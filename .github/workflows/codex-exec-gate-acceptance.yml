@@ -12,7 +12,8 @@
 #
 # Every run is made twice: with the executor started as ORCA's own child, and with it in the
 # user, pid and mount namespaces ORCA makes for it through the system's bubblewrap
-# (packages/agents/src/codex-exec-isolation.ts). There it also observes that a process a
+# (packages/agents/src/codex-exec-isolation.ts), closed: started through the system's
+# `unshare`, so that no mount made on the host afterwards appears inside. There it also observes that a process a
 # command left running is gone when the executor ends, and that a command a rule allowed
 # cannot reach what ORCA masks under any name. The namespace tests that need no Codex run
 # here too, because this job is where bubblewrap is known to be installed and usable.
@@ -90,27 +91,42 @@ jobs:
           echo "ORCA_CODEX_ADAPTER=$entry" >> "$GITHUB_ENV"
 
       # The isolated executor needs the system's bubblewrap, and leave for a plain process to
-      # make a user namespace. Where the runner withholds that leave through AppArmor, the
-      # exception is given to bubblewrap alone, as ci.yml gives it to the app's own sandbox,
-      # which is what an installed ORCA would have to arrange. Nothing else is loosened.
-      - name: Install bubblewrap and check it can make a user namespace
+      # make a user namespace. A closed executor is started through the system's `unshare`
+      # (it makes the mount namespace whose mounts follow none of the host's), which needs the
+      # same leave. Where the runner withholds that leave through AppArmor, the exception is
+      # given to those two programs alone, as ci.yml gives it to the app's own sandbox. This is
+      # a fixture of this test run. It is not something ORCA does on a host, and it shows
+      # nothing about a host with its stock policy: an installed ORCA would have to be given
+      # that leave by the host, or have no closed executor there. Nothing else is loosened.
+      - name: Install bubblewrap and check it and unshare can make a user namespace
         shell: bash
         run: |
           set -euo pipefail
           command -v bwrap || { sudo apt-get update -q && sudo apt-get install -y -q bubblewrap; }
           exe=$(readlink -f /usr/bin/bwrap)
           test "$(stat -c '%u' "$exe")" = 0
+          hop=$(readlink -f /usr/bin/unshare)
+          test "$(stat -c '%u' "$hop")" = 0
           try() { "$exe" --unshare-user --unshare-pid --dev-bind / / --proc /proc /bin/true; }
-          if ! try; then
+          # The closed executor's own start: bubblewrap inside a mount namespace made private.
+          closed() {
+            "$hop" --user --map-current-user --mount --propagation private -- \
+              "$exe" --unshare-user --unshare-pid --dev-bind / / --proc /proc /bin/true
+          }
+          if ! try || ! closed; then
             printf '%s\n' 'abi <abi/4.0>,' 'include <tunables/global>' \
               "profile orca-bwrap-userns \"$exe\" flags=(unconfined) {" '  userns,' '}' \
+              "profile orca-unshare-userns \"$hop\" flags=(unconfined) {" '  userns,' '}' \
               | sudo tee /etc/apparmor.d/orca-bwrap-userns > /dev/null
             sudo apparmor_parser -r /etc/apparmor.d/orca-bwrap-userns
             sudo grep -q '^orca-bwrap-userns ' /sys/kernel/security/apparmor/profiles
+            sudo grep -q '^orca-unshare-userns ' /sys/kernel/security/apparmor/profiles
             try
-            echo "user namespaces: allowed for $exe by the profile orca-bwrap-userns"
+            closed
+            echo "user namespaces: allowed for $exe and $hop by the profiles orca-bwrap-userns and orca-unshare-userns"
           fi
           bwrap --version
+          unshare --version
           echo "apparmor_restrict_unprivileged_userns=$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null || echo absent)"
           echo "ptrace_scope=$(cat /proc/sys/kernel/yama/ptrace_scope 2>/dev/null || echo absent)"
           # From here a namespace test that cannot run is a failure, not a skip.
