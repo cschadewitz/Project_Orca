@@ -89,7 +89,8 @@ export interface HostFileSystem {
    * local `fs/*` request on a host without them, since the binding cannot be established.
    */
   readonly bound?: {
-    read(binding: OwnedFsBinding): Promise<string>;
+    /** `singleLink`: the opened file must have one hard link before it is read (a judged read, #701). */
+    read(binding: OwnedFsBinding, options?: { singleLink?: boolean }): Promise<string>;
     /** Strict: an existing file, or a new one created bound to its checked directory. */
     write(binding: OwnedFsBinding, content: string): Promise<void>;
     /** Compatibility, best effort and outside the guarantee: a new file `write` cannot bind. */

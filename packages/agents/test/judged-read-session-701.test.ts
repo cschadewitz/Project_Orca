@@ -4,7 +4,7 @@
  * permission request, which the agent carries out itself, goes to the person and the judge is not asked. A real ACP
  * agent over stdio, with a fake judge standing in for #701's.
  */
-import { mkdir, mkdtemp, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { link, mkdir, mkdtemp, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -88,6 +88,8 @@ async function turn(opts: {
   secret?: boolean;
   /** While the judge decides, put a different file (a new identity) at `docs/a.md`. */
   swapWhileJudging?: boolean;
+  /** After the decision, before the I/O (while it is recorded): change the file the judge allowed. */
+  beforeIo?: (dir: string) => Promise<void>;
 }) {
   const dir = await temp("orca-judged-read-");
   await mkdir(join(dir, "docs"));
@@ -133,6 +135,14 @@ async function turn(opts: {
                 return answer;
               }
             : opts.judge,
+        }
+      : {}),
+    ...(opts.beforeIo
+      ? {
+          recordFsOperation: async () => {
+            await opts.beforeIo!(dir);
+            return async () => undefined;
+          },
         }
       : {}),
     onPermission: (info) => {
@@ -213,6 +223,30 @@ describe("a plain-language rule allows a read ORCA performs itself (#701)", () =
     expect(out.asked[0]!.judged).toMatchObject({ verdict: "changed-since" });
     expect(out.outcomes[0]).toHaveProperty("error");
     expect(JSON.stringify(out.outcomes)).not.toContain("swapped");
+  });
+
+  it("does not read a judged file that stopped being eligible after the decision, before the I/O", async () => {
+    // A second name outside the workspace: the single-link rule the judge relied on no longer holds.
+    const outside = await temp("orca-judged-read-outside-");
+    const linked = await turn({
+      judge: fakeJudge(),
+      reads: ["docs/a.md"],
+      beforeIo: (dir) => link(join(dir, "docs", "a.md"), join(outside, "a.md")),
+    });
+    expect(linked.decisions).toEqual(["fs:judged"]);
+    expect(linked.outcomes[0]).toHaveProperty("error");
+    expect(JSON.stringify(linked.outcomes)).not.toContain("hello");
+    // The allowed file moved away and another put at its name: not the file bound, so not read.
+    const moved = await turn({
+      judge: fakeJudge(),
+      reads: ["docs/a.md"],
+      beforeIo: async (dir) => {
+        await rename(join(dir, "docs", "a.md"), join(dir, "docs", "moved.md"));
+        await writeFile(join(dir, "docs", "a.md"), "other\n");
+      },
+    });
+    expect(moved.outcomes[0]).toHaveProperty("error");
+    expect(JSON.stringify(moved.outcomes)).not.toContain("other");
   });
 
   it("asks without a judge, as before", async () => {

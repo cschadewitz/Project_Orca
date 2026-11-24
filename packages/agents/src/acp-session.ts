@@ -45,6 +45,7 @@ import {
   type FsAccess,
 } from "./owned-fs-gate.js";
 import { judgedEditAdvice, judgedLane, judgedMcpLane } from "./judged-lane.js";
+import { verifyPlainRuleTargets } from "./verified-targets.js";
 import {
   bindOwnedFs,
   newFileMode,
@@ -612,12 +613,27 @@ async function openPlanned(
           decision: "judged",
           rule: judgedRule,
           // At the I/O: an allow since needs no judge; otherwise only the default's ask (no deny or ask rule has
-          // appeared) with the allowing rule still there at the same revision.
+          // appeared) with the allowing rule still there at the same revision, and the file still eligible by every
+          // rule the judge relied on (inside the workspace, outside every protected path, one regular file with a
+          // single link), as the very file bound. The read then checks identity and the single link again on the
+          // descriptor before any content is read (#701 activation review). Anything unproven: not read.
           stillAllowed: (now) => {
             const e = explain(now);
             if (e.decision === "allow") return true;
             if (e.decision !== "ask" || e.basis !== "default") return false;
-            return (now.judged ?? []).some((r) => r.ruleId === by.ruleId && r.ruleRevision === by.ruleRevision);
+            if (!(now.judged ?? []).some((r) => r.ruleId === by.ruleId && r.ruleRevision === by.ruleRevision))
+              return false;
+            const eligible = verifyPlainRuleTargets({
+              kind: "read",
+              locations: [path],
+              workspaceCwd: evalScope.workspaceCwd,
+              protectedPaths: evalScope.protectedPaths,
+            });
+            return (
+              eligible.targetsVerified &&
+              eligible.identities.length === 1 &&
+              eligible.identities[0] === binding.identity
+            );
           },
         };
       }
@@ -1100,7 +1116,9 @@ async function openPlanned(
       let content: string;
       try {
         content = await executeOwnedFs(path, "read", target, authorized, (file) =>
-          target.binding ? bound().read(target.binding) : opts.host.fs.readFile(file),
+          target.binding
+            ? bound().read(target.binding, authorized.decision === "judged" ? { singleLink: true } : undefined)
+            : opts.host.fs.readFile(file),
         );
       } catch (e) {
         // A missing file is an answer, not a failure: agents (Gemini CLI among them) find out
