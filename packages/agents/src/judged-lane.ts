@@ -57,6 +57,11 @@ export interface JudgedLaneOptions {
   localHost: boolean;
   /** Tests only: the file system the target check reads. */
   io?: PlainRuleTargetIo;
+  /**
+   * Replaces the session's secret values in a text; a change means the text held one (#701 review).
+   * Command advice sends the command and title to the judge: one holding a secret is not sent.
+   */
+  redact?: (text: string) => string;
 }
 
 /** Decides one call with the judged lane open: the typed answer, or an allow once by a judged rule. */
@@ -78,7 +83,7 @@ export function judgedLane(options: JudgedLaneOptions): JudgedLane {
       return remote.state === "closed" && remote.verdict ? { ...typed, judged: { verdict: remote.verdict } } : typed;
     }
     if (options.command && typed.decision === "ask") {
-      const advice = await adviseCommand(options.command, policy, request, ctx, signal);
+      const advice = await adviseCommand(options.command, policy, request, ctx, signal, options.redact);
       if (advice) return { ...typed, judged: advice };
     }
     const first = gate(policy, request, ctx, options.io);
@@ -242,6 +247,7 @@ async function adviseCommand(
   request: acp.RequestPermissionRequest,
   ctx: PermissionEvalContext | undefined,
   signal: AbortSignal,
+  redact: ((text: string) => string) | undefined,
 ): Promise<JudgedDecision | undefined> {
   const facts = callFacts(request, ctx);
   if (facts.kind !== "execute" || facts.claimed) return undefined;
@@ -253,6 +259,11 @@ async function adviseCommand(
   if (restricted(policy, facts)) return { ...base, verdict: "hard-boundary" };
   const command = commandText(request);
   if (command === "") return { ...base, verdict: "outside-envelope" };
+  // Advice authorizes nothing, but it still sends the command and title to the judge: one holding a
+  // session secret is not sent, and without a way to check, nothing is (#701 review).
+  const title = request.toolCall.title ?? "";
+  if (!redact || redact(command) !== command || redact(title) !== title)
+    return { ...base, verdict: "outside-envelope" };
   let outcome: PlainRuleJudgeOutcome;
   try {
     outcome = await judge(
@@ -261,7 +272,7 @@ async function adviseCommand(
         restrictions: { deny: false, ask: false },
         action: {
           kind: "execute",
-          title: request.toolCall.title ?? "",
+          title,
           locations: [],
           inWorkspace: false,
           targetsVerified: false,

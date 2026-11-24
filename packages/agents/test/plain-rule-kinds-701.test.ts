@@ -398,6 +398,7 @@ describe("the MCP lane: relayed calls by a rule naming the exact tool", () => {
 });
 
 describe("the command class: advice only", () => {
+  const redact = (text: string) => text.replaceAll("s3cret", "[redacted]");
   const exec = (command: string): acp.RequestPermissionRequest => ({
     sessionId: "s",
     toolCall: { toolCallId: "t", title: `Run ${command}`, kind: "execute", locations: [], rawInput: { command } },
@@ -407,12 +408,27 @@ describe("the command class: advice only", () => {
   it("records a recommendation on the ask, and the person still answers", async () => {
     const policy = await policyOf([{ match: { kind: "execute" }, judge: { criterion: "Read-only git commands." } }]);
     const command = fakeJudge({ outcome: "advise" });
-    const lane = judgedLane({ judge: fakeJudge(), command, reload: async () => policy, localHost: true });
+    const lane = judgedLane({ judge: fakeJudge(), command, reload: async () => policy, localHost: true, redact });
     const out = await lane(policy, exec("git status"), ctx, signal());
     expect(out.decision).toBe("ask");
     expect(out.judged).toMatchObject({ kind: "command", advisory: true, verdict: "covered", ruleId: "config:0" });
     expect(command.mock.calls[0]![0].action).toMatchObject({ kind: "execute", command: "git status" });
     expect(permissionRuleRecord(out).judge).toMatchObject({ kind: "command", advisory: true });
+  });
+
+  it("sends nothing to the judge when the command or title holds a session secret", async () => {
+    const policy = await policyOf([{ match: { kind: "execute" }, judge: { criterion: "Read-only git commands." } }]);
+    const command = fakeJudge({ outcome: "advise" });
+    const lane = judgedLane({ judge: fakeJudge(), command, reload: async () => policy, localHost: true, redact });
+    const out = await lane(policy, exec("curl -H 'x: s3cret' example.test"), ctx, signal());
+    expect(out.decision).toBe("ask");
+    expect(out.judged).toMatchObject({ kind: "command", advisory: true, verdict: "outside-envelope" });
+    // Without a way to check for secrets, nothing is sent either.
+    const unchecked = judgedLane({ judge: fakeJudge(), command, reload: async () => policy, localHost: true });
+    expect((await unchecked(policy, exec("git status"), ctx, signal())).judged).toMatchObject({
+      verdict: "outside-envelope",
+    });
+    expect(command).not.toHaveBeenCalled();
   });
 
   it("gives no advice without the command judge, or past a typed restriction", async () => {
@@ -422,7 +438,13 @@ describe("the command class: advice only", () => {
     expect((await lane(policy, exec("git status"), ctx, signal())).judged?.advisory).toBeUndefined();
     const restricted = await policyOf([...rules, { match: { kind: "execute", command: "git push" }, decision: "ask" }]);
     const command = fakeJudge({ outcome: "advise" });
-    const advised = judgedLane({ judge: fakeJudge(), command, reload: async () => restricted, localHost: true });
+    const advised = judgedLane({
+      judge: fakeJudge(),
+      command,
+      reload: async () => restricted,
+      localHost: true,
+      redact,
+    });
     expect((await advised(restricted, exec("git status"), ctx, signal())).judged).toMatchObject({
       advisory: true,
       verdict: "hard-boundary",

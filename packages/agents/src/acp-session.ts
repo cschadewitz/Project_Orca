@@ -441,6 +441,7 @@ async function openPlanned(
         // Targets are checked on this machine's file system: only a local session's are its own.
         localHost: opts.host.spec.type === "local",
         command: opts.judgeKinds?.command,
+        redact: (text) => redactSecretValues(text, values),
       })
     : undefined;
   /** The experimental classes (#701): only with the read judge, and each only when given its own. */
