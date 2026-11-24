@@ -36,7 +36,9 @@ import { pathToFileURL } from "node:url";
 import { parse as parseYaml } from "yaml";
 import {
   AgentRegistry,
+  admitCodexExecGateSession,
   claudePreToolHookScript,
+  codexExecGateRequested,
   CLAUDE_ADAPTER_NAMES,
   nativeToolHookNotQualified,
   nativeToolHookRequested,
@@ -46,6 +48,7 @@ import {
   withProviderGuards,
   permissionPolicyPath,
   type AgentSession,
+  type CodexExecGateAdmission,
   type OpenSessionOptions,
   type ProtectedPaths,
 } from "@orca/agents";
@@ -319,6 +322,8 @@ export function makeSessionFactory(
     runtime: process.execPath,
     script: claudePreToolHookScript(),
   },
+  /** For tests: the host, the executor maker and path resolution the Codex gate route reads. */
+  gate?: Pick<CodexExecGateAdmission, "host" | "isolate" | "real">,
 ): SessionFactory {
   const permissionFiles = [permissionPolicyPath(layout.configDir)];
   const protectedPaths = orcaProtectedPaths(layout);
@@ -336,6 +341,36 @@ export function makeSessionFactory(
     ));
   return async (options: Parameters<SessionFactory>[0]) => {
     const bound = { ...options, permissionFiles, protectedPaths };
+    // ORCA's gate in Codex's executor path (#1026): its own route, which refuses every session
+    // for now, with the reasons. Nothing falls back to the hook or to no gate.
+    if (codexExecGateRequested(options.agent)) {
+      if (nativeToolHookRequested(options.agent))
+        throw new OrcaError(
+          "NOT_SUPPORTED",
+          `agent ${options.agent.id} has both codexExecGate and nativeToolHook; they are separate routes, and an agent takes one of them.`,
+          { agentId: options.agent.id },
+        );
+      if (options.host.spec.type !== "local")
+        throw new OrcaError(
+          "NOT_SUPPORTED",
+          `agent ${options.agent.id} has codexExecGate: experimental, but it runs on ${options.host.spec.type} host ${options.host.spec.id}; ` +
+            `the gate route applies only to agents on ORCA's own machine. Remove codexExecGate to run it without the gate.`,
+          { agentId: options.agent.id, host: options.host.spec.id },
+        );
+      return admitCodexExecGateSession({
+        agentId: options.agent.id,
+        layout: {
+          configDir: layout.configDir,
+          storeDir: layout.storeDir,
+          configFile: layout.configFile,
+          workspace: options.cwd,
+          additionalDirectories: options.additionalDirectories,
+        },
+        protectedPaths,
+        runtimeEnv: process.versions["electron"] !== undefined ? { ELECTRON_RUN_AS_NODE: "1" } : undefined,
+        ...(gate ?? {}),
+      });
+    }
     // ORCA's pre-tool hook (#704, #705): prepared before the agent starts, decided once it
     // says who it is, and the session refused wherever it cannot be put in force.
     if (!nativeToolHookRequested(options.agent)) return guarded(bound);

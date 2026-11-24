@@ -58,6 +58,7 @@ import { processCleanup } from "./process-cleanup.js";
 import * as acpUnstable from "@agentclientprotocol/sdk/unstable";
 import { createMcpRelay, type McpRelay, type McpRelayCall, type McpRelayDispatch } from "./mcp-relay.js";
 import { nativeToolHookRefused } from "./native-tool-hook-session.js";
+import { codexExecGateRefused } from "./codex-exec-gate-session.js";
 import { normalizeConfigOption, normalizeSessionConfig } from "./config-options.js";
 import { isHostFileMissing, type AgentHost, type AgentProcessHandle } from "./host.js";
 import {
@@ -362,10 +363,12 @@ function withinRoots(path: string, roots: string[]): boolean {
 }
 
 export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSession> {
-  // An agent that asked for ORCA's tool hook is opened only by the session factory that
-  // installs it (`sessionMeta`); any other caller (a probe, a tool) would run it unguarded.
+  // An agent that asked for ORCA's tool hook, or its Codex gate (#1026), is opened only by the
+  // session factory that installs it (`sessionMeta`); any other caller (a probe, a tool) would
+  // run it unguarded.
   if (opts.sessionMeta === undefined) {
-    const refused = nativeToolHookRefused(opts.agent, "outside-factory");
+    const refused =
+      nativeToolHookRefused(opts.agent, "outside-factory") ?? codexExecGateRefused(opts.agent, "outside-factory");
     if (refused) throw refused;
   }
   if (opts.requireContextRecovery && !opts.resumeSessionId?.trim()) throw contextRecoveryFailure("missing-session-id");
