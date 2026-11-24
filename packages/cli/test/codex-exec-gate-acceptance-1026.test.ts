@@ -140,7 +140,11 @@ describe.skipIf(ADAPTER === undefined).each([
   let passed: string[] = [];
 
   beforeEach(async () => {
-    root = await realpath(await mkdtemp(join(tmpdir(), "orca-1026-acceptance-")));
+    // A closed executor has a temporary directory of its own in place of the host's, so an
+    // isolated run's directory is made where the namespace shows the host's file system as it
+    // is, read-only. Nothing but the workspace in it is bound writable, and nothing around the
+    // workspace is asked to be kept read-only: a request for both is refused.
+    root = await realpath(await mkdtemp(join(isolated ? "/var/tmp" : tmpdir(), "orca-1026-acceptance-")));
     configDir = join(root, "config");
     workspace = join(root, "work");
     codexHome = join(root, "codex-home");
@@ -228,13 +232,10 @@ describe.skipIf(ADAPTER === undefined).each([
     const spec = { program: RUNTIME, env: { ...process.env, ...agentEnv({}) }, cwd: workspace, budget };
     // The masks are the directories of ORCA's that exist when the executor is started. The
     // executor is closed: of the host's, a command can write the workspace and nothing else.
-    // This run's own directory is in the host's temporary directory, which a closed executor
-    // does not have, so it is bound for it to read as the rest of a host is.
-    const masks = codexExecMasks(protectedPaths);
     const backend = isolated
       ? spawnIsolatedCodexExecServer({
           ...spec,
-          masks: { ...masks, readOnly: [...masks.readOnly, root] },
+          masks: codexExecMasks(protectedPaths),
           closed: { writable: [workspace] },
         })
       : spawnCodexExecServer(spec);

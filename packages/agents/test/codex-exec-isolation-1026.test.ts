@@ -34,6 +34,7 @@ import {
   CODEX_EXEC_READS_AT_ONCE,
   CodexExecIsolationError,
   codexExecClosedMounts,
+  codexExecEnteredMounts,
   codexExecGateBinder,
   codexExecDescriptorsOf,
   codexExecMasks,
@@ -41,12 +42,14 @@ import {
   codexExecOutsideReach,
   codexExecProcessSeen,
   codexExecProofShortfalls,
+  CODEX_EXEC_NOT_CLOSED,
   codexExecReadsOut,
   codexExecReadsWaiting,
   codexExecSocketFilter,
   parseMountInfo,
   spawnIsolatedCodexExecServer,
   systemBubblewrap,
+  systemUnshare,
   type CodexExecIsolatedSpawn,
   type CodexExecIsolationProof,
   type CodexExecSetupReads,
@@ -117,10 +120,30 @@ describe("the mount table of a process", () => {
       "79 31 0:56 / /tab\\011and\\134slash rw master:3 shared:9 - tmpfs tmpfs rw",
       "not a mount line",
     ].join("\n");
+    const mount = { root: "/", propagation: [] as string[] };
     expect(parseMountInfo(table)).toEqual([
-      { id: "31", parent: "1", point: "/", options: ["rw", "relatime"], type: "ext4", device: "8:1" },
-      { id: "77", parent: "31", point: "/home/u/my store", options: ["ro", "relatime"], type: "ext4", device: "8:1" },
       {
+        ...mount,
+        id: "31",
+        parent: "1",
+        point: "/",
+        options: ["rw", "relatime"],
+        type: "ext4",
+        device: "8:1",
+        propagation: ["shared:1"],
+      },
+      {
+        ...mount,
+        id: "77",
+        parent: "31",
+        point: "/home/u/my store",
+        options: ["ro", "relatime"],
+        type: "ext4",
+        device: "8:1",
+        root: "/home/u/my store",
+      },
+      {
+        ...mount,
         id: "78",
         parent: "77",
         point: "/home/u/my store/private",
@@ -128,121 +151,281 @@ describe("the mount table of a process", () => {
         type: "tmpfs",
         device: "0:55",
       },
-      { id: "79", parent: "31", point: "/tab\tand\\slash", options: ["rw"], type: "tmpfs", device: "0:56" },
+      {
+        ...mount,
+        id: "79",
+        parent: "31",
+        point: "/tab\tand\\slash",
+        options: ["rw"],
+        type: "tmpfs",
+        device: "0:56",
+        propagation: ["master:3", "shared:9"],
+      },
     ]);
   });
 });
 
 describe("what a closed executor is held to", () => {
-  /** ORCA's own table: a disk, the host's devices, runtime and temporary directories, and a second disk. */
+  /** ORCA's own table: a disk with the home on a second file system, the host's devices, runtime and temporary directories, and another disk. */
   const mine = parseMountInfo(
     [
-      "20 1 8:1 / / rw,relatime - ext4 /dev/sda1 rw",
-      "21 20 0:5 / /dev rw,nosuid - devtmpfs udev rw",
-      "27 21 0:70 / /dev/shm rw,nosuid - tmpfs tmpfs rw",
-      "22 20 0:25 / /run rw,nosuid,nodev - tmpfs tmpfs rw",
-      "28 22 0:71 / /run/user/1000 rw,nosuid,nodev - tmpfs tmpfs rw",
-      "23 20 0:30 / /tmp rw,nosuid,nodev - tmpfs tmpfs rw",
-      "24 20 0:21 / /proc rw,relatime - proc proc rw",
-      "25 20 8:17 / /mnt/disk rw,relatime - ext4 /dev/sdb1 rw",
-      "26 20 0:40 / /sys/kernel/debug rw,relatime - debugfs debugfs rw",
+      "20 1 8:1 / / rw,relatime shared:1 - ext4 /dev/sda1 rw",
+      "19 20 8:3 /@home /home rw,relatime shared:2 - btrfs /dev/sda3 rw",
+      "21 20 0:5 / /dev rw,nosuid shared:3 - devtmpfs udev rw",
+      "27 21 0:70 / /dev/shm rw,nosuid shared:4 - tmpfs tmpfs rw",
+      "22 20 0:25 / /run rw,nosuid,nodev shared:5 - tmpfs tmpfs rw",
+      "28 22 0:71 / /run/user/1000 rw,nosuid,nodev shared:6 - tmpfs tmpfs rw",
+      "23 20 0:30 / /tmp rw,nosuid,nodev shared:7 - tmpfs tmpfs rw",
+      "24 20 0:21 / /proc rw,relatime shared:8 - proc proc rw",
+      "25 20 8:17 / /mnt/disk rw,relatime shared:9 - ext4 /dev/sdb1 rw",
+      "26 20 0:40 / /root/secret rw,relatime shared:10 - ext4 /dev/sdc1 rw",
     ].join("\n"),
   );
-  /** The namespace's table as bubblewrap leaves it, with `more` lines after it. */
-  const theirs = (more: string[] = [], root = "ro") =>
-    parseMountInfo(
-      [
-        `90 80 8:1 / / ${root},nosuid,nodev,relatime - ext4 /dev/sda1 rw`,
-        "91 90 8:17 / /mnt/disk ro,nosuid,nodev,relatime - ext4 /dev/sdb1 rw",
-        "92 90 0:40 / /sys/kernel/debug rw,nosuid,nodev,relatime - debugfs debugfs rw",
-        // The host's own, which bubblewrap bound with the rest and then mounted over.
-        "81 90 0:5 / /dev ro,nosuid,nodev - devtmpfs udev rw",
-        "82 81 0:70 / /dev/shm rw,nosuid - tmpfs tmpfs rw",
-        "83 90 0:21 / /proc ro,nosuid,nodev,relatime - proc proc rw",
-        "84 90 0:25 / /run ro,nosuid,nodev - tmpfs tmpfs rw",
-        "85 84 0:71 / /run/user/1000 rw,nosuid,nodev - tmpfs tmpfs rw",
-        "86 90 0:30 / /tmp ro,nosuid,nodev - tmpfs tmpfs rw",
-        // The namespace's own.
-        "93 81 0:61 / /dev rw,nosuid,nodev - tmpfs tmpfs rw,mode=755",
-        "94 93 0:5 /null /dev/null rw,nosuid - devtmpfs udev rw",
-        "95 93 0:62 / /dev/pts rw,nosuid,noexec - devpts devpts rw",
-        "97 83 0:64 / /proc rw,nosuid,nodev,noexec - proc proc rw",
-        "98 84 0:65 / /run rw,nosuid,nodev - tmpfs tmpfs rw",
-        "99 86 0:66 / /tmp rw,nosuid,nodev - tmpfs tmpfs rw",
-        "100 90 8:1 /home/u/work /home/u/work rw,nosuid,nodev,relatime - ext4 /dev/sda1 rw",
-        ...more,
-      ].join("\n"),
-    );
+  const store = "/home/u/store";
+  const roots = (writable: string[] = ["/home/u/work"]) => ({
+    writable,
+    masks: { hidden: [`${store}/private`], readOnly: [store], writable: [`${store}/work`] },
+  });
+  /** The namespace's table as bubblewrap leaves it when its mounts were made private first, with `more` lines after it. */
+  const lines = (root = "ro") => [
+    `90 80 8:1 / / ${root},nosuid,nodev,relatime - ext4 /dev/sda1 rw`,
+    "89 90 8:3 /@home /home ro,nosuid,nodev,relatime - btrfs /dev/sda3 rw",
+    "91 90 8:17 / /mnt/disk ro,nosuid,nodev,relatime - ext4 /dev/sdb1 rw",
+    // The host's own, which bubblewrap bound with the rest and then mounted over.
+    "81 90 0:5 / /dev ro,nosuid,nodev - devtmpfs udev rw",
+    "82 81 0:70 / /dev/shm rw,nosuid - tmpfs tmpfs rw",
+    "83 90 0:21 / /proc ro,nosuid,nodev,relatime - proc proc rw",
+    "84 90 0:25 / /run ro,nosuid,nodev - tmpfs tmpfs rw",
+    "85 84 0:71 / /run/user/1000 rw,nosuid,nodev - tmpfs tmpfs rw",
+    "86 90 0:30 / /tmp ro,nosuid,nodev - tmpfs tmpfs rw",
+    // The namespace's own.
+    "93 81 0:61 / /dev rw,nosuid,nodev - tmpfs tmpfs rw,mode=755",
+    "94 93 0:5 /null /dev/null rw,nosuid - devtmpfs udev rw",
+    "95 93 0:62 / /dev/pts rw,nosuid,noexec - devpts devpts rw",
+    "97 83 0:64 / /proc rw,nosuid,nodev,noexec - proc proc rw",
+    "98 84 0:65 / /run rw,nosuid,nodev - tmpfs tmpfs rw",
+    "99 86 0:66 / /tmp rw,nosuid,nodev - tmpfs tmpfs rw",
+    // What a command was given, and the masks: the store read-only, the agent's area in it, a hidden directory.
+    "100 89 8:3 /@home/u/work /home/u/work rw,nosuid,nodev,relatime - btrfs /dev/sda3 rw",
+    "101 89 8:3 /@home/u/store /home/u/store ro,nosuid,nodev,relatime - btrfs /dev/sda3 rw",
+    "102 101 8:3 /@home/u/store/work /home/u/store/work rw,nosuid,nodev,relatime - btrfs /dev/sda3 rw",
+    "103 101 0:67 / /home/u/store/private ro,nosuid,nodev - tmpfs tmpfs rw",
+  ];
+  const theirs = (more: string[] = [], root = "ro", change: (line: string) => string = (line) => line) =>
+    parseMountInfo([...lines(root).map(change), ...more].join("\n"));
+  const why = (...of: Parameters<typeof theirs>) => codexExecClosedMounts(theirs(...of), mine, roots());
 
-  it("takes a read-only file system with the namespace's own devices and temporary directory, and asks about what the table leaves open", () => {
-    // Of the mounts left writable, the host's shared memory and runtime directory are under what
-    // the namespace mounted over them and are not reached. The other is one bubblewrap left as it
-    // was, which it does only where the user cannot get to it: whether a path leads there is asked inside.
-    expect(codexExecClosedMounts(theirs(), mine, ["/home/u/work"])).toEqual({ look: ["/sys/kernel/debug"] });
-    // A mount inside a writable directory is the command's to write with it.
+  it("takes a read-only file system with the namespace's own devices and temporary directory, from the tables alone", () => {
+    // The host's shared memory and runtime directory are still listed writable, under what the
+    // namespace mounted over them: no path leads into them, for as long as the namespace lasts.
+    expect(why()).toBeUndefined();
+    // A mount inside a directory a command was given is the command's to write with it.
+    expect(why(["104 100 8:33 / /home/u/work/data rw,nodev,relatime - ext4 /dev/sdd1 rw"])).toBeUndefined();
+  });
+
+  it("finds which mount is on top from the kernel's links, whatever the order of the lines, and takes no table it cannot read", () => {
+    const entered = (table: string[]) => {
+      const tree = codexExecEnteredMounts(parseMountInfo(table.join("\n")));
+      return "entered" in tree ? tree.entered.map((mount) => `${mount.id} ${mount.point}`).sort() : tree.unreadable;
+    };
+    // What bubblewrap bound of the host's and then mounted over is passed through or out of
+    // reach, and the mounts made over it are what a path leads into.
+    expect(entered(lines())).toEqual(
+      [
+        "100 /home/u/work",
+        "101 /home/u/store",
+        "102 /home/u/store/work",
+        "103 /home/u/store/private",
+        "89 /home",
+        "90 /",
+        "91 /mnt/disk",
+        "93 /dev",
+        "94 /dev/null",
+        "95 /dev/pts",
+        "97 /proc",
+        "98 /run",
+        "99 /tmp",
+      ].sort(),
+    );
+    // The same table with its lines the other way round is the same tree, and as closed.
+    expect(entered(lines().reverse())).toEqual(entered(lines()));
+    expect(codexExecClosedMounts(theirs().reverse(), [...mine].reverse(), roots())).toBeUndefined();
+    // The host's temporary directory mounted over the namespace's own is on top by its link,
+    // though its line comes first.
     expect(
-      codexExecClosedMounts(theirs(["101 100 8:33 / /home/u/work/data rw,nodev,relatime - ext4 /dev/sdc1 rw"]), mine, [
-        "/home/u/work",
-      ]).look,
-    ).toEqual(["/sys/kernel/debug"]);
+      codexExecClosedMounts(
+        parseMountInfo(["104 99 0:30 / /tmp rw,nosuid,nodev - tmpfs tmpfs rw", ...lines()].join("\n")),
+        mine,
+        roots(),
+      ),
+    ).toBe("/tmp is not the namespace's own");
+    // The kernel also writes the root of a namespace as mounted in itself.
+    const inItself = (line: string) => line.replace(/^90 80 /, "90 90 ");
+    expect(entered(lines().map(inItself))).toEqual(entered(lines()));
+    expect(why([], "ro", inItself)).toBeUndefined();
+
+    // A table that does not read as one tree gives a reason, and is never a closed one.
+    const unreadable = (table: string[]) => {
+      const reason = entered(table);
+      expect(typeof reason).toBe("string");
+      expect(codexExecClosedMounts(parseMountInfo(table.join("\n")), mine, roots())).toBe(
+        `the namespace's mount table cannot be read (${String(reason)})`,
+      );
+      return reason;
+    };
+    expect(unreadable([])).toBe("no mount is listed");
+    expect(unreadable(["not a line of a mount table"])).toBe("no mount is listed");
+    // Every mount mounted in another that is listed: nothing to start from.
+    expect(unreadable(lines().map((line) => line.replace(/^90 80 /, "90 100 ")))).toBe("no mount is the root");
+    expect(unreadable([...lines(), "104 70 8:17 / /mnt/other ro,nosuid,nodev - ext4 /dev/sdb1 rw"])).toBe(
+      "more than one mount is the root: /, /mnt/other",
+    );
+    expect(unreadable(["90 80 8:1 / /mnt ro,nosuid,nodev - ext4 /dev/sda1 rw"])).toBe("the root is at /mnt");
+    expect(unreadable([...lines(), "100 90 8:17 / /mnt/disk ro,nosuid,nodev - ext4 /dev/sdb1 rw"])).toBe(
+      "two mounts have the number 100",
+    );
+    expect(unreadable([...lines(), "104 91 8:33 / /home/x ro,nosuid,nodev - ext4 /dev/sdd1 rw"])).toBe(
+      "/home/x is listed as mounted in the mount at /mnt/disk",
+    );
+    // Two mounts each mounted in the other: the root leads to neither, so neither was looked at.
+    expect(
+      unreadable([
+        ...lines(),
+        "104 105 8:33 / /mnt/loop rw - ext4 /dev/sdd1 rw",
+        "105 104 8:33 / /mnt/loop rw - ext4 /dev/sdd1 rw",
+      ]),
+    ).toBe("a mount is listed that the root does not lead to");
+    // Two at one point in one mount, where a path leads: the links do not say which is on top.
+    expect(unreadable([...lines(), "104 89 8:3 /@home/u/else /home/u/work rw,nosuid,nodev - btrfs /dev/sda3 rw"])).toBe(
+      "two mounts are at /home/u/work in one mount, and nothing says which a path leads into",
+    );
+    // The same two where no path leads (under the namespace's own `/dev`) are not asked about.
+    expect(why(["104 81 0:70 / /dev/shm rw,nosuid - tmpfs tmpfs rw"])).toBeUndefined();
+    // ORCA's own table is held to the same before anything is compared with it.
+    expect(codexExecClosedMounts(theirs(), [], roots())).toBe(
+      "ORCA's own mount table cannot be read (no mount is listed)",
+    );
+  });
+
+  it("is not closed while a mount takes mounts made outside afterwards, wherever it is", () => {
+    // As bubblewrap leaves it by itself: each mount follows the host's.
+    expect(why([], "ro", (line) => line.replace(" - ", " master:1 - "))).toBe(
+      "a mount made outside afterwards would appear at /",
+    );
+    expect(why(["104 91 8:17 /sub /mnt/disk/sub ro,nosuid,nodev shared:44 - ext4 /dev/sdb1 rw"])).toBe(
+      "a mount made outside afterwards would appear at /mnt/disk/sub",
+    );
+    expect(
+      why(["104 100 8:3 /@home/u/work/x /home/u/work/x rw,nodev master:2 propagate_from:9 - btrfs /dev/sda3 rw"]),
+    ).toBe("a mount made outside afterwards would appear at /home/u/work/x");
+  });
+
+  it("is not closed with a writable file system, the host's own temporary directory, or a writable directory that is not the directory", () => {
+    expect(why([], "rw")).toBe("the file system is not read-only");
+    // A temporary file system that is in ORCA's table too is the host's, whatever its kind.
+    expect(why(["104 99 0:30 / /tmp rw,nosuid,nodev - tmpfs tmpfs rw"])).toBe("/tmp is not the namespace's own");
+    expect(why(["104 98 0:25 / /run rw,nosuid,nodev - tmpfs tmpfs rw"])).toBe("/run is not the namespace's own");
+    expect(why(["104 93 0:5 / /dev rw,nosuid,nodev - devtmpfs udev rw"])).toBe("/dev is not the namespace's own");
+    // Not bound at all, bound read-only, and bound from somewhere else: another directory of the
+    // same file system, and the same path of another file system.
+    expect(codexExecClosedMounts(theirs(), mine, roots(["/home/u/other"]))).toBe(
+      "a writable directory is not bound writable: /home/u/other",
+    );
+    expect(why([], "ro", (line) => line.replace("/home/u/work rw,", "/home/u/work ro,"))).toBe(
+      "a writable directory is not bound writable: /home/u/work",
+    );
+    expect(why([], "ro", (line) => line.replace("/@home/u/work /home/u/work", "/@home/u/else /home/u/work"))).toBe(
+      "a writable directory is not the directory itself in the namespace: /home/u/work",
+    );
+    expect(why(["104 100 8:1 /home/u/work /home/u/work rw,nosuid,nodev - ext4 /dev/sda1 rw"])).toBe(
+      "a writable directory is not the directory itself in the namespace: /home/u/work",
+    );
+    // The agent's area is held to the same.
+    expect(why([], "ro", (line) => line.replace("/@home/u/store/work /home", "/@home/u/store/other /home"))).toBe(
+      "a writable directory is not the directory itself in the namespace: /home/u/store/work",
+    );
+  });
+
+  it("is not closed with anything else of the host's writable where a path leads into it, whoever can get to it", () => {
+    // A disk of the host's that stayed writable, the host's shared memory where a path leads
+    // into it, a directory bound writable that a command was not given, and a mount under a
+    // directory the user cannot enter today, which is how bubblewrap comes to leave one.
+    expect(why(["104 91 8:17 / /mnt/disk rw,nodev,relatime - ext4 /dev/sdb1 rw"])).toBe(
+      "/mnt/disk is the host's and writable in the namespace",
+    );
+    expect(why(["104 93 0:70 / /dev/shm rw,nosuid,nodev - tmpfs tmpfs rw"])).toBe(
+      "/dev/shm is the host's and writable in the namespace",
+    );
+    expect(why(["104 89 8:3 /@home/u/more /home/u/more rw,nosuid,nodev - btrfs /dev/sda3 rw"])).toBe(
+      "/home/u/more is the host's and writable in the namespace",
+    );
+    expect(why(["104 90 0:40 / /root/secret rw,nodev,relatime - ext4 /dev/sdc1 rw"])).toBe(
+      "/root/secret is the host's and writable in the namespace",
+    );
+  });
+
+  it("does not let what a command was given open what ORCA protects inside it", () => {
+    // The store is inside a directory a command was given: its masks are still what decides there.
+    const wide = roots(["/home/u"]);
+    const given = "104 89 8:3 /@home/u /home/u rw,nosuid,nodev,relatime - btrfs /dev/sda3 rw";
+    const under = (line: string) => line.replace(/^(100|101) 89 /, "$1 104 ");
+    const table = (more: string[] = [], change: (line: string) => string = (line) => line) =>
+      parseMountInfo(
+        [
+          ...lines()
+            .filter((line) => !line.startsWith("100 "))
+            .map(under)
+            .map(change),
+          given,
+          ...more,
+        ].join("\n"),
+      );
+    expect(codexExecClosedMounts(table(), mine, wide)).toBeUndefined();
+    // The store's read-only mask gone writable, and a writable mount inside the store that is
+    // not the agent's area: neither is covered by the directory around them having been given.
+    expect(
+      codexExecClosedMounts(
+        table([], (line) => line.replace("/home/u/store ro,", "/home/u/store rw,")),
+        mine,
+        wide,
+      ),
+    ).toBe("/home/u/store is the host's and writable in the namespace");
+    expect(
+      codexExecClosedMounts(
+        table(["105 101 8:3 /@home/u/store/log /home/u/store/log rw,nosuid,nodev - btrfs /dev/sda3 rw"]),
+        mine,
+        wide,
+      ),
+    ).toBe("/home/u/store/log is the host's and writable in the namespace");
+    // Inside the agent's area a mount is the agent's, and inside the hidden directory within it, it is not.
+    expect(
+      codexExecClosedMounts(table(["105 102 8:33 / /home/u/store/work/data rw,nodev - ext4 /dev/sdd1 rw"]), mine, wide),
+    ).toBeUndefined();
+    expect(
+      codexExecClosedMounts(
+        table(["105 103 8:33 / /home/u/store/private/data rw,nodev - ext4 /dev/sdd1 rw"]),
+        mine,
+        wide,
+      ),
+    ).toBe("/home/u/store/private/data is the host's and writable in the namespace");
   });
 
   it("is not closed where a device of the host's could be opened: every mount a path leads into but the namespace's own devices", () => {
-    const work = ["/home/u/work"];
     // Read-only does not keep a device from being written, so a read-only mount is held to it too.
-    expect(
-      codexExecClosedMounts(theirs(["101 91 8:17 / /mnt/disk ro,nosuid,relatime - ext4 /dev/sdb1 rw"]), mine, work)
-        .wrong,
-    ).toBe("a device of the host's could be opened under /mnt/disk");
-    expect(
-      codexExecClosedMounts(
-        theirs(["101 100 8:1 /home/u/work /home/u/work rw,relatime - ext4 /dev/sda1 rw"]),
-        mine,
-        work,
-      ).wrong,
-    ).toBe("a device of the host's could be opened under /home/u/work");
+    expect(why(["104 91 8:17 / /mnt/disk ro,nosuid,relatime - ext4 /dev/sdb1 rw"])).toBe(
+      "a device of the host's could be opened under /mnt/disk",
+    );
+    expect(why([], "ro", (line) => line.replace("/home/u/work rw,nosuid,nodev,", "/home/u/work rw,nosuid,"))).toBe(
+      "a device of the host's could be opened under /home/u/work",
+    );
     // The host's own terminals, mounted where the namespace's should be, are not the namespace's.
     expect(
       codexExecClosedMounts(
-        theirs(["101 95 0:9 / /dev/pts rw,nosuid,noexec - devpts devpts rw"]),
+        theirs(["104 95 0:9 / /dev/pts rw,nosuid,noexec - devpts devpts rw"]),
         [...mine, ...parseMountInfo("29 21 0:9 / /dev/pts rw,nosuid,noexec - devpts devpts rw")],
-        work,
-      ).wrong,
+        roots(),
+      ),
     ).toBe("a device of the host's could be opened under /dev/pts");
-    // A mount no path leads into is not counted: the host's shared memory under the namespace's `/dev`.
-    expect(codexExecClosedMounts(theirs(), mine, work).wrong).toBeUndefined();
-  });
-
-  it("is not closed with a writable file system, the host's own temporary directory, or a writable directory that is not bound", () => {
-    const work = ["/home/u/work"];
-    expect(codexExecClosedMounts(theirs([], "rw"), mine, work).wrong).toBe("the file system is not read-only");
-    // A temporary file system that is in ORCA's table too is the host's, whatever its kind.
-    expect(
-      codexExecClosedMounts(theirs(["102 99 0:30 / /tmp rw,nosuid,nodev - tmpfs tmpfs rw"]), mine, work).wrong,
-    ).toBe("/tmp is not the namespace's own");
-    expect(
-      codexExecClosedMounts(theirs(["103 98 0:25 / /run rw,nosuid,nodev - tmpfs tmpfs rw"]), mine, work).wrong,
-    ).toBe("/run is not the namespace's own");
-    expect(
-      codexExecClosedMounts(theirs(["104 93 0:5 / /dev rw,nosuid,nodev - devtmpfs udev rw"]), mine, work).wrong,
-    ).toBe("/dev is not the namespace's own");
-    expect(codexExecClosedMounts(theirs(), mine, ["/home/u/other"]).wrong).toBe(
-      "a writable directory is not bound writable: /home/u/other",
-    );
-    // A directory bound writable that a command was not given, a disk of the host's that stayed
-    // writable, and the host's shared memory mounted where a path leads into it: each is asked
-    // about, and none is passed.
-    expect(codexExecClosedMounts(theirs(), mine, []).look).toEqual(["/sys/kernel/debug", "/home/u/work"]);
-    expect(
-      codexExecClosedMounts(
-        theirs([
-          "105 91 8:17 / /mnt/disk rw,nodev,relatime - ext4 /dev/sdb1 rw",
-          "106 93 0:70 / /dev/shm rw,nosuid,nodev - tmpfs tmpfs rw",
-        ]),
-        mine,
-        work,
-      ).look,
-    ).toEqual(["/mnt/disk", "/sys/kernel/debug", "/dev/shm"]);
   });
 
   it("is under a filter that the kernel can take: whole instructions, every jump forward and inside it", () => {
@@ -271,14 +454,20 @@ describe("what a closed executor is held to", () => {
       closed: { writable: ["/home/u/work"] },
       ptraceScope: 1,
     };
-    expect(codexExecProofShortfalls(proof)).toEqual([]);
-    expect(codexExecProofShortfalls({ ...proof, closed: undefined })).toEqual([
+    // The best proof there is still lacks what this backend never closes or shows: the answer
+    // is never empty, so it cannot be read as leave to admit a session.
+    expect(codexExecProofShortfalls(proof)).toEqual([...CODEX_EXEC_NOT_CLOSED]);
+    expect(CODEX_EXEC_NOT_CLOSED.join("\n")).toMatch(/named pipe/);
+    expect(CODEX_EXEC_NOT_CLOSED.join("\n")).toMatch(/filter in place is ORCA's own .* is not read back/);
+    const own = (changed: CodexExecIsolationProof) =>
+      codexExecProofShortfalls(changed).slice(0, -CODEX_EXEC_NOT_CLOSED.length);
+    expect(own({ ...proof, closed: undefined })).toEqual([
       "a command can write wherever the user can, and connect to a socket it can name by a path",
     ]);
-    expect(codexExecProofShortfalls({ ...proof, network: "host", closed: undefined })).toHaveLength(2);
+    expect(own({ ...proof, network: "host", closed: undefined })).toHaveLength(2);
     // A system that says nothing about tracing is not one that restricts it.
     for (const ptraceScope of [0, undefined])
-      expect(codexExecProofShortfalls({ ...proof, ptraceScope })).toEqual([
+      expect(own({ ...proof, ptraceScope })).toEqual([
         "the system lets a command alter the executor that started it (no ptrace_scope of 1 or more)",
       ]);
   });
@@ -294,6 +483,10 @@ describe.skipIf(process.platform !== "linux")("the bubblewrap ORCA will run", ()
     expect(systemBubblewrap([join(root, "missing")])).toBeUndefined();
     expect(systemBubblewrap([root])).toBeUndefined();
     expect(systemBubblewrap([])).toBeUndefined();
+    // The program a closed executor's bubblewrap is started through is held to the same.
+    expect(systemUnshare([mine])).toBeUndefined();
+    expect(systemUnshare([join(root, "missing")])).toBeUndefined();
+    expect(systemUnshare([])).toBeUndefined();
   });
 });
 
@@ -1528,15 +1721,18 @@ describe.skipIf(!USABLE && !REQUIRED)("an executor in namespaces ORCA makes", ()
   });
 
   it("closed, does not keep a command from a named pipe of the user's that a program outside reads (the stated limit)", async () => {
-    // A pipe with a name is no socket, and a read-only file system does not protect it.
-    const pipe = join(root, "pipe-outside");
+    // A pipe with a name is no socket, and a read-only file system does not protect it. This one
+    // is in the directory the stand-in's program is in, which the namespace has read-only.
+    const { backend, run } = await close();
+    const tools = join(root, "tools");
+    const pipe = join(tools, "pipe-outside");
     execFileSync("mkfifo", [pipe]);
     const reader = spawn("/bin/sh", ["-c", `cat "${pipe}" > "${join(root, "read-outside.txt")}"`], { stdio: "ignore" });
     const read = new Promise((resolve) => reader.once("exit", resolve));
-    const { backend, run } = await close({ masks: { ...masks, readOnly: [...masks.readOnly, root] } });
     await backend.isolated;
     // The directory is read-only to the command, and nothing can be made in it.
-    expect(await run(`echo new > ${root}/made.txt`)).toMatch(/Read-only file system/);
+    expect(await run(`echo new > ${tools}/made.txt`)).toMatch(/Read-only file system/);
+    expect(existsSync(join(tools, "made.txt"))).toBe(false);
     expect(await run(`echo through > ${pipe}; echo $?`)).toBe("0\n");
     await read;
     expect(await readFile(join(root, "read-outside.txt"), "utf8")).toBe("through\n");
@@ -1545,11 +1741,43 @@ describe.skipIf(!USABLE && !REQUIRED)("an executor in namespaces ORCA makes", ()
   it("closed, is refused before anything is started when what is asked for is not closed", async () => {
     expect(() => isolate({ closed: { writable: [work] }, network: "host" })).toThrow(/has no network/);
     expect(() => isolate({ closed: { writable: [join(work, "not-there")] } })).toThrow(/not a directory's own path/);
-    expect(() => isolate({ closed: { writable: ["/"] } })).toThrow(/not a directory's own path/);
+    // The whole file system is not a directory to give: with nothing protected in it, and with.
+    expect(() => isolate({ closed: { writable: ["/"] }, masks: { hidden: [], readOnly: [], writable: [] } })).toThrow(
+      /not a directory's own path/,
+    );
+    expect(() => isolate({ closed: { writable: ["/"] } })).toThrow(
+      /a directory ORCA protects is inside a writable directory/,
+    );
     expect(() => isolate({ closed: { writable: [join(config, "auth")] } })).toThrow(/a writable directory is hidden/);
+    // What a command is given never opens what ORCA keeps read-only: not the directory, and
+    // nothing inside it. The agent's area there is writable by the masks and no other way.
+    for (const inside of masks.readOnly.flatMap((kept) => [kept, join(kept, "work")])) {
+      await mkdir(inside, { recursive: true });
+      expect(() => isolate({ closed: { writable: [inside] } })).toThrow(
+        /a writable directory is inside a directory that is kept read-only/,
+      );
+    }
+    // Nor the other way round: a protected directory inside what a command is given could be
+    // moved aside with the directory above it.
+    expect(() => isolate({ closed: { writable: [root] } })).toThrow(
+      /a directory ORCA protects is inside a writable directory/,
+    );
+    await mkdir(join(work, "deep", "kept"), { recursive: true });
+    for (const kind of ["readOnly", "hidden"] as const)
+      expect(() =>
+        isolate({
+          closed: { writable: [work] },
+          masks: { ...masks, [kind]: [...masks[kind], join(work, "deep", "kept")] },
+        }),
+      ).toThrow(/a directory ORCA protects is inside a writable directory: .*deep\/kept/);
+    // And a request that names one directory inside another is not taken to mean either.
+    await mkdir(join(work, "sub"), { recursive: true });
+    expect(() => isolate({ closed: { writable: [work, join(work, "sub")] } })).toThrow(
+      /a writable directory is inside another/,
+    );
   });
 
-  it("closed, is refused when the namespace bubblewrap made is not under the filter or can write the file system", async () => {
+  it("closed, is refused when the namespace that was made is not under the filter, can write the file system, or takes mounts from outside", async () => {
     const unfiltered = await close({
       bubblewrap: await bubblewrapWith('if [ "$1" = "--seccomp" ]; then shift 2; continue; fi'),
     });
@@ -1562,13 +1790,11 @@ describe.skipIf(!USABLE && !REQUIRED)("an executor in namespaces ORCA makes", ()
       ),
     });
     await expect(writable.backend.isolated).rejects.toThrow(/not closed: the file system is not read-only/);
-    // A directory of the host's bound writable that a command was not given: the table cannot
-    // say whether a path leads there, the holder finds that one does, and that is enough.
+    // A directory of the host's bound writable that a command was not given. Its top is not the
+    // user's to write: it is refused for what the mount table says, not for what could be done there.
     await rm(join(root, "tools"), { recursive: true });
     const extra = join(root, "not-given");
-    await mkdir(extra);
-    // Not the user's to write at its top: it is refused for being reached, not for being written.
-    await mkdir(join(extra, "below"));
+    await mkdir(join(extra, "below"), { recursive: true });
     await chmod(extra, 0o555);
     const more = await close({
       bubblewrap: await bubblewrapWith(
@@ -1577,11 +1803,56 @@ describe.skipIf(!USABLE && !REQUIRED)("an executor in namespaces ORCA makes", ()
     });
     try {
       await expect(more.backend.isolated).rejects.toThrow(
-        /not closed: a path leads a command to .*not-given, which is the host's and writable/,
+        /not closed: .*not-given is the host's and writable in the namespace/,
       );
     } finally {
       await chmod(extra, 0o755);
     }
+    // Another directory bound where the one a command was given should be.
+    await rm(join(root, "tools"), { recursive: true });
+    const swapped = await close({
+      bubblewrap: await bubblewrapWith(
+        `if [ "$1" = "--bind" ] && [ "$2" = "${work}" ]; then args+=("--bind" "${extra}"); shift 2; continue; fi`,
+      ),
+    });
+    await expect(swapped.backend.isolated).rejects.toThrow(
+      /a writable directory is not the directory itself in the namespace/,
+    );
+    // The table can say the right file system and place while what is at the path, looked at
+    // through the namespace's own root, is another directory: that look is made as well.
+    await rm(join(root, "tools"), { recursive: true });
+    const other = await close({
+      reads: {
+        readdir: (path) => readdir(path),
+        stat: async (path) =>
+          path.endsWith(`/root${work}`) ? { dev: 0n, ino: 0n } : await stat(path, { bigint: true }),
+      },
+    });
+    await expect(other.backend.isolated).rejects.toThrow(
+      /a writable directory is not the directory itself in the namespace/,
+    );
+    // Mounts that follow mounts made outside the namespace, which is how bubblewrap leaves them
+    // on a host that shares its mounts: a disk mounted there later would appear here, writable.
+    await rm(join(root, "tools"), { recursive: true });
+    const following = join(root, "following-unshare");
+    await writeFile(
+      following,
+      [
+        "#!/bin/bash",
+        "args=()",
+        'for arg in "$@"; do',
+        '  if [ "$arg" = "private" ]; then arg=shared; fi',
+        '  args+=("$arg")',
+        "done",
+        'exec unshare "${args[@]}"',
+        "",
+      ].join("\n"),
+    );
+    await chmod(following, 0o755);
+    const follows = await close({ unshare: following });
+    await expect(follows.backend.isolated).rejects.toThrow(
+      /not closed: a mount made outside afterwards would appear at/,
+    );
     // No executor was started any of the times.
     expect(existsSync(join(work, "started.txt"))).toBe(false);
   });

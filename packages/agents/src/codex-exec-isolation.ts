@@ -104,8 +104,25 @@
  * at all, so a program listening on one is out of reach wherever its socket is, not by a
  * list of the places sockets usually are. ORCA reads the mount table, the namespaces and
  * the kernel's word that a filter is in place from outside, and has the holder try a named
- * socket inside, before the executor is started. `codexExecProofShortfalls` says what a
- * proof lacks for all this to hold.
+ * socket inside, before the executor is started.
+ *
+ * What ORCA holds a closed executor to is the mount table itself, not what a look inside
+ * found at one moment. A mount that is the host's and writable, and is not a directory a
+ * command was given, is refused whether or not a path of the user's leads into it. Each
+ * writable directory has to be that very directory in the namespace (the same file system
+ * and place in it, and the same directory by ORCA's own look from outside). What a command
+ * is given never opens what ORCA protects: a writable directory that is, or is inside, a
+ * directory the masks keep read-only is refused before anything is started, and so are one
+ * inside another and one with a protected directory inside it (a command could move a
+ * directory above the protected one aside). And the namespace takes no mount from outside after it is made:
+ * bubblewrap leaves its mounts following the host's, so on a host that shares its mounts a
+ * disk mounted there later would appear inside, writable. A closed executor is therefore
+ * started through the system's `unshare`, in a mount namespace whose mounts are private
+ * before bubblewrap makes its own from them, and ORCA refuses a namespace in whose table any
+ * mount still follows or shares. A host without that program, or where it may not make its
+ * namespace, has no closed executor.
+ *
+ * `codexExecProofShortfalls` lists what a proof lacks. It is never a permission.
  *
  * What a closed executor does not close, said plainly. What a command writes inside its own
  * writable directories is still there after it, for whoever runs it later. And a named pipe
@@ -148,6 +165,8 @@ import { physicalPathOf, type ProtectedPaths } from "./permissions.js";
 
 /** Where a system installs bubblewrap. Nothing is looked up on `PATH`. */
 export const CODEX_EXEC_BUBBLEWRAP_PATHS = ["/usr/bin/bwrap", "/bin/bwrap"] as const;
+/** Where a system installs `unshare`, which a closed executor's bubblewrap is started through. */
+export const CODEX_EXEC_UNSHARE_PATHS = ["/usr/bin/unshare", "/bin/unshare"] as const;
 
 /** How long the namespace has to be made, shown and given its executor. */
 const SETUP_WAIT_MS = 10_000;
@@ -602,8 +621,21 @@ function maskArguments(masks: CodexExecMasks, writable: readonly string[] = []):
   };
   const steps: { path: string; args: string[] }[] = [];
   for (const path of writable) {
+    // What a command is given never opens what ORCA protects: a mask over a longer path lands
+    // on top of one over a shorter path, so a writable directory inside a read-only one would
+    // be writable. The agent's areas (`masks.writable`) are the only writable places there.
     if (masks.hidden.some((root) => path === root || inside(path, root)))
       throw new CodexExecIsolationError(`a writable directory is hidden: ${path}`);
+    if (masks.readOnly.some((root) => path === root || inside(path, root)))
+      throw new CodexExecIsolationError(`a writable directory is inside a directory that is kept read-only: ${path}`);
+    if (writable.some((other) => inside(path, other)))
+      throw new CodexExecIsolationError(`a writable directory is inside another: ${path}`);
+    // Nor is what ORCA protects left inside what a command is given. A mask there would hold
+    // at its own path, but a command could move a directory above it aside and put another
+    // in its place for whoever reads that path outside the namespace.
+    const within = [...masks.readOnly, ...masks.hidden].find((root) => inside(root, path));
+    if (within !== undefined)
+      throw new CodexExecIsolationError(`a directory ORCA protects is inside a writable directory: ${within}`);
     steps.push({ path, args: ["--bind", real(path, "writable"), path] });
   }
   for (const path of [...masks.readOnly, ...masks.writable])
@@ -701,6 +733,8 @@ export interface CodexExecIsolatedSpawn extends CodexExecServerSpawn {
   runtimeEnv?: Readonly<Record<string, string>> | undefined;
   /** The bubblewrap to use. The default is the one the system installed. */
   bubblewrap?: string | undefined;
+  /** The `unshare` a closed executor's bubblewrap is started through. The default is the system's. */
+  unshare?: string | undefined;
   /** How long the namespace has to be made, shown and given its executor. */
   setupWaitMs?: number | undefined;
   /** The clock that time is read from, in milliseconds, never running back. For tests. */
@@ -757,6 +791,15 @@ export interface CodexExecIsolationProof {
  * that does not run as root. Undefined when there is none.
  */
 export function systemBubblewrap(candidates: readonly string[] = CODEX_EXEC_BUBBLEWRAP_PATHS): string | undefined {
+  return systemProgram(candidates);
+}
+
+/** The `unshare` the system installed, held to what its bubblewrap is. Undefined when there is none. */
+export function systemUnshare(candidates: readonly string[] = CODEX_EXEC_UNSHARE_PATHS): string | undefined {
+  return systemProgram(candidates);
+}
+
+function systemProgram(candidates: readonly string[]): string | undefined {
   return candidates.find((path) => {
     try {
       const real = realpathSync(path);
@@ -808,12 +851,8 @@ const act = (m) => {
     }
     say({ id: m.id, wrong });
   } else if (m.op === "closed") {
-    // What ORCA could not settle from the mount table: whether a path leads a process here
-    // to a mount at all. One that is not there or cannot be entered is not reached. Any
-    // other answer, an error ORCA does not know included, counts as reached.
-    const reached = m.look.filter((path) => {
-      try { fs.lstatSync(path); return true; } catch (error) { return !["EACCES", "ENOENT", "ENOTDIR"].includes(error.code); }
-    });
+    // What a process here finds: each directory it was given can be written, and a socket
+    // with a name is refused. What it cannot write is not asked here: that is the mount table's to say.
     const kept = m.writable.filter((path) => {
       try { fs.accessSync(path, fs.constants.W_OK); return false; } catch { return true; }
     });
@@ -821,7 +860,7 @@ const act = (m) => {
     const answer = (socket) => {
       if (answered) return;
       answered = true;
-      say({ id: m.id, reached, kept, socket });
+      say({ id: m.id, kept, socket });
     };
     try {
       const tried = net.connect({ path: "/proc/self/no-socket-of-orca" });
@@ -884,9 +923,17 @@ interface Mount {
   /** The mount's own number, and the number of the mount it is mounted in. */
   id: string;
   parent: string;
+  /** The directory of that file system the mount shows, as a path from the file system's own root. */
+  root: string;
+  /**
+   * How mounts made elsewhere reach this one, as the kernel lists it (`shared:7`, `master:7`,
+   * `propagate_from:2`, `unbindable`). Empty for a mount that is private: nothing mounted in
+   * another namespace afterwards appears in it.
+   */
+  propagation: string[];
 }
 
-/** The mount table of a process, later mounts last. */
+/** The mount table of a process, each line as it is. Which mount is on top of which is not in their order: see `codexExecEnteredMounts`. */
 export function parseMountInfo(text: string): Mount[] {
   const mounts: Mount[] = [];
   for (const line of text.split("\n")) {
@@ -900,6 +947,8 @@ export function parseMountInfo(text: string): Mount[] {
       device: fields[2]!,
       id: fields[0]!,
       parent: fields[1]!,
+      root: mountPath(fields[3]!),
+      propagation: fields.slice(6, dash),
     });
   }
   return mounts;
@@ -910,72 +959,170 @@ const OWN_DEVICES = ["null", "zero", "full", "random", "urandom", "tty", "consol
 /** The kinds of file system a namespace makes for itself, with nothing of the host's in them. */
 const OWN_KINDS = ["tmpfs", "devpts", "proc"];
 
+/** The directories a closed executor's mount table is held to. */
+export interface CodexExecClosedRoots {
+  /** What a command was given to write: the closed executor's own list. */
+  writable: readonly string[];
+  /** The masks, of which `writable` are the agent's areas inside a read-only directory. */
+  masks: CodexExecMasks;
+}
+
 /**
- * What the mount table of a closed executor's namespace shows, against ORCA's own.
+ * The mounts of a table that a path can lead into, or why the table cannot be read.
  *
- * `wrong` is why it is not closed, when that can be read from the table alone. `look` are
- * the mounts the table does not settle: listed writable, of a file system of the host's,
- * and not among the directories a command was given. Bubblewrap leaves such a mount as it
- * was only when the user cannot get to it, so whether a path leads a process there at all
- * is asked inside the namespace. One that is reached is not closed, whether or not its top
- * directory is the user's to write: what is below it may be.
+ * Which mount is on top of which is taken from the kernel's own links and from nothing
+ * else: the number each mount has, and the number of the mount it is mounted in. The order
+ * of the lines says nothing here. A mount is entered from the one it is mounted in. One with
+ * another mounted on its root is only passed through, and one that sits under the point of
+ * another mount in the same parent is out of reach for as long as the namespace lasts (the
+ * host's own `/dev/shm`, under the `/dev` a namespace made).
  *
- * No mount but the namespace's own devices lets a device be opened: a device of the host's
- * that lies somewhere other than `/dev` and that the user may write is as good as writable
- * on a read-only file system.
+ * The table has to read as one tree before anything is taken from it, and a table that does
+ * not gives no mounts and a reason, never an empty list that could pass for "nothing wrong":
+ * - a number is one mount's;
+ * - there is one root, at `/`: the mount that is mounted in a mount the table does not list
+ *   or, as the kernel also writes the root of a namespace, in itself;
+ * - every other mount is at or under the point of the mount it is mounted in, and the root
+ *   leads to every mount by those links;
+ * - two mounts that a path could lead into are never at one point in one mount, because the
+ *   links do not say which of them it would be.
+ */
+export function codexExecEnteredMounts(table: readonly Mount[]): { entered: Mount[] } | { unreadable: string } {
+  if (table.length === 0) return { unreadable: "no mount is listed" };
+  const numbered = new Map<string, Mount>();
+  for (const mount of table) {
+    if (numbered.has(mount.id)) return { unreadable: `two mounts have the number ${mount.id}` };
+    numbered.set(mount.id, mount);
+  }
+  const roots = table.filter((mount) => mount.parent === mount.id || !numbered.has(mount.parent));
+  if (roots.length === 0) return { unreadable: "no mount is the root" };
+  if (roots.length > 1)
+    return { unreadable: `more than one mount is the root: ${roots.map((mount) => mount.point).join(", ")}` };
+  const root = roots[0]!;
+  if (root.point !== sep) return { unreadable: `the root is at ${root.point}` };
+  const mountedIn = new Map<string, Mount[]>();
+  for (const mount of table) {
+    if (mount === root) continue;
+    const parent = numbered.get(mount.parent)!;
+    if (mount.point !== parent.point && !inside(mount.point, parent.point))
+      return { unreadable: `${mount.point} is listed as mounted in the mount at ${parent.point}` };
+    mountedIn.set(parent.id, [...(mountedIn.get(parent.id) ?? []), mount]);
+  }
+  const entered: Mount[] = [];
+  let led = 0;
+  // One mount at a time, from the root. `covered`: no path leads into it or below it.
+  const waiting: [mount: Mount, covered: boolean][] = [[root, false]];
+  for (let next = waiting.pop(); next !== undefined; next = waiting.pop()) {
+    const [mount, covered] = next;
+    led += 1;
+    const inIt = mountedIn.get(mount.id) ?? [];
+    const reached = covered
+      ? []
+      : inIt.filter((child) => !inIt.some((other) => other !== child && inside(child.point, other.point)));
+    const points = new Set<string>();
+    for (const child of reached) {
+      if (points.has(child.point))
+        return {
+          unreadable: `two mounts are at ${child.point} in one mount, and nothing says which a path leads into`,
+        };
+      points.add(child.point);
+    }
+    // With another mounted on its root, nothing of its own is reached.
+    if (!covered && !points.has(mount.point)) entered.push(mount);
+    for (const child of inIt) waiting.push([child, !reached.includes(child)]);
+  }
+  // A mount the root does not lead to is mounted in itself by way of others: no tree has that.
+  if (led !== table.length) return { unreadable: "a mount is listed that the root does not lead to" };
+  if (entered.length === 0) return { unreadable: "no mount can be reached" };
+  return { entered };
+}
+
+/**
+ * Why the mount table of a namespace is not a closed executor's, against ORCA's own table,
+ * or undefined when it is one. Everything here is read from the two tables. Nothing is
+ * taken from what a process in the namespace could or could not do when it was asked: a
+ * mount that is the host's and writable where a path leads into it is not closed, whoever
+ * can get to it today.
  *
- * A mount is the namespace's own when its file system is of a kind a namespace makes for
- * itself and is not one of the file systems in ORCA's table: whatever is written there is
- * gone with the namespace.
+ * - **No mount takes mounts from outside.** A mount that is shared with, or follows, a mount
+ *   of another namespace gets whatever is mounted there afterwards, writable and with its
+ *   devices, so a table read once would not stay true. Every mount has to be private.
+ * - The root is read-only, and `/proc`, `/dev`, `/run` and `/tmp` are the namespace's own:
+ *   of a kind a namespace makes for itself, and not one of the file systems in ORCA's table.
+ * - **Each directory a command may write is that directory**: one mount at its path that a
+ *   path leads into, writable, showing the same directory of the same file system as the
+ *   path does in ORCA's own table.
+ * - No mount a path leads into lets a device be opened, but the namespace's own devices: a
+ *   device of the host's that the user may write is as good as writable on a read-only
+ *   file system.
+ * - Every other mount a path leads into is read-only, the namespace's own, or **inside a
+ *   directory a command may write and not inside one ORCA protects there**. Of the
+ *   directories named (what a command was given, the agent's areas, what is read-only and
+ *   what is hidden), the nearest one around a mount decides, and a protected one wins a tie.
  *
- * Only mounts a path can lead into count. A mount is entered from the one it is mounted in,
- * so one that sits under the point of a later mount in the same parent is out of reach (the
- * host's own `/dev/shm`, under the `/dev` the namespace made), and one with another mounted
- * on its root is only passed through.
+ * Only mounts a path can lead into count for all but the first, as `codexExecEnteredMounts`
+ * finds them from the kernel's links. A table it cannot read, the namespace's or ORCA's own,
+ * is not closed.
  */
 export function codexExecClosedMounts(
   theirs: readonly Mount[],
   mine: readonly Mount[],
-  writable: readonly string[],
-): { wrong?: string; look: string[] } {
+  roots: CodexExecClosedRoots,
+): string | undefined {
+  const follows = theirs.find((mount) => mount.propagation.some((field) => !field.startsWith("unbindable")));
+  if (follows !== undefined) return `a mount made outside afterwards would appear at ${follows.point}`;
   const host = new Set(mine.map((mount) => mount.device));
   const own = (mount: Mount | undefined, kind: string): boolean =>
     mount !== undefined && mount.type === kind && !host.has(mount.device);
-  const top = (path: string): Mount | undefined => theirs.filter((mount) => mount.point === path).at(-1);
-  if (!top(sep)?.options.includes("ro")) return { wrong: "the file system is not read-only", look: [] };
+  const tree = codexExecEnteredMounts(theirs);
+  if ("unreadable" in tree) return `the namespace's mount table cannot be read (${tree.unreadable})`;
+  const ownTree = codexExecEnteredMounts(mine);
+  if ("unreadable" in ownTree) return `ORCA's own mount table cannot be read (${ownTree.unreadable})`;
+  const entered = tree.entered;
+  const mineEntered = ownTree.entered;
+  const at = (path: string): Mount[] => entered.filter((mount) => mount.point === path);
+  if (at(sep).length !== 1 || !at(sep)[0]!.options.includes("ro")) return "the file system is not read-only";
   for (const [path, kind] of [
     ["/proc", "proc"],
     ["/dev", "tmpfs"],
     ["/run", "tmpfs"],
     ["/tmp", "tmpfs"],
   ] as const)
-    if (!own(top(path), kind)) return { wrong: `${path} is not the namespace's own`, look: [] };
-  for (const path of writable)
-    if (!top(path)?.options.includes("rw"))
-      return { wrong: `a writable directory is not bound writable: ${path}`, look: [] };
-  const ids = new Set(theirs.map((mount) => mount.id));
-  const children = (of: Mount): Mount[] => theirs.filter((mount) => mount.parent === of.id && mount !== of);
-  const entered: Mount[] = [];
-  const enter = (mount: Mount): void => {
-    const inIt = children(mount);
-    // With another mounted on its root, nothing of its own is reached.
-    if (!inIt.some((child) => child.point === mount.point)) entered.push(mount);
-    for (const child of inIt)
-      if (!inIt.some((other) => other !== child && inside(child.point, other.point))) enter(child);
+    if (at(path).length !== 1 || !own(at(path)[0], kind)) return `${path} is not the namespace's own`;
+
+  // Where a path is in ORCA's own table: the file system, and the directory of it.
+  const inMine = (path: string): { device: string; root: string } | undefined => {
+    const around = mineEntered
+      .filter((mount) => mount.point === path || inside(path, mount.point))
+      .sort((a, b) => b.point.length - a.point.length)[0];
+    if (around === undefined) return undefined;
+    const below = around.point === path ? "" : path.slice(around.point === sep ? 0 : around.point.length);
+    return { device: around.device, root: `${around.root === sep ? "" : around.root}${below}` || sep };
   };
-  for (const mount of theirs) if (!ids.has(mount.parent)) enter(mount);
-  const look = new Set<string>();
+  const given = [...roots.writable, ...roots.masks.writable];
+  for (const path of given) {
+    const mounts = at(path);
+    const expected = inMine(path);
+    if (mounts.length !== 1 || !mounts[0]!.options.includes("rw"))
+      return `a writable directory is not bound writable: ${path}`;
+    if (expected === undefined || mounts[0]!.device !== expected.device || mounts[0]!.root !== expected.root)
+      return `a writable directory is not the directory itself in the namespace: ${path}`;
+  }
+
+  const kept = [...roots.masks.readOnly, ...roots.masks.hidden];
+  const around = (point: string, of: readonly string[]): number =>
+    Math.max(-1, ...of.filter((root) => point === root || inside(point, root)).map((root) => root.length));
   for (const mount of entered) {
     const ownDevice = OWN_DEVICES.includes(mount.point) || own(mount, "devpts");
     if (!ownDevice && !mount.options.includes("nodev"))
-      return { wrong: `a device of the host's could be opened under ${mount.point}`, look: [] };
-    if (mount.options.includes("ro")) continue;
+      return `a device of the host's could be opened under ${mount.point}`;
+    if (ownDevice || mount.options.includes("ro")) continue;
     if (OWN_KINDS.includes(mount.type) && !host.has(mount.device)) continue;
-    if (OWN_DEVICES.includes(mount.point)) continue;
-    if (writable.some((root) => mount.point === root || inside(mount.point, root))) continue;
-    look.add(mount.point);
+    // The nearest directory named around it decides. One ORCA protects wins a tie.
+    if (around(mount.point, given) > around(mount.point, kept)) continue;
+    return `${mount.point} is the host's and writable in the namespace`;
   }
-  return { look: [...look] };
+  return undefined;
 }
 
 /** The numbers the kernel knows these by on x64, the one machine the filter is written for. */
@@ -1067,14 +1214,30 @@ export function codexExecSocketFilter(): Buffer {
 }
 
 /**
- * What a proof lacks of what this backend can show, each thing by name: the network, the
- * closed file system and filter, and a system that keeps a command from altering the
- * executor. What the namespace is, ORCA saw before it gave the proof. What the system
- * allows inside it is read here from what the proof recorded.
+ * What no proof of this backend covers, closed or not. Each is a way work or a wrong answer
+ * could get past what was verified, so each keeps a session out of a supported configuration
+ * until something else closes it.
+ */
+export const CODEX_EXEC_NOT_CLOSED = [
+  // Not a socket, and a read-only file system does not protect it.
+  "a command can write to a named pipe of the user's that a program outside the namespace reads",
+  // Whoever runs or reads them later does so outside the namespace.
+  "what a command writes into its writable directories stays after it",
+  // The kernel says that a filter is in place, not which. ORCA sees one refusal of it.
+  "that the filter in place is ORCA's own rests on the system's bubblewrap having been handed it, and is not read back",
+] as const;
+
+/**
+ * What a proof lacks, each thing by name. **It is a list of reasons to refuse, never a
+ * permission.** No answer of it admits a session: it is never empty, because what this
+ * backend cannot close or cannot show is in it for every proof, and whoever admits a
+ * session has to have each of those closed some other way or refuse.
  *
- * An empty answer is not a claim that nothing leads out. What a closed executor does not
- * close is the same for every proof and is not listed here: what a command writes into its
- * writable directories, and a named pipe of the user's that a program outside reads.
+ * First what the proof itself records: the network, the closed file system and filter, and
+ * a system that keeps a command from altering the executor. What the namespace is, ORCA saw
+ * before it gave the proof. What the system allows inside it is read here from what the
+ * proof recorded. Then what holds for every proof of this backend, in
+ * `CODEX_EXEC_NOT_CLOSED`.
  */
 export function codexExecProofShortfalls(proof: CodexExecIsolationProof): string[] {
   const lacks: string[] = [];
@@ -1085,7 +1248,7 @@ export function codexExecProofShortfalls(proof: CodexExecIsolationProof): string
   // that ran it, and nothing it then does is a request ORCA decided.
   if (proof.ptraceScope === undefined || proof.ptraceScope < 1)
     lacks.push("the system lets a command alter the executor that started it (no ptrace_scope of 1 or more)");
-  return lacks;
+  return [...lacks, ...CODEX_EXEC_NOT_CLOSED];
 }
 
 /**
@@ -1248,14 +1411,25 @@ export function spawnIsolatedCodexExecServer(spec: CodexExecIsolatedSpawn): Code
     throw new CodexExecIsolationError("a closed executor has no network: the host's cannot be asked for with it");
   if (sealed !== undefined && process.arch !== "x64")
     throw new CodexExecIsolationError("a closed executor is made on x64 only");
+  // Bubblewrap leaves its mounts following the host's, so that a disk mounted on the host
+  // afterwards appears in the namespace, writable. A closed executor's bubblewrap is started
+  // in a mount namespace whose mounts were made private first, and so are its own.
+  const unshare = sealed === undefined ? undefined : (spec.unshare ?? systemUnshare());
+  if (sealed !== undefined && unshare === undefined)
+    throw new CodexExecIsolationError(
+      "the system has no unshare that only root can change, which a closed executor is started through",
+    );
   const masks: CodexExecMasks = {
     hidden: [...spec.masks.hidden],
     readOnly: [...spec.masks.readOnly],
     writable: [...spec.masks.writable],
   };
   const child = spawn(
-    bubblewrap,
+    unshare ?? bubblewrap,
     [
+      ...(unshare === undefined
+        ? []
+        : ["--user", "--map-current-user", "--mount", "--propagation", "private", "--", bubblewrap]),
       "--unshare-user",
       "--unshare-pid",
       ...(network === "none" ? ["--unshare-net"] : []),
@@ -1637,7 +1811,12 @@ export function spawnIsolatedCodexExecServer(spec: CodexExecIsolatedSpawn): Code
 
     // From outside: its mount table shows each mask, and a hidden directory is empty through its root.
     const mounts = parseMountInfo(readFileSync(`${at}/mountinfo`, "utf8"));
-    const top = (path: string): Mount | undefined => mounts.filter((mount) => mount.point === path).at(-1);
+    // The mount a path ends in is found from the kernel's links between mounts, not from the
+    // order of the table. A table that cannot be read that way shows nothing.
+    const tree = codexExecEnteredMounts(mounts);
+    if ("unreadable" in tree) return wrong(`the holder's mount table cannot be read (${tree.unreadable})`);
+    // At most one at a path: two at one point in one mount do not read as a tree.
+    const top = (path: string): Mount | undefined => tree.entered.find((mount) => mount.point === path);
     for (const path of masks.hidden) {
       const mount = top(path);
       if (mount?.type !== "tmpfs" || !mount.options.includes("ro")) wrong(`a hidden directory is not masked: ${path}`);
@@ -1667,24 +1846,32 @@ export function spawnIsolatedCodexExecServer(spec: CodexExecIsolatedSpawn): Code
       wrong(`a mask does not hold inside the namespace (${String((probe["wrong"] as unknown[])[0])})`);
 
     if (sealed !== undefined) {
-      // From outside: the mount table shows a read-only file system, the namespace's own
-      // devices and temporary directory, and nothing of the host's writable but what was given.
-      const given = [...sealed.writable, ...masks.writable];
-      const table = codexExecClosedMounts(mounts, parseMountInfo(readFileSync("/proc/self/mountinfo", "utf8")), given);
-      if (table.wrong !== undefined) wrong(`the executor is not closed: ${table.wrong}`);
-      // From inside: whether what the table left open is reached at all, and that the filter
-      // refuses a socket with a name. Without it, the answer would be that there is no such
-      // socket. That the filter refuses the rest of what ORCA's does rests on bubblewrap
-      // having been handed ORCA's filter and no other.
-      const tried = await ask({ op: "closed", look: table.look, writable: given });
+      // From outside, and from the tables alone: no mount takes mounts from outside, the file
+      // system is read-only, the devices and temporary directory are the namespace's own, each
+      // writable directory is the directory itself, and nothing else of the host's is writable.
+      const notClosed = codexExecClosedMounts(mounts, parseMountInfo(readFileSync("/proc/self/mountinfo", "utf8")), {
+        writable: sealed.writable,
+        masks,
+      });
+      if (notClosed !== undefined) wrong(`the executor is not closed: ${notClosed}`);
+      // And through the holder's root: what is at a writable directory's path in the namespace
+      // is the directory ORCA has at that path.
+      for (const path of sealed.writable) {
+        const through = await outside(() => reads.stat(`${at}/root${path}`));
+        stillThere(holder);
+        const real = await outside(() => reads.stat(path));
+        stillThere(holder);
+        if (through.dev !== real.dev || through.ino !== real.ino)
+          wrong(`a writable directory is not the directory itself in the namespace: ${path}`);
+      }
+      // From inside: a command can write what it was given, and the filter refuses a socket
+      // with a name. Without it, the answer would be that there is no such socket. That the
+      // filter refuses the rest of what ORCA's does rests on bubblewrap having been handed
+      // ORCA's filter and no other.
+      const tried = await ask({ op: "closed", writable: [...sealed.writable, ...masks.writable] });
       stillThere(holder);
-      const reached = tried["reached"];
       const kept = tried["kept"];
-      if (!Array.isArray(reached) || !Array.isArray(kept)) wrong("the holder did not try what is closed");
-      if ((reached as unknown[]).length > 0)
-        wrong(
-          `the executor is not closed: a path leads a command to ${String((reached as unknown[])[0])}, which is the host's and writable`,
-        );
+      if (!Array.isArray(kept)) wrong("the holder did not try what is closed");
       if ((kept as unknown[]).length > 0)
         wrong(`a writable directory cannot be written in the namespace: ${String((kept as unknown[])[0])}`);
       if (tried["socket"] !== "EACCES")
