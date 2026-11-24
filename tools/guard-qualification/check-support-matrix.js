@@ -6,26 +6,36 @@
  *
  * Exit 0 with nothing printed when the matrix holds; otherwise one line per problem, exit 1.
  * Whether the synthetic cases *pass* is the suite's job (tools/test/enforcement-acceptance-706.test.js),
- * and synthetic results never count toward a tier. The receipt checks are structural only, and
- * promotion above `none` is refused outright (`PROMOTION_ENABLED`) until receipts are bound to
- * an independently trusted run.
+ * and synthetic results never count toward a tier. A receipt backs a tier only when it is
+ * bound to the run that produced it (`attestation.js`): from the command line every receipt's
+ * GitHub artifact attestation is verified; called as a function without a verifier, every
+ * receipt counts as unverified. That binding is plumbing only: no tier is promoted yet
+ * (`PROMOTABLE_TIERS` is empty) until a reviewed receipt producer exists and an end-to-end
+ * check accepts a real qualifying receipt and refuses a real nonqualifying one (#1026).
+ *
+ *   node tools/guard-qualification/check-support-matrix.js --release
+ *
+ * also refuses a promoted row whose certified build is stale against HEAD (the release gate).
  */
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { attestationProblems, staleProblems } from "./attestation.js";
 import { effectFrom } from "./connected/evidence.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = resolve(here, "..", "..");
 const TIERS = ["none", "A", "B", "C"];
 /**
- * Off until a receipt is bound to an independently trusted run (who ran it, on what, and that
- * the file was not written by hand). Until then the receipt checks are structural only and
- * every promotion above `none` is refused.
+ * Tiers a row may be promoted to on attested receipts: none yet. Promotion to A or B waits for
+ * the reviewed receipt producer and an end-to-end check of a real qualifying and nonqualifying
+ * receipt; C also needs #1026's independent observer.
  */
-export const PROMOTION_ENABLED = false;
+export const PROMOTABLE_TIERS = [];
 export const PROMOTION_DISABLED =
-  "tier promotion is disabled: receipt checks are structural only until a receipt is bound to an independently trusted run (#706)";
+  "tier promotion is disabled until a reviewed receipt producer and an end-to-end check of real receipts exist (#1026)";
+/** What a receipt is when nothing verified its attestation (the function's default). */
+export const UNVERIFIED = "attestation not verified (run check-support-matrix.js, which verifies it)";
 
 /** Categories a tier C claim's connected path may not exclude. A named residual is not proof. */
 const MUST_COVER_FOR_C = ["lifecycle", "bypass"];
@@ -202,6 +212,8 @@ export function checkSupportMatrix(
   exists = (p) => existsSync(join(REPO_ROOT, p)),
   readReceipt = (p) => JSON.parse(readFileSync(join(REPO_ROOT, p), "utf8")),
   assertions = loadAssertions(),
+  verifyReceipt = () => [UNVERIFIED],
+  promotable = PROMOTABLE_TIERS,
 ) {
   const problems = [];
   const ids = new Set(catalogue.cases.map((c) => c.id));
@@ -280,9 +292,9 @@ export function checkSupportMatrix(
       receipts.push({ file, receipt: readReceipt(file) });
     }
     if (tier === 0) continue;
-    // The checks below are structural: a receipt file says what it says. Until a receipt is
-    // bound to an independently trusted run, no structure is enough to promote a row.
-    if (!PROMOTION_ENABLED) problems.push(`${at}: ${PROMOTION_DISABLED}`);
+    if (!promotable.includes(agent.tier)) problems.push(`${at}: ${PROMOTION_DISABLED}`);
+    // A receipt says what it says; only one bound to the run that produced it is evidence.
+    for (const r of receipts) r.trust = verifyReceipt(r.file, r.receipt);
 
     const pin = agent.pin;
     if (!pin || !pin.agentVersion || !pin.adapterVersion || !pin.host || !/^[0-9a-f]{40}$/.test(pin.build ?? "")) {
@@ -309,15 +321,19 @@ export function checkSupportMatrix(
       const met = new Set();
       for (const need of required) {
         const good = receipts.filter(
-          ({ receipt }) => receiptProblems(receipt, agent, need.route, need.kind, need.cases, assertions).length === 0,
+          ({ receipt, trust }) =>
+            trust.length === 0 &&
+            receiptProblems(receipt, agent, need.route, need.kind, need.cases, assertions).length === 0,
         );
         if (good.length > 0) {
           met.add(need.route);
           continue;
         }
         if (need.tier === 3) continue;
-        const why = receipts.flatMap(({ file, receipt }) =>
-          receiptProblems(receipt, agent, need.route, need.kind, need.cases, assertions).map((p) => `${file}: ${p}`),
+        const why = receipts.flatMap(({ file, receipt, trust }) =>
+          [...receiptProblems(receipt, agent, need.route, need.kind, need.cases, assertions), ...trust].map(
+            (p) => `${file}: ${p}`,
+          ),
         );
         problems.push(
           `${at}: tier ${TIERS[need.tier]} on ${route} needs a passing ${need.kind} receipt for ${agent.id} ${pin.agentVersion} on ${pin.host}` +
@@ -358,8 +374,23 @@ export function checkSupportMatrix(
   return problems;
 }
 
+/**
+ * Why promoted rows are not current at HEAD: each row above `none` must pin a build whose
+ * certified code and requirements HEAD has not changed (`attestation.js`, `staleProblems`). The release gate.
+ */
+export function releaseProblems(matrix, repoRoot = REPO_ROOT, stale = staleProblems) {
+  return matrix.agents
+    .filter((a) => a.tier !== "none" && a.pin?.build)
+    .flatMap((a) => stale(repoRoot, a.pin.build).map((p) => `agent ${a.id}: ${p}`));
+}
+
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const problems = checkSupportMatrix(loadMatrix(), loadCatalogue());
+  const matrix = loadMatrix();
+  const read = (p) => JSON.parse(readFileSync(join(REPO_ROOT, p), "utf8"));
+  const problems = checkSupportMatrix(matrix, loadCatalogue(), undefined, read, loadAssertions(), (file, receipt) =>
+    attestationProblems(REPO_ROOT, file, receipt),
+  );
+  if (process.argv.includes("--release")) problems.push(...releaseProblems(matrix));
   for (const p of problems) console.error(p);
   process.exit(problems.length === 0 ? 0 : 1);
 }

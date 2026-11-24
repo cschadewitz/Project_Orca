@@ -134,12 +134,31 @@ an artifact. It is evidence for review: promotion stays disabled, so no tier cha
 The same tiers the #705 and #709-#711 streams report in, defined once in
 `support-matrix.json` and checked by `check-support-matrix.js`.
 
-**Promotion is disabled.** The receipt checks below are structural only: a receipt file says
-what it says, and nothing yet binds it to an independently trusted run (who ran it, on which
-machine, and that the file was not written by hand). Until that binding exists, the checker
-refuses every tier above `none`, whatever receipts a row lists (`PROMOTION_ENABLED = false`).
+**Promotion is disabled; receipts are bound to the run that produced them.** A receipt file
+says what it says; it counts only when it is bound to that run
+([attestation.js](../../../tools/guard-qualification/attestation.js), #1026).
+`guard-receipts.yml` will sign each receipt it produces with GitHub's artifact attestation
+(Sigstore, through the job's OIDC identity), and the bundle is committed beside the receipt as
+`<receipt>.sigstore.json`. The checker accepts a receipt only when `gh attestation verify`
+(GitHub CLI 2.102.0 or later, which matches `--signer-workflow` exactly, GHSA-wjmr-j3rp-mh2g)
+passes for that exact file in this repository on a GitHub-hosted runner, and it then checks the
+certificate itself: signed by that workflow file at the ref it ran from (`main` or a release
+line), with the signer workflow at the receipt's own `build` commit, so the signer is the
+revision reviewed with the code it certified. No tier is promoted on this yet
+(`PROMOTABLE_TIERS` is empty): promotion to A or B waits for the reviewed receipt producer and
+an end-to-end check that a real qualifying receipt is accepted and a real nonqualifying one is
+refused. C also waits for #1026's independent observer.
 
-What a receipt must show once promotion is enabled: the row pins agent version, adapter
+`guard-matrix.yml` verifies the attestations on every change to the matrix or its receipts.
+A tier is certified for one build: the release gate (`check-support-matrix.js --release`)
+refuses a promoted row whose build differs from the commit being released in anything but documentation, changelog fragments, the receipts, a `package.json`'s
+`version`, and a matrix row's `tier`, `pin` and `receipts`. Workflows, build and packaging
+configuration, and the routes, cases and requirements in the matrix all count. The release
+workflow does not run it yet: while no row is promoted the release path is unchanged, and the
+gate is wired in with promotion, as a separate verifier run against the selected commit with an
+explicit path for release lines that have no matrix to check.
+
+What a receipt must show: the row pins agent version, adapter
 version, host and the exact 40-hex ORCA build. For **each route**, a committed
 `orca-enforcement-receipt/1` must match that pin and route, list no case twice, pass every case
 it lists, and carry `checks.connects` passing. An installed receipt also needs

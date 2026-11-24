@@ -11,8 +11,9 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  PROMOTABLE_TIERS,
   PROMOTION_DISABLED,
-  PROMOTION_ENABLED,
+  UNVERIFIED,
   REPO_ROOT,
   casesFor,
   checkSupportMatrix,
@@ -101,28 +102,72 @@ describe("the matrix checker refuses claims beyond the evidence", () => {
       },
     };
   };
-  const check = (agent, files = {}, paths = matrix.paths, assertions = inventoryFor(paths)) =>
+  /**
+   * The structural checks, with every receipt's attestation taken as verified and every tier
+   * promotable: what the checker will require once promotion is enabled.
+   */
+  const attested = () => [];
+  const check = (
+    agent,
+    files = {},
+    paths = matrix.paths,
+    assertions = inventoryFor(paths),
+    verify = attested,
+    promotable = ["A", "B", "C"],
+  ) =>
     checkSupportMatrix(
       { ...matrix, agents: [{ ...agent, receipts: Object.keys(files) }], paths },
       catalogue,
       (p) => p in files,
       (p) => files[p],
       assertions,
+      verify,
+      promotable,
     );
-  /** Every promotion is refused today, so each result leads with that; the rest is structure. */
-  const structural = (problems) => {
-    expect(problems[0]).toBe(`agent claude: ${PROMOTION_DISABLED}`);
-    return problems.slice(1);
-  };
+  const structural = (problems) => problems;
   const needs = (tier, kind = tier === "C" ? "connected" : "installed", route = "acp-ask") =>
     `agent claude: tier ${tier} on ${route} needs a passing ${kind} receipt for claude 2.1.330 on linux-x64`;
 
-  it("refuses every promotion while receipts are not bound to a trusted run", () => {
-    expect(PROMOTION_ENABLED).toBe(false);
-    for (const tier of ["A", "B", "C"])
+  it("promotes nothing yet, whatever the receipts show", () => {
+    expect(PROMOTABLE_TIERS).toEqual([]);
+    for (const tier of ["A", "B", "C"]) {
+      const kind = tier === "C" ? "connected" : "installed";
       expect(
-        check(claude({ tier }), { "r.json": receipt({ kind: tier === "C" ? "connected" : "installed" }) })[0],
+        check(
+          claude({ tier }),
+          { "r.json": receipt({ kind }) },
+          matrix.paths,
+          undefined,
+          attested,
+          PROMOTABLE_TIERS,
+        )[0],
       ).toBe(`agent claude: ${PROMOTION_DISABLED}`);
+    }
+  });
+
+  it("counts a receipt only when its attestation verifies", () => {
+    // A complete, passing receipt holds tier A and B when its attestation verifies.
+    expect(check(claude({ tier: "A" }), { "r.json": receipt() })).toEqual([]);
+    expect(check(claude({ tier: "B" }), { "r.json": receipt() })).toEqual([]);
+    // The same receipt, with nothing verifying it (the function's default), is not evidence.
+    const unverified = checkSupportMatrix(
+      { ...matrix, agents: [{ ...claude({ tier: "A" }), receipts: ["r.json"] }] },
+      catalogue,
+      (p) => p === "r.json",
+      () => receipt(),
+      inventoryFor(matrix.paths),
+      undefined,
+      ["A"],
+    );
+    expect(unverified).toEqual([`${needs("A")} (r.json: ${UNVERIFIED})`]);
+    // A verifier's refusal is reported against the receipt, and the tier is not met.
+    const forged = () => ["attestation does not verify: no matching attestations found"];
+    expect(
+      check(claude({ tier: "B" }), { "r.json": receipt() }, matrix.paths, inventoryFor(matrix.paths), forged),
+    ).toEqual([
+      `${needs("A")} (r.json: attestation does not verify: no matching attestations found)`,
+      `${needs("B")} (r.json: attestation does not verify: no matching attestations found)`,
+    ]);
   });
 
   it("any tier without a pinned version, adapter version, host and exact build", () => {
