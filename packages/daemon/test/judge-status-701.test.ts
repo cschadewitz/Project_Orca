@@ -166,6 +166,7 @@ describe("#701 judge.status over RPC", () => {
       scope: UNRESTRICTED,
     });
     let budgetReads = 0;
+    let probes = 0;
     const daemon = await startDaemon({
       capabilities: ["runs.read"],
       orcaVersion: "test",
@@ -183,6 +184,10 @@ describe("#701 judge.status over RPC", () => {
           await onBudget();
           return ready;
         },
+        key: async (config) => {
+          probes++;
+          return judgeKeyStatus(config);
+        },
       },
       auth: { mode: "token", credentials, ownership: new OwnershipStore(), resolver: orchestratorResolver(orc) },
     });
@@ -195,13 +200,13 @@ describe("#701 judge.status over RPC", () => {
       });
       return (await response.json()) as { ok: boolean; result?: unknown; error?: { code: string } };
     };
-    return { credentials, owner, viewer, reader, call, budgetReads: () => budgetReads };
+    return { credentials, owner, viewer, reader, call, budgetReads: () => budgetReads, probes: () => probes };
   }
 
   it("answers an owner with its own grants and the key, and refuses a caller without config.read", async () => {
     process.env.JUDGE_STATUS_TEST_KEY = "sk-test";
     closers.push(() => void delete process.env.JUDGE_STATUS_TEST_KEY);
-    const { owner, viewer, call } = await setup();
+    const { owner, viewer, call, probes } = await setup();
     const hello = (await call(owner.token, "hello", { client: "test", protocol: PROTOCOL_VERSION })) as {
       result: { methods: string[] };
     };
@@ -214,14 +219,16 @@ describe("#701 judge.status over RPC", () => {
       budget: { state: "ready" },
     });
     expect(status.grants[0]).toEqual({ kind: "reads", enabled: true, granted: true });
+    expect(probes()).toBe(1);
     expect(await call(viewer.token, "judge.status")).toMatchObject({ ok: false, error: { code: "AUTH_FORBIDDEN" } });
     expect(await call(owner.token, "judge.status", { extra: 1 })).toMatchObject({ ok: false });
   });
 
   it("withholds the key from a config reader whose secrets grant does not name it, without probing", async () => {
-    const { reader, call } = await setup();
+    const { reader, call, probes } = await setup();
     const status = JudgeStatusResultSchema.parse((await call(reader.token, "judge.status")).result);
     expect(status.config).toMatchObject({ state: "configured", key: "withheld" });
+    expect(probes()).toBe(0);
     expect(status.grants.every((g) => !g.granted)).toBe(true);
   });
 
@@ -232,6 +239,8 @@ describe("#701 judge.status over RPC", () => {
     });
     during.revoke = () => made.credentials.revoke(made.owner.credential.id);
     expect(await made.call(made.owner.token, "judge.status")).toMatchObject({ ok: false });
+    // Revoked during the budget read: the key was never probed for it.
+    expect(made.probes()).toBe(0);
     const reads = made.budgetReads();
     expect(await made.call(made.owner.token, "judge.status")).toMatchObject({ ok: false });
     expect(made.budgetReads()).toBe(reads);

@@ -66,6 +66,7 @@ import { directAdmissionAuthority } from "./admission-retry.js";
 import { holds, type Principal } from "./auth/principal.js";
 import type { JudgeBudgetInspection } from "./judge-budget.js";
 import { judgeKeyStatus, judgeStatus } from "./judge-status.js";
+import type { JudgeKeyState } from "@orca/protocol";
 import {
   HostResourceReadModel,
   resourceResponseForPublication,
@@ -92,6 +93,8 @@ export interface DaemonOptions extends MethodContext {
   judgeStatusSource?: {
     config: () => Pick<OrcaConfig, "review" | "secrets" | "hosts"> | undefined;
     budget: () => Promise<JudgeBudgetInspection>;
+    /** The key check (`judgeKeyStatus` by default); tests inject one to count probes. */
+    key?: (config: Pick<OrcaConfig, "review" | "secrets" | "hosts"> | undefined) => Promise<JudgeKeyState>;
   };
   /** Installed protected evidence reader; never a callback that attaches execution. */
   admissionExecutionSource?: ((runId: string) => Promise<AdmissionExecutionView | undefined>) | undefined;
@@ -703,14 +706,18 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
       const config = source.config();
       const credential = (config?.review?.plainRules?.judge as { credential?: unknown } | undefined)?.credential;
       // The key is probed only for a caller who may see that reference; otherwise it is withheld unprobed.
-      const mayProbe =
-        typeof credential === "string" && secretsModel !== undefined && secretsModel.sees(before, credential);
+      const sees = (principal: Principal) =>
+        typeof credential === "string" && secretsModel !== undefined && secretsModel.sees(principal, credential);
+      const mayProbe = sees(before);
       const budget = await source.budget();
-      const key = mayProbe ? await judgeKeyStatus(config) : "withheld";
+      // Authorized again immediately before the probe: a caller revoked or narrowed during the
+      // budget read causes no secret-specific inspection at all.
+      const probe = mayProbe && sees(current(invocation));
+      const key: JudgeKeyState = probe ? await (source.key ?? judgeKeyStatus)(config) : "withheld";
       // Again after the awaits, before anything is answered: the caller, its permission, its
       // secret visibility and its grants as they are now.
       const after = current(invocation);
-      const visible = mayProbe && secretsModel !== undefined && secretsModel.sees(after, credential);
+      const visible = probe && sees(after);
       return judgeStatus({
         config,
         key: visible ? key : "withheld",
