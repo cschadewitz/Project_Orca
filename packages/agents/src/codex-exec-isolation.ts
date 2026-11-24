@@ -5,8 +5,8 @@
  * cannot do by deciding: end everything the executor started, and keep ORCA's own directories
  * out of the executor's reach under a name the decision never saw. This backend does both by
  * where it runs the executor: through the system's bubblewrap, in a user, pid and mount
- * namespace of its own. The user, the network and the rest of the file system stay as they
- * are.
+ * namespace of its own, and with no network unless the host's is asked for. The user and the
+ * rest of the file system stay as they are.
  *
  * **The executor's processes are ORCA's to end.** The first process of the pid namespace is a
  * small program of ORCA's (the holder), and the executor is its child. Everything the
@@ -76,10 +76,22 @@
  * namespace ends when ORCA or its bubblewrap dies. The masks' paths are read on ORCA's
  * thread too, before bubblewrap is started, when there is nothing yet to end.
  *
- * Limits, said plainly. A command ORCA allowed runs as the user and can ask a service outside
- * the namespace to act for it (a user service manager, a container daemon's socket, a login
- * to the same machine): what that service starts is not in the namespace and does not see
- * the masks. Where the system lets one process trace an unrelated process of the same user
+ * **What a command can reach outside the namespace is narrowed, not closed.** A command
+ * ORCA allowed runs as the user. A program outside the namespace that acts for that user (a
+ * user service manager, a keyring, a container daemon, a terminal multiplexer, a login to the
+ * same machine) is under no mask and in no tree, and what it does for a command it does with
+ * all the user may do. `codexExecOutsideReach` names the directories such programs are
+ * usually reached through, for whoever starts the executor to hide, and the variables that
+ * point a command at them. Unless the host's network is asked for, the namespace has a
+ * network of its own with nothing in it, which closes services on the loopback address and
+ * sockets with abstract names, and every other use of the network with them. With
+ * `network: "host"` those stay reachable. Neither covers a system service the user may use
+ * through a socket outside the hidden directories, nor what a command leaves behind to be
+ * run later (a shell profile, a unit of the user's service manager). A file that gives
+ * whoever runs it another user's rights gives a command nothing: ORCA starts the executor
+ * only after the kernel listed it as unable to gain privileges that way.
+ *
+ * Limits, said plainly. Where the system lets one process trace an unrelated process of the same user
  * (`ptrace_scope` 0), such a command can also alter the executor and the holder beside it.
  * A file that had a second name before the session is reached by that name whatever is
  * masked; the gate refuses a file request for any file with more than one. A directory that
@@ -195,6 +207,110 @@ function isDirectory(path: string): boolean {
 const inside = (path: string, root: string): boolean =>
   path !== root && path.startsWith(root === sep ? sep : `${root}${sep}`);
 
+/** The variables that point a command at a program outside the namespace that acts for the user. */
+export const CODEX_EXEC_OUTSIDE_VARIABLES = [
+  "XDG_RUNTIME_DIR",
+  "DBUS_SESSION_BUS_ADDRESS",
+  "SSH_AUTH_SOCK",
+  "SSH_AGENT_PID",
+  "GPG_AGENT_INFO",
+  "GNOME_KEYRING_CONTROL",
+  "DISPLAY",
+  "WAYLAND_DISPLAY",
+  "XAUTHORITY",
+  "SESSION_MANAGER",
+  "DOCKER_HOST",
+  "CONTAINER_HOST",
+  "TMUX",
+  "TMUX_PANE",
+  "STY",
+  "VSCODE_IPC_HOOK_CLI",
+] as const;
+
+/** What `codexExecOutsideReach` found. */
+export interface CodexExecOutsideReach {
+  /** Directories to hide: each is a real directory's own path, and holds such programs' sockets. */
+  hidden: string[];
+  /** The environment for the executor, without the variables in `CODEX_EXEC_OUTSIDE_VARIABLES`. */
+  env: Record<string, string>;
+  /** Which of those variables were set, by name. Their values are not kept. */
+  dropped: string[];
+  /** A place such a program is reached through that cannot be hidden, and why. */
+  unhidden: { path: string; why: string }[];
+}
+
+/**
+ * Where a command would usually reach a program outside the namespace that acts for the
+ * user, as far as a directory can be named for it: the user's runtime directory (the session
+ * bus with the user service manager and the keyring, rootless container sockets, agents,
+ * editors), the directory of the SSH agent's socket, the sockets of the X and session
+ * managers, and those of the terminal multiplexers. Whoever starts the executor hides the
+ * directories (`masks.hidden`) and gives it the environment without the variables.
+ *
+ * This is a list of well-known places, and so it narrows what is reached and does not close
+ * it: a program that listens anywhere else is not on it. A directory is listed only when it
+ * can be hidden without hiding anything else: one that is the user's home or holds the
+ * directory a command works in, or that is not a directory of its own, is reported in
+ * `unhidden` instead.
+ */
+export function codexExecOutsideReach(
+  env: Readonly<Record<string, string | undefined>>,
+  user: { uid: number; name: string; home: string; keep: readonly string[] },
+): CodexExecOutsideReach {
+  const hidden = new Set<string>();
+  const unhidden: { path: string; why: string }[] = [];
+  const kept = [user.home, ...user.keep].map((path) => physicalPathOf(path) ?? path);
+  const hide = (path: string | undefined, mustBeTheUsers: boolean): void => {
+    if (path === undefined || path === "" || !isAbsolute(path)) return;
+    const real = physicalPathOf(path);
+    if (real === undefined) return;
+    if (!isDirectory(real)) return void unhidden.push({ path, why: "it is not a directory" });
+    if (real === sep || kept.some((needed) => needed === real || inside(needed, real)))
+      return void unhidden.push({ path, why: "it holds the user's home or a directory a command works in" });
+    if (mustBeTheUsers) {
+      let owner: number;
+      let mode: number;
+      try {
+        ({ uid: owner, mode } = statSync(real));
+      } catch {
+        return void unhidden.push({ path, why: "it could not be looked at" });
+      }
+      // A directory others may write is one other things live in: hiding it hides those.
+      if (owner !== user.uid || (mode & 0o022) !== 0)
+        return void unhidden.push({ path, why: "it is not a directory of the user's own" });
+    }
+    hidden.add(real);
+  };
+  const runtime = env["XDG_RUNTIME_DIR"];
+  hide(runtime, false);
+  // The same directory by the name the system gives it, whatever the variable says.
+  hide(`/run/user/${user.uid}`, false);
+  const agent = env["SSH_AUTH_SOCK"];
+  if (agent !== undefined && isAbsolute(agent)) {
+    const socket = physicalPathOf(agent);
+    if (socket !== undefined) hide(socket.slice(0, socket.lastIndexOf(sep)) || sep, true);
+  }
+  hide("/tmp/.X11-unix", false);
+  hide("/tmp/.ICE-unix", false);
+  hide(`${env["TMUX_TMPDIR"] && isAbsolute(env["TMUX_TMPDIR"]) ? env["TMUX_TMPDIR"] : "/tmp"}/tmux-${user.uid}`, true);
+  hide(`/run/screen/S-${user.name}`, true);
+  const dropped: string[] = [];
+  const without: Record<string, string> = {};
+  for (const [key, value] of Object.entries(env)) {
+    if (value === undefined) continue;
+    if ((CODEX_EXEC_OUTSIDE_VARIABLES as readonly string[]).includes(key)) dropped.push(key);
+    else without[key] = value;
+  }
+  // One inside another is hidden with it.
+  const all = [...hidden];
+  return {
+    hidden: all.filter((path) => !all.some((root) => inside(path, root))),
+    env: without,
+    dropped,
+    unhidden,
+  };
+}
+
 /** One mask, as bubblewrap is told to make it. */
 function maskArguments(masks: CodexExecMasks): string[] {
   const seen = new Map<string, string>();
@@ -307,6 +423,14 @@ export interface CodexExecIsolatedSpawn extends CodexExecServerSpawn {
   clock?: (() => number) | undefined;
   /** What reads a file system for the setup. For tests: Node's own, unless one is given. */
   reads?: CodexExecSetupReads | undefined;
+  /**
+   * The network a command has. `none`, the default, is a network namespace of the executor's
+   * own with nothing in it but a loopback address of its own: no service outside the
+   * namespace is reached over the network, the loopback address and sockets with abstract
+   * names included, and neither is anything else. `host` is ORCA's own network, and has to
+   * be asked for.
+   */
+  network?: "host" | "none" | undefined;
 }
 
 /** What ORCA saw of an isolated executor before it was sent anything. */
@@ -315,8 +439,14 @@ export interface CodexExecIsolationProof {
   holder: number;
   /** The executor, by its pid here. */
   executor: number;
-  /** The namespaces both are in, as the kernel names them. None is ORCA's. */
-  namespaces: { pid: string; mnt: string; user: string };
+  /**
+   * The namespaces both are in, as the kernel names them. The pid, mount and user namespaces
+   * are never ORCA's. The network namespace is ORCA's with `network: "host"`, and never with
+   * `network: "none"`.
+   */
+  namespaces: { pid: string; mnt: string; user: string; net: string };
+  /** The network a command has: ORCA's own, or none. Seen from the namespaces, not taken from the request. */
+  network: "host" | "none";
   masks: CodexExecMasks;
   /** The system's `ptrace_scope`, when it has one. */
   ptraceScope?: number | undefined;
@@ -535,10 +665,11 @@ function childrenOf(first: FirstProcess): number[] {
 }
 
 /** The namespaces of the process whose `/proc` directory this is. */
-const namespacesOf = (directory: string): { pid: string; mnt: string; user: string } => ({
+const namespacesOf = (directory: string): { pid: string; mnt: string; user: string; net: string } => ({
   pid: readlinkSync(`${directory}/ns/pid`),
   mnt: readlinkSync(`${directory}/ns/mnt`),
   user: readlinkSync(`${directory}/ns/user`),
+  net: readlinkSync(`${directory}/ns/net`),
 });
 
 /** A descriptor for the kernel's directory of the process a pid means now, or undefined when there is none. */
@@ -581,6 +712,7 @@ export function spawnIsolatedCodexExecServer(spec: CodexExecIsolatedSpawn): Code
   const bubblewrap = spec.bubblewrap ?? systemBubblewrap();
   if (bubblewrap === undefined)
     throw new CodexExecIsolationError("the system has no bubblewrap (bwrap) that only root can change");
+  const network = spec.network ?? "none";
   const masks: CodexExecMasks = {
     hidden: [...spec.masks.hidden],
     readOnly: [...spec.masks.readOnly],
@@ -591,6 +723,7 @@ export function spawnIsolatedCodexExecServer(spec: CodexExecIsolatedSpawn): Code
     [
       "--unshare-user",
       "--unshare-pid",
+      ...(network === "none" ? ["--unshare-net"] : []),
       "--as-pid-1",
       "--die-with-parent",
       // Nothing in the namespace is to hold a capability over it, whoever ORCA runs as.
@@ -885,7 +1018,7 @@ export function spawnIsolatedCodexExecServer(spec: CodexExecIsolatedSpawn): Code
     const candidate = openProcess(named as number);
     if (candidate === undefined) wrong("the holder is not there");
     const at = candidate!.directory;
-    let namespaces: { pid: string; mnt: string; user: string };
+    let namespaces: { pid: string; mnt: string; user: string; net: string };
     let status: string;
     try {
       status = readFileSync(`${at}/status`, "utf8");
@@ -901,6 +1034,14 @@ export function spawnIsolatedCodexExecServer(spec: CodexExecIsolatedSpawn): Code
       const mine = namespacesOf("/proc/self");
       for (const kind of ["pid", "mnt", "user"] as const)
         if (namespaces[kind] === mine[kind]) wrong(`the holder is in ORCA's own ${kind} namespace`);
+      // The network is the one that was asked for, as the kernel names it: ORCA's, or one
+      // that is not ORCA's. Bubblewrap's having been told is not what is believed.
+      if ((namespaces.net === mine.net) !== (network === "host"))
+        wrong(
+          network === "host"
+            ? "the holder is not in ORCA's network namespace"
+            : "the holder is in ORCA's own network namespace",
+        );
       if (codexExecProcessSeen(at) !== "there") wrong("the holder is not there");
     } catch (error) {
       closeSync(candidate!.fd);
@@ -991,10 +1132,14 @@ export function spawnIsolatedCodexExecServer(spec: CodexExecIsolatedSpawn): Code
     if (theirs === undefined) wrong("the executor is not there");
     try {
       if (!isIt(theirs!.directory)) wrong("the executor is not the holder's child");
-      if (!/^0+$/.test(field(readFileSync(`${theirs!.directory}/status`, "utf8"), "CapEff")[0] ?? ""))
+      const itsStatus = readFileSync(`${theirs!.directory}/status`, "utf8");
+      if (!/^0+$/.test(field(itsStatus, "CapEff")[0] ?? ""))
         wrong("the executor holds capabilities over its namespace");
+      // No file the executor or a command runs gives it more than it has: a program that
+      // acts as another user for whoever runs it (sudo, a policy agent's helper) does not.
+      if (field(itsStatus, "NoNewPrivs")[0] !== "1") wrong("the executor could gain privileges from a file it runs");
       const its = namespacesOf(theirs!.directory);
-      for (const kind of ["pid", "mnt", "user"] as const)
+      for (const kind of ["pid", "mnt", "user", "net"] as const)
         if (its[kind] !== namespaces[kind]) wrong(`the executor is not in the holder's ${kind} namespace`);
       // The holder's channel is a socket, which no path opens. The executor was not handed it
       // either: ORCA has to have seen what each of its descriptors is to say so.
@@ -1014,6 +1159,7 @@ export function spawnIsolatedCodexExecServer(spec: CodexExecIsolatedSpawn): Code
       holder: holder.pid,
       executor: executor!,
       namespaces,
+      network,
       masks,
       ...(ptraceScope !== undefined && Number.isInteger(ptraceScope) ? { ptraceScope } : {}),
     };

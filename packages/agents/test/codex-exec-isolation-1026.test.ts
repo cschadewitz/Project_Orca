@@ -25,7 +25,8 @@ import {
   symlink,
   writeFile,
 } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { createServer, type Server } from "node:net";
+import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
@@ -34,6 +35,7 @@ import {
   codexExecGateBinder,
   codexExecDescriptorsOf,
   codexExecMasks,
+  codexExecOutsideReach,
   codexExecProcessSeen,
   codexExecReadsOut,
   codexExecReadsWaiting,
@@ -227,6 +229,76 @@ describe.skipIf(process.platform !== "linux")("what a process's descriptors are"
     expect(() => codexExecDescriptorsOf(listing)).toThrow(/could not see what descriptor 5/);
     // No listing at all is no pass either.
     expect(() => codexExecDescriptorsOf(join(root, "missing"))).toThrow();
+  });
+});
+
+describe.skipIf(process.platform !== "linux")("what a command would reach outside its namespace", () => {
+  const user = () => ({ uid: userInfo().uid, name: userInfo().username, home: join(root, "home"), keep: [] });
+
+  it("names the user's runtime directory and the agent's, and leaves their variables out", async () => {
+    const runtime = join(root, "runtime");
+    const agent = join(root, "ssh-abc");
+    for (const dir of [runtime, agent, join(root, "home")]) await mkdir(dir, { mode: 0o700 });
+    await writeFile(join(agent, "agent.1"), "");
+    const reach = codexExecOutsideReach(
+      {
+        PATH: "/usr/bin:/bin",
+        HOME: join(root, "home"),
+        XDG_RUNTIME_DIR: runtime,
+        DBUS_SESSION_BUS_ADDRESS: `unix:path=${runtime}/bus`,
+        SSH_AUTH_SOCK: join(agent, "agent.1"),
+        DISPLAY: ":0",
+        NOT_SET: undefined,
+      },
+      user(),
+    );
+    expect(reach.hidden).toEqual(expect.arrayContaining([runtime, agent]));
+    expect(reach.env).toEqual({ PATH: "/usr/bin:/bin", HOME: join(root, "home") });
+    expect(reach.dropped.sort()).toEqual(["DBUS_SESSION_BUS_ADDRESS", "DISPLAY", "SSH_AUTH_SOCK", "XDG_RUNTIME_DIR"]);
+    expect(reach.unhidden.filter(({ path }) => path.startsWith(root))).toEqual([]);
+    // Each can be masked as it is: a real directory's own path, none inside another.
+    for (const path of reach.hidden) expect(await realpath(path)).toBe(path);
+  });
+
+  it("hides one directory once when the agent's socket is inside the runtime directory", async () => {
+    const runtime = join(root, "runtime");
+    await mkdir(join(runtime, "keyring"), { recursive: true, mode: 0o700 });
+    await mkdir(join(root, "home"));
+    await writeFile(join(runtime, "keyring", "ssh"), "");
+    const reach = codexExecOutsideReach(
+      { XDG_RUNTIME_DIR: runtime, SSH_AUTH_SOCK: join(runtime, "keyring", "ssh") },
+      user(),
+    );
+    expect(reach.hidden.filter((path) => path.startsWith(root))).toEqual([runtime]);
+  });
+
+  it("says what it cannot hide without hiding more: a home, a working directory, a directory that is not the user's own", async () => {
+    const home = join(root, "home");
+    const shared = join(root, "shared");
+    await mkdir(join(home, "project"), { recursive: true });
+    await mkdir(shared, { mode: 0o777 });
+    await chmod(shared, 0o777);
+    await writeFile(join(shared, "agent.sock"), "");
+    await writeFile(join(root, "not-a-directory"), "");
+
+    // The runtime directory is the home, or holds the directory a command works in.
+    for (const runtime of [home, join(home, "project")]) {
+      const reach = codexExecOutsideReach({ XDG_RUNTIME_DIR: runtime }, { ...user(), keep: [join(home, "project")] });
+      expect(reach.hidden.filter((path) => path.startsWith(root))).toEqual([]);
+      expect(reach.unhidden).toContainEqual({
+        path: runtime,
+        why: "it holds the user's home or a directory a command works in",
+      });
+      // The variable is still left out: a command is not pointed at what could not be hidden.
+      expect(reach.env).toEqual({});
+    }
+    // The agent's socket is in a directory others may write.
+    const open = codexExecOutsideReach({ SSH_AUTH_SOCK: join(shared, "agent.sock") }, user());
+    expect(open.hidden.filter((path) => path.startsWith(root))).toEqual([]);
+    expect(open.unhidden).toContainEqual({ path: shared, why: "it is not a directory of the user's own" });
+    // The runtime directory is a file.
+    const file = codexExecOutsideReach({ XDG_RUNTIME_DIR: join(root, "not-a-directory") }, user());
+    expect(file.unhidden).toContainEqual({ path: join(root, "not-a-directory"), why: "it is not a directory" });
   });
 });
 
@@ -764,6 +836,83 @@ describe.skipIf(!USABLE && !REQUIRED)("an executor in namespaces ORCA makes", ()
       for (const read of stuck.out) read.back();
     }
     await expect.poll(codexExecReadsOut).toBe(0);
+  });
+
+  /** Three things a program outside the namespace might listen on, and a command's way to try each. */
+  async function outsidePrograms() {
+    const runtime = join(root, "runtime");
+    await mkdir(runtime, { mode: 0o700 });
+    const abstract = `orca-1026-${process.pid}-${Date.now()}`;
+    const servers: Server[] = [];
+    const listening = (where: Parameters<Server["listen"]>[0]): Promise<Server> =>
+      new Promise((resolve) => {
+        const server = createServer((socket) => socket.end());
+        servers.push(server);
+        server.listen(where, () => resolve(server));
+      });
+    await listening({ path: join(runtime, "bus") });
+    await listening({ path: `\0${abstract}` });
+    const loopback = await listening({ host: "127.0.0.1", port: 0 });
+    const port = (loopback.address() as { port: number }).port;
+    const client = join(root, "reach.js");
+    await writeFile(
+      client,
+      [
+        'const net = require("node:net");',
+        "const [kind, target] = process.argv.slice(2);",
+        'const to = kind === "tcp" ? { host: "127.0.0.1", port: Number(target) } : { path: kind === "abstract" ? "\\0" + target : target };',
+        "const socket = net.connect(to);",
+        'socket.on("connect", () => { console.log("reached"); process.exit(0); });',
+        'socket.on("error", (error) => { console.log(error.code); process.exit(0); });',
+        "",
+      ].join("\n"),
+    );
+    const tryIt = (kind: string, target: string | number) => `${process.execPath} ${client} ${kind} ${target}`;
+    return {
+      runtime,
+      byPath: tryIt("path", join(runtime, "bus")),
+      byAbstractName: tryIt("abstract", abstract),
+      onLoopback: tryIt("tcp", port),
+      close: () => Promise.all(servers.map((server) => new Promise((resolve) => server.close(resolve)))),
+    };
+  }
+
+  it("keeps a command from a socket in a hidden directory, and with the host's network not from the loopback address or an abstract name", async () => {
+    const outside = await outsidePrograms();
+    try {
+      masks = { ...masks, hidden: [...masks.hidden, outside.runtime] };
+      const { backend, run } = isolate({ network: "host" });
+      const proof = await backend.isolated;
+      // The host's network was asked for: the namespace's network is ORCA's own, and the proof says so.
+      expect(proof.network).toBe("host");
+      expect(proof.namespaces.net).toBe(readlinkSync("/proc/self/ns/net"));
+      expect(await run(outside.byPath)).toBe("ENOENT\n");
+      // The stated limit: with the host's network, neither of these is closed.
+      expect(await run(outside.onLoopback)).toBe("reached\n");
+      expect(await run(outside.byAbstractName)).toBe("reached\n");
+    } finally {
+      await outside.close();
+    }
+  });
+
+  it("gives a command no network unless the host's is asked for: nothing on the loopback address, no abstract name, and it still runs", async () => {
+    const outside = await outsidePrograms();
+    try {
+      const { backend, run } = isolate();
+      const proof = await backend.isolated;
+      expect(proof.network).toBe("none");
+      expect(proof.namespaces.net).not.toBe(readlinkSync("/proc/self/ns/net"));
+      expect(readlinkSync(`/proc/${proof.executor}/ns/net`)).toBe(proof.namespaces.net);
+      expect(await run("echo still here")).toBe("still here\n");
+      // Nor does a file a command runs give it another user's rights.
+      expect(await run("grep NoNewPrivs /proc/self/status")).toBe("NoNewPrivs:\t1\n");
+      expect(await run(outside.onLoopback)).not.toBe("reached\n");
+      expect(await run(outside.byAbstractName)).toBe("ECONNREFUSED\n");
+      // A socket named by a path is the file system's, not the network's: masks hide those.
+      expect(await run(outside.byPath)).toBe("reached\n");
+    } finally {
+      await outside.close();
+    }
   });
 
   it("keeps a hidden directory out of reach by its name, through a link and after its parent is renamed", async () => {
