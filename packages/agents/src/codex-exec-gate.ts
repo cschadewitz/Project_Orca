@@ -27,41 +27,62 @@
  *   cannot read the way the executor would, a process it never allowed, and every file
  *   request it cannot tie to the file the executor would use (below).
  *
- * **A decision is about the file the executor uses, not about a name.** A check of a path in
- * ORCA followed by an open of that path in another process is two looks at a name that can
- * change in between. So the gate never passes on the path it was given:
+ * **What a decision covers.** A check of a path in ORCA followed by an open of that path in
+ * another process is two looks at a name that can change in between. The gate narrows that as
+ * far as the pinned executor lets it, and never passes on the path it was given:
  *
  * - For a file request it works out the path with every link followed, decides that path (and
  *   the path as written, which must be allowed too), and passes on *that* path with
  *   `followSymlinks: false`. The executor then walks it one name at a time from the root and
- *   refuses a link at any step (`exec-server/src/no_follow`), so it uses the file at exactly
- *   the path ORCA decided or nothing. A link swapped in after the decision is the executor's
- *   to refuse, and it does.
+ *   refuses a link at any step (`exec-server/src/no_follow`), so it uses the link-free path
+ *   ORCA decided or nothing. A link swapped in after the decision is the executor's to
+ *   refuse, and it does.
  * - For a process it opens the directory the process would start in, decides the directory
  *   that descriptor holds, and tells the executor to start the process in the descriptor
- *   (`/proc/<pid>/fd/<n>`), not in a name. Linux only; elsewhere a start is refused.
+ *   (`/proc/<pid>/fd/<n>`), not in a name. The descriptor stays open until the executor has
+ *   answered the start or has been seen to exit. Linux only; elsewhere a start is refused.
  * - The requests the executor has no such mode for are refused: file handles (`fs/open` and
  *   the block reads and writes on it), `fs/copy`, `fs/readDirectory`, `fs/walk`,
  *   `fs/canonicalize` and `fs/watchMissing`. So are the ones that touch more than the one
  *   path decided: a removal of a whole tree, and creating more than one directory at a time
  *   (a recursive create is passed on as a create of that one directory).
  *
- * A request is passed on as the gate read it: the fields the protocol has are serialized
- * again from the parsed message, so the executor cannot read a request differently from the
- * way the gate decided it (a duplicate key, for one).
+ * **The contract for a file request is path scope, not the identity of a file.** The gate
+ * decides a link-free path, and the executor uses whatever is at that path when it gets
+ * there. A directory renamed onto the path after the decision, a second hard link to a file
+ * a rule protects, and a mount over the path are seen by neither side: nothing here ties a
+ * decision to an inode. So this module is not a security boundary on its own account, and it
+ * is not wired into any session. Before it is used as one, the executor's own isolation has
+ * to be shown, separately, to keep ORCA's protected files out of reach under another name
+ * and to hold while the tree changes underneath a request.
  *
- * **What the gate holds is bounded in bytes.** A connection has a budget for everything the
- * gate holds for it at once: the message the websocket is assembling, requests waiting for a
- * decision, and bytes not yet written to either side. Every gate in the process shares one
- * larger budget. A connection that would pass either is closed. The records kept for
- * `records()` are capped in number, in bytes and field by field.
+ * **The executor is sent only what the gate read.** Every request it passes is built again,
+ * field by field, from a fixed list for that method; a field the list does not have refuses
+ * the request. For a `process/start` that list is everything that shapes the process: the
+ * command line, the directory, the environment (name by name, with the only values ORCA
+ * passes), the terminal flags and the sandbox Codex names. Codex's sandbox is passed on in
+ * a fixed shape with its directories resolved the way the request's own paths are, so that
+ * what was decided, what is sent and what the executor's sandbox is built around are one set
+ * of paths. Nothing ORCA decides rests on that sandbox.
+ *
+ * **What the gate holds is bounded in bytes, and counted until it is really gone.** A
+ * connection has a budget for everything the gate holds for it at once: the message the
+ * websocket is assembling, requests waiting for a decision, and bytes not yet written to
+ * either side. Every gate in the process shares one larger budget. A connection that would
+ * pass either is closed. An ended connection gives nothing back wholesale: each claim is
+ * returned when the thing it stands for has drained (a decision that has settled, a write
+ * that has left, a socket that has closed), and until its executor has been seen to exit it
+ * still counts as a connection. `close` returns within a bound whatever is still held; what
+ * is, stays counted. The records kept for `records()` are capped in number, in bytes and
+ * field by field.
  *
  * Limits, said plainly. The gate decides the process being started and the text typed into
  * it, not what that process goes on to do. A file with two names (a hard link) is the file
  * at each of them, so a rule for one name reaches it. Tool calls that never use the executor
  * (MCP servers Codex reaches over HTTP, tools hosted at the model provider) do not pass here.
  * The gate records nothing about a call it never saw, and that absence is not evidence of
- * anything.
+ * anything. An acceptance run on the installed pair is evidence for the cases it runs and
+ * for nothing else.
  */
 import { spawn } from "node:child_process";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
@@ -99,6 +120,13 @@ const ASKED_LIMIT = 256;
 
 /** Processes one connection may have started; the oldest closed one makes room for a new one. */
 const TRACKED_LIMIT = 1024;
+
+/**
+ * Starts one connection may have with the executor, unanswered, each with its directory held
+ * open. A directory stays held for as long as the executor might still use it, so the number
+ * is kept small.
+ */
+const HELD_LIMIT = 32;
 
 /** Records kept in memory for `records()`, in number and in bytes. `onRecord` hears every one. */
 const RECORD_LIMIT = 2048;
@@ -191,6 +219,8 @@ export interface CodexExecGateSubject {
   /** For typed input and a file write: how many bytes, and their sha256. */
   bytes?: number | undefined;
   sha256?: string | undefined;
+  /** The kind of sandbox Codex named for the request and the executor was sent, or `none`. */
+  sandbox?: string | undefined;
 }
 
 /** A count of bytes held, with a ceiling. */
@@ -246,9 +276,16 @@ export interface CodexExecBackend {
   send(message: string, flushed: () => void): void;
   /** Hear each message the executor writes. */
   onMessage(listener: (message: string) => void): void;
-  /** Hear the executor end, once, however it ends. */
+  /**
+   * Hear the executor end, once: only when it has been seen to exit, so that it can no longer
+   * use anything ORCA holds for it. This, not `stop` returning, is what the gate waits for
+   * before it lets go of a directory or stops counting the connection.
+   */
   onExit(listener: (detail: string) => void): void;
-  /** End it and wait until it is gone, within the backend's own bound. */
+  /**
+   * Ask it to end and wait, within the backend's own bound. Returning says nothing about
+   * whether it is gone: `onExit` does.
+   */
   stop(): Promise<void>;
 }
 
@@ -359,7 +396,17 @@ export interface CodexExecGate {
   initialized(timeoutMs: number): Promise<void>;
   /** The most recent records, oldest first. */
   records(): readonly CodexExecGateRecord[];
-  /** Refuse everything from now on, end every connection and executor, and stop listening. */
+  /**
+   * Connections the gate still counts. `stopping` ones have ended but are not gone: their
+   * executor has not been seen to exit, a decision made for them has not settled, or bytes
+   * held for them have not drained. They count against the connection limit and the budgets.
+   */
+  connections(): { open: number; stopping: number };
+  /**
+   * Refuse everything from now on, end every connection and executor, and stop listening.
+   * It returns once all of that is gone, or after `closeWaitMs` whatever is left; what is
+   * left stays counted (`connections`, the budgets) until it does go.
+   */
   close(): Promise<void>;
 }
 
@@ -378,8 +425,9 @@ export interface CodexExecGateConnectionState {
 export const newCodexExecGateConnectionState = (): CodexExecGateConnectionState => ({ processes: new Map() });
 
 /**
- * What to do with one request. `params` is what the executor is sent in place of the
- * request's own. `effect` is applied only when the request is forwarded. `hold` is a
+ * What to do with one request. `params` is everything the executor is sent as the request's
+ * parameters: nothing of the request's own is passed on beside it, and without it the request
+ * is sent with none. `effect` is applied only when the request is forwarded. `hold` is a
  * directory held open for it, which whoever asked for the plan releases.
  */
 export type CodexExecGatePlan =
@@ -457,19 +505,30 @@ const text = (v: unknown, what: string, max: number): string => {
   return v;
 };
 
+const given = (v: unknown): boolean => v !== undefined && v !== null;
+
 /** An optional yes or no: absent and null are the default. */
 const flag = (v: unknown, what: string, fallback: boolean): boolean => {
-  if (v === undefined || v === null) return fallback;
+  if (!given(v)) return fallback;
   if (typeof v !== "boolean") throw new Unreadable(`${what} is not a yes or a no`);
   return v;
 };
 
-/** The sandbox a file request names: passed on as it is, since it can only narrow the request. */
-const sandboxOf = (p: Record<string, unknown>): Record<string, unknown> | null => {
-  const sandbox = p["sandbox"];
-  if (sandbox === undefined || sandbox === null) return null;
-  if (!isRecord(sandbox)) throw new Unreadable("the sandbox is not one ORCA can pass on");
-  return sandbox;
+/** An optional count: absent and null are sent as none. */
+const count = (v: unknown, what: string): number | null => {
+  if (!given(v)) return null;
+  if (typeof v !== "number" || !Number.isSafeInteger(v) || v < 0) throw new Unreadable(`${what} is not a count`);
+  return v;
+};
+
+/**
+ * Refuse parameters with a field the gate does not read. The executor is sent the fields the
+ * gate read and no other, so one it did not read cannot be dropped quietly either: the
+ * request would then mean something else than what was asked.
+ */
+const only = (p: Record<string, unknown>, what: string, keys: readonly string[]): void => {
+  for (const key of Object.keys(p))
+    if (!keys.includes(key)) throw new Unreadable(`${what} has a setting ORCA does not pass (${clip(key, 64)})`);
 };
 
 /** Bytes written as base64 in the one spelling that decodes to them. */
@@ -481,6 +540,201 @@ const base64Bytes = (v: unknown, what: string): Buffer => {
 };
 
 const sha256 = (bytes: Buffer | string): string => createHash("sha256").update(bytes).digest("hex");
+
+const SESSION_ID = /^[0-9A-Za-z-]{1,64}$/;
+const CALL_ID = /^[0-9A-Za-z._:|-]{1,256}$/;
+
+/**
+ * The environment a request may give a process it starts: each name with the only values
+ * ORCA passes. These are what Codex 0.171 itself writes (`UNIFIED_EXEC_ENV` and its own ids).
+ * A variable can decide what a command runs (`BASH_ENV`, `PAGER`, `LD_PRELOAD`), and no rule
+ * reads the environment, so a name or a value that is not here refuses the start.
+ */
+const START_ENV: ReadonlyMap<string, RegExp> = new Map([
+  ["NO_COLOR", /^1$/],
+  ["TERM", /^dumb$/],
+  ["LANG", /^C\.UTF-8$/],
+  ["LC_CTYPE", /^C\.UTF-8$/],
+  ["LC_ALL", /^C\.UTF-8$/],
+  ["COLORTERM", /^$/],
+  ["PAGER", /^cat$/],
+  ["GIT_PAGER", /^cat$/],
+  ["GH_PAGER", /^cat$/],
+  ["CODEX_CI", /^1$/],
+  ["CODEX_SESSION_ID", SESSION_ID],
+  ["CODEX_THREAD_ID", SESSION_ID],
+  ["CODEX_TOOL_CALL_ID", CALL_ID],
+  ["CODEX_VERSION", /^[0-9A-Za-z.+-]{1,64}$/],
+  ["CODEX_SANDBOX_NETWORK_DISABLED", /^1$/],
+  ["CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS", /^1$/],
+]);
+
+const startEnv = (v: unknown, what: string): Record<string, string> => {
+  if (!isRecord(v)) throw new Unreadable(`${what} is missing`);
+  const env: [string, string][] = [];
+  for (const [name, value] of Object.entries(v)) {
+    const allowed = START_ENV.get(name);
+    if (allowed === undefined || typeof value !== "string" || !allowed.test(value))
+      throw new Unreadable(`${what} sets a variable ORCA does not pass (${clip(name, 64)})`);
+    env.push([name, value]);
+  }
+  return Object.fromEntries(env);
+};
+
+/** Patterns that choose among the executor's own variables. They add none and set no value. */
+const variablePatterns = (v: unknown, what: string): string[] => {
+  if (!Array.isArray(v) || v.length > 256) throw new Unreadable(`${what} is not a list ORCA can read`);
+  return v.map((pattern) => {
+    if (typeof pattern !== "string" || !/^[\x21-\x7e]{1,256}$/.test(pattern))
+      throw new Unreadable(`${what} is not a list ORCA can read`);
+    return pattern;
+  });
+};
+
+/** Which of the executor's own variables a started process inherits, and what is set over them. */
+const envPolicyOf = (v: unknown): Record<string, unknown> | null => {
+  if (!given(v)) return null;
+  if (!isRecord(v)) throw new Unreadable("the environment policy is not one ORCA can read");
+  only(v, "the environment policy", ["inherit", "ignoreDefaultExcludes", "exclude", "set", "includeOnly"]);
+  const inherit = v["inherit"];
+  if (inherit !== "all" && inherit !== "core" && inherit !== "none")
+    throw new Unreadable("the environment policy is not one ORCA can read");
+  if (typeof v["ignoreDefaultExcludes"] !== "boolean")
+    throw new Unreadable("the environment policy is not one ORCA can read");
+  return {
+    inherit,
+    ignoreDefaultExcludes: v["ignoreDefaultExcludes"],
+    exclude: variablePatterns(v["exclude"], "the environment policy's exclusions"),
+    set: startEnv(v["set"], "the environment policy"),
+    includeOnly: variablePatterns(v["includeOnly"], "the environment policy's inclusions"),
+  };
+};
+
+/** Codex's own ids for the call. The executor gives them to the process as variables. */
+const metadataOf = (v: unknown): { threadId?: string; toolCallId?: string } | undefined => {
+  if (!given(v)) return undefined;
+  if (!isRecord(v)) throw new Unreadable("the call's ids are not ones ORCA can read");
+  only(v, "the call's ids", ["threadId", "toolCallId"]);
+  const id = (value: unknown, shape: RegExp): string | undefined => {
+    if (!given(value)) return undefined;
+    if (typeof value !== "string" || !shape.test(value))
+      throw new Unreadable("the call's ids are not ones ORCA can read");
+    return value;
+  };
+  const threadId = id(v["threadId"], SESSION_ID);
+  const toolCallId = id(v["toolCallId"], CALL_ID);
+  return { ...(threadId !== undefined ? { threadId } : {}), ...(toolCallId !== undefined ? { toolCallId } : {}) };
+};
+
+const SANDBOX_KEYS = [
+  "permissions",
+  "sandboxOverride",
+  "cwd",
+  "policyContext",
+  "workspaceRoots",
+  "userHomeDir",
+  "temporaryDirectories",
+  "windowsSandboxLevel",
+  "windowsSandboxProxySettingsMode",
+  "useLegacyLandlock",
+];
+const SANDBOX_PROFILES: Readonly<Record<string, readonly string[]>> = {
+  managed: ["type", "file_system", "network"],
+  disabled: ["type"],
+  external: ["type", "network"],
+};
+const SANDBOX_OVERRIDES = ["noOverride", "escalatedSandboxWithRestrictions", "bypassSandboxFirstAttempt"];
+
+/**
+ * The sandbox Codex names for a request, in the shape the executor is sent.
+ *
+ * Nothing ORCA decides rests on it: a request is decided as if there were none, and a
+ * sandbox only takes away from what the executor would do without one. What the gate does
+ * hold it to is agreement. Every directory the sandbox is built around (its working
+ * directory, its roots, the home and temporary directories) is resolved by `resolve`, the
+ * same way the request's own path was, so the sandbox, the decision and the request the
+ * executor is sent name one set of directories. The rules inside `permissions` are Codex's
+ * and are passed on as read, under the three kinds of profile the executor knows.
+ */
+function sandboxOf(
+  v: unknown,
+  resolve: (path: string) => string | undefined,
+): { sandbox: Record<string, unknown> | null; kind: string } {
+  if (!given(v)) return { sandbox: null, kind: "none" };
+  const unreadable = (): never => {
+    throw new Unreadable("the sandbox is not one ORCA can pass on");
+  };
+  if (!isRecord(v)) return unreadable();
+  only(v, "the sandbox", SANDBOX_KEYS);
+  const permissions = v["permissions"];
+  if (!isRecord(permissions)) return unreadable();
+  const kind = permissions["type"];
+  if (typeof kind !== "string" || !Object.hasOwn(SANDBOX_PROFILES, kind)) return unreadable();
+  only(permissions, "the sandbox's permissions", SANDBOX_PROFILES[kind]!);
+  const directory = (uri: unknown): string => {
+    const resolved = resolve(codexExecPath(uri));
+    if (resolved === undefined) throw new Unreadable("ORCA could not tell which directory the sandbox names");
+    return codexExecUri(resolved);
+  };
+  const directories = (list: unknown): string[] => {
+    if (!Array.isArray(list) || list.length > 64) return unreadable();
+    return list.map(directory);
+  };
+  const sandbox: Record<string, unknown> = { permissions };
+  const override = v["sandboxOverride"];
+  if (override !== undefined) {
+    if (typeof override !== "string" || !SANDBOX_OVERRIDES.includes(override)) return unreadable();
+    sandbox["sandboxOverride"] = override;
+  }
+  if (given(v["cwd"])) sandbox["cwd"] = directory(v["cwd"]);
+  const context = v["policyContext"];
+  if (given(context)) {
+    if (!isRecord(context)) return unreadable();
+    only(context, "the sandbox's context", ["cwd", "workspaceRoots"]);
+    sandbox["policyContext"] = {
+      ...(given(context["cwd"]) ? { cwd: directory(context["cwd"]) } : {}),
+      workspaceRoots: context["workspaceRoots"] === undefined ? [] : directories(context["workspaceRoots"]),
+    };
+  }
+  if (v["workspaceRoots"] !== undefined) sandbox["workspaceRoots"] = directories(v["workspaceRoots"]);
+  if (given(v["userHomeDir"])) sandbox["userHomeDir"] = directory(v["userHomeDir"]);
+  if (given(v["temporaryDirectories"])) sandbox["temporaryDirectories"] = directories(v["temporaryDirectories"]);
+  // The gate holds a process to a directory only on Linux, so a sandbox for another system is not one to pass.
+  if (v["windowsSandboxLevel"] !== "disabled") return unreadable();
+  sandbox["windowsSandboxLevel"] = "disabled";
+  const proxy = v["windowsSandboxProxySettingsMode"];
+  if (given(proxy)) {
+    if (proxy !== "reconcile" && proxy !== "preserve") return unreadable();
+    sandbox["windowsSandboxProxySettingsMode"] = proxy;
+  }
+  sandbox["useLegacyLandlock"] = flag(v["useLegacyLandlock"], "useLegacyLandlock", false);
+  return { sandbox, kind };
+}
+
+/** What `initialize` is sent on with: who is connecting, and a session to pick up again if it names one. */
+function initializeParams(params: unknown): Record<string, unknown> {
+  const p = isRecord(params) ? params : {};
+  only(p, "the request", ["clientName", "resumeSessionId"]);
+  const resume = p["resumeSessionId"];
+  if (given(resume) && (typeof resume !== "string" || !SESSION_ID.test(resume)))
+    throw new Unreadable("the session to resume is not one ORCA can read");
+  return {
+    clientName: text(p["clientName"], "clientName", ID_LIMIT),
+    ...(typeof resume === "string" ? { resumeSessionId: resume } : {}),
+  };
+}
+
+/** A trace context is telemetry: passed on when it is well formed, left out when it is not. */
+function traceOf(trace: unknown): { trace: Record<string, string> } | undefined {
+  if (!isRecord(trace)) return undefined;
+  const parent = trace["traceparent"];
+  const state = trace["tracestate"];
+  const out: Record<string, string> = {};
+  if (typeof parent === "string" && /^[0-9a-f]{2}-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$/.test(parent))
+    out["traceparent"] = parent;
+  if (typeof state === "string" && /^[\x20-\x7e]{1,512}$/.test(state)) out["tracestate"] = state;
+  return Object.keys(out).length > 0 ? { trace: out } : undefined;
+}
 
 /** File requests the executor cannot be held to one file for, and what they would need. */
 const UNBOUND_FILE_REQUESTS = new Set([
@@ -494,6 +748,26 @@ const UNBOUND_FILE_REQUESTS = new Set([
   "fs/canonicalize",
   "fs/watchMissing",
 ]);
+
+/** Every field of a `process/start` in Codex 0.171's protocol. One that is not here refuses the start. */
+const START_KEYS = [
+  "processId",
+  "metadata",
+  "argv",
+  "cwd",
+  "envPolicy",
+  "shellSnapshot",
+  "env",
+  "tty",
+  "pipeStdin",
+  "arg0",
+  "sandbox",
+  "enforceManagedNetwork",
+  "managedNetwork",
+  "networkProxy",
+];
+/** Fields that ask the executor to run or reach something no rule reads. Present, they refuse the start. */
+const START_NOT_PASSED = ["shellSnapshot", "managedNetwork", "networkProxy"];
 
 /**
  * Decide what one request needs. It reads the parameters and the connection's state and
@@ -535,10 +809,12 @@ function plan(
     check: CodexExecGateCall["check"] = "policy",
     subject: CodexExecGateSubject = {},
   ): CodexExecGatePlan => {
+    only(p, "the request", ["path", "followSymlinks", "sandbox", ...Object.keys(more)]);
     const written = codexExecPath(p["path"]);
     // A request that already says "follow no link" is held to its own words.
     const bound = flag(p["followSymlinks"], "followSymlinks", true) ? binder[resolve](written) : written;
     if (bound === undefined) throw new Unreadable("ORCA could not tell which file a path names");
+    const sandbox = sandboxOf(p["sandbox"], (path) => binder.target(path));
     const title = `${verb} ${bound}`;
     return {
       action: "decide",
@@ -550,17 +826,27 @@ function plan(
           ...(bound !== written ? { asWritten: { title: `${verb} ${written}`, locations: [{ path: written }] } } : {}),
         },
       ],
-      subject: { kind, title, paths: [bound], ...(bound !== written ? { written: [written] } : {}), ...subject },
-      params: { path: codexExecUri(bound), ...more, followSymlinks: false, sandbox: sandboxOf(p) },
+      subject: {
+        kind,
+        title,
+        paths: [bound],
+        ...(bound !== written ? { written: [written] } : {}),
+        ...subject,
+        sandbox: sandbox.kind,
+      },
+      params: { path: codexExecUri(bound), ...more, followSymlinks: false, sandbox: sandbox.sandbox },
     };
   };
 
   switch (method) {
     case "environment/info":
     case "environment/status":
+      // Sent with no parameters, as Codex sends them.
+      only(p, "the request", []);
       return { action: "pass", calls: [] };
 
     case "process/start": {
+      only(p, "the start", START_KEYS);
       const processId = text(p["processId"], "processId", ID_LIMIT);
       if (state.processes.has(processId)) throw new Unreadable("the process id is already in use");
       if (state.processes.size >= TRACKED_LIMIT && ![...state.processes.values()].includes("closed"))
@@ -570,9 +856,18 @@ function plan(
         throw new Unreadable("argv is missing");
       const written = codexExecPath(p["cwd"]);
       const arg0 = p["arg0"];
-      if (arg0 !== undefined && arg0 !== null && typeof arg0 !== "string") throw new Unreadable("arg0 is not text");
-      const metadata = isRecord(p["metadata"]) ? p["metadata"] : {};
-      const toolCallId = typeof metadata["toolCallId"] === "string" ? metadata["toolCallId"] : undefined;
+      if (given(arg0) && (typeof arg0 !== "string" || arg0.length > PATH_LIMIT))
+        throw new Unreadable("arg0 is not text");
+      for (const name of START_NOT_PASSED)
+        if (given(p[name])) throw new Unreadable(`the start asks for something ORCA does not pass (${name})`);
+      const metadata = metadataOf(p["metadata"]);
+      const toolCallId = metadata?.toolCallId;
+      const envPolicy = envPolicyOf(p["envPolicy"]);
+      const env = startEnv(p["env"], "the start's environment");
+      if (typeof p["tty"] !== "boolean") throw new Unreadable("tty is not a yes or a no");
+      const tty = p["tty"];
+      const pipeStdin = flag(p["pipeStdin"], "pipeStdin", false);
+      const enforceManagedNetwork = flag(p["enforceManagedNetwork"], "enforceManagedNetwork", false);
       // `[shell, -c, script]` under a shell ORCA knows is the script, which is what a rule's
       // title matches and what the hook sees. Any other shape, a shell at a path the model
       // chose, or a process started under another name is decided as the whole command line.
@@ -580,15 +875,33 @@ function plan(
         argv.length === 3 &&
         (SYSTEM_SHELLS.has(argv[0]!) || argv[0] === state.shell) &&
         /^-l?c$/.test(argv[1]!) &&
-        (arg0 === undefined || arg0 === null || arg0 === argv[0]);
+        (!given(arg0) || arg0 === argv[0]);
       const rendered = argv.map(quoteWord).join(" ");
       const title = wrapped ? argv[2]! : typeof arg0 === "string" ? `${rendered} (as ${quoteWord(arg0)})` : rendered;
       // Last, so that nothing above can fail with the directory held.
       const hold = binder.directory(written);
       if (hold === undefined) throw new Unreadable("ORCA could not hold the directory the command would start in");
-      let reach: string;
+      let params: Record<string, unknown>;
+      let sandboxed: string;
       try {
-        reach = codexExecUri(hold.reach);
+        // A sandbox built around the directory the process starts in is built around the one held.
+        const sandbox = sandboxOf(p["sandbox"], (path) => (path === written ? hold.real : binder.target(path)));
+        sandboxed = sandbox.kind;
+        // The whole of what the executor is sent: each field read above, and no other.
+        params = {
+          processId,
+          ...(metadata !== undefined ? { metadata } : {}),
+          argv,
+          cwd: codexExecUri(hold.reach),
+          envPolicy,
+          env,
+          tty,
+          pipeStdin,
+          arg0: typeof arg0 === "string" ? arg0 : null,
+          sandbox: sandbox.sandbox,
+          enforceManagedNetwork,
+          managedNetwork: null,
+        };
       } catch (error) {
         hold.release();
         throw error;
@@ -614,8 +927,9 @@ function plan(
           ...(hold.real !== written ? { written: [written] } : {}),
           processId,
           ...(toolCallId !== undefined ? { toolCallId: clip(toolCallId, 256) } : {}),
+          sandbox: sandboxed,
         },
-        params: { ...p, cwd: reach },
+        params,
         effect: (s) => {
           if (s.processes.size >= TRACKED_LIMIT)
             for (const [id, status] of s.processes)
@@ -629,17 +943,44 @@ function plan(
       };
     }
 
-    case "process/read":
-    case "process/signal":
-    case "process/terminate":
-      return { action: "pass", calls: [], subject: { processId: knownProcess() } };
+    case "process/read": {
+      only(p, "the request", ["processId", "afterSeq", "maxBytes", "waitMs"]);
+      const processId = knownProcess();
+      return {
+        action: "pass",
+        calls: [],
+        subject: { processId },
+        params: {
+          processId,
+          afterSeq: count(p["afterSeq"], "afterSeq"),
+          maxBytes: count(p["maxBytes"], "maxBytes"),
+          waitMs: count(p["waitMs"], "waitMs"),
+        },
+      };
+    }
+
+    case "process/signal": {
+      only(p, "the request", ["processId", "signal"]);
+      const processId = knownProcess();
+      // The one signal the protocol has. It only ever stops what was already allowed.
+      if (p["signal"] !== "interrupt") throw new Unreadable("the signal is not one ORCA passes");
+      return { action: "pass", calls: [], subject: { processId }, params: { processId, signal: "interrupt" } };
+    }
+
+    case "process/terminate": {
+      only(p, "the request", ["processId"]);
+      const processId = knownProcess();
+      return { action: "pass", calls: [], subject: { processId }, params: { processId } };
+    }
 
     case "process/write": {
+      only(p, "the request", ["processId", "chunk", "writeId"]);
       const processId = knownProcess();
       const bytes = base64Bytes(p["chunk"], "the typed input");
+      const params = { processId, chunk: p["chunk"], writeId: text(p["writeId"], "writeId", ID_LIMIT) };
       // Nothing typed, or one interrupt (Ctrl-C), only ever stops what was already allowed.
       if (bytes.length === 0 || (bytes.length === 1 && bytes[0] === 0x03))
-        return { action: "pass", calls: [], subject: { processId, bytes: bytes.length } };
+        return { action: "pass", calls: [], subject: { processId, bytes: bytes.length }, params };
       let typed: string;
       try {
         typed = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
@@ -657,6 +998,7 @@ function plan(
           },
         ],
         subject: { kind: "execute", processId, bytes: bytes.length, sha256: sha256(bytes) },
+        params,
       };
     }
 
@@ -741,7 +1083,8 @@ export async function openCodexExecGate(options: CodexExecGateOptions): Promise<
   const initializedWaiters = new Set<() => void>();
   const kept: { record: CodexExecGateRecord; bytes: number }[] = [];
   let keptBytes = 0;
-  const live = new Set<{ end: (reason: string) => void; stopped: () => Promise<void> }>();
+  /** Every connection still counted: open ones, and ended ones not yet gone. */
+  const live = new Set<{ end: (reason: string) => void; gone: () => Promise<void>; ended: () => boolean }>();
 
   const record = (entry: Omit<CodexExecGateRecord, "seq" | "at">): void => {
     const made: CodexExecGateRecord = {
@@ -812,18 +1155,34 @@ export async function openCodexExecGate(options: CodexExecGateOptions): Promise<
     });
   });
 
-  const decideBounded = async (call: CodexExecGateCall): Promise<CodexExecGateDecision> => {
+  /**
+   * One decision, bounded in time and ended early when the connection is (`ended`). `keep`
+   * claims the request's bytes for as long as `decide` itself has not settled: a decision the
+   * gate stopped waiting for can still be running, with the call in its hands.
+   */
+  const decideBounded = async (
+    call: CodexExecGateCall,
+    ended: AbortSignal,
+    keep: () => () => void,
+  ): Promise<CodexExecGateDecision> => {
+    if (ended.aborted) return NOT_CHECKED;
     const controller = new AbortController();
+    const stop = (): void => controller.abort();
+    ended.addEventListener("abort", stop, { once: true });
+    const settled = keep();
+    const decided = Promise.resolve().then(() => options.decide(call, controller.signal));
+    decided.then(settled, settled);
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       return decisionOf(
         await Promise.race([
-          options.decide(call, controller.signal),
+          decided,
           new Promise<CodexExecGateDecision>((resolve) => {
             timer = setTimeout(
               () => resolve({ allow: false, basis: "gate", reason: "ORCA could not decide this call in time" }),
               decisionTimeoutMs,
             );
+            controller.signal.addEventListener("abort", () => resolve(NOT_CHECKED), { once: true });
           }),
         ]),
       );
@@ -831,6 +1190,7 @@ export async function openCodexExecGate(options: CodexExecGateOptions): Promise<
       return NOT_CHECKED;
     } finally {
       clearTimeout(timer);
+      ended.removeEventListener("abort", stop);
       controller.abort();
     }
   };
@@ -846,30 +1206,53 @@ export async function openCodexExecGate(options: CodexExecGateOptions): Promise<
     /** Directories held for a `process/start` the executor has not answered yet. */
     const held = new Map<string, CodexExecGateHeldDirectory>();
     let backend: CodexExecBackend | undefined;
+    /** False from the moment an executor is started until it has been seen to exit. */
+    let backendGone = true;
+    let socketClosed = false;
     let initializeId: string | number | undefined;
     let ready = false;
     let ended = false;
+    let gone = false;
     let queued = 0;
     let chain: Promise<void> = Promise.resolve();
-    let stopping: Promise<void> = Promise.resolve();
+    const ending = new AbortController();
+    let resolveGone: (() => void) | undefined;
+    const whenGone = new Promise<void>((resolve) => {
+      resolveGone = resolve;
+    });
+
+    /**
+     * The connection is gone, and stops being counted, only when nothing is left of it: the
+     * socket has closed, the executor has been seen to exit, and every claim on the budget
+     * has been returned by what it stood for. Until then it holds its place and its bytes.
+     */
+    const settle = (): void => {
+      if (!ended || gone || !socketClosed || !backendGone || budget.held > 0) return;
+      gone = true;
+      budget.close();
+      live.delete(entry);
+      resolveGone?.();
+    };
 
     const end = (reason: string): void => {
       if (ended) return;
       ended = true;
-      live.delete(entry);
       record({ connection, method: "connection", outcome: "closed", basis: "gate", reason });
+      // A decision still being made is told to stop; its bytes stay claimed until it has.
+      ending.abort();
       ws.terminate();
-      budget.close();
-      // A start the executor has not answered may still be on its way into the directory held
-      // for it, so a hold outlives the executor: its descriptor's number is not reused before.
-      const release = (): void => {
-        for (const hold of held.values()) hold.release();
-        held.clear();
-      };
-      if (backend) stopping = backend.stop().then(release, release);
-      else release();
+      // Asking the executor to stop frees nothing by itself. What is held for it (a directory
+      // a start may still be on its way into, bytes not yet in its pipe) is let go when it is
+      // seen to exit, below, and stays held for as long as it is not.
+      if (backend !== undefined && !backendGone) {
+        const stopping = backend;
+        Promise.resolve()
+          .then(() => stopping.stop())
+          .catch(() => undefined);
+      }
+      settle();
     };
-    const entry = { end, stopped: () => stopping };
+    const entry = { end, gone: () => whenGone, ended: () => ended };
     live.add(entry);
     record({ connection, method: "connection", outcome: "opened", basis: "gate" });
 
@@ -881,7 +1264,21 @@ export async function openCodexExecGate(options: CodexExecGateOptions): Promise<
         if (!open) return;
         open = false;
         budget.give(bytes);
+        settle();
       };
+    };
+    /** What the executor's side claims for this connection, counted with the rest. */
+    const backendBudget: CodexExecGateBudget = {
+      limit: budget.limit,
+      get held() {
+        return budget.held;
+      },
+      take: (bytes) => budget.take(bytes),
+      give(bytes) {
+        budget.give(bytes);
+        settle();
+      },
+      close: () => undefined,
     };
 
     const reply = (message: unknown): void => {
@@ -901,13 +1298,14 @@ export async function openCodexExecGate(options: CodexExecGateOptions): Promise<
       record({ connection, method, id, outcome: "refused", basis, reason, ...(subject ? { subject } : {}) });
       reply({ id, error: { code: REFUSED, message: clip(refusal(reason), 2048) } });
     };
-    // Only the fields the protocol has are passed on, serialized from what the gate parsed.
-    const requestOf = (id: string | number, method: string, message: Record<string, unknown>, params?: unknown) => ({
-      id,
-      method,
-      ...(params !== undefined ? { params } : message["params"] !== undefined ? { params: message["params"] } : {}),
-      ...(isRecord(message["trace"]) ? { trace: message["trace"] } : {}),
-    });
+    // The executor is sent what the gate built: the id, the method, the parameters the plan
+    // gave (or none), and a trace context. Nothing of the message itself is passed on.
+    const requestOf = (
+      id: string | number,
+      method: string,
+      message: Record<string, unknown>,
+      params?: Record<string, unknown>,
+    ) => ({ id, method, ...(params !== undefined ? { params } : {}), ...traceOf(message["trace"]) });
     const forward = (message: Record<string, unknown>): boolean => {
       const data = JSON.stringify(message);
       const release = claim(Buffer.byteLength(data));
@@ -941,7 +1339,7 @@ export async function openCodexExecGate(options: CodexExecGateOptions): Promise<
           if (asked.size >= ASKED_LIMIT) return end("the executor behind the gate asked more than the agent answered");
           asked.add(idKey(id));
         } else if (typeof method !== "string" && hasId) {
-          // An answer: the request is done with, and so is a directory held for it.
+          // An answer: the request is finished, and so is the use of a directory held for it.
           const key = idKey(id);
           pending.delete(key);
           held.get(key)?.release();
@@ -963,12 +1361,20 @@ export async function openCodexExecGate(options: CodexExecGateOptions): Promise<
     };
 
     const initialize = async (id: string | number, message: Record<string, unknown>): Promise<void> => {
+      let params: Record<string, unknown>;
+      try {
+        params = initializeParams(message["params"]);
+      } catch (error) {
+        if (!(error instanceof Unreadable)) throw error;
+        return refuse(id, "initialize", "gate", `ORCA could not read the request (${error.message})`);
+      }
       if (startBackend === undefined) {
         let timer: ReturnType<typeof setTimeout> | undefined;
         await Promise.race([
           admission,
           new Promise<void>((resolve) => {
             timer = setTimeout(resolve, admissionWaitMs);
+            ending.signal.addEventListener("abort", () => resolve(), { once: true });
           }),
         ]);
         clearTimeout(timer);
@@ -977,21 +1383,36 @@ export async function openCodexExecGate(options: CodexExecGateOptions): Promise<
       if (startBackend === undefined || closed)
         return refuse(id, "initialize", "gate", "ORCA has not admitted this session's runtime");
       try {
-        backend = startBackend({ budget });
+        backend = startBackend({ budget: backendBudget });
       } catch {
         refuse(id, "initialize", "gate", "ORCA could not start the executor behind its gate");
         return end("the executor behind the gate did not start");
       }
+      backendGone = false;
       backend.onMessage(fromBackend);
-      backend.onExit((detail) => end(`the executor behind the gate ended (${detail})`));
+      backend.onExit((detail) => {
+        // Seen to exit: it can use nothing more, so what was held for it is let go here and
+        // nowhere earlier.
+        backendGone = true;
+        for (const hold of held.values()) hold.release();
+        held.clear();
+        end(`the executor behind the gate ended (${detail})`);
+        settle();
+      });
+      if (ended) return;
       initializeId = id;
-      if (forward(requestOf(id, "initialize", message))) {
+      if (forward(requestOf(id, "initialize", message, params))) {
         pending.add(idKey(id));
         record({ connection, method: "initialize", id, outcome: "forwarded", basis: "pass" });
       }
     };
 
-    const request = async (method: string, id: string | number, message: Record<string, unknown>): Promise<void> => {
+    const request = async (
+      method: string,
+      id: string | number,
+      message: Record<string, unknown>,
+      keep: () => () => void,
+    ): Promise<void> => {
       // An id still in use would let one answer stand for two requests.
       if (pending.has(idKey(id))) return end("the agent used a request id twice");
       if (backend === undefined) {
@@ -1002,13 +1423,15 @@ export async function openCodexExecGate(options: CodexExecGateOptions): Promise<
       if (!ready) return refuse(id, method, "gate", "the executor behind the gate has not answered yet");
       if (pending.size >= PENDING_LIMIT)
         return refuse(id, method, "gate", "too many requests are waiting for the executor behind the gate");
+      if (method === "process/start" && held.size >= HELD_LIMIT)
+        return refuse(id, method, "gate", "too many commands are still starting behind the gate");
       const planned = planCodexExecRequest(method, message["params"], state, binder);
       if (planned.action === "refuse") return refuse(id, method, "gate", planned.reason, planned.subject);
       let passed = false;
       try {
         let basis = "pass";
         for (const call of planned.calls) {
-          const decision = await decideBounded(call);
+          const decision = await decideBounded(call, ending.signal, keep);
           if (ended) return;
           if (decision.allow !== true) return refuse(id, method, decision.basis, decision.reason, planned.subject);
           basis = decision.basis;
@@ -1027,11 +1450,12 @@ export async function openCodexExecGate(options: CodexExecGateOptions): Promise<
           ...(planned.subject ? { subject: planned.subject } : {}),
         });
       } finally {
+        // Never sent, so the executor never heard of the directory.
         if (!passed) planned.hold?.release();
       }
     };
 
-    const handle = async (data: string): Promise<void> => {
+    const handle = async (data: string, keep: () => () => void): Promise<void> => {
       if (ended) return;
       let message: unknown;
       try {
@@ -1045,7 +1469,7 @@ export async function openCodexExecGate(options: CodexExecGateOptions): Promise<
       const hasId =
         (typeof id === "string" && id.length <= ID_LIMIT) || (typeof id === "number" && Number.isSafeInteger(id));
       if (typeof method === "string") {
-        if (hasId) return request(method, id, message);
+        if (hasId) return request(method, id, message, keep);
         if (id !== undefined && id !== null) return end("the agent sent a request with an id ORCA cannot answer");
         // A notification has no answer to refuse it with, so one ORCA does not know is dropped.
         if (method === "initialized" && backend !== undefined && ready) {
@@ -1085,16 +1509,39 @@ export async function openCodexExecGate(options: CodexExecGateOptions): Promise<
       // Held as it arrived until its turn; it is parsed only then, one message at a time.
       const release = claim(frame.length);
       if (release === undefined) return end(OVER_BUDGET);
+      // The frame's bytes are returned when its turn is over and every decision made for it
+      // has settled, whichever is later.
+      let users = 1;
+      const done = (): void => {
+        if (--users === 0) release();
+      };
+      const keep = (): (() => void) => {
+        users++;
+        let open = true;
+        return () => {
+          if (!open) return;
+          open = false;
+          done();
+        };
+      };
       // One at a time, in the order they arrived: a request is decided before the next is read.
       chain = chain
-        .then(() => handle(frame.toString("utf8")))
+        .then(() => handle(frame.toString("utf8"), keep))
         .catch(() => end("ORCA's gate failed"))
         .finally(() => {
           queued--;
-          release();
+          done();
         });
     });
-    ws.on("close", () => end("the agent closed the connection"));
+    ws.on("close", () => {
+      // The socket is gone, and with it the message it was assembling.
+      if (!socketClosed) {
+        socketClosed = true;
+        budget.give(messageLimit);
+      }
+      end("the agent closed the connection");
+      settle();
+    });
     ws.on("error", (error: Error & { code?: string }) =>
       end(
         error.code === "WS_ERR_UNSUPPORTED_MESSAGE_LENGTH"
@@ -1128,6 +1575,11 @@ export async function openCodexExecGate(options: CodexExecGateOptions): Promise<
       });
     },
     records: () => kept.map((entry) => entry.record),
+    connections() {
+      let stopping = 0;
+      for (const connection of live) if (connection.ended()) stopping++;
+      return { open: live.size - stopping, stopping };
+    },
     async close() {
       if (closed) return;
       closed = true;
@@ -1138,10 +1590,11 @@ export async function openCodexExecGate(options: CodexExecGateOptions): Promise<
         server.close(() => resolve());
       });
       server.closeAllConnections();
-      // Each executor's `stop` has its own bound; this one holds whatever a backend does.
+      // The caller is held for a bounded time. A connection that is not gone by then is not
+      // let go of: it stays counted, with what it holds, until it is.
       let timer: ReturnType<typeof setTimeout> | undefined;
       await Promise.race([
-        Promise.all(ending.map((connection) => connection.stopped())),
+        Promise.all(ending.map((connection) => connection.gone())),
         new Promise<void>((resolve) => {
           timer = setTimeout(resolve, closeWaitMs);
         }),
@@ -1170,7 +1623,8 @@ export interface CodexExecServerSpawn {
 /**
  * Start `codex exec-server --listen stdio` as ORCA's own direct child and speak its
  * line-delimited JSON. `stop` closes its input, then signals that one child, and only while
- * it has not been reaped: nothing is looked up by pid or by group.
+ * it has not been reaped: nothing is looked up by pid or by group. `stop` gives up after its
+ * last wait whether or not the child went; `onExit` is heard only once the child has exited.
  */
 export function spawnCodexExecServer(
   spec: CodexExecServerSpawn,

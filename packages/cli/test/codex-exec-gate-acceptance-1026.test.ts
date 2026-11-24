@@ -651,11 +651,14 @@ describe.skipIf(ADAPTER === undefined)("ORCA's exec gate in the real Codex (#102
   it("fails the call when ORCA cannot decide it", async () => {
     let mode: "throw" | "hang" = "throw";
     const s = await gated(undefined, {
-      decide: (call) => {
+      decide: (call, signal) => {
         if (call.check === "protected" || call.toolCall.kind !== "execute")
           return Promise.resolve({ allow: true, basis: "test" });
         if (mode === "throw") return Promise.reject(new Error("the policy could not be read"));
-        return new Promise<CodexExecGateDecision>(() => undefined);
+        // Never decided. It gives up when the gate tells it to stop, as ORCA's own would.
+        return new Promise<CodexExecGateDecision>((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(new Error("stopped")), { once: true });
+        });
       },
     });
     await s.prompt(script(shell("echo ran >> threw.txt")));
