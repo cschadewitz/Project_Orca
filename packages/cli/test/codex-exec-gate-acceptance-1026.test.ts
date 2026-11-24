@@ -33,6 +33,7 @@
  */
 import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
+import { readlinkSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, realpath, rename, rm, rmdir, symlink, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -43,7 +44,10 @@ import {
   LocalHost,
   codexExecGateBinder,
   codexExecGateDecider,
+  codexExecGateDirectories,
   codexExecGateHeldBytes,
+  codexExecGateHeldDirectories,
+  codexExecPath,
   openAcpSession,
   openCodexExecGate,
   permissionPolicyPath,
@@ -57,6 +61,7 @@ import {
   type CodexExecGateCall,
   type CodexExecGateConnection,
   type CodexExecGateDecision,
+  type CodexExecGateDirectories,
   type CodexExecGateRecord,
   type OpenSessionOptions,
 } from "@orca/agents";
@@ -136,8 +141,10 @@ describe.skipIf(ADAPTER === undefined)("ORCA's exec gate in the real Codex (#102
       await gate?.close();
       session = undefined;
       gate = undefined;
-      // Whatever a session did, a closed gate holds nothing.
+      // Whatever a session did, a closed gate holds nothing: the pinned executor said every
+      // command was over, so no directory is held and none had to be kept for good.
       expect(codexExecGateHeldBytes()).toBe(0);
+      expect(codexExecGateHeldDirectories()).toEqual({ held: 0, kept: 0 });
       // Codex may still be writing its home as the session closes.
       await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
     };
@@ -218,6 +225,7 @@ describe.skipIf(ADAPTER === undefined)("ORCA's exec gate in the real Codex (#102
       env?: Record<string, string>;
       url?: (url: string) => string;
       binder?: CodexExecGateBinder;
+      directories?: CodexExecGateDirectories;
     } = {},
   ): Promise<AgentSession> {
     const byPolicy = codexExecGateDecider(context(permissions));
@@ -232,6 +240,7 @@ describe.skipIf(ADAPTER === undefined)("ORCA's exec gate in the real Codex (#102
       decisionTimeoutMs: 2000,
       admissionWaitMs: 2000,
       ...(more.binder ? { binder: more.binder } : {}),
+      ...(more.directories ? { directories: more.directories } : {}),
     });
     if (more.admit !== false) gate.admit(startExecutor);
     session = await openAcpSession({
@@ -290,6 +299,8 @@ describe.skipIf(ADAPTER === undefined)("ORCA's exec gate in the real Codex (#102
     expect(await exists("denied.txt")).toBeUndefined();
     expect(await exists("asked.txt")).toBeUndefined();
     expect(asks).toEqual([]);
+    // The executor said the command it ran was over, which is what lets go of its directory.
+    await expect.poll(() => codexExecGateHeldDirectories().held, { timeout: 5000 }).toBe(0);
     // The model is told it was ORCA, in ORCA's words.
     expect(told(/Denied by ORCA: ORCA's permission policy/)).toBe(true);
     expect(told(/Blocked by ORCA: its policy asks a person first/)).toBe(true);
@@ -320,6 +331,21 @@ describe.skipIf(ADAPTER === undefined)("ORCA's exec gate in the real Codex (#102
     expect(refused).toMatchObject({ basis: "policy:ask", subject: { bytes: 12 } });
     expect(JSON.stringify(records)).not.toContain("typed-1026");
     expect(told(/Blocked by ORCA/)).toBe(true);
+  }, 180_000);
+
+  it("decides a typed Ctrl-C like anything else typed", async () => {
+    const s = await gated({ rules: [ALLOW_CAT, { match: { kind: "execute" }, decision: "allow" }] });
+    await s.prompt(
+      script(
+        { tool: "exec_command", args: { cmd: "cat > typed.txt", tty: true, yield_time_ms: 500 } },
+        { tool: "write_stdin", args: { session_id: "$SID", chars: "\u0003", yield_time_ms: 500 } },
+      ),
+    );
+    // One byte, and it is data: no rule names typed input, so it never reaches the command.
+    const [refused] = recorded("process/write", "refused");
+    expect(refused).toMatchObject({ basis: "policy:ask", subject: { bytes: 1 } });
+    expect(recorded("process/write", "forwarded")).toEqual([]);
+    expect(passed.some((m) => m.includes('"process/write"'))).toBe(false);
   }, 180_000);
 
   it("passes typed input a rule names", async () => {
@@ -696,6 +722,26 @@ describe.skipIf(ADAPTER === undefined)("ORCA's exec gate in the real Codex (#102
       ["forwarded", "policy", "echo ran >> after.txt"],
       ["refused", "policy:deny", "echo denied >> denied.txt"],
     ]);
+  }, 180_000);
+
+  it("keeps the directory of a command still running when the executor behind the gate is killed", async () => {
+    // A count of its own: what is kept here stays kept for as long as this process lives.
+    const directories = codexExecGateDirectories(8);
+    const s = await gated(
+      { rules: [{ match: { kind: "execute", titlePattern: "^sleep 20$" }, decision: "allow" }] },
+      { directories },
+    );
+    await s.prompt(script({ tool: "exec_command", args: { cmd: "sleep 20", yield_time_ms: 500 } }));
+    const started = passed.map((m) => JSON.parse(m) as { method?: string; params?: { cwd?: string } });
+    const reach = codexExecPath(started.find((m) => m.method === "process/start")!.params!.cwd);
+    expect(readlinkSync(reach)).toBe(workspace);
+    expect(directories).toMatchObject({ held: 1, kept: 0 });
+    process.kill(executors[0]!, "SIGKILL");
+    await expect.poll(() => records.some((r) => r.outcome === "kept"), { timeout: 10_000 }).toBe(true);
+    // The executor's exit says nothing about what it started. The name it was given goes on
+    // leading to the directory ORCA decided, and to no other.
+    expect(directories).toMatchObject({ held: 1, kept: 1 });
+    expect(readlinkSync(reach)).toBe(workspace);
   }, 180_000);
 
   it("fails every later call when the gate is closed", async () => {

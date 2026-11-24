@@ -22,7 +22,8 @@
  *   starting a process, typing into one, and reading, writing, creating and removing one
  *   file or directory. A metadata probe is checked against ORCA's protected paths only.
  * - **passes it** when it only continues a process this connection was allowed to start:
- *   reading its output, interrupting it and ending it.
+ *   reading its output, interrupting it (`process/signal`) and ending it. Typing is not one
+ *   of these: every write of one byte or more is decided, a Ctrl-C included.
  * - **refuses it** in every other case: a method the gate does not know, parameters it
  *   cannot read the way the executor would, a process it never allowed, and every file
  *   request it cannot tie to the file the executor would use (below).
@@ -39,13 +40,30 @@
  *   refuse, and it does.
  * - For a process it opens the directory the process would start in, decides the directory
  *   that descriptor holds, and tells the executor to start the process in the descriptor
- *   (`/proc/<pid>/fd/<n>`), not in a name. The descriptor stays open until the executor has
- *   answered the start or has been seen to exit. Linux only; elsewhere a start is refused.
+ *   (`/proc/<pid>/fd/<n>`), not in a name. Linux only; elsewhere a start is refused.
  * - The requests the executor has no such mode for are refused: file handles (`fs/open` and
  *   the block reads and writes on it), `fs/copy`, `fs/readDirectory`, `fs/walk`,
  *   `fs/canonicalize` and `fs/watchMissing`. So are the ones that touch more than the one
  *   path decided: a removal of a whole tree, and creating more than one directory at a time
  *   (a recursive create is passed on as a create of that one directory).
+ *
+ * **How long a directory is held.** The name the executor is given means the directory ORCA
+ * decided only while the descriptor is open; once it is closed the same name can come to mean
+ * another directory. So the descriptor is closed only on the executor's own word that the
+ * command is over: an error answer to the start, or, once it has started, word that the
+ * process exited or closed. The answer that it started is too early, because Codex's sandbox
+ * helper reads the directory again after it (`linux-sandbox/src/bwrap.rs`). Nothing else
+ * closes it: not the connection ending, not `stop` returning, and not the executor exiting,
+ * since a child the executor was starting can outlive it and still be on its way in. An ended
+ * connection has the executor end the commands it left and waits a bounded time for that
+ * word. A directory whose executor exits first stays open for as long as this process lives,
+ * unless the backend proves nothing of the executor's is left; it is counted
+ * (`codexExecGateHeldDirectories`), and at the ceiling a start is refused. The executor that
+ * `spawnCodexExecServer` starts cannot give that proof.
+ *
+ * With Codex's sandbox the last step into the directory is by name: the sandbox helper asks
+ * for the current name of what the descriptor holds and has bubblewrap enter that name. There
+ * the directory is path scope, like a file.
  *
  * **The contract for a file request is path scope, not the identity of a file.** The gate
  * decides a link-free path, and the executor uses whatever is at that path when it gets
@@ -122,11 +140,19 @@ const ASKED_LIMIT = 256;
 const TRACKED_LIMIT = 1024;
 
 /**
- * Starts one connection may have with the executor, unanswered, each with its directory held
- * open. A directory stays held for as long as the executor might still use it, so the number
- * is kept small.
+ * Commands one connection may have starting or running, each with its directory held open.
+ * Codex 0.171 itself keeps at most 64 processes.
  */
-const HELD_LIMIT = 32;
+const HELD_LIMIT = 64;
+
+/** Directories every gate in this process holds open together, unless a gate is given its own count. */
+export const CODEX_EXEC_GATE_DIRECTORY_LIMIT = 256;
+
+/**
+ * How long an ended connection gives its executor to say the commands it left are over,
+ * before the executor is asked to stop.
+ */
+const STOP_WAIT_MS = 2000;
 
 /** Records kept in memory for `records()`, in number and in bytes. `onRecord` hears every one. */
 const RECORD_LIMIT = 2048;
@@ -192,7 +218,7 @@ export interface CodexExecGateRecord {
   method: string;
   /** The JSON-RPC id of a request. */
   id?: string | number | undefined;
-  outcome: "forwarded" | "refused" | "dropped" | "opened" | "closed";
+  outcome: "forwarded" | "refused" | "dropped" | "opened" | "closed" | "kept";
   /** What decided: `pass`, `gate`, or the basis `decide` gave. */
   basis: string;
   /** Why, for a refusal, a drop or a close. */
@@ -267,6 +293,57 @@ const PROCESS_BUDGET = codexExecGateBudget(CODEX_EXEC_GATE_PROCESS_BUDGET);
 /** Bytes every gate on the shared budget holds right now. Zero once they are all closed. */
 export const codexExecGateHeldBytes = (): number => PROCESS_BUDGET.held;
 
+/** A count of directories held open, with a ceiling. */
+export interface CodexExecGateDirectories {
+  readonly limit: number;
+  /** Held open right now, the kept ones included. */
+  readonly held: number;
+  /** Held open for good: their executor ended before it said the command was over. */
+  readonly kept: number;
+  /** Count one more. False, and nothing is counted, at the ceiling. */
+  take(): boolean;
+  /** One was released. */
+  give(): void;
+  /** One will not be released. It stays counted. */
+  keep(): void;
+}
+
+export function codexExecGateDirectories(limit: number): CodexExecGateDirectories {
+  let held = 0;
+  let kept = 0;
+  return {
+    limit,
+    get held() {
+      return held;
+    },
+    get kept() {
+      return kept;
+    },
+    take() {
+      if (held >= limit) return false;
+      held += 1;
+      return true;
+    },
+    give() {
+      if (held > kept) held -= 1;
+    },
+    keep() {
+      if (kept < held) kept += 1;
+    },
+  };
+}
+
+const PROCESS_DIRECTORIES = codexExecGateDirectories(CODEX_EXEC_GATE_DIRECTORY_LIMIT);
+
+/**
+ * Directories every gate on the shared count holds open right now. `kept` ones stay open for
+ * as long as this process lives.
+ */
+export const codexExecGateHeldDirectories = (): { held: number; kept: number } => ({
+  held: PROCESS_DIRECTORIES.held,
+  kept: PROCESS_DIRECTORIES.kept,
+});
+
 /** The executor behind the gate, one per connection. */
 export interface CodexExecBackend {
   /**
@@ -277,11 +354,17 @@ export interface CodexExecBackend {
   /** Hear each message the executor writes. */
   onMessage(listener: (message: string) => void): void;
   /**
-   * Hear the executor end, once: only when it has been seen to exit, so that it can no longer
-   * use anything ORCA holds for it. This, not `stop` returning, is what the gate waits for
-   * before it lets go of a directory or stops counting the connection.
+   * Hear the executor end, once: only when it has been seen to exit. This, not `stop`
+   * returning, is what the gate waits for before it stops counting the connection.
+   *
+   * The executor's own exit says nothing about the processes it started, or was in the middle
+   * of starting: one of those can still be on its way into a directory ORCA holds for it. So
+   * `nothingLeft` is true only when the backend can prove that no process the executor
+   * started, and no descendant of one, still exists (an executor run as the first process of
+   * its own pid namespace, say, where the kernel ends the rest with it). Without that proof
+   * the gate keeps every directory the executor had not finished with.
    */
-  onExit(listener: (detail: string) => void): void;
+  onExit(listener: (detail: string, nothingLeft?: boolean) => void): void;
   /**
    * Ask it to end and wait, within the backend's own bound. Returning says nothing about
    * whether it is gone: `onExit` does.
@@ -376,6 +459,13 @@ export interface CodexExecGateOptions {
   budget?: CodexExecGateBudget | undefined;
   /** How long `close` waits for the executors to be gone. */
   closeWaitMs?: number | undefined;
+  /** The count of held directories this gate draws on. The default is shared by the process. */
+  directories?: CodexExecGateDirectories | undefined;
+  /**
+   * How long an ended connection waits for its executor to say the commands it left are over
+   * before the executor is asked to stop.
+   */
+  stopWaitMs?: number | undefined;
 }
 
 /** What a connection gives the executor it starts. */
@@ -405,7 +495,9 @@ export interface CodexExecGate {
   /**
    * Refuse everything from now on, end every connection and executor, and stop listening.
    * It returns once all of that is gone, or after `closeWaitMs` whatever is left; what is
-   * left stays counted (`connections`, the budgets) until it does go.
+   * left stays counted (`connections`, the budgets) until it does go. A directory held for a
+   * command its executor never said was over is no part of that wait: it stays open, and
+   * counted (`codexExecGateHeldDirectories`), after the gate has closed.
    */
   close(): Promise<void>;
 }
@@ -978,9 +1070,10 @@ function plan(
       const processId = knownProcess();
       const bytes = base64Bytes(p["chunk"], "the typed input");
       const params = { processId, chunk: p["chunk"], writeId: text(p["writeId"], "writeId", ID_LIMIT) };
-      // Nothing typed, or one interrupt (Ctrl-C), only ever stops what was already allowed.
-      if (bytes.length === 0 || (bytes.length === 1 && bytes[0] === 0x03))
-        return { action: "pass", calls: [], subject: { processId, bytes: bytes.length }, params };
+      // Only a write of nothing passes undecided. Every byte typed is data, whatever it is
+      // meant to do: the gate cannot tell a Ctrl-C a terminal will act on from the same byte
+      // read by a program as input. An interrupt has its own request, `process/signal`.
+      if (bytes.length === 0) return { action: "pass", calls: [], subject: { processId, bytes: bytes.length }, params };
       let typed: string;
       try {
         typed = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
@@ -1070,6 +1163,8 @@ export async function openCodexExecGate(options: CodexExecGateOptions): Promise<
   const connectionBudget = Math.max(options.connectionBudgetBytes ?? 4 * messageLimit, 2 * messageLimit);
   const gateBudget = options.budget ?? PROCESS_BUDGET;
   const closeWaitMs = options.closeWaitMs ?? CLOSE_WAIT_MS;
+  const directories = options.directories ?? PROCESS_DIRECTORIES;
+  const stopWaitMs = options.stopWaitMs ?? STOP_WAIT_MS;
 
   let seq = 0;
   let connectionSeq = 0;
@@ -1203,8 +1298,13 @@ export async function openCodexExecGate(options: CodexExecGateOptions): Promise<
     const asked = new Set<string>();
     /** Ids of requests passed to the executor and not answered yet. */
     const pending = new Set<string>();
-    /** Directories held for a `process/start` the executor has not answered yet. */
-    const held = new Map<string, CodexExecGateHeldDirectory>();
+    /** Directories held for a `process/start` the executor has not answered yet, by request id. */
+    const starting = new Map<string, { hold: CodexExecGateHeldDirectory; processId: string; over?: boolean }>();
+    /** Directories held for a process the executor started and has not said is over, by process id. */
+    const running = new Map<string, CodexExecGateHeldDirectory>();
+    let stopAsked = false;
+    let stopTimer: ReturnType<typeof setTimeout> | undefined;
+    let ownRequests = 0;
     let backend: CodexExecBackend | undefined;
     /** False from the moment an executor is started until it has been seen to exit. */
     let backendGone = true;
@@ -1241,14 +1341,15 @@ export async function openCodexExecGate(options: CodexExecGateOptions): Promise<
       // A decision still being made is told to stop; its bytes stay claimed until it has.
       ending.abort();
       ws.terminate();
-      // Asking the executor to stop frees nothing by itself. What is held for it (a directory
-      // a start may still be on its way into, bytes not yet in its pipe) is let go when it is
-      // seen to exit, below, and stays held for as long as it is not.
       if (backend !== undefined && !backendGone) {
-        const stopping = backend;
-        Promise.resolve()
-          .then(() => stopping.stop())
-          .catch(() => undefined);
+        if (starting.size + running.size === 0) stopExecutor();
+        else {
+          // A directory is let go only on the executor's own word that its command is over.
+          // So the commands this connection left are ended through the executor first, and
+          // it is given a bounded time to say so before it is asked to stop.
+          for (const processId of running.keys()) terminate(processId);
+          stopTimer = setTimeout(stopExecutor, stopWaitMs);
+        }
       }
       settle();
     };
@@ -1256,9 +1357,12 @@ export async function openCodexExecGate(options: CodexExecGateOptions): Promise<
     live.add(entry);
     record({ connection, method: "connection", outcome: "opened", basis: "gate" });
 
-    /** Claim bytes for this connection until the returned function is called. */
-    const claim = (bytes: number): (() => void) | undefined => {
-      if (ended || !budget.take(bytes)) return undefined;
+    /**
+     * Claim bytes for this connection until the returned function is called. Once it has
+     * ended only the gate's own last words to the executor (`late`) may claim.
+     */
+    const claim = (bytes: number, late = false): (() => void) | undefined => {
+      if ((ended && !late) || !budget.take(bytes)) return undefined;
       let open = true;
       return () => {
         if (!open) return;
@@ -1279,6 +1383,86 @@ export async function openCodexExecGate(options: CodexExecGateOptions): Promise<
         settle();
       },
       close: () => undefined,
+    };
+
+    /**
+     * Ask the executor to stop, once. Asking frees nothing: bytes not yet in its pipe stay
+     * claimed until it is seen to exit, and a directory until it says the command is over.
+     */
+    const stopExecutor = (): void => {
+      if (stopAsked || backend === undefined || backendGone) return;
+      stopAsked = true;
+      clearTimeout(stopTimer);
+      const stopping = backend;
+      Promise.resolve()
+        .then(() => stopping.stop())
+        .catch(() => undefined);
+    };
+    /** The executor said this command is over, so nothing it started is still entering the directory. */
+    const letGo = (hold: CodexExecGateHeldDirectory): void => {
+      hold.release();
+      directories.give();
+      if (ended && starting.size + running.size === 0) stopExecutor();
+    };
+    /** End a command an ended connection left running. This is the gate's own request, and its answer is not passed on. */
+    const terminate = (processId: string): void => {
+      if (backend === undefined || backendGone) return;
+      let id: string;
+      do id = `orca-gate:${++ownRequests}`;
+      while (starting.has(idKey(id)));
+      const data = JSON.stringify({ id, method: "process/terminate", params: { processId } });
+      const release = claim(Buffer.byteLength(data), true);
+      if (release === undefined) return;
+      try {
+        backend.send(data, release);
+      } catch {
+        release();
+      }
+    };
+    /**
+     * What the executor says about a command decides how long its directory is held. An error
+     * answer to the start says nothing was started. An answer that it started is too early to
+     * let go: Codex's sandbox helper reads the directory again after it. Word that the process
+     * exited or closed is the end of it.
+     */
+    const heard = (message: Record<string, unknown>): void => {
+      const id = message["id"];
+      const method = message["method"];
+      if (typeof method !== "string" && (typeof id === "string" || typeof id === "number")) {
+        const started = starting.get(idKey(id));
+        if (started === undefined) return;
+        starting.delete(idKey(id));
+        if (isRecord(message["error"]) && message["result"] === undefined) return letGo(started.hold);
+        if (isRecord(message["result"]) && message["error"] === undefined && !running.has(started.processId)) {
+          // A quick command can be reported over before its start is answered.
+          if (started.over === true) return letGo(started.hold);
+          running.set(started.processId, started.hold);
+          if (ended) terminate(started.processId);
+          return;
+        }
+        // An answer that says neither: the gate cannot tell what became of the start.
+        return keepForGood(started.hold);
+      }
+      if (
+        id === undefined &&
+        (method === "process/exited" || method === "process/closed") &&
+        isRecord(message["params"])
+      ) {
+        const processId = message["params"]["processId"];
+        if (typeof processId !== "string") return;
+        const hold = running.get(processId);
+        if (hold === undefined) {
+          for (const entry of starting.values()) if (entry.processId === processId) entry.over = true;
+          return;
+        }
+        running.delete(processId);
+        letGo(hold);
+      }
+    };
+    /** No word that the command is over will come, so the directory stays open and counted. */
+    const keepForGood = (_hold: CodexExecGateHeldDirectory): void => {
+      directories.keep();
+      if (ended && starting.size + running.size === 0) stopExecutor();
     };
 
     const reply = (message: unknown): void => {
@@ -1324,13 +1508,15 @@ export async function openCodexExecGate(options: CodexExecGateOptions): Promise<
     };
 
     const fromBackend = (line: string): void => {
-      if (ended) return;
       let message: unknown;
       try {
         message = JSON.parse(line);
       } catch {
         return end("the executor behind the gate sent something that is not JSON");
       }
+      // Heard after the connection has ended too: it is what lets go of a directory.
+      if (isRecord(message)) heard(message);
+      if (ended) return;
       if (isRecord(message)) {
         const id = message["id"];
         const hasId = typeof id === "string" || typeof id === "number";
@@ -1339,11 +1525,7 @@ export async function openCodexExecGate(options: CodexExecGateOptions): Promise<
           if (asked.size >= ASKED_LIMIT) return end("the executor behind the gate asked more than the agent answered");
           asked.add(idKey(id));
         } else if (typeof method !== "string" && hasId) {
-          // An answer: the request is finished, and so is the use of a directory held for it.
-          const key = idKey(id);
-          pending.delete(key);
-          held.get(key)?.release();
-          held.delete(key);
+          pending.delete(idKey(id));
         } else if (method === "process/closed" && isRecord(message["params"])) {
           const processId = message["params"]["processId"];
           if (typeof processId === "string" && state.processes.has(processId)) state.processes.set(processId, "closed");
@@ -1390,12 +1572,30 @@ export async function openCodexExecGate(options: CodexExecGateOptions): Promise<
       }
       backendGone = false;
       backend.onMessage(fromBackend);
-      backend.onExit((detail) => {
-        // Seen to exit: it can use nothing more, so what was held for it is let go here and
-        // nowhere earlier.
+      backend.onExit((detail, nothingLeft) => {
         backendGone = true;
-        for (const hold of held.values()) hold.release();
-        held.clear();
+        clearTimeout(stopTimer);
+        // The executor will say nothing more. Its exit alone does not show that a command it
+        // was starting, or had started, is done with its directory: a child can still be on
+        // its way in, by the name the gate gave. So what is still held is let go only when
+        // the backend proves nothing of the executor's is left, and is otherwise kept open
+        // for as long as this process lives, where the name can never come to mean another
+        // directory.
+        const left = [...[...starting.values()].map((entry) => entry.hold), ...running.values()];
+        starting.clear();
+        running.clear();
+        for (const hold of left) {
+          if (nothingLeft === true) letGo(hold);
+          else keepForGood(hold);
+        }
+        if (left.length > 0 && nothingLeft !== true)
+          record({
+            connection,
+            method: "connection",
+            outcome: "kept",
+            basis: "gate",
+            reason: `the executor ended before it said ${left.length} command(s) were over; their directories stay held`,
+          });
         end(`the executor behind the gate ended (${detail})`);
         settle();
       });
@@ -1423,10 +1623,22 @@ export async function openCodexExecGate(options: CodexExecGateOptions): Promise<
       if (!ready) return refuse(id, method, "gate", "the executor behind the gate has not answered yet");
       if (pending.size >= PENDING_LIMIT)
         return refuse(id, method, "gate", "too many requests are waiting for the executor behind the gate");
-      if (method === "process/start" && held.size >= HELD_LIMIT)
-        return refuse(id, method, "gate", "too many commands are still starting behind the gate");
+      if (method === "process/start" && starting.size + running.size >= HELD_LIMIT)
+        return refuse(id, method, "gate", "too many commands are running or starting behind the gate");
       const planned = planCodexExecRequest(method, message["params"], state, binder);
       if (planned.action === "refuse") return refuse(id, method, "gate", planned.reason, planned.subject);
+      // The executor drops a start it is asked to end before it has answered, with the process
+      // already on its way. Nothing reaches a process until the executor says it started.
+      const about = planned.subject?.processId;
+      if (method !== "process/start" && about !== undefined)
+        for (const entry of starting.values())
+          if (entry.processId === about)
+            return refuse(id, method, "gate", "the command has not started yet", planned.subject);
+      // Counted from here until it is released, or for good.
+      if (planned.hold !== undefined && !directories.take()) {
+        planned.hold.release();
+        return refuse(id, method, "gate", "ORCA's gates hold too many directories to start another command");
+      }
       let passed = false;
       try {
         let basis = "pass";
@@ -1439,7 +1651,7 @@ export async function openCodexExecGate(options: CodexExecGateOptions): Promise<
         if (!forward(requestOf(id, method, message, planned.params))) return;
         passed = true;
         pending.add(idKey(id));
-        if (planned.hold) held.set(idKey(id), planned.hold);
+        if (planned.hold) starting.set(idKey(id), { hold: planned.hold, processId: about ?? "" });
         planned.effect?.(state);
         record({
           connection,
@@ -1451,7 +1663,10 @@ export async function openCodexExecGate(options: CodexExecGateOptions): Promise<
         });
       } finally {
         // Never sent, so the executor never heard of the directory.
-        if (!passed) planned.hold?.release();
+        if (!passed && planned.hold !== undefined) {
+          planned.hold.release();
+          directories.give();
+        }
       }
     };
 
@@ -1625,6 +1840,8 @@ export interface CodexExecServerSpawn {
  * line-delimited JSON. `stop` closes its input, then signals that one child, and only while
  * it has not been reaped: nothing is looked up by pid or by group. `stop` gives up after its
  * last wait whether or not the child went; `onExit` is heard only once the child has exited.
+ * It never says `nothingLeft`: seeing one child exit proves nothing about what that child
+ * started.
  */
 export function spawnCodexExecServer(
   spec: CodexExecServerSpawn,

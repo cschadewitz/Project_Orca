@@ -15,7 +15,9 @@ import {
   codexExecGateBinder,
   codexExecGateBudget,
   codexExecGateDecider,
+  codexExecGateDirectories,
   codexExecGateHeldBytes,
+  codexExecGateHeldDirectories,
   codexExecPath,
   codexExecUri,
   newCodexExecGateConnectionState,
@@ -29,6 +31,7 @@ import {
   type CodexExecGate,
   type CodexExecGateBinder,
   type CodexExecGateBudget,
+  type CodexExecGateDirectories,
   type CodexExecGateCall,
   type CodexExecGateDecision,
   type CodexExecGateRecord,
@@ -46,7 +49,7 @@ class FakeBackend implements CodexExecBackend {
   raw: string[] = [];
   stopped = false;
   private listener: ((message: string) => void) | undefined;
-  private exit: ((detail: string) => void) | undefined;
+  private exit: ((detail: string, nothingLeft?: boolean) => void) | undefined;
   private gone = false;
   private exited: string | undefined;
   /** Set to keep what is sent "unwritten": the gate goes on holding its bytes. */
@@ -59,6 +62,8 @@ class FakeBackend implements CodexExecBackend {
    * executor is still there.
    */
   onStop: "exits" | "lingers" | "fails" = "exits";
+  /** Whether it says a process it was asked to end has exited, as the real executor does. */
+  ends = true;
   private unflushed: (() => void)[] = [];
 
   send(message: string, flushed: () => void): void {
@@ -73,7 +78,12 @@ class FakeBackend implements CodexExecBackend {
       parsed["method"] === "initialize"
         ? { sessionId: "s", environmentInfo: { shell: { name: "fish", path: "/opt/fish" } } }
         : { ok: parsed["method"] };
-    queueMicrotask(() => this.emit({ id: parsed["id"], result }));
+    queueMicrotask(() => {
+      this.emit({ id: parsed["id"], result });
+      const params = parsed["params"] as { processId?: unknown } | undefined;
+      if (parsed["method"] === "process/terminate" && this.ends)
+        this.emit({ method: "process/exited", params: { processId: params?.processId, seq: 1, exitCode: 143 } });
+    });
   }
   emit(message: unknown): void {
     if (this.exited === undefined) this.listener?.(JSON.stringify(message));
@@ -87,17 +97,20 @@ class FakeBackend implements CodexExecBackend {
   onMessage(listener: (message: string) => void): void {
     this.listener = listener;
   }
-  onExit(listener: (detail: string) => void): void {
+  onExit(listener: (detail: string, nothingLeft?: boolean) => void): void {
     if (this.exited !== undefined) listener(this.exited);
     else this.exit = listener;
   }
-  /** The executor is seen to exit: what it had not written is dropped, and the gate hears of it. */
-  die(detail = "exit 1"): void {
+  /**
+   * The executor is seen to exit: what it had not written is dropped, and the gate hears of
+   * it. `nothingLeft` is the backend's proof that nothing the executor started is left.
+   */
+  die(detail = "exit 1", nothingLeft?: boolean): void {
     if (this.exited !== undefined) return;
     this.gone = true;
     this.exited = detail;
     this.flush();
-    this.exit?.(detail);
+    this.exit?.(detail, nothingLeft);
   }
   stop(): Promise<void> {
     this.stopped = true;
@@ -182,6 +195,7 @@ function fakeBinder(links: Record<string, string> = {}) {
 }
 
 let gate: CodexExecGate | undefined;
+let directories = codexExecGateDirectories(256);
 let clients: Client[] = [];
 let backends: FakeBackend[] = [];
 let calls: CodexExecGateCall[] = [];
@@ -215,6 +229,8 @@ interface OpenOptions {
   budget?: CodexExecGateBudget;
   maxConnections?: number;
   closeWaitMs?: number;
+  stopWaitMs?: number;
+  directories?: CodexExecGateDirectories;
   backend?: () => FakeBackend;
 }
 
@@ -233,6 +249,9 @@ async function open(decide: Decide = allowAll, more: OpenOptions = {}) {
     ...(more.budget !== undefined ? { budget: more.budget } : {}),
     ...(more.maxConnections !== undefined ? { maxConnections: more.maxConnections } : {}),
     ...(more.closeWaitMs !== undefined ? { closeWaitMs: more.closeWaitMs } : {}),
+    // A count of its own for each gate: a directory kept for good would stay on the shared one.
+    directories: more.directories ?? (directories = codexExecGateDirectories(256)),
+    stopWaitMs: more.stopWaitMs ?? 40,
   });
   if (more.admit !== false)
     gate.admit(() => {
@@ -282,6 +301,7 @@ afterEach(async () => {
   gate = undefined;
   // Every byte a gate claimed on the shared budget is given back once it is closed.
   expect(codexExecGateHeldBytes()).toBe(0);
+  expect(codexExecGateHeldDirectories()).toEqual({ held: 0, kept: 0 });
 });
 
 describe("the path a file: URI names", () => {
@@ -750,11 +770,14 @@ describe("what one request needs", () => {
     expect(plan.params).toEqual({ processId: "p1", chunk: b64("yes\n"), writeId: "1" });
   });
 
-  it("passes an empty write and a lone interrupt, and nothing else typed", () => {
+  it("passes a write of nothing, and decides every byte typed, a Ctrl-C included", () => {
     const s = state("p1");
     const write = (chunk: unknown, processId = "p1") => planned("process/write", { processId, chunk, writeId: "1" }, s);
     expect(write("").action).toBe("pass");
-    expect(write(b64("\u0003")).action).toBe("pass");
+    // The gate cannot tell a Ctrl-C the terminal acts on from the same byte read as input.
+    const interrupt = write(b64("\u0003"));
+    expect(interrupt.action).toBe("decide");
+    expect(interrupt.action === "decide" && interrupt.calls[0]).toMatchObject({ typedInput: true });
     expect(write(b64("\u0003\u0003")).action).toBe("decide");
     expect(write(b64("\u0004")).action).toBe("decide");
     expect(reason(write(b64("x"), "p2"))).toMatch(/did not allow/);
@@ -1115,7 +1138,7 @@ describe("requests through the gate", () => {
     expect(records.filter((r) => r.outcome === "refused")).toHaveLength(8);
   });
 
-  it("refuses typed input by default while passing an interrupt", async () => {
+  it("refuses typed input by default, a typed Ctrl-C too, while the interrupt request passes", async () => {
     const decide: Decide = (call) =>
       Promise.resolve(
         call.typedInput
@@ -1127,10 +1150,13 @@ describe("requests through the gate", () => {
     expect(errorOf(await client.call("process/write", { processId: "p1", chunk: b64("typed\n"), writeId: "1" }))).toBe(
       "Blocked by ORCA: no rule names typed input.",
     );
-    expect(
-      (await client.call("process/write", { processId: "p1", chunk: b64("\u0003"), writeId: "2" }))["result"],
-    ).toBeDefined();
-    expect(backend.received.filter((m) => m["method"] === "process/write")).toHaveLength(1);
+    expect(errorOf(await client.call("process/write", { processId: "p1", chunk: b64("\u0003"), writeId: "2" }))).toBe(
+      "Blocked by ORCA: no rule names typed input.",
+    );
+    expect(backend.received.filter((m) => m["method"] === "process/write")).toHaveLength(0);
+    // The request that is an interrupt, and carries no data, is the way to send one.
+    expect((await client.call("process/signal", { processId: "p1", signal: "interrupt" }))["result"]).toBeDefined();
+    expect(backend.received.at(-1)).toMatchObject({ method: "process/signal", params: { signal: "interrupt" } });
     const refused = records.find((r) => r.method === "process/write" && r.outcome === "refused")!;
     expect(refused.subject).toMatchObject({ processId: "p1", bytes: 6 });
     expect(JSON.stringify(records)).not.toContain("typed\\n");
@@ -1221,7 +1247,7 @@ describe("requests through the gate", () => {
     expect(calls).toHaveLength(0);
   });
 
-  it("holds the starting directory until the executor has answered the start, and no longer", async () => {
+  it("holds the starting directory until the executor says the command is over, not until it says it started", async () => {
     const binder = fakeBinder();
     const { client, backend } = await connected(allowAll, { binder });
     backend.silent = true;
@@ -1229,16 +1255,96 @@ describe("requests through the gate", () => {
     await client.raw(70, `{"id":70,"method":"bogus"}`);
     expect(binder.held).toEqual(["/work"]);
     expect(binder.released).toEqual([]);
+    // Started: Codex's sandbox helper reads the directory again after this answer.
     backend.emit({ id: backend.received.at(-1)!["id"], result: { processId: "p1" } });
     await started;
+    expect(binder.released).toEqual([]);
+    expect(directories).toMatchObject({ held: 1, kept: 0 });
+    // Word about another process, and a request dressed as that word, let go of nothing.
+    backend.emit({ method: "process/exited", params: { processId: "p9", seq: 1, exitCode: 0 } });
+    backend.emit({ id: 900, method: "process/exited", params: { processId: "p1", seq: 1, exitCode: 0 } });
+    await client.raw(71, `{"id":71,"method":"bogus"}`);
+    expect(binder.released).toEqual([]);
+    backend.emit({ method: "process/exited", params: { processId: "p1", seq: 1, exitCode: 0 } });
+    await client.raw(72, `{"id":72,"method":"bogus"}`);
     expect(binder.released).toEqual(["/work"]);
+    expect(directories).toMatchObject({ held: 0, kept: 0 });
+    // A second word for the same process releases nothing twice.
+    backend.emit({ method: "process/closed", params: { processId: "p1", seq: 2 } });
+    await client.raw(73, `{"id":73,"method":"bogus"}`);
+    expect(binder.released).toEqual(["/work"]);
+  });
+
+  it("lets go of the directory when the executor says the process closed, or that nothing was started", async () => {
+    const binder = fakeBinder();
+    const { client, backend } = await connected(allowAll, { binder });
+    await client.call("process/start", start("p1", ["/bin/sh", "-c", "ls"]));
+    backend.emit({ method: "process/closed", params: { processId: "p1", seq: 2 } });
+    await client.raw(70, `{"id":70,"method":"bogus"}`);
+    expect(binder.released).toEqual(["/work"]);
+    backend.silent = true;
+    const failed = client.call("process/start", start("p2", ["/bin/nope"], { cwd: uri("/work/sub") }));
+    await client.raw(71, `{"id":71,"method":"bogus"}`);
+    backend.emit({ id: backend.received.at(-1)!["id"], error: { code: -32603, message: "No such file" } });
+    expect(errorOf(await failed)).toBe("No such file");
+    expect(binder.released).toEqual(["/work", "/work/sub"]);
+    expect(directories).toMatchObject({ held: 0, kept: 0 });
+  });
+
+  it("lets go at the answer when the executor said the process was over before it answered the start", async () => {
+    const binder = fakeBinder();
+    const { client, backend } = await connected(allowAll, { binder });
+    backend.silent = true;
+    const started = client.call("process/start", start("p1", ["/bin/true"]));
+    await client.raw(70, `{"id":70,"method":"bogus"}`);
+    const id = backend.received.at(-1)!["id"];
+    backend.emit({ method: "process/exited", params: { processId: "p1", seq: 1, exitCode: 0 } });
+    await client.raw(71, `{"id":71,"method":"bogus"}`);
+    expect(binder.released).toEqual([]);
+    backend.emit({ id, result: { processId: "p1" } });
+    await started;
+    expect(binder.released).toEqual(["/work"]);
+    expect(directories).toMatchObject({ held: 0, kept: 0 });
+  });
+
+  it("keeps the directory for good when an answer to the start says neither that it started nor that it failed", async () => {
+    const binder = fakeBinder();
+    const { client, backend } = await connected(allowAll, { binder });
+    backend.silent = true;
+    const started = client.call("process/start", start("p1", ["/bin/sh", "-c", "ls"]));
+    await client.raw(70, `{"id":70,"method":"bogus"}`);
+    backend.emit({ id: backend.received.at(-1)!["id"], result: null });
+    await started;
+    expect(binder.released).toEqual([]);
+    expect(directories).toMatchObject({ held: 1, kept: 1 });
+  });
+
+  it("reaches no process whose start the executor has not answered", async () => {
+    // The pinned executor drops a start it is asked to end before it answers, with the
+    // process already on its way into the directory.
+    const { client, backend } = await connected();
+    backend.silent = true;
+    void client.call("process/start", start("p1", ["/bin/sh", "-c", "ls"]));
+    for (const [method, more] of [
+      ["process/terminate", {}],
+      ["process/signal", { signal: "interrupt" }],
+      ["process/read", { afterSeq: null, maxBytes: null, waitMs: null }],
+      ["process/write", { chunk: b64("x"), writeId: "1" }],
+    ] as const)
+      expect(errorOf(await client.call(method, { processId: "p1", ...more }))).toBe(
+        "Blocked by ORCA: the command has not started yet.",
+      );
+    expect(backend.methods().filter((m) => m !== "process/start")).toEqual(["initialize", "initialized"]);
+    backend.emit({ id: backend.received.at(-1)!["id"], result: { processId: "p1" } });
+    backend.silent = false;
+    expect((await client.call("process/terminate", { processId: "p1" }))["result"]).toBeDefined();
   });
 
   it.each([
     ["returns with the executor still there", "lingers"],
     ["fails", "fails"],
   ] as const)(
-    "lets go of a directory for a refused start at once, and of one passed on only when the executor is seen to exit: stopping it %s",
+    "lets go of a directory for a refused start at once, and keeps one passed on past the executor's exit: stopping it %s",
     async (_what, onStop) => {
       const binder = fakeBinder();
       let allow = false;
@@ -1248,42 +1354,138 @@ describe("requests through the gate", () => {
       );
       await client.call("process/start", start("p1", ["/bin/sh", "-c", "ls"]));
       expect(binder.released).toEqual(["/work"]);
+      expect(directories).toMatchObject({ held: 0, kept: 0 });
       allow = true;
       backend.silent = true;
       void client.call("process/start", start("p2", ["/bin/sh", "-c", "ls"], { cwd: uri("/work/sub") }));
       await client.raw(71, `{"id":71,"method":"bogus"}`);
       expect(binder.released).toEqual(["/work"]);
-      // The executor was asked to stop and is still there: a start in flight may still be on
-      // its way into the directory, so it stays held and the connection stays counted.
+      // The connection ends with the start unanswered. The executor is given a moment to
+      // answer, then asked to stop, and is still there: the directory stays held and the
+      // connection stays counted.
       backend.onStop = onStop;
       client.ws.terminate();
       await client.closed;
-      await soon();
+      expect(backend.stopped).toBe(false);
+      await soon(120);
       expect(backend.stopped).toBe(true);
       expect(binder.released).toEqual(["/work"]);
       expect(gate!.connections()).toEqual({ open: 0, stopping: 1 });
-      // Seen to exit, it can use nothing more.
+      // Seen to exit. A child it was starting can outlive it and still be on its way into
+      // the directory by the name the gate gave, so the directory is not let go: the
+      // connection is gone, the directory stays open and counted.
       backend.die("signal SIGKILL");
-      expect(binder.released).toEqual(["/work", "/work/sub"]);
+      expect(binder.released).toEqual(["/work"]);
+      expect(directories).toMatchObject({ held: 1, kept: 1 });
+      expect(records.find((r) => r.outcome === "kept")).toMatchObject({
+        method: "connection",
+        reason: "the executor ended before it said 1 command(s) were over; their directories stay held",
+      });
       await soon();
       expect(gate!.connections()).toEqual({ open: 0, stopping: 0 });
     },
   );
 
-  it("refuses another start while too many are still unanswered, each with a directory held", async () => {
+  it("lets go of what an exited executor left only on the backend's proof that nothing of it is left", async () => {
     const binder = fakeBinder();
     const { client, backend } = await connected(allowAll, { binder });
+    await client.call("process/start", start("p1", ["/bin/sh", "-c", "sleep 100"]));
     backend.silent = true;
-    for (let i = 0; i < 32; i++) void client.call("process/start", start(`p${i}`, ["/bin/sh", "-c", "ls"]));
-    expect(errorOf(await client.call("process/start", start("p32", ["/bin/sh", "-c", "ls"])))).toMatch(
-      /too many commands are still starting/,
-    );
-    expect(binder.held).toHaveLength(32);
-    // One answered start makes room for one more.
-    backend.emit({ id: backend.received.find((m) => m["method"] === "process/start")!["id"], result: {} });
+    void client.call("process/start", start("p2", ["/bin/sh", "-c", "ls"], { cwd: uri("/work/sub") }));
+    await client.raw(71, `{"id":71,"method":"bogus"}`);
+    expect(directories).toMatchObject({ held: 2, kept: 0 });
+    backend.die("signal SIGKILL", true);
+    expect(binder.released.sort()).toEqual(["/work", "/work/sub"]);
+    expect(directories).toMatchObject({ held: 0, kept: 0 });
+    expect(records.some((r) => r.outcome === "kept")).toBe(false);
+  });
+
+  it("has the executor end the commands an ended connection left, and stops it once it says they are over", async () => {
+    const binder = fakeBinder();
+    const { client, backend } = await connected(allowAll, { binder, stopWaitMs: 5000 });
+    await client.call("process/start", start("p1", ["/bin/sh", "-c", "sleep 100"]));
+    await client.call("process/start", start("p2", ["/bin/sh", "-c", "sleep 100"], { cwd: uri("/work/sub") }));
+    // A third is still starting when the connection ends.
+    backend.silent = true;
+    void client.call("process/start", start("p3", ["/bin/sh", "-c", "sleep 100"], { cwd: uri("/work/three") }));
+    await client.raw(71, `{"id":71,"method":"bogus"}`);
+    const third = backend.received.at(-1)!["id"];
     backend.silent = false;
-    expect((await client.call("process/start", start("p33", ["/bin/sh", "-c", "ls"])))["result"]).toBeDefined();
-    expect(binder.held).toHaveLength(33);
+    client.ws.terminate();
+    await client.closed;
+    await soon();
+    // The gate's own requests, for the two that had started, and nothing asked of the third.
+    const ended = backend.received.filter((m) => m["method"] === "process/terminate");
+    expect(ended).toEqual([
+      { id: "orca-gate:1", method: "process/terminate", params: { processId: "p1" } },
+      { id: "orca-gate:2", method: "process/terminate", params: { processId: "p2" } },
+    ]);
+    expect(binder.released.sort()).toEqual(["/work", "/work/sub"]);
+    expect(backend.stopped).toBe(false);
+    expect(gate!.connections()).toEqual({ open: 0, stopping: 1 });
+    // The third start is answered after the connection ended: it is ended the same way.
+    backend.emit({ id: third, result: { processId: "p3" } });
+    await soon();
+    expect(backend.received.at(-1)).toEqual({
+      id: "orca-gate:3",
+      method: "process/terminate",
+      params: { processId: "p3" },
+    });
+    expect(binder.released.sort()).toEqual(["/work", "/work/sub", "/work/three"]);
+    expect(directories).toMatchObject({ held: 0, kept: 0 });
+    // Nothing is held any more, so the executor is stopped without waiting out the bound.
+    expect(backend.stopped).toBe(true);
+    expect(gate!.connections()).toEqual({ open: 0, stopping: 0 });
+  });
+
+  it("stops an executor that never says a command is over after a bounded wait, and keeps that directory", async () => {
+    const binder = fakeBinder();
+    const { client, backend } = await connected(allowAll, { binder, stopWaitMs: 80 });
+    backend.ends = false;
+    await client.call("process/start", start("p1", ["/bin/sh", "-c", "sleep 100"]));
+    client.ws.terminate();
+    await client.closed;
+    await soon(30);
+    expect(backend.methods().at(-1)).toBe("process/terminate");
+    expect(backend.stopped).toBe(false);
+    await soon(120);
+    expect(backend.stopped).toBe(true);
+    expect(binder.released).toEqual([]);
+    expect(directories).toMatchObject({ held: 1, kept: 1 });
+    expect(gate!.connections()).toEqual({ open: 0, stopping: 0 });
+  });
+
+  it("refuses a start when the gates already hold as many directories as they may", async () => {
+    const binder = fakeBinder();
+    const { client } = await connected(allowAll, { binder, directories: codexExecGateDirectories(1) });
+    expect((await client.call("process/start", start("p1", ["/bin/sh", "-c", "ls"])))["result"]).toBeDefined();
+    expect(
+      errorOf(await client.call("process/start", start("p2", ["/bin/sh", "-c", "ls"], { cwd: uri("/work/sub") }))),
+    ).toBe("Blocked by ORCA: ORCA's gates hold too many directories to start another command.");
+    // The one it could not count was never the executor's to use.
+    expect(binder.released).toEqual(["/work/sub"]);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("refuses another start while too many commands are starting or running, each with a directory held", async () => {
+    const binder = fakeBinder();
+    const { client, backend } = await connected(allowAll, { binder });
+    for (let i = 0; i < 40; i++) await client.call("process/start", start(`p${i}`, ["/bin/sh", "-c", "ls"]));
+    backend.silent = true;
+    for (let i = 40; i < 64; i++) void client.call("process/start", start(`p${i}`, ["/bin/sh", "-c", "ls"]));
+    expect(errorOf(await client.call("process/start", start("p64", ["/bin/sh", "-c", "ls"])))).toMatch(
+      /too many commands are running or starting/,
+    );
+    expect(binder.held).toHaveLength(64);
+    // An answered start makes no room. A process the executor says is over does.
+    backend.emit({ id: backend.received.at(-1)!["id"], result: { processId: "p63" } });
+    expect(errorOf(await client.call("process/start", start("p65", ["/bin/sh", "-c", "ls"])))).toMatch(
+      /too many commands are running or starting/,
+    );
+    backend.emit({ method: "process/exited", params: { processId: "p0", seq: 1, exitCode: 0 } });
+    backend.silent = false;
+    expect((await client.call("process/start", start("p66", ["/bin/sh", "-c", "ls"])))["result"]).toBeDefined();
+    expect(binder.held).toHaveLength(65);
   });
 
   it("goes on passing reads of a process the executor reports closed", async () => {
@@ -1725,9 +1927,11 @@ describe("when something fails", () => {
     expect(codexExecGateHeldBytes()).toBeLessThan(held);
     expect(g.connections()).toEqual({ open: 0, stopping: 1 });
     expect(backend.methods().filter((m) => m === "fs/readFile")).toEqual([]);
-    // The executor is seen to exit: the directory is let go and nothing is left.
+    // The executor is seen to exit: no byte is left and the connection is gone. The directory
+    // of the start it never answered is a different matter, and stays open and counted.
     backend.die("signal SIGKILL");
-    expect(binder.released).toEqual(["/work"]);
+    expect(binder.released).toEqual([]);
+    expect(directories).toMatchObject({ held: 1, kept: 1 });
     expect(codexExecGateHeldBytes()).toBe(0);
     expect(g.connections()).toEqual({ open: 0, stopping: 0 });
   });
@@ -1783,7 +1987,7 @@ describe.skipIf(process.platform !== "linux")("this machine's binder", () => {
     expect(binder.directory(join(root, "missing"))).toBeUndefined();
   });
 
-  it("gives the executor a descriptor for a start, and closes it once the start is answered", async () => {
+  it("gives the executor a descriptor for a start, and closes it once the executor says the process is over", async () => {
     const { client, backend } = await connected(allowAll, { binder: codexExecGateBinder() });
     backend.silent = true;
     const started = client.call(
@@ -1797,7 +2001,35 @@ describe.skipIf(process.platform !== "linux")("this machine's binder", () => {
     expect(calls[0]).toMatchObject({ cwd: join(root, "dir"), asWritten: { cwd: join(root, "to-dir") } });
     backend.emit({ id: sent["id"], result: { processId: "p1" } });
     await started;
+    // Started is not over: the name still leads to the directory ORCA decided.
+    expect(readlinkSync(reach)).toBe(join(root, "dir"));
+    backend.emit({ method: "process/exited", params: { processId: "p1", seq: 1, exitCode: 0 } });
+    await client.raw(91, `{"id":91,"method":"bogus"}`);
     expect(existsSync(reach)).toBe(false);
+  });
+
+  it("leaves the name it gave leading to the same directory after the executor is gone", async () => {
+    const { client, backend } = await connected(allowAll, { binder: codexExecGateBinder() });
+    backend.silent = true;
+    void client.call("process/start", start("p1", ["/bin/sh", "-c", "ls"], { cwd: uri(join(root, "dir")) }));
+    await client.raw(90, `{"id":90,"method":"bogus"}`);
+    const reach = codexExecPath((backend.received.at(-1)!["params"] as { cwd: string }).cwd);
+    backend.die("signal SIGKILL");
+    await gate!.close();
+    // Whatever the executor left behind and whenever it gets there, the name means this
+    // directory or nothing: its descriptor is never closed, so its number is never given to
+    // another directory the gate opens.
+    await rename(join(root, "dir"), join(root, "moved"));
+    await mkdir(join(root, "dir"));
+    const { client: second } = await connected(allowAll, { binder: codexExecGateBinder() });
+    const later = backends.at(-1)!;
+    later.silent = true;
+    void second.call("process/start", start("p2", ["/bin/sh", "-c", "ls"], { cwd: uri(join(root, "dir")) }));
+    await second.raw(91, `{"id":91,"method":"bogus"}`);
+    const next = codexExecPath((later.received.at(-1)!["params"] as { cwd: string }).cwd);
+    expect(next).not.toBe(reach);
+    expect(readlinkSync(reach)).toBe(join(root, "moved"));
+    expect(readlinkSync(next)).toBe(join(root, "dir"));
   });
 });
 
