@@ -59,7 +59,11 @@
  * word. A directory whose executor exits first stays open for as long as this process lives,
  * unless the backend proves nothing of the executor's is left; it is counted
  * (`codexExecGateHeldDirectories`), and at the ceiling a start is refused. The executor that
- * `spawnCodexExecServer` starts cannot give that proof.
+ * `spawnCodexExecServer` starts cannot give that proof. The one `spawnIsolatedCodexExecServer`
+ * starts (`codex-exec-isolation.ts`) runs in a pid namespace of its own, where the kernel
+ * ends everything with its first process. That executor cannot reach ORCA's descriptors, so
+ * the first process of its namespace holds the directory for it (`CodexExecBackend.hold`),
+ * and that hold ends with the namespace: nothing of it is kept here.
  *
  * With Codex's sandbox the last step into the directory is by name: the sandbox helper asks
  * for the current name of what the descriptor holds and has bubblewrap enter that name. There
@@ -67,12 +71,15 @@
  *
  * **The contract for a file request is path scope, not the identity of a file.** The gate
  * decides a link-free path, and the executor uses whatever is at that path when it gets
- * there. A directory renamed onto the path after the decision, a second hard link to a file
- * a rule protects, and a mount over the path are seen by neither side: nothing here ties a
- * decision to an inode. So this module is not a security boundary on its own account, and it
- * is not wired into any session. Before it is used as one, the executor's own isolation has
- * to be shown, separately, to keep ORCA's protected files out of reach under another name
- * and to hold while the tree changes underneath a request.
+ * there: nothing here ties a decision to an inode. Two things narrow what that leaves open.
+ * A file with more than one name is refused, since a second hard link is the file under a
+ * name no rule was written for. And the isolated executor (`codex-exec-isolation.ts`) runs
+ * where ORCA's protected directories are masked as directories, whatever name leads to
+ * them, and where nothing can be mounted over a path. What stays open is a name that a
+ * command ORCA allowed, or something outside the session, changes between a decision and
+ * its use, and a protected file that is a single file in a directory the agent can write,
+ * which no mask covers and the gate refuses by path alone. This module is not wired into
+ * any session.
  *
  * **The executor is sent only what the gate read.** Every request it passes is built again,
  * field by field, from a fixed list for that method; a field the list does not have refuses
@@ -95,16 +102,16 @@
  * field by field.
  *
  * Limits, said plainly. The gate decides the process being started and the text typed into
- * it, not what that process goes on to do. A file with two names (a hard link) is the file
- * at each of them, so a rule for one name reaches it. Tool calls that never use the executor
+ * it, not what that process goes on to do. A file with two names (a hard link) cannot be
+ * read or written through the gate at all. Tool calls that never use the executor
  * (MCP servers Codex reaches over HTTP, tools hosted at the model provider) do not pass here.
  * The gate records nothing about a call it never saw, and that absence is not evidence of
  * anything. An acceptance run on the installed pair is evidence for the cases it runs and
  * for nothing else.
  */
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { closeSync, constants, fstatSync, openSync, readlinkSync, statSync } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, openSync, readlinkSync, statSync } from "node:fs";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 import { basename, dirname, join } from "node:path";
@@ -376,6 +383,14 @@ export interface CodexExecBackend {
    * whether it is gone: `onExit` does.
    */
   stop(): Promise<void>;
+  /**
+   * For an executor that cannot reach ORCA's own descriptors (one in another user namespace):
+   * hold the directory `held` holds where that executor can reach it, and say by what name.
+   * The backend must show for itself that both are one directory, and then releases `held`.
+   * Undefined when it cannot, with `held` left as it was. A backend without this is given
+   * the name of ORCA's own descriptor.
+   */
+  hold?(held: CodexExecGateHeldDirectory): Promise<CodexExecGateHeldDirectory | undefined>;
 }
 
 /** A directory ORCA holds open, so that what was decided and what is used are one directory. */
@@ -384,6 +399,12 @@ export interface CodexExecGateHeldDirectory {
   real: string;
   /** A path that reaches the descriptor itself, for the executor to start in. */
   reach: string;
+  /**
+   * True when the descriptor belongs to the first process of the executor's own pid
+   * namespace: the name then means that descriptor or nothing, and ends with the executor's
+   * processes, so there is nothing to keep once the executor is gone.
+   */
+  endsWithExecutor?: boolean | undefined;
   release(): void;
 }
 
@@ -398,6 +419,11 @@ export interface CodexExecGateBinder {
   entry(path: string): string | undefined;
   /** Open the directory at `path` and hold it. Undefined when it cannot be held. */
   directory(path: string): CodexExecGateHeldDirectory | undefined;
+  /**
+   * How many names the file at `path` has, its last name not followed: 0 when nothing is
+   * there, 1 for a directory, undefined when that cannot be told.
+   */
+  links(path: string): number | undefined;
 }
 
 /** The binder for this machine. It holds directories only on Linux, through `/proc`. */
@@ -408,6 +434,14 @@ export function codexExecGateBinder(): CodexExecGateBinder {
       const parent = physicalPathOf(dirname(path));
       const name = basename(path);
       return parent === undefined || name === "" ? undefined : join(parent, name);
+    },
+    links(path) {
+      try {
+        const entry = lstatSync(path, { bigint: true });
+        return entry.isDirectory() ? 1 : Number(entry.nlink);
+      } catch (error) {
+        return (error as NodeJS.ErrnoException).code === "ENOENT" ? 0 : undefined;
+      }
     },
     directory(path) {
       if (process.platform !== "linux") return undefined;
@@ -930,6 +964,11 @@ function plan(
     // A request that already says "follow no link" is held to its own words.
     const bound = flag(p["followSymlinks"], "followSymlinks", true) ? binder[resolve](written) : written;
     if (bound === undefined) throw new Unreadable("ORCA could not tell which file a path names");
+    // A file with a second name is the file at both, and a rule is written for one of them.
+    const names = binder.links(bound);
+    if (names === undefined) throw new Unreadable("ORCA could not tell how many names the file has");
+    if (names > 1)
+      throw new Unreadable("the file has more than one name (a hard link), so a rule for one name does not cover it");
     const sandbox = sandboxOf(p["sandbox"], (path) => binder.target(path));
     const title = `${verb} ${bound}`;
     return {
@@ -1604,17 +1643,34 @@ export async function openCodexExecGate(options: CodexExecGateOptions): Promise<
         const left = [...[...starting.values()].map((entry) => entry.hold), ...running.values()];
         starting.clear();
         running.clear();
+        // A hold in the executor's own pid namespace is no descriptor of ORCA's, and its name
+        // means nothing outside that namespace, so there is nothing of it to keep.
+        let kept = 0;
         for (const hold of left) {
-          if (nothingLeft === true) letGo(hold);
-          else keepForGood(hold);
+          if (nothingLeft === true || hold.endsWithExecutor === true) letGo(hold);
+          else {
+            keepForGood(hold);
+            kept += 1;
+          }
         }
-        if (left.length > 0 && nothingLeft !== true)
+        if (kept > 0)
           record({
             connection,
             method: "connection",
             outcome: "kept",
             basis: "gate",
-            reason: `the executor ended before it said ${left.length} command(s) were over; their directories stay held`,
+            reason: `the executor ended before it said ${kept} command(s) were over; their directories stay held`,
+          });
+        // What a backend that owns the executor's process tree saw of its end, said either way.
+        if (nothingLeft !== undefined)
+          record({
+            connection,
+            method: "executor",
+            outcome: "closed",
+            basis: nothingLeft ? "tree-ended" : "tree-unseen",
+            reason: nothingLeft
+              ? `the executor ended (${detail}), and nothing it started is left`
+              : `the executor ended (${detail}), and ORCA did not see everything it started end`,
           });
         end(`the executor behind the gate ended (${detail})`);
         settle();
@@ -1660,7 +1716,30 @@ export async function openCodexExecGate(options: CodexExecGateOptions): Promise<
         return refuse(id, method, "gate", "ORCA's gates hold too many directories to start another command");
       }
       let passed = false;
+      let hold = planned.hold;
+      let params = planned.params;
       try {
+        // An executor that cannot reach ORCA's descriptors is given a hold of its own on the
+        // same directory, which the backend shows to be the one ORCA holds. Before the
+        // decision, so that the directory decided is already the one the executor has,
+        // however long deciding takes.
+        if (hold !== undefined && backend.hold !== undefined) {
+          const inner = await backend.hold(hold).catch(() => undefined);
+          if (ended) {
+            if (inner !== undefined) hold = inner;
+            return;
+          }
+          if (inner === undefined)
+            return refuse(
+              id,
+              method,
+              "gate",
+              "ORCA could not hold the directory where the executor behind its gate would start the command",
+              planned.subject,
+            );
+          hold = inner;
+          params = { ...params, cwd: codexExecUri(inner.reach) };
+        }
         let basis = "pass";
         for (const call of planned.calls) {
           const decision = await decideBounded(call, ending.signal, keep);
@@ -1668,10 +1747,10 @@ export async function openCodexExecGate(options: CodexExecGateOptions): Promise<
           if (decision.allow !== true) return refuse(id, method, decision.basis, decision.reason, planned.subject);
           basis = decision.basis;
         }
-        if (!forward(requestOf(id, method, message, planned.params))) return;
+        if (!forward(requestOf(id, method, message, params))) return;
         passed = true;
         pending.add(idKey(id));
-        if (planned.hold) starting.set(idKey(id), { hold: planned.hold, processId: about ?? "" });
+        if (hold) starting.set(idKey(id), { hold, processId: about ?? "" });
         planned.effect?.(state);
         record({
           connection,
@@ -1683,8 +1762,8 @@ export async function openCodexExecGate(options: CodexExecGateOptions): Promise<
         });
       } finally {
         // Never sent, so the executor never heard of the directory.
-        if (!passed && planned.hold !== undefined) {
-          planned.hold.release();
+        if (!passed && hold !== undefined) {
+          hold.release();
           directories.give();
         }
       }
@@ -1855,33 +1934,51 @@ export interface CodexExecServerSpawn {
   messageLimitBytes?: number | undefined;
 }
 
+/** A started process whose input and output are an executor's, and how ORCA ends it. */
+export interface CodexExecServerProcess {
+  child: ChildProcessWithoutNullStreams;
+  /** How long each step of `stop` waits for the exit. */
+  stopGraceMs?: number | undefined;
+  /** The connection's budget: a message the executor has only partly written is claimed here. */
+  budget?: CodexExecGateBudget | undefined;
+  /** The longest message the executor may write. */
+  messageLimitBytes?: number | undefined;
+  /**
+   * What `stop` does, one step at a time, once the executor's input is closed and it has not
+   * exited. The default signals the child: `SIGTERM`, then `SIGKILL`.
+   */
+  steps?: readonly (() => void)[] | undefined;
+  /** End it at once, when ORCA gives it up. The default is `SIGKILL` to the child. */
+  kill?: (() => void) | undefined;
+  /**
+   * Whether an exit proves that nothing the executor started is left. Left out, the backend
+   * says nothing either way.
+   */
+  nothingLeft?: ((code: number | null, signal: NodeJS.Signals | null) => boolean) | undefined;
+  /** Hear what the process writes to its error stream, which is otherwise drained unread. */
+  onDiagnostics?: ((chunk: Buffer) => void) | undefined;
+}
+
 /**
- * Start `codex exec-server --listen stdio` as ORCA's own direct child and speak its
- * line-delimited JSON. `stop` closes its input, then signals that one child, and only while
- * it has not been reaped: nothing is looked up by pid or by group. `stop` gives up after its
- * last wait whether or not the child went; `onExit` is heard only once the child has exited.
- * It never says `nothingLeft`: seeing one child exit proves nothing about what that child
- * started.
+ * Speak an executor's line-delimited JSON over a process ORCA started. `stop` closes its
+ * input and then takes `steps`; it gives up after its last wait whether or not the process
+ * went, and `onExit` is heard only once it has exited. `fail` gives the executor up for a
+ * reason of ORCA's own: nothing more is sent or heard, and `onExit` gives that reason.
  */
-export function spawnCodexExecServer(
-  spec: CodexExecServerSpawn,
-): CodexExecBackend & { readonly pid: number | undefined } {
-  const env: Record<string, string> = {};
-  for (const [key, value] of Object.entries(spec.env))
-    if (value !== undefined && key !== "CODEX_EXEC_SERVER_URL") env[key] = value;
-  const child = spawn(spec.program, ["exec-server", "--listen", "stdio"], {
-    cwd: spec.cwd,
-    env,
-    stdio: ["pipe", "pipe", "pipe"],
-  });
+export function codexExecServerOver(spec: CodexExecServerProcess): CodexExecBackend & { fail(detail: string): void } {
+  const child = spec.child;
   const grace = spec.stopGraceMs ?? 2000;
   const messageLimit = spec.messageLimitBytes ?? CODEX_EXEC_GATE_MESSAGE_LIMIT;
   const budget = spec.budget;
+  // `kill` signals this child only while Node still holds its handle, so never a reused pid.
+  const kill = spec.kill ?? (() => void child.kill("SIGKILL"));
+  const steps = spec.steps ?? [() => void child.kill("SIGTERM"), () => void child.kill("SIGKILL")];
   let gone: string | undefined;
+  let nothingLeft: boolean | undefined;
   /** Set when ORCA gave the executor up before it exited; nothing more is sent or heard. */
   let failed: string | undefined;
   let onMessage: ((message: string) => void) | undefined;
-  const exitListeners: ((detail: string) => void)[] = [];
+  const exitListeners: ((detail: string, nothingLeft?: boolean) => void)[] = [];
   let resolveExit: (() => void) | undefined;
   const exited = new Promise<void>((resolve) => {
     resolveExit = resolve;
@@ -1894,12 +1991,13 @@ export function spawnCodexExecServer(
     parts = [];
     size = 0;
   };
-  const finish = (detail: string): void => {
+  const finish = (detail: string, proven?: boolean): void => {
     if (gone !== undefined) return;
-    gone = detail;
+    gone = failed ?? detail;
+    nothingLeft = proven;
     drop();
     resolveExit?.();
-    for (const listener of exitListeners) listener(failed ?? detail);
+    for (const listener of exitListeners) listener(gone, nothingLeft);
   };
   /** Set once ORCA is ending it: what goes wrong after that is the ending, not a failure. */
   let ending = false;
@@ -1907,8 +2005,8 @@ export function spawnCodexExecServer(
     if (gone !== undefined || failed !== undefined || ending) return;
     failed = detail;
     drop();
-    // The exit is still observed below; `kill` reaches this child only while it is unreaped.
-    child.kill("SIGKILL");
+    // The exit is still observed below.
+    kill();
   };
 
   child.stdout.on("data", (chunk: Buffer) => {
@@ -1932,10 +2030,13 @@ export function spawnCodexExecServer(
     }
   });
   // Its diagnostics are not ORCA's to keep; draining them keeps the pipe from filling.
-  child.stderr.resume();
+  if (spec.onDiagnostics) child.stderr.on("data", spec.onDiagnostics);
+  else child.stderr.resume();
   child.stdin.on("error", () => giveUp("its input closed"));
   child.on("error", (error) => finish(`it could not be started: ${error.message}`));
-  child.on("exit", (code, signal) => finish(signal !== null ? `signal ${signal}` : `exit ${code ?? "unknown"}`));
+  child.on("exit", (code, signal) =>
+    finish(signal !== null ? `signal ${signal}` : `exit ${code ?? "unknown"}`, spec.nothingLeft?.(code, signal)),
+  );
 
   const within = async (ms: number): Promise<boolean> => {
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -1950,7 +2051,6 @@ export function spawnCodexExecServer(
   };
 
   return {
-    pid: child.pid,
     send(message, flushed) {
       if (gone !== undefined || failed !== undefined || ending)
         throw new Error(`the executor is gone (${failed ?? gone ?? "ORCA ended it"})`);
@@ -1961,7 +2061,7 @@ export function spawnCodexExecServer(
       onMessage = listener;
     },
     onExit(listener) {
-      if (gone !== undefined) listener(gone);
+      if (gone !== undefined) listener(gone, nothingLeft);
       else exitListeners.push(listener);
     },
     async stop() {
@@ -1969,11 +2069,50 @@ export function spawnCodexExecServer(
       ending = true;
       child.stdin.end();
       if (await within(grace)) return;
-      // `kill` signals this child only while Node still holds its handle, so never a reused pid.
-      child.kill("SIGTERM");
-      if (await within(grace)) return;
-      child.kill("SIGKILL");
-      await within(grace);
+      for (const step of steps) {
+        step();
+        if (await within(grace)) return;
+      }
     },
+    fail: giveUp,
   };
+}
+
+/**
+ * Start `codex exec-server --listen stdio` as ORCA's own direct child and speak its
+ * line-delimited JSON. `stop` closes its input, then signals that one child, and only while
+ * it has not been reaped: nothing is looked up by pid or by group. `stop` gives up after its
+ * last wait whether or not the child went; `onExit` is heard only once the child has exited.
+ * It never says `nothingLeft`: seeing one child exit proves nothing about what that child
+ * started. `spawnIsolatedCodexExecServer` is the backend that can.
+ */
+export function spawnCodexExecServer(
+  spec: CodexExecServerSpawn,
+): CodexExecBackend & { readonly pid: number | undefined } {
+  const child = spawn(spec.program, ["exec-server", "--listen", "stdio"], {
+    cwd: spec.cwd,
+    env: codexExecServerEnv(spec.env),
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  const backend = codexExecServerOver({
+    child,
+    stopGraceMs: spec.stopGraceMs,
+    budget: spec.budget,
+    messageLimitBytes: spec.messageLimitBytes,
+  });
+  return {
+    pid: child.pid,
+    send: (message, flushed) => backend.send(message, flushed),
+    onMessage: (listener) => backend.onMessage(listener),
+    onExit: (listener) => backend.onExit(listener),
+    stop: () => backend.stop(),
+  };
+}
+
+/** The environment an executor is started with: what was given, never the gate's own address. */
+export function codexExecServerEnv(given: Readonly<Record<string, string | undefined>>): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(given))
+    if (value !== undefined && key !== "CODEX_EXEC_SERVER_URL") env[key] = value;
+  return env;
 }

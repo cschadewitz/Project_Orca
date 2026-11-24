@@ -7,8 +7,9 @@
  * rule reads them as given: it is the executor, not a second resolution here, that holds a
  * request to them. A decision made here is therefore about a path. It is not about the
  * identity of a file, and a protected file reached under another name that is no link (a
- * second hard link, a directory moved into place) is not seen here. The gate's own notes
- * say what has to be shown before this is used as a boundary.
+ * directory moved into place) is not seen here. A second hard link never gets this far: the
+ * gate refuses a file with more than one name. The gate's own notes say what is left open,
+ * and what the isolated executor closes.
  *
  * The gate cannot pause a request for a person, so an `ask` refuses, as it does at the Codex
  * hook. A person allows the call with a rule.

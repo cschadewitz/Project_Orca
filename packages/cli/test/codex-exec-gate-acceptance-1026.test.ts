@@ -29,12 +29,22 @@
  * - the Codex behaviour this rests on, pinned so a change is noticed: a local MCP server does
  *   not start without a local executor.
  *
+ * Every run is made twice: with the executor started as ORCA's own child, and with it in
+ * namespaces ORCA makes (`codex-exec-isolation.ts`), which is how a session would run it once
+ * the gate is wired in. In its namespaces, also observed on the installed pair:
+ * - Codex's own sandbox still works inside ORCA's namespaces, and a command still starts in
+ *   the directory ORCA decided, now held by the first process of the executor's namespace;
+ * - a process a command left running is gone when the executor ends, also when ORCA's
+ *   bubblewrap is killed, and the gate records what ORCA saw of that;
+ * - a command a rule allowed cannot read or change what ORCA masks, under the directory's own
+ *   name, through a link, after renaming its parent, or from a user namespace of its own.
+ *
  * Nothing here wires the gate into ORCA's sessions or claims a support tier.
  */
 import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { readlinkSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, realpath, rename, rm, rmdir, symlink, writeFile } from "node:fs/promises";
+import { link, mkdir, mkdtemp, readFile, realpath, rename, rm, rmdir, symlink, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, onTestFailed } from "vitest";
@@ -47,6 +57,7 @@ import {
   codexExecGateDirectories,
   codexExecGateHeldBytes,
   codexExecGateHeldDirectories,
+  codexExecMasks,
   codexExecPath,
   openAcpSession,
   openCodexExecGate,
@@ -54,6 +65,7 @@ import {
   readPermissionPolicyFile,
   replacePermissionPolicyFile,
   spawnCodexExecServer,
+  spawnIsolatedCodexExecServer,
   type AgentSession,
   type ClaudeHookContext,
   type CodexExecGate,
@@ -94,7 +106,10 @@ const PNG = Buffer.from(
 
 type Decide = (call: CodexExecGateCall, signal: AbortSignal) => Promise<CodexExecGateDecision>;
 
-describe.skipIf(ADAPTER === undefined)("ORCA's exec gate in the real Codex (#1026)", () => {
+describe.skipIf(ADAPTER === undefined).each([
+  { isolated: false, how: "started as ORCA's own child" },
+  { isolated: true, how: "in namespaces ORCA makes" },
+])("ORCA's exec gate in the real Codex, its executor $how (#1026)", ({ isolated }) => {
   let model: ModelStandIn;
   let root: string;
   let configDir: string;
@@ -123,6 +138,11 @@ describe.skipIf(ADAPTER === undefined)("ORCA's exec gate in the real Codex (#102
     workspace = join(root, "work");
     codexHome = join(root, "codex-home");
     await mkdir(join(configDir, ".orca"), { recursive: true });
+    protectedPaths = {
+      readOnly: [permissionPolicyPath(configDir), join(configDir, ".orca")],
+      noAccess: [join(configDir, "auth"), join(configDir, ".orca", "private-execution")],
+      agentAreas: [join(configDir, ".orca", "work")],
+    };
     await mkdir(workspace);
     await mkdir(codexHome);
     model.outputs.length = 0;
@@ -179,11 +199,10 @@ describe.skipIf(ADAPTER === undefined)("ORCA's exec gate in the real Codex (#102
     permissions,
     permissionFiles: [permissionPolicyPath(configDir)],
     workspaceCwd: workspace,
-    protectedPaths: {
-      readOnly: [permissionPolicyPath(configDir), join(configDir, ".orca")],
-      noAccess: [join(configDir, "auth")],
-    },
+    protectedPaths,
   });
+  /** ORCA's own files in this run's config directory, as a session lists them. */
+  let protectedPaths: NonNullable<ClaudeHookContext["protectedPaths"]>;
 
   /** Every permission ask that reaches ORCA's human channel; each one is refused. */
   const asks: string[] = [];
@@ -199,12 +218,11 @@ describe.skipIf(ADAPTER === undefined)("ORCA's exec gate in the real Codex (#102
     );
 
   const startExecutor = ({ budget }: CodexExecGateConnection) => {
-    const backend = spawnCodexExecServer({
-      program: RUNTIME,
-      env: { ...process.env, ...agentEnv({}) },
-      cwd: workspace,
-      budget,
-    });
+    const spec = { program: RUNTIME, env: { ...process.env, ...agentEnv({}) }, cwd: workspace, budget };
+    // The masks are the directories of ORCA's that exist when the executor is started.
+    const backend = isolated
+      ? spawnIsolatedCodexExecServer({ ...spec, masks: codexExecMasks(protectedPaths) })
+      : spawnCodexExecServer(spec);
     if (backend.pid !== undefined) executors.push(backend.pid);
     const send = backend.send.bind(backend);
     backend.send = (message, flushed) => {
@@ -724,24 +742,132 @@ describe.skipIf(ADAPTER === undefined)("ORCA's exec gate in the real Codex (#102
     ]);
   }, 180_000);
 
-  it("keeps the directory of a command still running when the executor behind the gate is killed", async () => {
-    // A count of its own: what is kept here stays kept for as long as this process lives.
-    const directories = codexExecGateDirectories(8);
-    const s = await gated(
-      { rules: [{ match: { kind: "execute", titlePattern: "^sleep 20$" }, decision: "allow" }] },
-      { directories },
+  if (!isolated)
+    it("keeps the directory of a command still running when the executor behind the gate is killed", async () => {
+      // A count of its own: what is kept here stays kept for as long as this process lives.
+      const directories = codexExecGateDirectories(8);
+      const s = await gated(
+        { rules: [{ match: { kind: "execute", titlePattern: "^sleep 20$" }, decision: "allow" }] },
+        { directories },
+      );
+      await s.prompt(script({ tool: "exec_command", args: { cmd: "sleep 20", yield_time_ms: 500 } }));
+      const started = passed.map((m) => JSON.parse(m) as { method?: string; params?: { cwd?: string } });
+      const reach = codexExecPath(started.find((m) => m.method === "process/start")!.params!.cwd);
+      expect(readlinkSync(reach)).toBe(workspace);
+      expect(directories).toMatchObject({ held: 1, kept: 0 });
+      process.kill(executors[0]!, "SIGKILL");
+      await expect.poll(() => records.some((r) => r.outcome === "kept"), { timeout: 10_000 }).toBe(true);
+      // The executor's exit says nothing about what it started. The name it was given goes on
+      // leading to the directory ORCA decided, and to no other.
+      expect(directories).toMatchObject({ held: 1, kept: 1 });
+      expect(readlinkSync(reach)).toBe(workspace);
+    }, 180_000);
+
+  if (isolated) {
+    /** A command that leaves a process behind it, writing the time to `beat.txt` in the workspace. */
+    const BEAT = "setsid nohup sh -c 'while :; do date +%s%N > beat.txt; sleep 0.1; done' > /dev/null 2>&1 &";
+    const ALLOW_BEAT = { match: { kind: "execute", titlePattern: "^setsid nohup sh -c " }, decision: "allow" } as const;
+    const beating = async (): Promise<boolean> => {
+      const before = await exists("beat.txt");
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      return (await exists("beat.txt")) !== before;
+    };
+
+    it("ends a process a command left running when the executor ends, and records that it saw it", async () => {
+      const s = await gated({ rules: [ALLOW_BEAT] });
+      await s.prompt(script(shell(BEAT)));
+      await expect.poll(() => exists("beat.txt"), { timeout: 10_000 }).toBeDefined();
+      expect(await beating()).toBe(true);
+      await s.close();
+      await gate!.close();
+      // Read from the workspace, not from anything the gate says: the process writes no more.
+      expect(await beating()).toBe(false);
+      expect(records.filter((r) => r.method === "executor").map((r) => [r.outcome, r.basis])).toEqual([
+        ["closed", "tree-ended"],
+      ]);
+    }, 180_000);
+
+    it("ends it too when ORCA's bubblewrap is killed, and keeps no directory", async () => {
+      const directories = codexExecGateDirectories(8);
+      const s = await gated(
+        { rules: [ALLOW_BEAT, { match: { kind: "execute", titlePattern: "^sleep 20$" }, decision: "allow" }] },
+        { directories },
+      );
+      await s.prompt(script(shell(BEAT), { tool: "exec_command", args: { cmd: "sleep 20", yield_time_ms: 500 } }));
+      expect(await beating()).toBe(true);
+      // The command still running is held in the executor's own namespace, by its first process.
+      const started = passed.map((m) => JSON.parse(m) as { method?: string; params?: { cwd?: string } });
+      const reaches = started.filter((m) => m.method === "process/start").map((m) => codexExecPath(m.params!.cwd));
+      expect(reaches.every((reach) => /^\/proc\/1\/fd\/\d+$/.test(reach))).toBe(true);
+      expect(directories).toMatchObject({ held: 1, kept: 0 });
+      process.kill(executors[0]!, "SIGKILL");
+      await expect.poll(() => records.some((r) => r.method === "executor"), { timeout: 10_000 }).toBe(true);
+      // The kernel ends the namespace with ORCA's bubblewrap. ORCA says what it saw of that,
+      // and holds nothing: the name the executor was given means nothing outside the namespace.
+      expect(records.find((r) => r.method === "executor")!.basis).toMatch(/^tree-(ended|unseen)$/);
+      expect(records.some((r) => r.outcome === "kept")).toBe(false);
+      expect(directories).toMatchObject({ held: 0, kept: 0 });
+      await expect.poll(() => beating(), { timeout: 10_000 }).toBe(false);
+    }, 180_000);
+
+    it("keeps what ORCA masks out of reach of a command a rule allowed, under any name", async () => {
+      const auth = join(configDir, "auth");
+      const store = join(configDir, ".orca");
+      await mkdir(auth);
+      await mkdir(join(store, "private-execution"));
+      await mkdir(join(store, "work"));
+      await writeFile(join(auth, "owner.token"), "orca-1026-owner-token\n");
+      await writeFile(join(store, "private-execution", "key"), "orca-1026-store-key\n");
+      await writeFile(join(store, "events.log"), "orca-1026-events\n");
+      const moved = join(root, "config-moved");
+      // Every command is allowed: what stops these is where the executor runs, not a rule.
+      const s = await gated({ default: "allow", rules: [] });
+      await s.prompt(
+        script(
+          shell(`cat ${auth}/owner.token ${store}/private-execution/key; ls -A ${auth} ${store}/private-execution`),
+          shell(`ln -s ${auth} peek && cat peek/owner.token`),
+          shell(`mv ${configDir} ${moved} && cat ${moved}/auth/owner.token; mv ${moved} ${configDir}`),
+          shell(`umount ${auth}; mv ${auth} ${root}/auth-moved; rmdir ${auth}`),
+          shell(`unshare -Urm sh -c 'umount ${auth}; cat ${auth}/owner.token'`),
+          shell(`echo changed >> ${store}/events.log; echo new > ${store}/new.txt`),
+          shell(`cat ${store}/events.log && echo deliverable > ${store}/work/out.txt && echo masks-tried`),
+        ),
+      );
+      // The last command ran, so the ones before it did too, and said what they could not do.
+      expect(told(/masks-tried/)).toBe(true);
+      expect(told(/orca-1026-events/)).toBe(true);
+      expect(told(/Read-only file system/)).toBe(true);
+      // Neither secret reached the model, and from outside nothing of ORCA's has changed.
+      expect(model.outputs.join("\n")).not.toMatch(/orca-1026-owner-token|orca-1026-store-key/);
+      expect(await readFile(join(auth, "owner.token"), "utf8")).toBe("orca-1026-owner-token\n");
+      expect(await readFile(join(store, "private-execution", "key"), "utf8")).toBe("orca-1026-store-key\n");
+      expect(await readFile(join(store, "events.log"), "utf8")).toBe("orca-1026-events\n");
+      expect(await readFile(join(store, "new.txt"), "utf8").catch(() => undefined)).toBeUndefined();
+      // The agent's own area inside the store is still its to write.
+      expect(await readFile(join(store, "work", "out.txt"), "utf8")).toBe("deliverable\n");
+    }, 240_000);
+  }
+
+  it("refuses a file request for a file that has a second name", async () => {
+    await writeFile(join(workspace, "twice.txt"), "one\n");
+    await link(join(workspace, "twice.txt"), join(root, "other-name.txt"));
+    await writeFile(join(workspace, "twice.png"), PNG);
+    await link(join(workspace, "twice.png"), join(root, "other-name.png"));
+    const s = await gated({ default: "allow", rules: [] });
+    await s.prompt(
+      script(patch("*** Update File: twice.txt", "@@", "-one", "+two"), {
+        tool: "view_image",
+        args: { path: join(workspace, "twice.png") },
+      }),
     );
-    await s.prompt(script({ tool: "exec_command", args: { cmd: "sleep 20", yield_time_ms: 500 } }));
-    const started = passed.map((m) => JSON.parse(m) as { method?: string; params?: { cwd?: string } });
-    const reach = codexExecPath(started.find((m) => m.method === "process/start")!.params!.cwd);
-    expect(readlinkSync(reach)).toBe(workspace);
-    expect(directories).toMatchObject({ held: 1, kept: 0 });
-    process.kill(executors[0]!, "SIGKILL");
-    await expect.poll(() => records.some((r) => r.outcome === "kept"), { timeout: 10_000 }).toBe(true);
-    // The executor's exit says nothing about what it started. The name it was given goes on
-    // leading to the directory ORCA decided, and to no other.
-    expect(directories).toMatchObject({ held: 1, kept: 1 });
-    expect(readlinkSync(reach)).toBe(workspace);
+    // Whatever a rule allows, a file with two names is not one a rule can have been written for.
+    expect(await exists("twice.txt")).toBe("one\n");
+    expect(await readFile(join(root, "other-name.txt"), "utf8")).toBe("one\n");
+    const refused = records.filter((r) => r.outcome === "refused" && /more than one name/.test(r.reason ?? ""));
+    expect(refused.length).toBeGreaterThan(0);
+    expect(refused.every((r) => r.basis === "gate")).toBe(true);
+    expect(recorded("fs/writeFile", "forwarded")).toEqual([]);
+    expect(recorded("fs/readFile", "forwarded")).toEqual([]);
   }, 180_000);
 
   it("fails every later call when the gate is closed", async () => {
