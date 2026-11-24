@@ -452,6 +452,40 @@ environment that let calls run without asking ORCA (for Gemini CLI today: YOLO o
 in a trusted workspace, allowed-tools and policy flags, a trusted workspace, and the user's
 own Gemini home; for pi, always, because pi never asks). It reads no settings file, so an empty advisory is not proof.
 
+#### Codex through ORCA's gate (`codexExecGate`, experimental, refused for now)
+
+A second route for Codex, separate from the hook (#1026): Codex would run every command, every
+byte typed into a running command, every patch and every file request through ORCA's gate in
+its executor path, into an executor in namespaces ORCA makes and checks, with nothing to fall
+back to. It is opt-in per agent, never together with `nativeToolHook`:
+
+```yaml
+  - id: codex
+    command: codex-acp
+    codexExecGate: experimental
+```
+
+**Every session that asks for it is refused today**, before the agent starts, with each reason
+ORCA found, numbered. Nothing falls back to the hook or to running Codex without the gate:
+remove `codexExecGate` to run the agent without it. The reasons, in order:
+
+- **Layout.** ORCA's config directory, its store, and the directory of a config file loaded
+  with `--config` (both where it is named and, for a link, where it leads) must be outside every directory the agent may write (the workspace and any
+  additional directory), and none of those may be inside them, compared by resolved path. The
+  default layout, where the config directory is the workspace, is refused: set `workspace:` to a
+  directory outside the config directory. A single file in a directory a command can write
+  cannot be kept from it, so ORCA keeps the whole directory apart.
+- **Host.** Linux x64, the system's own bubblewrap and `unshare`, and no `/etc/codex` (host-wide
+  Codex configuration can override or add to the settings ORCA would give Codex; an
+  administrator-configured host is a separate configuration).
+- **The closed executor.** What it still cannot close: a named pipe a program outside reads,
+  what a command leaves in its writable directories, and that the filter in place is not read
+  back. These are stated, not probed; admission starts nothing. Whether a host lets ORCA make
+  the closed executor at all is checked by a separate probe (`tools/codex-exec-host-probe.mjs`).
+- **Wiring.** ORCA does not start Codex on this route yet.
+
+The route claims no support tier.
+
 An `ask` is routed to the `humanInput` channel above, or upstream when ORCA runs as an ACP
 agent. **An `ask` nobody can answer is refused, never parked**: a permission cannot outlive
 the agent session that raised it, so `pause` cancels it, `auto` refuses it, and either way

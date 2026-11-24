@@ -32,6 +32,8 @@ on:
       - packages/agents/src/codex-exec-gate.ts
       - packages/agents/src/codex-exec-gate-policy.ts
       - packages/agents/src/codex-exec-isolation.ts
+      - packages/agents/src/codex-exec-gate-session.ts
+      - packages/cli/test/codex-exec-gate-route-1026.test.ts
       - packages/agents/src/claude-pre-tool-hook.ts
       - packages/agents/src/native-tool-hook-session.ts
       - packages/agents/src/acp-session.ts
@@ -138,6 +140,7 @@ jobs:
           set -euo pipefail
           pnpm exec vitest run packages/cli/test/codex-exec-gate-acceptance-1026.test.ts \
             packages/agents/test/codex-exec-isolation-1026.test.ts \
+            packages/cli/test/codex-exec-gate-route-1026.test.ts \
             --reporter=default --reporter=json --outputFile="$RUNNER_TEMP/acceptance.json"
           # The suite is skipped without the adapter; here every test has to have run.
           node -e '

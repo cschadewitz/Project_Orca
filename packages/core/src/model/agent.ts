@@ -1197,6 +1197,15 @@ export const AgentSpecSchema = z
      */
     nativeToolHook: z.enum(["on", "off", "experimental"]).optional(),
     /**
+     * Whether Codex runs every command, patch and file request through ORCA's gate in its
+     * executor path, into an executor in namespaces ORCA makes and checks (#1026), with nothing
+     * to fall back to. **Experimental, and refused for now**: ORCA checks the layout (its own
+     * files outside every directory the agent may write), the host and the closed executor,
+     * and refuses every session that asks for it with the reasons, since the route is not
+     * wired into sessions yet. Never together with `nativeToolHook`. Off when left out.
+     */
+    codexExecGate: z.enum(["off", "experimental"]).optional(),
+    /**
      * MCP servers passed in `session/new`. The legacy inline form: each one is on for this
      * agent, as if it were in the catalog and enabled here. `capabilities` below selects from
      * the shared catalog instead (#335).
@@ -1239,6 +1248,15 @@ export const AgentSpecSchema = z
     diagnostics: AgentDiagnosticsSchema.optional(),
   })
   .superRefine((agent, ctx) => {
+    if (
+      agent.codexExecGate === "experimental" &&
+      (agent.nativeToolHook === "on" || agent.nativeToolHook === "experimental")
+    )
+      ctx.addIssue({
+        code: "custom",
+        path: ["codexExecGate"],
+        message: "codexExecGate and nativeToolHook are separate routes; an agent takes one of them",
+      });
     if (agent.type === "acp") {
       if (agent.command.length === 0)
         ctx.addIssue({ code: "custom", path: ["command"], message: "an ACP agent needs the command that starts it" });
@@ -1264,6 +1282,12 @@ export const AgentSpecSchema = z
         code: "custom",
         path: ["nativeToolHook"],
         message: "an orca-daemon agent runs the remote daemon's own agents; ORCA's tool hook does not apply to it",
+      });
+    if (agent.codexExecGate === "experimental")
+      ctx.addIssue({
+        code: "custom",
+        path: ["codexExecGate"],
+        message: "an orca-daemon agent runs the remote daemon's own agents; ORCA's Codex gate does not apply to it",
       });
     if (agent.mcpServers.length > 0 || agent.capabilities !== undefined)
       ctx.addIssue({
