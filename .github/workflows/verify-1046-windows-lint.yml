@@ -1,0 +1,63 @@
+name: One-off Windows lint verification for PR 1046
+
+on:
+  push:
+    branches: [bot/verify-1046-windows-lint-90dbb687]
+    paths: [.github/workflows/verify-1046-windows-lint.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Windows lint at 90dbb687
+    runs-on: windows-latest
+    timeout-minutes: 18
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: verification checkout
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: 90dbb687963dd4b133ae902328c171309f40186f
+          path: verification checkout
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.21.0'
+          package-manager-cache: false
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          package_json_file: verification checkout/package.json
+          run_install: false
+      - name: Install the exact revision's dependencies
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+        run: |
+          $actual = (git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $actual -ne '90dbb687963dd4b133ae902328c171309f40186f') {
+            throw "Unexpected checkout: $actual"
+          }
+          node --version
+          pnpm --version
+          pnpm install --frozen-lockfile
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Lint without a concurrency override
+        run: |
+          Remove-Item Env:ESLINT_CONCURRENCY -ErrorAction SilentlyContinue
+          pnpm run lint
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Lint with two ESLint workers
+        env:
+          ESLINT_CONCURRENCY: '2'
+        run: |
+          pnpm run lint
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Keep ESLint's invalid-CLI exit code
+        env:
+          ESLINT_CONCURRENCY: invalid
+        run: |
+          node tools/lint.js
+          if ($LASTEXITCODE -ne 2) { throw "Expected ESLint exit code 2, got $LASTEXITCODE" }
+          exit 0
