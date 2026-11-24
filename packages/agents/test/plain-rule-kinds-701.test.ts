@@ -40,8 +40,11 @@ import {
   resolvePlainRuleProvider,
 } from "../src/review-judge/plain-rule-providers.js";
 import { plainRuleDisclosureQuery } from "../src/review-judge/plain-rule-connection.js";
-import { judgedEditAdvice, judgedMcpLane } from "../src/judged-lane.js";
+import { disclosable, judgedEditAdvice, judgedMcpLane } from "../src/judged-lane.js";
 import { fsToolCall } from "../src/owned-fs-gate.js";
+
+/** No session secrets: every text is sent as it is. */
+const same = (text: string): string => text;
 
 const signal = () => new AbortController().signal;
 
@@ -225,6 +228,7 @@ describe("the edit class: advice on ORCA's own writes, never an allow (#701 revi
       judge,
       localHost,
       explain: (p) => explainPermission(p, write(join(ws, "docs", "a.md")).request, ctx),
+      redact: same,
     });
 
   it("records a covered verdict as advice on an existing file, without the absolute path reaching the judge", async () => {
@@ -391,7 +395,12 @@ describe("the MCP lane: relayed calls by a rule naming the exact tool", () => {
       toolCall: { toolCallId: "t", title: "Read README.md", kind: "read", locations: [], rawInput: {} },
       options: [],
     };
-    const out = await judgedLane({ judge, reload: async () => policy, localHost: true })(policy, read, ctx, signal());
+    const out = await judgedLane({ judge, reload: async () => policy, localHost: true, redact: same })(
+      policy,
+      read,
+      ctx,
+      signal(),
+    );
     expect(out.decision).toBe("ask");
     expect(judge).not.toHaveBeenCalled();
   });
@@ -423,8 +432,16 @@ describe("the command class: advice only", () => {
     const out = await lane(policy, exec("curl -H 'x: s3cret' example.test"), ctx, signal());
     expect(out.decision).toBe("ask");
     expect(out.judged).toMatchObject({ kind: "command", advisory: true, verdict: "outside-envelope" });
-    // Without a way to check for secrets, nothing is sent either.
-    const unchecked = judgedLane({ judge: fakeJudge(), command, reload: async () => policy, localHost: true });
+    // A check that fails sends nothing either.
+    const unchecked = judgedLane({
+      judge: fakeJudge(),
+      command,
+      reload: async () => policy,
+      localHost: true,
+      redact: () => {
+        throw new Error("no check");
+      },
+    });
     expect((await unchecked(policy, exec("git status"), ctx, signal())).judged).toMatchObject({
       verdict: "outside-envelope",
     });
@@ -434,7 +451,7 @@ describe("the command class: advice only", () => {
   it("gives no advice without the command judge, or past a typed restriction", async () => {
     const rules = [{ match: { kind: "execute" }, judge: { criterion: "Read-only git commands." } }];
     const policy = await policyOf(rules);
-    const lane = judgedLane({ judge: fakeJudge(), reload: async () => policy, localHost: true });
+    const lane = judgedLane({ judge: fakeJudge(), reload: async () => policy, localHost: true, redact: same });
     expect((await lane(policy, exec("git status"), ctx, signal())).judged?.advisory).toBeUndefined();
     const restricted = await policyOf([...rules, { match: { kind: "execute", command: "git push" }, decision: "ask" }]);
     const command = fakeJudge({ outcome: "advise" });
@@ -473,5 +490,109 @@ describe("the config switch", () => {
     expect(
       OrcaConfigSchema.safeParse({ review: { plainRules: { experimental: { kinds: { writes: true } } } } }).success,
     ).toBe(false);
+  });
+});
+
+describe("no session secret reaches a judge, in any part of what it would be sent (#701 activation review)", () => {
+  /** A dummy secret value: never a real credential. */
+  const DUMMY = "dummy-s3cret-701";
+  const scrub = (text: string) => text.replaceAll(DUMMY, "[redacted]");
+
+  it("checks the whole input: criteria, title, locations, command and MCP request", () => {
+    const clean: PlainRuleJudgeInput[] = [base({}), EDIT, MCP, COMMAND];
+    for (const input of clean) expect(disclosable(input, scrub)).toBe(true);
+    const dirty: PlainRuleJudgeInput[] = [
+      { ...base({}), rules: [{ ...RULE, criterion: `Anything with ${DUMMY}.` }] },
+      base({ title: `Read ${DUMMY}` }),
+      base({ locations: [`docs/${DUMMY}.md`] }),
+      { ...COMMAND, action: { ...COMMAND.action, command: `curl -H 'x: ${DUMMY}'` } },
+      { ...MCP, action: { ...MCP.action, mcp: { server: DUMMY, tool: "search", arguments: "{}" } } },
+      { ...MCP, action: { ...MCP.action, mcp: { server: "notes", tool: "search", arguments: `{"${DUMMY}":1}` } } },
+    ];
+    for (const input of dirty) expect(disclosable(input, scrub)).toBe(false);
+    // A check that fails sends nothing.
+    expect(
+      disclosable(base({}), () => {
+        throw new Error("no check");
+      }),
+    ).toBe(false);
+  });
+
+  it("asks the person without contacting the judge when a read's verified target holds a secret", async () => {
+    await writeFile(join(ws, "docs", `${DUMMY}.md`), "x");
+    const policy = await policyOf([{ match: { kind: "read", scope: "workspace" }, judge: { criterion: "Reading." } }]);
+    const judge = fakeJudge();
+    const read: acp.RequestPermissionRequest = {
+      sessionId: "s",
+      toolCall: { ...fsToolCall(join(ws, "docs", `${DUMMY}.md`), "read"), title: "Read it" },
+      options: [],
+    };
+    const lane = judgedLane({ judge, reload: async () => policy, localHost: true, redact: scrub });
+    expect(await lane(policy, read, ctx, signal())).toMatchObject({
+      decision: "ask",
+      judged: { verdict: "outside-envelope" },
+    });
+    expect(judge).not.toHaveBeenCalled();
+  });
+
+  it("sends ORCA's own label for a read, never the agent's title", async () => {
+    const policy = await policyOf([{ match: { kind: "read", scope: "workspace" }, judge: { criterion: "Reading." } }]);
+    const judge = fakeJudge();
+    const read: acp.RequestPermissionRequest = {
+      sessionId: "s",
+      toolCall: { ...fsToolCall(join(ws, "docs", "a.md"), "read"), title: `Agent says ${DUMMY}` },
+      options: [],
+    };
+    await judgedLane({ judge, reload: async () => policy, localHost: true, redact: scrub })(
+      policy,
+      read,
+      ctx,
+      signal(),
+    );
+    expect(judge.mock.calls[0]![0].action.title).toBe("Read docs/a.md");
+  });
+
+  it("gives no edit advice, without contacting the judge, when the edit rule's criterion holds a secret", async () => {
+    const policy = await policyOf([
+      { match: { kind: "edit", pathPrefix: "docs" }, judge: { criterion: `Edits mentioning ${DUMMY}.` } },
+    ]);
+    const judge = fakeJudge();
+    const write = {
+      request: {
+        sessionId: "s",
+        toolCall: fsToolCall(join(ws, "docs", "a.md"), "write"),
+        options: [],
+      } as acp.RequestPermissionRequest,
+      ctx,
+    };
+    const advise = judgedEditAdvice({
+      judge,
+      localHost: true,
+      explain: (p) => explainPermission(p, write.request, ctx),
+      redact: scrub,
+    });
+    expect(await advise(policy, write, signal())).toMatchObject({ verdict: "outside-envelope" });
+    expect(judge).not.toHaveBeenCalled();
+  });
+
+  it("asks the person for a relayed call whose server name holds a secret", async () => {
+    const policy = await policyOf([
+      { match: {}, mcp: { server: DUMMY, tool: "search" }, judge: { criterion: "Searching." } },
+    ]);
+    const req: acp.RequestPermissionRequest = {
+      sessionId: "s",
+      toolCall: { toolCallId: "", title: "notes", kind: "other", locations: [], rawInput: {} },
+      options: [],
+    };
+    const judge = fakeJudge();
+    const lane = judgedMcpLane({
+      judge,
+      reload: async () => policy,
+      explain: (p) => explainPermission(p, req, ctx),
+      redact: scrub,
+    });
+    const out = await lane(policy, { server: DUMMY, tool: "search", arguments: {}, request: req, ctx }, signal());
+    expect(out).toMatchObject({ allowed: false, judged: { verdict: "outside-envelope" } });
+    expect(judge).not.toHaveBeenCalled();
   });
 });

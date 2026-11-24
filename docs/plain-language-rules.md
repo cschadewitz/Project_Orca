@@ -26,7 +26,7 @@ You can also write and edit these rules in the app, on the Agents surface's perm
 - **Your written rules decide first.** If any deny or ask rule matches the call anywhere in the policy, the judge is not asked. ORCA's own protected files are never opened.
 - **Only reads ORCA performs itself.** The judge may allow a read that the agent asks ORCA to do (`fs/read_text_file`), of a single regular file ORCA resolved inside the workspace and then reads, bound to that file. A read or search the agent does itself and only asks permission for goes to you, because ORCA cannot show the agent reads the file the judge was shown. Commands, writes, fetches, links and anything on a remote host go to you too.
 - **It is checked again before the call proceeds.** If the rule or the file changed while the judge was deciding, the yes no longer applies and you are asked. The ask says so.
-- **The judge sees only what it needs.** It sees your rule's sentence and ORCA's own description of the call: its kind, a title and the workspace-relative path. It never sees file contents, absolute paths or the agent's conversation. Its answers are fixed verdicts and reason codes, never free text.
+- **The judge sees only what it needs.** It sees your rule's sentence and ORCA's own description of the call: its kind, a label ORCA writes (such as `Read docs/a.md`) and the workspace-relative path. It never sees file contents, absolute paths, the agent's own wording or the agent's conversation. If any part of that description would contain one of the session's secret values, nothing is sent and the call goes to you. Its answers are fixed verdicts and reason codes, never free text.
 
 When the app asks you about a call the judge looked at, the card shows what the judge said and why.
 
@@ -53,13 +53,13 @@ The judge is off for a session until all five of these are in place. The Config 
 
    `enabled: true` is your opt-in to automatic decisions, and step 5 below. Changing anything under `review.plainRules` through the app or the daemon needs the same `permissions.grant` authority as changing a plain-language rule.
 2. **Set the key** in the daemon's environment, under the variable the secret names (`ORCA_JUDGE_KEY` above).
-3. **Grant disclosure.** As the owner, issue the credential your runs use with `--judge-disclosure`. This approves sending the call's description to that judge:
+3. **Grant disclosure.** An owner issues the credential your runs use with `--judge-disclosure`. This approves sending the call's description to that judge. Give that credential only what its runs need: keep the default `client` preset, narrow it with `--workflow-scope` and `--runs-scope owned` where you can, and don't use the `owner` preset for it. For example:
 
    ```sh
-   orca auth issue <principal> --preset owner --judge-disclosure
+   orca auth issue <principal> --workflow-scope <workflow> --runs-scope owned --judge-disclosure
    ```
 
-   The grant names the configured destination and provider exactly. If you change either, issue a new one. The daemon must run in token mode, because the loopback mode keeps no grants.
+   See `orca auth issue --help` for the other flags. The grant names the configured destination and provider exactly. If you change either, issue a new one. The daemon must run in token mode, because the loopback mode keeps no grants.
 4. **Create the daily budget** on the daemon's machine:
 
    ```sh

@@ -76,10 +76,23 @@ function fakeJudge(answer?: Partial<PlainRuleJudgeOutcome>) {
 
 const READ_RULE = { match: { kind: "read", scope: "workspace" }, judge: { criterion: "Reading the docs." } };
 
-async function turn(opts: { judge?: JudgePermission; reads?: string[]; ask?: string; answer?: string }) {
+/** A dummy secret value for the session: never a real credential. */
+const DUMMY_SECRET = "dummy-s3cret-701";
+
+async function turn(opts: {
+  judge?: JudgePermission;
+  reads?: string[];
+  ask?: string;
+  answer?: string;
+  /** Give the session a secret whose value is `DUMMY_SECRET`. */
+  secret?: boolean;
+}) {
   const dir = await temp("orca-judged-read-");
   await mkdir(join(dir, "docs"));
   await writeFile(join(dir, "docs", "a.md"), "hello\n");
+  await writeFile(join(dir, "docs", `${DUMMY_SECRET}.md`), "hello\n");
+  const secretFile = join(await temp("orca-judged-read-secret-"), "token");
+  await writeFile(secretFile, DUMMY_SECRET);
   const log = join(await temp("orca-judged-read-log-"), "results.json");
   const path = (p: string) => join(dir, p);
   const agent = AgentSpecSchema.parse({
@@ -90,6 +103,7 @@ async function turn(opts: { judge?: JudgePermission; reads?: string[]; ask?: str
       READS: JSON.stringify((opts.reads ?? []).map(path)),
       ...(opts.ask ? { ASK: path(opts.ask) } : {}),
       RESULT_LOG: log,
+      ...(opts.secret ? { DUMMY_TOKEN: { secret: "dummy" } } : {}),
     },
     permissions: { default: "ask", rules: [READ_RULE] },
   });
@@ -101,6 +115,12 @@ async function turn(opts: { judge?: JudgePermission; reads?: string[]; ask?: str
     agent,
     cwd: dir,
     protectedPaths: { readOnly: [], noAccess: [] },
+    ...(opts.secret
+      ? {
+          secrets: { dummy: { host: "local", provider: "file" as const, path: secretFile } },
+          authorizeSecretUse: async () => undefined,
+        }
+      : {}),
     ...(opts.judge ? { judgePermission: opts.judge } : {}),
     onPermission: (info) => {
       decisions.push(info.decision);
@@ -150,6 +170,25 @@ describe("a plain-language rule allows a read ORCA performs itself (#701)", () =
     expect(out.asked).toHaveLength(1);
     expect(out.asked[0]!.judged).toBeUndefined();
     expect(out.decisions).toEqual(["ask:reject_once"]);
+  });
+
+  it("sends ORCA's own label for the read, never the agent's wording", async () => {
+    const judge = fakeJudge();
+    await turn({ judge, reads: ["docs/a.md"] });
+    expect(judge.mock.calls[0]![0].action.title).toBe("Read docs/a.md");
+  });
+
+  it("asks the person, without contacting the judge, when the description would carry a session secret", async () => {
+    const judge = fakeJudge();
+    const out = await turn({ judge, reads: [`docs/${DUMMY_SECRET}.md`], answer: "reject", secret: true });
+    expect(judge).not.toHaveBeenCalled();
+    expect(out.asked).toHaveLength(1);
+    expect(out.asked[0]!.judged).toMatchObject({ verdict: "outside-envelope" });
+    // The same session's read of a file whose description holds no secret still reaches the judge.
+    const clean = fakeJudge();
+    const ok = await turn({ judge: clean, reads: ["docs/a.md"], secret: true });
+    expect(clean).toHaveBeenCalledTimes(1);
+    expect(ok.asked).toHaveLength(0);
   });
 
   it("asks without a judge, as before", async () => {

@@ -37,6 +37,7 @@ import {
   PLAIN_RULE_JUDGED_KINDS,
   PLAIN_RULE_REASONS,
   type JudgePermission,
+  type PlainRuleJudgeInput,
   type PlainRuleJudgeOutcome,
 } from "./review-judge/plain-rule.js";
 import { verifyPlainRuleTargets, type PlainRuleTargetIo } from "./verified-targets.js";
@@ -65,10 +66,42 @@ export interface JudgedLaneOptions {
   /** Tests only: the file system the target check reads. */
   io?: PlainRuleTargetIo;
   /**
-   * Replaces the session's secret values in a text; a change means the text held one (#701 review).
-   * Command advice sends the command and title to the judge: one holding a secret is not sent.
+   * Replaces the session's secret values in a text; a change means the text held one (#701 review). Required: every
+   * string the judge would be sent is checked first (`disclosable`), and a call holding a secret is not sent.
    */
-  redact?: (text: string) => string;
+  redact: (text: string) => string;
+}
+
+/**
+ * Whether everything a judge would be sent for one call can go as it is (#701 activation review): every string in
+ * the whole input, the criteria and the action's kind, title, locations, command and MCP request alike, and every
+ * object key, is checked against the session's known secret values. One holding a secret would reach the provider
+ * only redacted, so the judge would not see what it decides about: the call is not sent and the person is asked
+ * (`outside-envelope`). Nesting past a fixed depth, or a value that is not plain data, is not sent either.
+ */
+export function disclosable(input: PlainRuleJudgeInput, redact: (text: string) => string): boolean {
+  const clean = (text: string): boolean => {
+    try {
+      return redact(text) === text;
+    } catch {
+      return false;
+    }
+  };
+  const safe = (value: unknown, depth: number): boolean => {
+    if (depth > 32) return false;
+    if (typeof value === "string") return clean(value);
+    if (value === undefined || value === null || typeof value === "number" || typeof value === "boolean") return true;
+    if (Array.isArray(value)) return value.every((v) => safe(v, depth + 1));
+    if (typeof value === "object")
+      return Object.entries(value as Record<string, unknown>).every(([k, v]) => clean(k) && safe(v, depth + 1));
+    return false;
+  };
+  return safe(input, 0);
+}
+
+/** ORCA's own words for a read or search it verified, from the verified workspace-relative targets only. */
+function orcaLabel(kind: string, locations: readonly string[]): string {
+  return `${kind === "search" ? "Search" : "Read"} ${locations.join(", ")}`;
 }
 
 /** Decides one call with the judged lane open: the typed answer, or an allow once by a judged rule. */
@@ -97,27 +130,27 @@ export function judgedLane(options: JudgedLaneOptions): JudgedLane {
     if (options.reads === false) return typed;
     const first = gate(policy, request, ctx, options.io);
     if (first.state === "closed") return first.verdict ? { ...typed, judged: { verdict: first.verdict } } : typed;
+    const input: PlainRuleJudgeInput = {
+      rules: first.candidates.map((r) => ({
+        ruleId: r.ruleId,
+        ruleRevision: r.ruleRevision,
+        criterion: r.criterion,
+      })),
+      // Both are false here: the gate closed the lane otherwise. The judge checks again.
+      restrictions: { deny: false, ask: false },
+      action: {
+        kind: first.callKind,
+        // ORCA's own label from the verified targets, never the agent's title (#701 activation review).
+        title: orcaLabel(first.callKind, first.locations),
+        locations: first.locations,
+        inWorkspace: true,
+        targetsVerified: true,
+      },
+    };
+    if (!disclosable(input, options.redact)) return { ...typed, judged: { verdict: "outside-envelope" } };
     let outcome: PlainRuleJudgeOutcome;
     try {
-      outcome = await options.judge(
-        {
-          rules: first.candidates.map((r) => ({
-            ruleId: r.ruleId,
-            ruleRevision: r.ruleRevision,
-            criterion: r.criterion,
-          })),
-          // Both are false here: the gate closed the lane otherwise. The judge checks again.
-          restrictions: { deny: false, ask: false },
-          action: {
-            kind: first.callKind,
-            title: request.toolCall.title ?? "",
-            locations: first.locations,
-            inWorkspace: true,
-            targetsVerified: true,
-          },
-        },
-        signal,
-      );
+      outcome = await options.judge(input, signal);
     } catch {
       return { ...typed, judged: { verdict: "unavailable" } };
     }
@@ -256,7 +289,7 @@ async function adviseCommand(
   request: acp.RequestPermissionRequest,
   ctx: PermissionEvalContext | undefined,
   signal: AbortSignal,
-  redact: ((text: string) => string) | undefined,
+  redact: (text: string) => string,
 ): Promise<JudgedDecision | undefined> {
   const facts = callFacts(request, ctx);
   if (facts.kind !== "execute" || facts.claimed) return undefined;
@@ -268,28 +301,25 @@ async function adviseCommand(
   if (restricted(policy, facts)) return { ...base, verdict: "hard-boundary" };
   const command = commandText(request);
   if (command === "") return { ...base, verdict: "outside-envelope" };
-  // Advice authorizes nothing, but it still sends the command and title to the judge: one holding a
-  // session secret is not sent, and without a way to check, nothing is (#701 review).
-  const title = request.toolCall.title ?? "";
-  if (!redact || redact(command) !== command || redact(title) !== title)
-    return { ...base, verdict: "outside-envelope" };
+  const input: PlainRuleJudgeInput = {
+    rules: candidates.map((r) => ({ ruleId: r.ruleId, ruleRevision: r.ruleRevision, criterion: r.criterion })),
+    restrictions: { deny: false, ask: false },
+    action: {
+      kind: "execute",
+      // ORCA's own label: the agent's title is not sent (#701 activation review). The command is what is judged.
+      title: "Run a command",
+      locations: [],
+      inWorkspace: false,
+      targetsVerified: false,
+      command,
+    },
+  };
+  // Advice authorizes nothing, but it still sends the command to the judge: one holding a session secret is not
+  // sent (#701 review).
+  if (!disclosable(input, redact)) return { ...base, verdict: "outside-envelope" };
   let outcome: PlainRuleJudgeOutcome;
   try {
-    outcome = await judge(
-      {
-        rules: candidates.map((r) => ({ ruleId: r.ruleId, ruleRevision: r.ruleRevision, criterion: r.criterion })),
-        restrictions: { deny: false, ask: false },
-        action: {
-          kind: "execute",
-          title,
-          locations: [],
-          inWorkspace: false,
-          targetsVerified: false,
-          command,
-        },
-      },
-      signal,
-    );
+    outcome = await judge(input, signal);
   } catch {
     return { ...base, verdict: "unavailable" };
   }
@@ -327,6 +357,8 @@ export function judgedEditAdvice(options: {
   /** The typed answer for the write under a policy: what the file gate decides by. */
   explain: (policy: PermissionPolicy) => PermissionExplanation;
   io?: PlainRuleTargetIo;
+  /** Replaces the session's secret values in a text; a change means the text held one (`disclosable`). */
+  redact: (text: string) => string;
 }): (
   policy: PermissionPolicy,
   write: { request: acp.RequestPermissionRequest; ctx: PermissionEvalContext | undefined },
@@ -351,23 +383,22 @@ export function judgedEditAdvice(options: {
       ...(options.io ? { io: options.io } : {}),
     });
     if (!check.targetsVerified) return { ...base, verdict: "outside-envelope" };
+    const input: PlainRuleJudgeInput = {
+      rules: candidates.map((r) => ({ ruleId: r.ruleId, ruleRevision: r.ruleRevision, criterion: r.criterion })),
+      restrictions: { deny: false, ask: false },
+      action: {
+        kind: "edit",
+        // ORCA's own words for its own operation, with the verified path: never the absolute path.
+        title: `Write ${check.locations[0]!}`,
+        locations: check.locations,
+        inWorkspace: true,
+        targetsVerified: true,
+      },
+    };
+    if (!disclosable(input, options.redact)) return { ...base, verdict: "outside-envelope" };
     let outcome: PlainRuleJudgeOutcome;
     try {
-      outcome = await options.judge(
-        {
-          rules: candidates.map((r) => ({ ruleId: r.ruleId, ruleRevision: r.ruleRevision, criterion: r.criterion })),
-          restrictions: { deny: false, ask: false },
-          action: {
-            kind: "edit",
-            // ORCA's own words for its own operation, with the verified path: never the absolute path.
-            title: `Write ${check.locations[0]!}`,
-            locations: check.locations,
-            inWorkspace: true,
-            targetsVerified: true,
-          },
-        },
-        signal,
-      );
+      outcome = await options.judge(input, signal);
     } catch {
       return { ...base, verdict: "unavailable" };
     }
@@ -456,24 +487,27 @@ export function judgedMcpLane(options: {
         said ??= { ...base, verdict: "outside-envelope" };
         continue;
       }
+      const input: PlainRuleJudgeInput = {
+        rules: rules.map((r) => ({ ruleId: r.ruleId, ruleRevision: r.ruleRevision, criterion: r.criterion })),
+        restrictions: { deny: false, ask: false },
+        action: {
+          kind: "other",
+          title: `${call.server}: ${call.tool}`,
+          locations: [],
+          inWorkspace: false,
+          // ORCA runs this server and relays this request: the identity is its own, not the agent's claim.
+          targetsVerified: true,
+          mcp: { server: call.server, tool: call.tool, arguments: args },
+        },
+      };
+      // The whole description, server and tool names included, not only the arguments.
+      if (!disclosable(input, options.redact)) {
+        said ??= { ...base, verdict: "outside-envelope" };
+        continue;
+      }
       let outcome: PlainRuleJudgeOutcome;
       try {
-        outcome = await options.judge(
-          {
-            rules: rules.map((r) => ({ ruleId: r.ruleId, ruleRevision: r.ruleRevision, criterion: r.criterion })),
-            restrictions: { deny: false, ask: false },
-            action: {
-              kind: "other",
-              title: `${call.server}: ${call.tool}`,
-              locations: [],
-              inWorkspace: false,
-              // ORCA runs this server and relays this request: the identity is its own, not the agent's claim.
-              targetsVerified: true,
-              mcp: { server: call.server, tool: call.tool, arguments: args },
-            },
-          },
-          signal,
-        );
+        outcome = await options.judge(input, signal);
       } catch {
         said = { ...base, verdict: "unavailable" };
         continue;

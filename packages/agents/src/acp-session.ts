@@ -469,6 +469,7 @@ async function openPlanned(
         reload: policyForAsk,
         // Targets are checked on this machine's file system: only a local session's are its own.
         localHost: opts.host.spec.type === "local",
+        redact: (text) => redactSecretValues(text, values),
       })
     : undefined;
   /** The experimental classes (#701): only with the read judge, and each only when given its own. */
@@ -616,7 +617,12 @@ async function openPlanned(
     // The experimental edit class (#701): a judge's recommendation on this write, recorded with the ask.
     // It allows nothing: a path does not show what a write changes (#701 review), so the person answers.
     if (access === "write" && judgedEdit) {
-      const advise = judgedEditAdvice({ judge: judgedEdit, localHost: opts.host.spec.type === "local", explain });
+      const advise = judgedEditAdvice({
+        judge: judgedEdit,
+        localHost: opts.host.spec.type === "local",
+        explain,
+        redact: (text) => redactSecretValues(text, values),
+      });
       advice = await advise(
         policy,
         {
