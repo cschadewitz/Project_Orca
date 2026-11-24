@@ -199,8 +199,14 @@ export interface CodexExecGateCall {
   asWritten?: { title: string; locations: { path: string }[]; cwd?: string | undefined } | undefined;
   /** Codex's id for the model's call. Only `process/start` carries one. */
   toolCallId?: string | undefined;
-  /** Text typed into a running process: decided only by a rule that names typed input. */
-  typedInput?: true | undefined;
+  /**
+   * Bytes typed into a running process: decided only by a rule that names typed input. These
+   * are the bytes the decision is for and the only ones the executor is sent: how many, and
+   * their sha256. The call's title spells the same bytes as text, `write_stdin: ` and then
+   * the text as one JSON string, and that spelling reads back as exactly these bytes. Nothing
+   * is dropped or folded on the way: a byte-order mark stays in the text.
+   */
+  typedInput?: { bytes: number; sha256: string } | undefined;
 }
 
 export type CodexExecGateDecision =
@@ -632,6 +638,24 @@ const base64Bytes = (v: unknown, what: string): Buffer => {
 };
 
 const sha256 = (bytes: Buffer | string): string => createHash("sha256").update(bytes).digest("hex");
+
+/**
+ * Typed bytes as the text a rule is matched against. The policy reads text and the executor
+ * is sent bytes, so the two have to be one thing said twice: every byte is kept (a decoder's
+ * habit of dropping a leading byte-order mark is turned off), bytes that are not UTF-8 are
+ * refused, and so is anything whose text would not write back as the same bytes.
+ */
+function typedText(bytes: Buffer): string {
+  let typed: string;
+  try {
+    typed = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+  } catch {
+    throw new Unreadable("the typed input is not text");
+  }
+  if (!Buffer.from(typed, "utf8").equals(bytes))
+    throw new Unreadable("the typed input does not read back as the bytes that were sent");
+  return typed;
+}
 
 const SESSION_ID = /^[0-9A-Za-z-]{1,64}$/;
 const CALL_ID = /^[0-9A-Za-z._:|-]{1,256}$/;
@@ -1069,28 +1093,24 @@ function plan(
       only(p, "the request", ["processId", "chunk", "writeId"]);
       const processId = knownProcess();
       const bytes = base64Bytes(p["chunk"], "the typed input");
-      const params = { processId, chunk: p["chunk"], writeId: text(p["writeId"], "writeId", ID_LIMIT) };
+      // The executor is sent the bytes that were read, written out again from them.
+      const params = { processId, chunk: bytes.toString("base64"), writeId: text(p["writeId"], "writeId", ID_LIMIT) };
       // Only a write of nothing passes undecided. Every byte typed is data, whatever it is
       // meant to do: the gate cannot tell a Ctrl-C a terminal will act on from the same byte
       // read by a program as input. An interrupt has its own request, `process/signal`.
       if (bytes.length === 0) return { action: "pass", calls: [], subject: { processId, bytes: bytes.length }, params };
-      let typed: string;
-      try {
-        typed = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-      } catch {
-        throw new Unreadable("the typed input is not text");
-      }
+      const digest = sha256(bytes);
       return {
         action: "decide",
         calls: [
           {
             method,
             check: "policy",
-            typedInput: true,
-            toolCall: { title: `write_stdin: ${JSON.stringify(typed)}`, kind: "execute", locations: [] },
+            typedInput: { bytes: bytes.length, sha256: digest },
+            toolCall: { title: `write_stdin: ${JSON.stringify(typedText(bytes))}`, kind: "execute", locations: [] },
           },
         ],
-        subject: { kind: "execute", processId, bytes: bytes.length, sha256: sha256(bytes) },
+        subject: { kind: "execute", processId, bytes: bytes.length, sha256: digest },
         params,
       };
     }

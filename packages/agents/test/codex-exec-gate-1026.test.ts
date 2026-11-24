@@ -761,7 +761,7 @@ describe("what one request needs", () => {
     expect(plan.action).toBe("decide");
     if (plan.action !== "decide") return;
     expect(plan.calls[0]).toMatchObject({
-      typedInput: true,
+      typedInput: { bytes: 4, sha256: createHash("sha256").update("yes\n").digest("hex") },
       toolCall: { title: 'write_stdin: "yes\\n"', kind: "execute", locations: [] },
     });
     expect(plan.subject).toMatchObject({ processId: "p1", bytes: 4 });
@@ -777,13 +777,107 @@ describe("what one request needs", () => {
     // The gate cannot tell a Ctrl-C the terminal acts on from the same byte read as input.
     const interrupt = write(b64("\u0003"));
     expect(interrupt.action).toBe("decide");
-    expect(interrupt.action === "decide" && interrupt.calls[0]).toMatchObject({ typedInput: true });
+    expect(interrupt.action === "decide" && interrupt.calls[0]).toMatchObject({ typedInput: { bytes: 1 } });
     expect(write(b64("\u0003\u0003")).action).toBe("decide");
     expect(write(b64("\u0004")).action).toBe("decide");
     expect(reason(write(b64("x"), "p2"))).toMatch(/did not allow/);
     expect(reason(write("not base64!"))).toMatch(/not base64/);
     expect(reason(write(Buffer.from([0xff, 0xfe]).toString("base64")))).toMatch(/not text/);
     expect(reason(write(7))).toMatch(/missing/);
+  });
+
+  describe("what is decided for typed input", () => {
+    const BOM = [0xef, 0xbb, 0xbf];
+    const text = (words: string): number[] => [...Buffer.from(words, "utf8")];
+    /** Byte strings that a careless reading would fold into another, each beside its neighbour. */
+    const typed: [string, number[]][] = [
+      ["plain text", text("yes\n")],
+      ["a byte-order mark before the same text", [...BOM, ...text("yes\n")]],
+      ["two byte-order marks before it", [...BOM, ...BOM, ...text("yes\n")]],
+      ["a byte-order mark alone", BOM],
+      ["a byte-order mark inside the text", [...text("ye"), ...BOM, ...text("s\n")]],
+      ["a byte-order mark after it", [...text("yes\n"), ...BOM]],
+      ["a NUL before it", [0x00, ...text("yes\n")]],
+      ["a NUL alone", [0x00]],
+      ["a carriage return and a line feed", text("yes\r\n")],
+      ["a carriage return alone", text("yes\r")],
+      ["an escape sequence", [0x1b, ...text("[2Jyes\n")]],
+      ["a delete", [0x7f]],
+      ["a quote and a backslash", text('"\\')],
+      ["the letters of an escape, typed", text("\\ufeffyes\\n")],
+      ["a composed letter", text("\u00e9")],
+      ["the same letter in two parts", text("e\u0301")],
+      ["a zero-width space in it", text("y\u200bes\n")],
+      ["a right-to-left override", text("\u202eyes\n")],
+      ["a line separator", text("yes\u2028")],
+      ["a character beyond the first plane", text("\u{1f600}")],
+      ["the last code point", text("\u{10ffff}")],
+      ["a replacement character, typed as one", text("\ufffd")],
+    ];
+    const plannedFor = (bytes: number[]) =>
+      planned(
+        "process/write",
+        { processId: "p1", chunk: Buffer.from(bytes).toString("base64"), writeId: "1" },
+        state("p1"),
+      );
+
+    it.each(typed)("spells exactly the bytes the executor is sent: %s", (_what, bytes) => {
+      const plan = plannedFor(bytes);
+      expect(plan.action).toBe("decide");
+      if (plan.action !== "decide") return;
+      const call = plan.calls[0]!;
+      const title = call.toolCall.title;
+      expect(title.startsWith("write_stdin: ")).toBe(true);
+      // What the policy is asked about reads back as the bytes, with none added or missing.
+      const spelled = Buffer.from(JSON.parse(title.slice("write_stdin: ".length)) as string, "utf8");
+      const sent = Buffer.from((plan.params as { chunk: string }).chunk, "base64");
+      expect([...spelled]).toEqual(bytes);
+      expect([...sent]).toEqual(bytes);
+      // And the decision names those bytes by count and digest, apart from the record.
+      expect(call.typedInput).toEqual({
+        bytes: bytes.length,
+        sha256: createHash("sha256").update(Buffer.from(bytes)).digest("hex"),
+      });
+    });
+
+    it("gives no two byte strings the same spelling", () => {
+      const titles = typed.map(([, bytes]) => {
+        const plan = plannedFor(bytes);
+        return plan.action === "decide" ? plan.calls[0]!.toolCall.title : "";
+      });
+      expect(titles).not.toContain("");
+      expect(new Set(titles).size).toBe(typed.length);
+      // A byte-order mark is in the spelling, so a rule for the bare text does not match it.
+      const [bare, marked] = [titles[0]!, titles[1]!];
+      expect(/^write_stdin: "yes\\n"$/.test(bare)).toBe(true);
+      expect(/^write_stdin: "yes\\n"$/.test(marked)).toBe(false);
+      expect(marked).toBe('write_stdin: "\ufeffyes\\n"');
+    });
+
+    it.each([
+      ["a byte that starts nothing", [0xff]],
+      ["a sequence cut short", [0xe2, 0x82]],
+      ["a continuation byte alone", [0x80]],
+      ["an over-long spelling of a slash", [0xc0, 0xaf]],
+      ["an over-long spelling of NUL", [0xc0, 0x80]],
+      ["half of a surrogate pair, as bytes", [0xed, 0xa0, 0x80]],
+      ["a surrogate pair, as six bytes", [0xed, 0xa0, 0xbd, 0xed, 0xb8, 0x80]],
+      ["a code point past the last one", [0xf4, 0x90, 0x80, 0x80]],
+      ["text with one bad byte in it", [...text("yes"), 0xfe, ...text("\n")]],
+      ["UTF-16 with its mark", [0xff, 0xfe, 0x79, 0x00]],
+    ])("refuses bytes with no one text for them: %s", (_what, bytes) => {
+      expect(reason(plannedFor(bytes))).toMatch(/not text/);
+    });
+
+    it("sends the executor the bytes it read, written out again, and refuses another spelling of them", () => {
+      // The same bytes in base64 without padding, and with padding bits set, are refused.
+      const s = state("p1");
+      const write = (chunk: string) => planned("process/write", { processId: "p1", chunk, writeId: "1" }, s);
+      expect(reason(write("eWVz\n"))).toMatch(/not base64/);
+      expect(reason(write("eQ"))).toMatch(/not base64/);
+      expect(reason(write("eR=="))).toMatch(/not base64/);
+      expect(write("eQ==").action).toBe("decide");
+    });
   });
 
   describe("a file request", () => {
