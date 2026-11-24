@@ -134,12 +134,24 @@ an artifact. It is evidence for review: promotion stays disabled, so no tier cha
 The same tiers the #705 and #709-#711 streams report in, defined once in
 `support-matrix.json` and checked by `check-support-matrix.js`.
 
-**Promotion is disabled.** The receipt checks below are structural only: a receipt file says
-what it says, and nothing yet binds it to an independently trusted run (who ran it, on which
-machine, and that the file was not written by hand). Until that binding exists, the checker
-refuses every tier above `none`, whatever receipts a row lists (`PROMOTION_ENABLED = false`).
+**Promotion needs an attested receipt.** A receipt file says what it says; it counts only when
+it is bound to the run that produced it ([attestation.js](../../../tools/guard-qualification/attestation.js), #1026).
+`guard-receipts.yml` signs each receipt it produces with GitHub's artifact attestation
+(Sigstore, through the job's OIDC identity), and the Sigstore bundle is committed beside the
+receipt as `<receipt>.sigstore.json`. The checker accepts a receipt for tier A or B only when
+`gh attestation verify` passes for that exact file, signed by that workflow, in this
+repository, on a GitHub-hosted runner, from `main` or a release line, at the commit the
+receipt names as its `build`. A receipt written by hand, produced elsewhere or edited after
+signing does not verify. Tier C stays refused (`PROMOTION_DISABLED_C`) until #1026's
+independent observer binds each assertion to its call, its effect and ORCA's authority.
 
-What a receipt must show once promotion is enabled: the row pins agent version, adapter
+`guard-matrix.yml` verifies the attestations on every change to the matrix or its receipts.
+A tier is certified for one build: the release gate (`check-support-matrix.js --release`, in
+`release-publish.yml`) also refuses a promoted row whose build differs from the commit being
+released in any enforcement path (`CERTIFIED_PATHS`: `packages/`, `tools/guard-qualification/`
+and the lockfile, less Markdown, `package.json` files, receipts and the matrix itself).
+
+What a receipt must show: the row pins agent version, adapter
 version, host and the exact 40-hex ORCA build. For **each route**, a committed
 `orca-enforcement-receipt/1` must match that pin and route, list no case twice, pass every case
 it lists, and carry `checks.connects` passing. An installed receipt also needs

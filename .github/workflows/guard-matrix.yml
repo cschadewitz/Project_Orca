@@ -1,0 +1,42 @@
+# The #706 support matrix holds: every tier above `none` rests on receipts that pass the
+# structural checks and whose GitHub artifact attestation verifies (tools/guard-qualification/
+# attestation.js). The unit tests check the structure with the attestation injected; this is
+# where the attestation itself is verified, against Sigstore's public trust root.
+#
+# Staleness against HEAD is not checked here, so an unrelated change does not fail CI; the
+# release gate in release-publish.yml runs the same checker with --release.
+name: Guard support matrix
+
+on:
+  pull_request:
+    branches: [main, "release/**"]
+    paths:
+      - tools/guard-qualification/**
+      - .github/workflows/guard-matrix.yml
+  push:
+    branches: [main]
+    paths:
+      - tools/guard-qualification/**
+      - .github/workflows/guard-matrix.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: support matrix (attested)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      # The checker has no dependencies; gh is on every hosted runner.
+      - name: Check the support matrix and verify every receipt's attestation
+        run: node tools/guard-qualification/check-support-matrix.js
+        env:
+          GH_TOKEN: ${{ github.token }}
