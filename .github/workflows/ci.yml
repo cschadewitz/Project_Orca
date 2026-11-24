@@ -9,6 +9,15 @@ on:
     branches: [main, "release/[0-9]*"]
   push:
     branches: [main, "release/[0-9]*"]
+  # The merge queue on main: the full suite and coverage thresholds run here, not on the PR.
+  merge_group:
+    types: [checks_requested]
+  workflow_dispatch:
+    inputs:
+      full_tests:
+        description: "Run the full suite with coverage thresholds (skipped on a manual run otherwise)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -95,6 +104,10 @@ jobs:
     env:
       # Worker cap from the picked runner (see the `runner` job); unset elsewhere means 2
       WORKERS_CAP: ${{ needs.runner.outputs.workers }}
+      # The full suite waits for the merge queue: a pull request into main skips it, and a
+      # manual run skips it unless `full_tests` is ticked. Release lines have no queue, so
+      # their pull requests, and every push, still run it.
+      COVERAGE_DEFERRED: ${{ (github.event_name == 'pull_request' && github.base_ref == 'main') || (github.event_name == 'workflow_dispatch' && !inputs.full_tests) }}
     strategy:
       fail-fast: false
       max-parallel: 1
@@ -265,8 +278,9 @@ jobs:
           console.log(`Retry acceptance: ${report.numPassedTests} tests passed in both named files; none skipped`);
           NODE
 
-      # Full/fallback PRs and every main push retain global/app coverage ratchets.
-      # Selected PRs do not produce or claim global coverage; main catches regressions.
+      # Global/app coverage ratchets run in the merge queue, on every push and on release-line
+      # PRs (see COVERAGE_DEFERRED). Selected PRs do not produce or claim global coverage;
+      # the queue catches regressions before they reach main.
       - name: Test selected files
         if: needs.changes.outputs.code != 'false' && steps.selection.outputs.mode == 'targeted'
         run: node tools/ci-shadow/execute.js run
@@ -277,7 +291,7 @@ jobs:
           ORCA_MCP_REQUIRE_PRODUCTION: "1"
 
       - name: Test with coverage
-        if: needs.changes.outputs.code != 'false' && steps.selection.outputs.mode != 'targeted'
+        if: needs.changes.outputs.code != 'false' && steps.selection.outputs.mode != 'targeted' && env.COVERAGE_DEFERRED != 'true'
         # Explicit `run` forwards reporter flags to Vitest through pnpm.
         run: pnpm run test:coverage --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/full-suite.json"
         env:
