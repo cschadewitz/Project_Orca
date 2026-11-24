@@ -18,6 +18,8 @@ import {
   codexHookTrustHash,
   codexPatchFiles,
   codexPreToolHookCommand,
+  codexPreToolHookProgram,
+  CODEX_HOOK_FAILED_REASON,
   codexProbeReceipt,
   permissionPolicyPath,
   probeCodexHook,
@@ -225,11 +227,65 @@ describe("answering Codex", () => {
   });
 });
 
+describe("the fail-closed line around ORCA's program (#1026)", () => {
+  /** Run the installed command line as Codex does, with a stand-in for ORCA's program. */
+  const runLine = (programBody: string | undefined, input = "{}") =>
+    new Promise<{ exitCode: number | null; stdout: string; stderr: string }>(async (done) => {
+      const script = join(root, "program.sh");
+      if (programBody !== undefined) await writeFile(script, programBody, "utf8");
+      const runtime = programBody === undefined ? join(root, "no-such-runtime") : "/bin/sh";
+      const child = spawn(SH.program, [...SH.args, codexPreToolHookCommand(runtime, script, contextFile)], {
+        cwd: workspace,
+      });
+      let stdout = "";
+      let stderr = "";
+      child.stdout.on("data", (d: Buffer) => (stdout += d.toString()));
+      child.stderr.on("data", (d: Buffer) => (stderr += d.toString()));
+      child.on("close", (exitCode) => done({ exitCode, stdout, stderr }));
+      child.stdin.end(input);
+    });
+  const failed = { exitCode: 2, stdout: "", stderr: `${CODEX_HOOK_FAILED_REASON}\n` };
+
+  it.skipIf(process.platform === "win32")("passes on ORCA's allow and ORCA's block, and nothing else", async () => {
+    expect(await runLine("cat >/dev/null; exit 0")).toEqual({ exitCode: 0, stdout: "", stderr: "" });
+    expect(await runLine("cat >/dev/null; echo 'Denied by ORCA: its policy.' >&2; exit 2")).toEqual({
+      exitCode: 2,
+      stdout: "",
+      stderr: "Denied by ORCA: its policy.\n",
+    });
+    expect(await runLine("cat >/dev/null; printf 'Blocked by ORCA: a.\\norca-hook-receipt:x\\n' >&2; exit 2")).toEqual({
+      exitCode: 2,
+      stdout: "",
+      stderr: "Blocked by ORCA: a.\norca-hook-receipt:x\n",
+    });
+  });
+
+  it.skipIf(process.platform === "win32")("blocks, with a fixed reason, whenever the program fails", async () => {
+    for (const body of [
+      "cat >/dev/null; exit 1",
+      // Codex lets a quiet exit 2 through; the line does not.
+      "cat >/dev/null; exit 2",
+      "cat >/dev/null; echo 'something else' >&2; exit 2",
+      "cat >/dev/null; echo 'Denied by ORCA: x' >&2; exit 3",
+      // An allow with output is not ORCA's allow.
+      'cat >/dev/null; echo \'{"decision":"allow"}\'; exit 0',
+      "cat >/dev/null; kill -9 $$",
+    ])
+      expect([body, await runLine(body)]).toEqual([body, failed]);
+    // The runtime itself is missing.
+    expect(await runLine(undefined)).toEqual(failed);
+  });
+
+  it("stops the program short of Codex's own timeout", () => {
+    expect(codexPreToolHookCommand("/n", "/s", "/c")).toContain("timeout -s KILL 25 '/n' '/s' '--codex' '/c' 2>&1");
+  });
+});
+
 describe("installing it in Codex", () => {
   it("hashes the hook the way Codex 0.171 does", () => {
     // Both values were read from the real Codex 0.171 (`hooks/list` on its app server, with
     // this hook passed as a session flag).
-    const command = codexPreToolHookCommand("/usr/bin/node", "/opt/orca/claude-pre-tool-hook.mjs", "/x/ctx.json");
+    const command = codexPreToolHookProgram("/usr/bin/node", "/opt/orca/claude-pre-tool-hook.mjs", "/x/ctx.json");
     expect(codexHookTrustHash(command, 10)).toBe(
       "sha256:b90b4753446a395a8b1c43ebf10ba44ec9feeebeba9153a2ea3372c2f04bf306",
     );
@@ -239,7 +295,7 @@ describe("installing it in Codex", () => {
   });
 
   it("quotes every word of the command for the shell", () => {
-    expect(codexPreToolHookCommand("/usr/bin/node", "/opt/it's here/hook.mjs", "/x/ctx.json")).toBe(
+    expect(codexPreToolHookProgram("/usr/bin/node", "/opt/it's here/hook.mjs", "/x/ctx.json")).toBe(
       `'/usr/bin/node' '/opt/it'\\''s here/hook.mjs' '--codex' '/x/ctx.json'`,
     );
   });

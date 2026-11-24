@@ -81,8 +81,7 @@ export function codexModelStandIn() {
     });
     const tail = input.slice(last + 1);
     const outputs = tail.filter((i) => i.type === "function_call_output" || i.type === "custom_tool_call_output");
-    for (const o of outputs)
-      log.results.push({ toolUseId: o.call_id, isError: false, text: outputText(o.output) });
+    for (const o of outputs) log.results.push({ toolUseId: o.call_id, isError: false, text: outputText(o.output) });
     const id = `resp_${++n}`;
     const items = [];
     // A prompt's calls are made once. Codex may send the same history again (after a hook
@@ -151,8 +150,6 @@ export function codexModelStandIn() {
   }
 
   return new Promise((resolve) =>
-    server.listen(0, "127.0.0.1", () =>
-      resolve({ server, url: `http://127.0.0.1:${server.address().port}/v1`, log }),
-    ),
+    server.listen(0, "127.0.0.1", () => resolve({ server, url: `http://127.0.0.1:${server.address().port}/v1`, log })),
   );
 }

@@ -16,7 +16,9 @@
  * by the command line the session installed.
  */
 import { spawn } from "node:child_process";
-import { codexHookShell, codexPreToolHookCommand } from "@orca/agents";
+import { createHash } from "node:crypto";
+import { codexHookShell } from "@orca/agents";
+import { codexFailClosedLine, codexInstalledHookProblems } from "../check-support-matrix.js";
 import { codexNativeHook } from "../paths.js";
 
 /** How Codex 0.171.0 takes a hook's exit, as the `codex-native-hook` path judges it in `paths.js`. */
@@ -33,34 +35,50 @@ export function codexHookOutcome(result) {
 }
 
 const shellWord = (s) => `'${s.replaceAll("'", `'\\''`)}'`;
+const unquote = (w) => w.slice(1, -1).replaceAll(`'\\''`, "'");
 
-/** ORCA's hook as the session installed it, from the `CODEX_CONFIG` it handed the agent. */
-export function installedCodexHook(codexConfig, runtime, script) {
+/**
+ * ORCA's hook as the session installed it: the `hooks` and `web_search` of the `CODEX_CONFIG`
+ * it handed the agent (the receipt's `installedSettings`), and the runtime, program and context
+ * file its fail-closed line runs.
+ */
+export function installedCodexHook(codexConfig) {
   const config = JSON.parse(codexConfig ?? "null");
-  const hook = config?.hooks?.PreToolUse?.[0]?.hooks?.[0];
-  if (config?.hooks?.PreToolUse?.length !== 1 || typeof hook?.command !== "string")
-    throw new Error("the session installed no PreToolUse hook");
-  const prefix = codexPreToolHookCommand(runtime, script, "").slice(0, -"''".length);
-  if (!hook.command.startsWith(prefix)) throw new Error("the installed hook is not ORCA's program");
-  const quoted = hook.command.slice(prefix.length);
-  const contextFile = quoted.slice(1, -1).replaceAll(`'\\''`, "'");
-  if (codexPreToolHookCommand(runtime, script, contextFile) !== hook.command)
-    throw new Error("the installed hook's context file could not be read off its command line");
-  return { config, hook, contextFile, runtime, script };
+  const settings = { hooks: config?.hooks, web_search: config?.web_search };
+  const problems = codexInstalledHookProblems(settings);
+  if (problems.length) throw new Error(`the session did not install ORCA's hook: ${problems.join("; ")}`);
+  const hook = settings.hooks.PreToolUse[0].hooks[0];
+  const words = /timeout -s KILL \d+ ('(?:[^']|'\\'')*') ('(?:[^']|'\\'')*') '--codex' ('(?:[^']|'\\'')*') 2>&1/.exec(
+    hook.command,
+  );
+  const [runtime, script, contextFile] = words.slice(1).map(unquote);
+  return { settings, hook, runtime, script, contextFile };
 }
 
 /**
- * @param {{ live: ReturnType<typeof import("../connected/codex.js").codexConnected>,
- *   runtime: string, script: string }} env the live path whose sessions install the hook this runs
+ * Faults the end-to-end check in `guard-receipts.yml` injects to produce a real nonqualifying
+ * receipt, as for Claude (`installed/claude-hook-program.js`): `lets-everything-through` runs
+ * a program that exits 0 with no output in place of the installed line.
+ */
+export const PROGRAM_FAULTS = ["lets-everything-through"];
+
+/**
+ * @param {{ live: ReturnType<typeof import("../connected/codex.js").codexConnected>, fault?: string }} env
+ *   the live path whose sessions install the hook this runs, and a fault to inject
  */
 export function codexHookProgram(env) {
+  if (env.fault !== undefined && !PROGRAM_FAULTS.includes(env.fault)) throw new Error(`unknown fault ${env.fault}`);
   const path = {
     id: "codex-native-hook",
     capabilities: codexNativeHook.capabilities,
+    /** Settings from the first session this path opened. */
+    installedSettings: undefined,
 
     async installed(world) {
       if (!world.installedCodexConfig) await env.live.open(world);
-      return installedCodexHook(world.installedCodexConfig, env.runtime, env.script);
+      const installed = installedCodexHook(world.installedCodexConfig);
+      path.installedSettings ??= installed.settings;
+      return installed;
     },
 
     frame: codexNativeHook.frame,
@@ -70,22 +88,62 @@ export function codexHookProgram(env) {
       return path.decideRaw(world, codexNativeHook.frame(world, action));
     },
 
-    /** Send the installed command these stdin bytes; `args` replaces its context-file argument. */
+    /**
+     * Send the installed command line these stdin bytes. `args` replaces its context-file
+     * argument: the same fail-closed line, around the same runtime and program, with those
+     * arguments after `--codex`.
+     */
     async decideRaw(world, input, args) {
-      const { hook, contextFile, runtime, script } = await path.installed(world);
+      const { hook, runtime, script } = await path.installed(world);
       const command =
-        args === undefined ? hook.command : [runtime, script, "--codex", ...args].map(shellWord).join(" ");
+        args === undefined
+          ? hook.command
+          : args.length === 1
+            ? codexFailClosedLine(runtime, script, args[0])
+            : codexFailClosedLine(runtime, script, "").replace(
+                `'--codex' '' 2>&1`,
+                `${["--codex", ...args].map(shellWord).join(" ")} 2>&1`,
+              );
       const shell = codexHookShell();
       if ("error" in shell) throw new Error(shell.error);
-      const result = await run(shell.program, [...shell.args, command], input, hook.timeout * 1000, world.workspace);
+      const result =
+        env.fault === "lets-everything-through"
+          ? await run(process.execPath, ["-e", ""], input, hook.timeout * 1000, world.workspace)
+          : await run(shell.program, [...shell.args, command], input, hook.timeout * 1000, world.workspace);
+      (world.programCalls ??= []).push(programRecord(hook, args, input, result));
       return {
         outcome: codexHookOutcome(result),
-        detail: { ...result, installed: true, contextFile: args === undefined ? contextFile : undefined },
+        detail: { ...result, installed: true },
         surfaces: [result.stdout, result.stderr],
       };
     },
+
+    settings() {
+      if (!path.installedSettings) throw new Error("no session has installed the hook yet");
+      return path.installedSettings;
+    },
   };
   return path;
+}
+
+/** Program output kept in the receipt; a run that says more is recorded as truncated. */
+export const PROGRAM_OUTPUT_LIMIT = 64 * 1024;
+
+const sha256 = (data) => createHash("sha256").update(data).digest("hex");
+
+/** One run of the installed command line, as the receipt records it (as for Claude). */
+export function programRecord(hook, args, input, result) {
+  const keep = (text) =>
+    Buffer.byteLength(text) <= PROGRAM_OUTPUT_LIMIT ? text : { truncated: true, sha256: sha256(text) };
+  return {
+    command: hook.command,
+    args: args === undefined ? "installed" : "replaced",
+    input: { sha256: sha256(input), bytes: Buffer.byteLength(input) },
+    exitCode: result.exitCode,
+    stdout: keep(result.stdout),
+    stderr: keep(result.stderr),
+    outcome: codexHookOutcome(result),
+  };
 }
 
 /** Run a command hook as Codex does; a hook that cannot start or is killed is not a block. */

@@ -213,12 +213,13 @@
         "A Codex other than the pinned one",
         "An agent whose own CODEX_CONFIG already sets hooks",
         "Tool calls Codex makes without asking (its full-access mode, its own approval settings)",
+        "ORCA's hook program failing during the session (a crash, a bad exit or output, a hang)",
         "Hosted web search, which runs at the model provider",
         "A call ORCA would ask a person about: Codex cannot pause a call from a hook"
       ],
       "residualRisks": [
         "Text typed into a running command (write_stdin) is never shown to the hook; Codex 0.171.0 has no setting that removes write_stdin and keeps its shell (features.unified_exec=false does not)",
-        "Codex lets a call through when its hook runner fails (exit 1, a quiet exit 2, a timeout); ORCA's startup probe refuses the session unless the hook blocks with a receipt, but cannot watch later calls",
+        "Codex itself lets a call through when its hook runner fails; ORCA runs its program inside a fail-closed shell line that turns any failure of the program into a block, so only that shell line being killed from outside (for example by the system when memory runs out) is left open",
         "Files a shell command reads, and what it spawns, writes or fetches: one decision covers the command text; only view_image is hooked as a read",
         "A hook is not an operating-system boundary; Codex's sandbox and ORCA's protected-path rules stay in force beside it",
         "Admission checks (adapter, runtime image, startup probe) run once when the session opens; nothing re-checks them during the session"

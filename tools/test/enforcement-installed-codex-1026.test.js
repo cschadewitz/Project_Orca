@@ -1,8 +1,8 @@
 /**
  * The installed receipt for Codex's hook route (#1026), for tiers A and B in the support matrix:
  * the pinned Codex ACP adapter and Codex, with ORCA's pre-tool hook installed by the daemon's own
- * session factory (`nativeToolHook: experimental`), against a scripted stand-in for the OpenAI
- * Responses API, so no account, key or spend is involved.
+ * session factory (`nativeToolHook: experimental`) inside its fail-closed line, against a
+ * scripted stand-in for the OpenAI Responses API, so no account, key or spend is involved.
  *
  * - `checks.connects`: the factory admits a session and a workspace write takes effect.
  * - `uncoveredRoutes`: every route the Codex row lists as unsupported, shown refused here.
@@ -12,16 +12,18 @@
  *   of session installed (`installed/codex-hook-program.js`).
  *
  * `guard-receipts.yml` runs this with ORCA_CODEX_ADAPTER, ORCA_CODEX_OTHER_RUNTIME and
- * ORCA_ENFORCEMENT_RECEIPT_DIR set, and attests the receipt it writes. Without them only the
+ * ORCA_ENFORCEMENT_RECEIPT_DIR set, and attests the receipt it writes. Its end-to-end check
+ * also runs part of it with ORCA_GUARD_RECEIPT_FAULT set, for a receipt that must be refused. Without them only the
  * agreement checks run. A receipt counts only through that attestation (`attestation.js`).
  */
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { CODEX_HOOK_VERIFIED_PAIRS } from "@orca/agents";
+import { CODEX_HOOK_FAILED_REASON, CODEX_HOOK_VERIFIED_PAIRS } from "@orca/agents";
 import { childBundle } from "@orca/testing/child-bundle";
 import {
   REPO_ROOT,
@@ -30,6 +32,7 @@ import {
   loadAssertions,
   loadCatalogue,
   loadMatrix,
+  qualificationProfile,
   uncoveredRouteProblems,
 } from "../guard-qualification/check-support-matrix.js";
 import { SCENARIOS } from "../guard-qualification/scenarios.js";
@@ -40,7 +43,12 @@ import { codexHookProgram } from "../guard-qualification/installed/codex-hook-pr
 
 const ADAPTER = process.env["ORCA_CODEX_ADAPTER"];
 const OTHER_RUNTIME = process.env["ORCA_CODEX_OTHER_RUNTIME"];
+/** Set only by the end-to-end check, for a real nonqualifying receipt (`PROGRAM_FAULTS`). */
+const FAULT = process.env["ORCA_GUARD_RECEIPT_FAULT"] || undefined;
 const ROUTE = "codex-native-hook";
+const FAILING_HOOK = fileURLToPath(
+  new URL("../guard-qualification/installed/failing-hook-program.js", import.meta.url),
+);
 const catalogue = loadCatalogue();
 const matrix = loadMatrix();
 const route = matrix.paths.find((p) => p.id === ROUTE);
@@ -77,9 +85,10 @@ const PROBES = {
     how: "a session whose agent's CODEX_CONFIG sets its own hooks is refused before any work",
     async run(live, world) {
       const own = { ...live.codexConfig(world), hooks: { PreToolUse: [] } };
-      await expect(
-        live.openSession(world, { extraEnv: { CODEX_CONFIG: JSON.stringify(own) } }),
-      ).rejects.toMatchObject({ code: "NOT_SUPPORTED", message: expect.stringContaining("already sets hooks") });
+      await expect(live.openSession(world, { extraEnv: { CODEX_CONFIG: JSON.stringify(own) } })).rejects.toMatchObject({
+        code: "NOT_SUPPORTED",
+        message: expect.stringContaining("already sets hooks"),
+      });
     },
   },
   "Tool calls Codex makes without asking (its full-access mode, its own approval settings)": {
@@ -103,6 +112,30 @@ const PROBES = {
         expect(model.log.offered).not.toContain("web_search");
       } finally {
         await session.close();
+      }
+    },
+  },
+  "ORCA's hook program failing during the session (a crash, a bad exit or output, a hang)": {
+    how: "a hook program that passes the startup probe and then exits 1, exits 2 quietly, answers with other output, is killed or hangs has every later shell call blocked by the fail-closed line ORCA installs around it",
+    async run(live, world, _model, realHook) {
+      for (const failure of ["exit-1", "quiet-exit-2", "garbage", "killed", "hang"]) {
+        const w = await realWorld();
+        try {
+          w.configured = { default: "allow", rules: [] };
+          w.sessionOptions = {
+            hookScript: FAILING_HOOK,
+            extraEnv: { ORCA_1026_REAL_HOOK: realHook, ORCA_1026_HOOK_FAILURE: failure },
+          };
+          const got = await live.decide(w, { tool: "shell", command: `echo ran-${failure}` });
+          expect([failure, got.outcome, got.detail.effect], JSON.stringify(got.detail)).toEqual([
+            failure,
+            "block",
+            "none",
+          ]);
+          expect(got.detail.result).toContain(CODEX_HOOK_FAILED_REASON);
+        } finally {
+          await w.dispose();
+        }
       }
     },
   },
@@ -144,6 +177,7 @@ describe.skipIf(ADAPTER === undefined || OTHER_RUNTIME === undefined)("installed
   let model;
   let live;
   let hookProgram;
+  let hookScript;
   const receipt = { route: ROUTE, cases: [], uncoveredRoutes: [], checks: {} };
 
   beforeAll(async () => {
@@ -151,8 +185,9 @@ describe.skipIf(ADAPTER === undefined || OTHER_RUNTIME === undefined)("installed
     const entry = fileURLToPath(new URL("../../packages/agents/src/bin/claude-pre-tool-hook.ts", import.meta.url));
     const built = childBundle("codex-pre-tool-hook-1026-installed", { entries: { hook: entry } });
     if (!built?.["hook"]) throw new Error("the hook program could not be built for this run");
-    live = codexConnected({ adapter: ADAPTER, hookScript: built["hook"], model });
-    hookProgram = codexHookProgram({ live, runtime: process.execPath, script: built["hook"] });
+    hookScript = built["hook"];
+    live = codexConnected({ adapter: ADAPTER, hookScript, model });
+    hookProgram = codexHookProgram({ live, fault: FAULT });
   });
 
   afterAll(async () => {
@@ -178,12 +213,13 @@ describe.skipIf(ADAPTER === undefined || OTHER_RUNTIME === undefined)("installed
     it(`uncovered route refused: ${name}`, async () => {
       const world = await realWorld();
       try {
-        await PROBES[name].run(live, world, model);
+        await PROBES[name].run(live, world, model, hookScript);
         receipt.uncoveredRoutes.push({ route: name, result: "refused", how: PROBES[name].how });
       } finally {
         await world.dispose();
       }
-    }, 120_000);
+      // The failing-program probe waits out a hang the fail-closed line stops at 25 seconds.
+    }, 240_000);
 
   for (const c of catalogue.cases.filter((x) => casesFor(route, catalogue).includes(x.id))) {
     const via = c.id in program ? "program" : "live";
@@ -197,7 +233,7 @@ describe.skipIf(ADAPTER === undefined || OTHER_RUNTIME === undefined)("installed
           await SCENARIOS[c.id](world, via === "program" ? hookProgram : live);
           entry.result = "pass";
         } finally {
-          if (via === "live") entry.calls = world.callRecords ?? [];
+          entry.calls = (via === "live" ? world.callRecords : world.programCalls) ?? [];
           await world.dispose();
         }
       },
@@ -205,6 +241,11 @@ describe.skipIf(ADAPTER === undefined || OTHER_RUNTIME === undefined)("installed
       300_000,
     );
   }
+
+  it("binds the receipt to what ran: the adapter, the runtime image and the hook program", async () => {
+    receipt.inputs = await inputsOf(hookProgram);
+    receipt.installedSettings = hookProgram.settings();
+  });
 
   it("the receipt holds: every case, every uncovered route, every live call's evidence", () => {
     receipt.checks.uncoveredRoutesRefused =
@@ -217,9 +258,41 @@ describe.skipIf(ADAPTER === undefined || OTHER_RUNTIME === undefined)("installed
     expect(
       installedCaseProblems({ ...receipt, route: ROUTE }, casesFor(route, catalogue), loadAssertions(), route),
     ).toEqual([]);
+    expect(receipt.inputs.profile).toBe(qualificationProfile(matrix, catalogue, loadAssertions(), row, route));
     expect(model.log.errors, "the model stand-in answered every request").toEqual([]);
   });
 });
+
+const sha256 = (data) => createHash("sha256").update(data).digest("hex");
+
+/**
+ * What this run installed and ran: the adapter as its lockfile pins it, the Codex image beside
+ * it (the one the session factory admitted, so the pair's pinned digest), ORCA's hook program
+ * as the session installed it, and the qualification profile it ran against.
+ */
+async function inputsOf(hookProgram) {
+  const root = join(ADAPTER, "..", "..", "..", "..", "..");
+  const name = "@agentclientprotocol/codex-acp";
+  const lock = JSON.parse(await readFile(join(root, "package-lock.json"), "utf8"));
+  const adapter = lock.packages[`node_modules/${name}`];
+  const host = `${process.platform}-${process.arch}`;
+  const pair = CODEX_HOOK_VERIFIED_PAIRS.find((p) => p.adapter === adapter.version);
+  const target = { "linux-x64": "x86_64-unknown-linux-musl", "linux-arm64": "aarch64-unknown-linux-musl" }[host];
+  const image = sha256(
+    await readFile(join(root, "node_modules", "@openai", `codex-${host}`, "vendor", target ?? "", "bin", "codex")),
+  );
+  expect(image, "the Codex beside the adapter is the pinned image").toBe(pair?.images[host]);
+  const words = /timeout -s KILL \d+ '(?:[^']|'\\'')*' ('(?:[^']|'\\'')*') '--codex'/.exec(
+    hookProgram.settings().hooks.PreToolUse[0].hooks[0].command,
+  );
+  const program = words[1].slice(1, -1).replaceAll(`'\\''`, "'");
+  return {
+    adapter: { name, version: adapter.version, integrity: adapter.integrity },
+    runtime: { version: pair.runtime, sha256: image },
+    hookProgram: { sha256: sha256(await readFile(program)) },
+    profile: qualificationProfile(matrix, catalogue, loadAssertions(), row, route),
+  };
+}
 
 async function writeReceipt(receipt) {
   const dir = process.env["ORCA_ENFORCEMENT_RECEIPT_DIR"];
@@ -236,6 +309,7 @@ async function writeReceipt(receipt) {
       {
         format: "orca-enforcement-receipt/1",
         kind: "installed",
+        ...(FAULT ? { fault: FAULT } : {}),
         agent: "codex",
         agentVersion: pair?.runtime ?? null,
         adapterVersion,
@@ -243,6 +317,8 @@ async function writeReceipt(receipt) {
         route: ROUTE,
         build,
         node: process.version,
+        inputs: receipt.inputs,
+        installedSettings: receipt.installedSettings,
         checks: receipt.checks,
         uncoveredRoutes: receipt.uncoveredRoutes,
         cases: receipt.cases,

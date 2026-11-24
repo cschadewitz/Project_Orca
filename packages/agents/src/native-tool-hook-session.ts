@@ -288,9 +288,40 @@ export function codexHookShell(
   return { program: loginShell, args: ["-c"] };
 }
 
-/** The command line Codex runs (through `codexHookShell`) for the hook. */
-export function codexPreToolHookCommand(runtime: string, script: string, contextFile: string): string {
+/** ORCA's hook program as one command line: each word quoted, nothing else. */
+export function codexPreToolHookProgram(runtime: string, script: string, contextFile: string): string {
   return [runtime, script, "--codex", contextFile].map(shellWord).join(" ");
+}
+
+/**
+ * How long ORCA's program may run inside the hook, in seconds: short of Codex's own timeout,
+ * so the program is stopped, and the call blocked, before Codex would give up and let it run.
+ */
+export const CODEX_PRE_TOOL_PROGRAM_SECONDS = CODEX_PRE_TOOL_TIMEOUT_SECONDS - 5;
+
+/** What the fail-closed line says when ORCA's program did not answer in ORCA's form. */
+export const CODEX_HOOK_FAILED_REASON =
+  "Blocked by ORCA: its hook did not answer, so the call does not run (ORCA's permission policy).";
+
+/**
+ * The command line Codex runs (through `codexHookShell`) for the hook: ORCA's program inside a
+ * fail-closed line (#1026). Codex 0.171.0 lets a call through when its hook exits 1, exits 2
+ * with nothing on stderr, or runs out of time, and has no setting that changes that. So the
+ * line, not Codex, decides what a failure means: it runs the program under `timeout -s KILL`
+ * short of Codex's own timeout, and passes on only ORCA's two answers, an allow (exit 0 with
+ * no output) and a block (exit 2 with a reason in ORCA's form). Anything else (a crash, a
+ * kill, a missing runtime, a hang, any other exit or output) becomes exit 2 with a fixed reason,
+ * which Codex blocks on. Only the line's own shell being killed from outside is left open.
+ */
+export function codexPreToolHookCommand(runtime: string, script: string, contextFile: string): string {
+  const program = codexPreToolHookProgram(runtime, script, contextFile);
+  return [
+    // The shell's own notice of a killed program ("Killed") is not ORCA's answer either.
+    `{ out=$(timeout -s KILL ${CODEX_PRE_TOOL_PROGRAM_SECONDS} ${program} 2>&1); s=$?; } 2>/dev/null`,
+    `if [ "$s" -eq 0 ] && [ -z "$out" ]; then exit 0; fi`,
+    `case "$s:$out" in "2:Denied by ORCA: "*|"2:Blocked by ORCA: "*) printf '%s\\n' "$out" >&2 ;; *) printf '%s\\n' ${shellWord(CODEX_HOOK_FAILED_REASON)} >&2 ;; esac`,
+    "exit 2",
+  ].join("; ");
 }
 
 /** Sorted keys, as `serde_json`'s `sort_all_objects` leaves them. */

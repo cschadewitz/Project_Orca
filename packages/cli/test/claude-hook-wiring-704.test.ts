@@ -528,13 +528,15 @@ describe("installing the hook in Codex (#705)", () => {
         () => ({ message: "it opened" }),
         (e: unknown) => e,
       )) as { message: string; details?: Record<string, unknown> };
+      // The fail-closed line turns the missing program into a block (#1026), but one without
+      // the hook's receipt, so the probe still refuses the session.
       expect(error.details?.["probe"]).toMatchObject({
-        outcome: "exit",
-        exitCode: 1,
+        outcome: "no-receipt",
+        exitCode: 2,
         receipt: "absent",
         shell: expect.any(String),
       });
-      expect(error.message).toMatch(/did not block[\s\S]*exit 1/);
+      expect(error.message).toMatch(/did not block[\s\S]*receipt/);
     },
   );
 

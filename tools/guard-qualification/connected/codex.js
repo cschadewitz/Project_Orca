@@ -54,7 +54,11 @@ export const MCP_SERVERS = {
 const MCP_TOOLS = Object.entries(MCP_SERVERS).flatMap(([s, tools]) => tools.map((t) => `mcp__${s}__${t}`));
 /** How Codex hands a hook's block back to the model, by tool. */
 const BLOCKED = /^(?:Command|Tool call) blocked by PreToolUse hook: /;
-const MARKERS = { deny: "Denied by ORCA: ", block: "Blocked by ORCA: ", ask: "Blocked by ORCA: its policy asks a person first" };
+const MARKERS = {
+  deny: "Denied by ORCA: ",
+  block: "Blocked by ORCA: ",
+  ask: "Blocked by ORCA: its policy asks a person first",
+};
 
 /** A patch in Codex's `apply_patch` format, as the model would write it. */
 function codexPatch(op, path, content = "") {
@@ -154,7 +158,7 @@ export function codexConnected(env) {
     },
 
     /** Open a session the daemon's way. The world's `configured` is read now, as at session open. */
-    async openSession(world, { askPermission, extraEnv, host, codexProcess } = {}) {
+    async openSession(world, { askPermission, extraEnv, host, codexProcess, hookScript } = {}) {
       await mkdir(join(world.root, "codex-home"), { recursive: true });
       patientDispose(world);
       await writeShellRecorder(world);
@@ -166,7 +170,7 @@ export function codexConnected(env) {
       };
       return makeSessionFactory({ configDir: world.configDir, storeDir: ".orca" }, capturing, {
         runtime: process.execPath,
-        script: env.hookScript,
+        script: hookScript ?? env.hookScript,
         ...(codexProcess ? { codexProcess } : {}),
       })({
         host: host ?? new LocalHost({ id: "local", type: "local" }),
@@ -182,9 +186,15 @@ export function codexConnected(env) {
       if (world.connected) return world.connected;
       const state = { approvals: [] };
       const session = await path.openSession(world, {
+        // A probe may open the world's session on another program or environment.
+        ...(world.sessionOptions ?? {}),
         askPermission: async (req) => {
           // Codex in full-access mode never asks; an ask here would be recorded against its call.
-          state.approvals.push({ toolCallId: req.toolCall.toolCallId, title: req.toolCall.title ?? "", answer: "reject_once" });
+          state.approvals.push({
+            toolCallId: req.toolCall.toolCallId,
+            title: req.toolCall.title ?? "",
+            answer: "reject_once",
+          });
           world.asked.push(req.toolCall.title ?? "");
           return req.options.find((o) => o.kind === "reject_once")?.optionId;
         },
@@ -263,7 +273,11 @@ export function codexConnected(env) {
           content = action.content ?? `orca-1026-${callRef}`;
         }
         const patchInput =
-          action.tool === "write" ? codexPatch("add", action.path, content) : action.tool === "edit" ? input : undefined;
+          action.tool === "write"
+            ? codexPatch("add", action.path, content)
+            : action.tool === "edit"
+              ? input
+              : undefined;
         // An MCP call carries its own id, which the recorder logs.
         if (action.tool === "mcp") input.orca706Call = callRef;
         const before = action.tool === "write" || action.tool === "edit" ? await bytes(action.path) : undefined;

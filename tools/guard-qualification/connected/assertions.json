@@ -772,6 +772,74 @@
           "surfaceLimit": 512
         }
       ]
+    },
+    "codex-native-hook": {
+      "F01": [
+        {
+          "args": "installed",
+          "expected": ["block"],
+          "calls": 11
+        },
+        {
+          "args": "installed",
+          "expected": ["allow"]
+        }
+      ],
+      "F02": [
+        {
+          "args": "replaced",
+          "expected": ["block"],
+          "calls": 12
+        }
+      ],
+      "F05": [
+        {
+          "args": "installed",
+          "expected": ["ask"],
+          "calls": 4
+        }
+      ],
+      "A04": [
+        {
+          "args": "installed",
+          "expected": ["allow"]
+        },
+        {
+          "args": "installed",
+          "expected": ["ask"],
+          "calls": 2
+        }
+      ],
+      "B01": [
+        {
+          "args": "installed",
+          "expected": ["deny"],
+          "calls": 10
+        },
+        {
+          "args": "installed",
+          "expected": ["allow"]
+        }
+      ],
+      "P02": [
+        {
+          "args": "installed",
+          "expected": ["block"],
+          "calls": 5
+        },
+        {
+          "args": "replaced",
+          "expected": ["block"]
+        }
+      ],
+      "P03": [
+        {
+          "args": "installed",
+          "expected": ["allow", "ask", "deny", "block"],
+          "calls": 4,
+          "surfaceLimit": 512
+        }
+      ]
     }
   }
 }
