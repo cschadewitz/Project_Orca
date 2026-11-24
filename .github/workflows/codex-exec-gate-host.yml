@@ -70,8 +70,10 @@ jobs:
           command -v bwrap || { sudo apt-get update -q && sudo apt-get install -y -q bubblewrap; }
           dpkg-query -W -f '${Package} ${Version}\n' bubblewrap util-linux | tee -a "$GITHUB_STEP_SUMMARY"
           # No profile of anyone's for either program, and neither may make a user namespace.
-          sudo aa-status 2>/dev/null | grep -iE 'bwrap|unshare' || echo "no AppArmor profile names bwrap or unshare"
-          ls /etc/apparmor.d | grep -iE 'bwrap|unshare|orca' || true
+          # (The stock `lxc-unshare` profile is for /usr/bin/lxc-unshare, another program.)
+          attached=$(sudo grep -rlE '(/usr)?/bin/(bwrap|unshare)([^-a-z]|$)' /etc/apparmor.d || true)
+          if [ -n "$attached" ]; then echo "$attached"; echo "::error::a profile names bwrap or unshare"; exit 1; fi
+          if ls /etc/apparmor.d | grep -qiE 'orca'; then echo "::error::an ORCA profile is there before the package"; exit 1; fi
           if bwrap --unshare-user --ro-bind / / /bin/true 2>/dev/null; then
             echo "::error::bubblewrap makes a user namespace on this image as it comes"; exit 1
           fi
