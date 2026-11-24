@@ -86,6 +86,7 @@ describe("#701 judge.status model", () => {
         config: moved,
         auth: { mode: "token", principal: "casey", principals: credentials.currentForPrincipal("casey") },
         budget: ready,
+        key: "present",
       }).grants[0],
     ).toEqual({ kind: "reads", enabled: true, granted: false });
   });
@@ -156,7 +157,7 @@ describe("#701 judge.status over RPC", () => {
       reads: new ReadModel({ orchestrator: orc }),
       source: orc,
       judgeStatusSource: {
-        config: () => ({ review: { plainRules: { judge } } }),
+        config: () => ({ review: { plainRules: { judge } }, hosts: [{ id: "local", type: "local" as const }] }),
         budget: async () => {
           budgetReads++;
           return ready;
