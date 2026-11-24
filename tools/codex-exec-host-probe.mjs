@@ -100,7 +100,9 @@ const store = join(config, ".orca");
 const work = join(root, "work");
 const tools = join(root, "tools");
 for (const dir of [join(config, "auth"), join(store, "work"), work, tools]) await mkdir(dir, { recursive: true });
-await writeFile(join(config, "auth", "owner.token"), "the-owner-token\n");
+// A marker no command should see: the directory holding it is hidden in the namespace.
+const MARKER = `orca-hidden-marker-${process.pid}-${Date.now()}`;
+await writeFile(join(config, "auth", "owner.token"), `${MARKER}\n`);
 const program = join(tools, "executor.sh");
 await writeFile(
   program,
@@ -144,11 +146,25 @@ try {
   report.inside = {
     label: (await run("cat /proc/self/attr/current")).trim(),
     writesWork: (await run(`echo ok > ${work}/made && cat ${work}/made`)).trim(),
-    writesRoot: (await run(`echo no > ${root}/made 2>&1; echo $?`)).trim(),
-    token: (await run(`cat ${join(config, "auth", "owner.token")} 2>&1 || true`)).trim(),
+    // The exit status of a write outside the workspace, and the error that said why.
+    writesRoot: (await run(`( echo no > ${root}/made ) 2>&1; echo "status=$?"`)).trim(),
+    hidden: (await run(`cat ${join(config, "auth", "owner.token")} 2>&1; echo "status=$?"`)).trim(),
   };
-  const closedAsShown =
-    report.inside.writesWork === "ok" && report.inside.writesRoot !== "0" && !existsSync(join(root, "made"));
+  // Each of these is checked, not only recorded: the write in the workspace landed, the one
+  // outside was refused by the read-only file system and left nothing, and the hidden file
+  // was not there to read (its marker never appears).
+  report.checks = {
+    workspaceWritten: report.inside.writesWork === "ok",
+    outsideRefused:
+      /Read-only file system/.test(report.inside.writesRoot) &&
+      !/status=0$/.test(report.inside.writesRoot) &&
+      !existsSync(join(root, "made")),
+    hiddenAbsent:
+      !report.inside.hidden.includes(MARKER) &&
+      /No such file or directory/.test(report.inside.hidden) &&
+      !/status=0$/.test(report.inside.hidden),
+  };
+  const closedAsShown = Object.values(report.checks).every(Boolean);
   report.closedAsShown = closedAsShown;
   await backend.stop();
   process.stdout.write(JSON.stringify(report, null, 2) + "\n");

@@ -27,6 +27,7 @@ on:
       - packages/app/build/linux/**
       - packages/app/electron-builder.yml
       - tools/codex-exec-host-probe.mjs
+      - tools/codex-exec-host-verdict.mjs
       - .github/workflows/codex-exec-gate-host.yml
   workflow_dispatch:
 
@@ -87,7 +88,8 @@ jobs:
           set -euo pipefail
           debs=(packages/app/dist/release/ORCA-*-linux-amd64.deb)
           test "${#debs[@]}" = 1
-          sha256sum "${debs[0]}" | tee -a "$GITHUB_STEP_SUMMARY"
+          # The commit checked out and built, beside the digest of the package built from it.
+          echo "commit $(git rev-parse HEAD), package $(sha256sum "${debs[0]}")" | tee -a "$GITHUB_STEP_SUMMARY"
           sudo apt-get install -y -q "$(readlink -f "${debs[0]}")"
           sudo grep '^orca-desktop ' /sys/kernel/security/apparmor/profiles
           test "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)" = 1
@@ -124,3 +126,7 @@ jobs:
           # A plain program is refused on the stock host: the probe would show nothing otherwise.
           test "$plain" = 1
           test "$installed" = 0
+          # And every claim above, from the reports themselves: the control's refusals, each
+          # label, and what a command could and could not do inside.
+          node tools/codex-exec-host-verdict.mjs plain.json installed.json "orca-desktop (unconfined)" \
+            | tee -a "$GITHUB_STEP_SUMMARY"
