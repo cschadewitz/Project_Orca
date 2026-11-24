@@ -1882,6 +1882,28 @@ describe.skipIf(!USABLE && !REQUIRED)("an executor in namespaces ORCA makes", ()
     expect(existsSync(join(work, "started.txt"))).toBe(false);
   });
 
+  it("is refused when what is at an agent's area in the namespace is another directory, closed or not", async () => {
+    // The table can show a writable mount at the agent's area while what is there, looked at
+    // through the namespace's own root, is another directory. That look is made for the
+    // agent's areas as for the directories a command was given.
+    const area = masks.writable[0]!;
+    const reads: CodexExecSetupReads = {
+      readdir: (path) => readdir(path),
+      stat: async (path) => (path.endsWith(`/root${area}`) ? { dev: 0n, ino: 0n } : await stat(path, { bigint: true })),
+    };
+    const open = isolate({ reads });
+    await expect(open.backend.isolated).rejects.toThrow(
+      `a writable directory is not the directory itself in the namespace: ${area}`,
+    );
+    const closed = await close({ reads });
+    await expect(closed.backend.isolated).rejects.toThrow(
+      `a writable directory is not the directory itself in the namespace: ${area}`,
+    );
+    // No executor was started either time.
+    expect(existsSync(started())).toBe(false);
+    expect(existsSync(join(work, "started.txt"))).toBe(false);
+  });
+
   it("keeps a hidden directory out of reach by its name, through a link and after its parent is renamed", async () => {
     const { backend, run } = isolate();
     await backend.isolated;
