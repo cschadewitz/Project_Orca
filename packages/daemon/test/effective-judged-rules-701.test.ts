@@ -84,4 +84,24 @@ describe("the effective policy's plain-language rules", () => {
       },
     ]);
   });
+
+  it("lists an MCP tool rule with its server, tool and shown arguments (#701 experimental class)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orca-effective-judged-"));
+    dirs.push(dir);
+    const configFile = join(dir, "orca.config.yaml");
+    await writeFile(
+      configFile,
+      `${CONFIG}        - mcp: { server: notes, tool: search, arguments: [query] }\n          match: {}\n          judge: { criterion: "Searching notes." }\n`,
+      "utf8",
+    );
+    const model = new ConfigModel({ configDir: dir, configFile, clock: new FakeClock(Date.UTC(2026, 10, 23)) });
+    const result = ConfigGetResultSchema.parse(await model.get());
+    expect(result.effective.agents["claude"]!.judged?.[1]).toEqual({
+      ruleId: "config:2",
+      source: "config",
+      match: {},
+      criterion: "Searching notes.",
+      mcp: { server: "notes", tool: "search", arguments: ["query"] },
+    });
+  });
 });

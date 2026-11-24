@@ -43,6 +43,7 @@ const OPTIONS = {
   "mcp-server": { type: "string", multiple: true },
   skill: { type: "string", multiple: true },
   "judge-disclosure": { type: "boolean" },
+  "judge-disclosure-kind": { type: "string", multiple: true },
   "host-key": { type: "string", multiple: true },
   "jump-host-key": { type: "string", multiple: true },
   issue: { type: "boolean" },

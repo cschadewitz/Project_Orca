@@ -33,7 +33,13 @@ import type {
 import type { AuditSink } from "./audit.js";
 import type { CredentialStore } from "./credentials.js";
 import type { OwnershipStore } from "./ownership.js";
-import { disclosureGrantEntry, workflowAllowed, type DisclosureGrantEntry, type Principal } from "./principal.js";
+import {
+  JUDGE_DISCLOSURE_REQUEST_SCHEMAS,
+  disclosureGrantEntry,
+  workflowAllowed,
+  type DisclosureGrantEntry,
+  type Principal,
+} from "./principal.js";
 import { RunAccess, type ResourceResolver, type RunRoot } from "./resources.js";
 import type { SecretUseAuthorityOptions } from "./secret-use.js";
 
@@ -57,7 +63,8 @@ const isQuery = (q: unknown): q is PlainRuleDisclosureQuery => {
     v.purpose === "review-judge" &&
     typeof v.destination === "string" &&
     typeof v.providerVersion === "string" &&
-    v.requestSchema === "orca-plain-rule-request/v1"
+    typeof v.requestSchema === "string" &&
+    (JUDGE_DISCLOSURE_REQUEST_SCHEMAS as readonly string[]).includes(v.requestSchema)
   );
 };
 

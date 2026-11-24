@@ -148,9 +148,12 @@ export function verifyPlainRuleTargets(input: {
   try {
     const { kind, locations, workspaceCwd, protectedPaths } = input;
     const io = input.io ?? NODE_IO;
-    if (kind !== "read" && kind !== "search") return refuse("kind");
+    // `edit` (#701 per-kind switches): one existing file ORCA's own file gate will write, checked against the
+    // paths ORCA keeps read-only as well as those it keeps from all access.
+    if (kind !== "read" && kind !== "search" && kind !== "edit") return refuse("kind");
+    const access = kind === "edit" ? "write" : "read";
     if (!Array.isArray(locations) || locations.length === 0) return refuse("no-location");
-    if (locations.length > MAX_LOCATIONS) return refuse("too-many-locations");
+    if (locations.length > (kind === "edit" ? 1 : MAX_LOCATIONS)) return refuse("too-many-locations");
     if (typeof workspaceCwd !== "string" || !isAbsolute(workspaceCwd)) return refuse("no-workspace");
     if (!protectedPaths || !Array.isArray(protectedPaths.noAccess) || !Array.isArray(protectedPaths.readOnly))
       return refuse("no-protected-paths");
@@ -161,7 +164,9 @@ export function verifyPlainRuleTargets(input: {
     // No-access paths, by identity where they exist and by case-folded real path either way.
     const guardIds = new Set<string>();
     const guardSegments: string[][] = [];
-    for (const guard of protectedPaths.noAccess) {
+    // A write is also kept from every read-only path, by identity and by real path alike.
+    const guards = kind === "edit" ? [...protectedPaths.noAccess, ...protectedPaths.readOnly] : protectedPaths.noAccess;
+    for (const guard of guards) {
       if (typeof guard !== "string" || !isAbsolute(guard)) return refuse("no-protected-paths");
       const resolved = real(io, guard);
       // A guard that confirmably does not exist still guards by text; one the file system would not answer for
@@ -184,7 +189,7 @@ export function verifyPlainRuleTargets(input: {
       }
       const targetId = identity(io, target);
       if (
-        protectedPathFor(target, "read", protectedPaths, workspaceCwd) !== undefined ||
+        protectedPathFor(target, access, protectedPaths, workspaceCwd) !== undefined ||
         guardIds.has(targetId) ||
         ancestors.some((id) => guardIds.has(id)) ||
         guardSegments.some((guard) => within(segments(target, true), guard))

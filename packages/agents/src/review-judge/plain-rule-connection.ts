@@ -37,9 +37,11 @@ import { createHttpsJudgeSender, type HttpsRequestFn } from "./https-sender.js";
 import {
   createPlainRuleJudge,
   DEFAULT_PLAIN_RULE_LIMITS,
-  PLAIN_RULE_REQUEST_SCHEMA,
+  PLAIN_RULE_REQUEST_SCHEMAS,
   plainRuleJudgeConfigRef,
   type JudgePermission,
+  type PlainRuleActionClass,
+  type PlainRuleRequestSchema,
   type PlainRuleJudgeLimits,
   type PlainRuleTransport,
 } from "./plain-rule.js";
@@ -79,7 +81,8 @@ export interface PlainRuleDisclosureQuery {
   readonly purpose: typeof JUDGE_DISCLOSURE_PURPOSE;
   readonly destination: string;
   readonly providerVersion: string;
-  readonly requestSchema: typeof PLAIN_RULE_REQUEST_SCHEMA;
+  /** The class's wire format (`PLAIN_RULE_REQUEST_SCHEMAS`): each class is its own grant (#701 per-kind switches). */
+  readonly requestSchema: PlainRuleRequestSchema;
 }
 
 export interface PlainRuleDisclosureGrant extends PlainRuleDisclosureQuery {
@@ -97,7 +100,11 @@ export interface PlainRuleDisclosureGrant extends PlainRuleDisclosureQuery {
  * The judge's own `limits` (per-call timeout and calls per day) are not part of it: they change neither what is sent
  * nor where, so changing them needs no new grant. Every other change to the judge config does.
  */
-export function plainRuleDisclosureQuery(config: unknown): PlainRuleDisclosureQuery | undefined {
+export function plainRuleDisclosureQuery(
+  config: unknown,
+  actionClass: PlainRuleActionClass = "read",
+): PlainRuleDisclosureQuery | undefined {
+  if (!Object.hasOwn(PLAIN_RULE_REQUEST_SCHEMAS, actionClass)) return undefined;
   const selected = selectConfig(config);
   if (selected === undefined) return undefined;
   const provider = resolvePlainRuleProvider(selected.provider);
@@ -112,8 +119,8 @@ export function plainRuleDisclosureQuery(config: unknown): PlainRuleDisclosureQu
   return Object.freeze({
     purpose: JUDGE_DISCLOSURE_PURPOSE,
     destination: selected.destination,
-    providerVersion: plainRuleProviderVersion(provider),
-    requestSchema: PLAIN_RULE_REQUEST_SCHEMA,
+    providerVersion: plainRuleProviderVersion(provider, actionClass),
+    requestSchema: PLAIN_RULE_REQUEST_SCHEMAS[actionClass],
   });
 }
 
@@ -232,10 +239,16 @@ export async function preparePlainRuleJudge(
     readonly now?: () => number;
   },
   signal: AbortSignal,
+  /**
+   * The one class this judge decides (default `read`). Each class has its own prompt, wire format and disclosure
+   * grant, so a judge prepared for one is never used for another (#701 per-kind switches).
+   */
+  actionClass: PlainRuleActionClass = "read",
 ): Promise<PreparedPlainRuleJudge> {
   const refuse = (reason: PlainRuleConnectionRefusal): PreparedPlainRuleJudge =>
     Object.freeze({ status: "unavailable" as const, reason });
   if (signal.aborted) return refuse("cancelled");
+  if (!Object.hasOwn(PLAIN_RULE_REQUEST_SCHEMAS, actionClass)) return refuse("incomplete-config");
   const selected = selectConfig(config);
   if (selected === undefined) return refuse("incomplete-config");
   // Capture each injected function once; later caller mutation cannot redirect delivery.
@@ -262,7 +275,11 @@ export async function preparePlainRuleJudge(
   // and every request body all come from this same object, so the choice approved is the choice used.
   const destination = selected.destination;
   const maxCallsPerDay = selected.maxCallsPerDay;
-  const made = createPlainRuleProviderTransport({ config: selected.provider, post: (body, s) => post(body, s) });
+  const made = createPlainRuleProviderTransport({
+    config: selected.provider,
+    post: (body, s) => post(body, s),
+    actionClass,
+  });
   if (made.status !== "ready") return refuse("provider-invalid");
   const provider = made.provider;
   const providerTransport = made.transport;
@@ -297,7 +314,7 @@ export async function preparePlainRuleJudge(
     purpose: JUDGE_DISCLOSURE_PURPOSE,
     destination: selected.destination,
     providerVersion: providerTransport.version,
-    requestSchema: PLAIN_RULE_REQUEST_SCHEMA,
+    requestSchema: PLAIN_RULE_REQUEST_SCHEMAS[actionClass],
   });
   let found: unknown;
   try {
@@ -377,8 +394,8 @@ export async function preparePlainRuleJudge(
   });
   return Object.freeze({
     status: "prepared" as const,
-    judge: createPlainRuleJudge({ transport, limits }),
-    judgeConfigRef: plainRuleJudgeConfigRef(transport.version, limits),
+    judge: createPlainRuleJudge({ transport, limits, actionClass }),
+    judgeConfigRef: plainRuleJudgeConfigRef(transport.version, limits, actionClass),
     provider,
     durableBudget: budget.durable === true,
   });

@@ -12,7 +12,7 @@ import { execFileSync } from "node:child_process";
 import { link, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentSpecSchema, type Logger } from "@orca/core";
 import {
   ENV_SECRET_DELIVERY,
@@ -23,6 +23,7 @@ import {
   type AgentSession,
   type OpenSessionOptions,
 } from "@orca/agents";
+import type { JudgePermission } from "../src/review-judge/plain-rule.js";
 
 const SECRET = "relay-secret-7f3a9c";
 
@@ -166,6 +167,10 @@ async function setup(opts: {
   permissionFiles?: string[];
   permissions?: { default: "allow" | "ask" | "deny"; rules: unknown[] };
   askPermission?: OpenSessionOptions["askPermission"];
+  /** The plain-rule judge (#701), and the experimental per-kind judges riding with it. */
+  judgePermission?: OpenSessionOptions["judgePermission"];
+  judgeKinds?: OpenSessionOptions["judgeKinds"];
+  onPermission?: OpenSessionOptions["onPermission"];
   startTimeoutMs?: number;
   requestTimeoutMs?: number;
 }) {
@@ -227,6 +232,9 @@ async function setup(opts: {
     relayMcpServers: true,
     ...(opts.admission ? { admission: opts.admission } : {}),
     ...(opts.askPermission ? { askPermission: opts.askPermission } : {}),
+    ...(opts.judgePermission ? { judgePermission: opts.judgePermission } : {}),
+    ...(opts.judgeKinds ? { judgeKinds: opts.judgeKinds } : {}),
+    ...(opts.onPermission ? { onPermission: opts.onPermission } : {}),
     ...(opts.startTimeoutMs !== undefined ? { mcpStartTimeoutMs: opts.startTimeoutMs } : {}),
     ...(opts.requestTimeoutMs !== undefined ? { mcpRequestTimeoutMs: opts.requestTimeoutMs } : {}),
   });
@@ -873,3 +881,83 @@ async function expectGone(pid: number): Promise<void> {
   for (let i = 0; i < 60 && alive(); i++) await new Promise((r) => setTimeout(r, 50));
   expect(alive()).toBe(false);
 }
+
+describe("a relayed tool call, judged (#701 MCP class)", () => {
+  const RULE = {
+    match: {},
+    mcp: { server: "tools", tool: "touch" },
+    judge: { criterion: "Touching the tools server." },
+  };
+  const judge = (outcome: "allow" | "no-match" = "allow") =>
+    vi.fn<JudgePermission>(async (input) => ({
+      outcome,
+      verdict: outcome === "allow" ? "covered" : "not-covered",
+      ruleId: input.rules[0]!.ruleId,
+      ruleRevision: input.rules[0]!.ruleRevision,
+      reasonCode: outcome === "allow" ? "matches-criterion" : "outside-criterion",
+      verdicts: [],
+      judgeConfigRef: "judge-ref",
+    }));
+
+  it("is allowed once by a judged rule naming that exact tool, with nobody asked", async () => {
+    const mcp = judge();
+    const decisions: string[] = [];
+    const asked: unknown[] = [];
+    const t = await setup({
+      permissions: { default: "ask", rules: [RULE] },
+      judgePermission: judge(),
+      judgeKinds: { mcp },
+      onPermission: (info) => void decisions.push(info.decision),
+      askPermission: async (req) => {
+        asked.push(req);
+        return "reject";
+      },
+    });
+    const s = await t.open();
+    await t.listed();
+    const [call] = await t.turn(s);
+    expect(call).toEqual({ content: [{ type: "text", text: "secret is here" }] });
+    expect(asked).toHaveLength(0);
+    expect(decisions).toContain("mcp:judged");
+    expect(mcp.mock.calls[0]![0].action).toMatchObject({ kind: "other", mcp: { server: "tools", tool: "touch" } });
+  });
+
+  it("asks the person without the MCP judge, or on the judge's no", async () => {
+    for (const judgeKinds of [undefined, { mcp: judge("no-match") }]) {
+      const asked: unknown[] = [];
+      const t = await setup({
+        permissions: { default: "ask", rules: [RULE] },
+        judgePermission: judge(),
+        ...(judgeKinds ? { judgeKinds } : {}),
+        askPermission: async (req) => {
+          asked.push(req);
+          return "reject";
+        },
+      });
+      const s = await t.open();
+      await t.listed();
+      const [call] = await t.turn(s);
+      expect(call).toEqual(refused(/not allowed/));
+      expect(asked).toHaveLength(1);
+      expect(await t.serverLog()).not.toContain("tools/call");
+    }
+  });
+
+  it("is never judged under a rule that names it only by title", async () => {
+    const mcp = judge();
+    const t = await setup({
+      permissions: {
+        default: "ask",
+        rules: [{ match: { titlePattern: "^tools: touch$" }, judge: { criterion: "Touching the tools server." } }],
+      },
+      judgePermission: judge(),
+      judgeKinds: { mcp },
+      askPermission: async () => "reject",
+    });
+    const s = await t.open();
+    await t.listed();
+    const [call] = await t.turn(s);
+    expect(call).toEqual(refused(/not allowed/));
+    expect(mcp).not.toHaveBeenCalled();
+  });
+});

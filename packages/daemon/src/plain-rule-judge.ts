@@ -22,6 +22,7 @@ import type { OrcaConfig } from "@orca/core";
 import {
   preparePlainRuleJudge,
   secretJudgeCredentials,
+  type JudgePermission,
   type PlainRuleConnectionRefusal,
   type PreparedPlainRuleJudge,
 } from "@orca/agents/review-judge";
@@ -48,8 +49,24 @@ export type PlainRuleJudgeUnavailable =
   | PlainRuleConnectionRefusal;
 
 export type PlainRuleJudgeForSession =
-  | Extract<PreparedPlainRuleJudge, { status: "prepared" }>
+  | (Extract<PreparedPlainRuleJudge, { status: "prepared" }> & {
+      /**
+       * The experimental classes the config turns on (#701 per-kind switches), each prepared with its own
+       * disclosure grant. A class whose preparation failed is absent, and its calls take the existing path.
+       */
+      readonly kinds: {
+        readonly edit?: JudgePermission;
+        readonly mcp?: JudgePermission;
+        readonly command?: JudgePermission;
+      };
+      /** Each class that was turned on but could not be prepared, and why. */
+      readonly kindsUnavailable: readonly { readonly kind: KindSwitch; readonly reason: PlainRuleJudgeUnavailable }[];
+    })
   | { readonly status: "unavailable"; readonly reason: PlainRuleJudgeUnavailable };
+
+/** The config's names for the experimental classes, and the class each one is. */
+const KIND_SWITCHES = { edits: "edit", mcpCalls: "mcp", commands: "command" } as const;
+export type KindSwitch = keyof typeof KIND_SWITCHES;
 
 export interface PlainRuleJudgeSourceOptions {
   /** The workspace config as it is now; only `review.plainRules.judge` is read. */
@@ -124,7 +141,27 @@ export function plainRuleJudgeSource(opts: PlainRuleJudgeSourceOptions): PlainRu
       );
       if (prepared.status !== "prepared") return prepared;
       if (prepared.durableBudget !== true) return unavailable("budget-not-durable");
-      return prepared;
+      // The experimental classes, each off unless the config turns it on, and each its own grant.
+      const switches = opts.config()?.review?.plainRules?.experimental?.kinds ?? {};
+      const kinds: { edit?: JudgePermission; mcp?: JudgePermission; command?: JudgePermission } = {};
+      const kindsUnavailable: { kind: KindSwitch; reason: PlainRuleJudgeUnavailable }[] = [];
+      for (const [name, actionClass] of Object.entries(KIND_SWITCHES) as [KindSwitch, keyof typeof kinds][]) {
+        if (switches[name] !== true) continue;
+        const one = await preparePlainRuleJudge(
+          judgeConfig,
+          { credentials, disclosure, budget: qualified.budget },
+          signal,
+          actionClass,
+        );
+        if (one.status !== "prepared") kindsUnavailable.push({ kind: name, reason: one.reason });
+        else if (one.durableBudget !== true) kindsUnavailable.push({ kind: name, reason: "budget-not-durable" });
+        else kinds[actionClass] = one.judge;
+      }
+      return Object.freeze({
+        ...prepared,
+        kinds: Object.freeze(kinds),
+        kindsUnavailable: Object.freeze(kindsUnavailable),
+      });
     } catch {
       return unavailable("run-not-authorized");
     }
@@ -140,7 +177,13 @@ export function plainRuleJudgeSource(opts: PlainRuleJudgeSourceOptions): PlainRu
 export function withPlainRuleJudge(
   open: SessionFactory,
   source: PlainRuleJudgeSource,
-  onUnavailable?: (info: { runId: string; agentId: string; reason: PlainRuleJudgeUnavailable }) => void,
+  onUnavailable?: (info: {
+    runId: string;
+    agentId: string;
+    reason: PlainRuleJudgeUnavailable;
+    /** Set when one experimental class could not be prepared; the read judge was. */
+    kind?: KindSwitch;
+  }) => void,
 ): SessionFactory {
   // Read once, here: there is no parameter or setting that turns it on.
   if (!PLAIN_RULE_JUDGE_ACTIVE) return open;
@@ -156,6 +199,8 @@ export function withPlainRuleJudge(
         onUnavailable?.({ runId, agentId: options.agent.id, reason: prepared.reason });
       return open(options);
     }
-    return open({ ...options, judgePermission: prepared.judge });
+    for (const { kind, reason } of prepared.kindsUnavailable)
+      onUnavailable?.({ runId, agentId: options.agent.id, reason, kind });
+    return open({ ...options, judgePermission: prepared.judge, judgeKinds: prepared.kinds });
   };
 }

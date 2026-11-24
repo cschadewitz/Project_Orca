@@ -28,6 +28,36 @@ import { createHash, randomUUID } from "node:crypto";
 export const PLAIN_RULE_REQUEST_SCHEMA = "orca-plain-rule-request/v1";
 export const PLAIN_RULE_VERDICT_SCHEMA = "orca-plain-rule-verdict/v1";
 
+/**
+ * What a judge is asked about (#701, Cal's answer of 2026-11-23 on the per-kind switches). Each class is its own
+ * wire format and so its own owner disclosure grant; a judge is made for exactly one class and refuses the others.
+ *
+ * - `read`: a known read-only call (`read`, `search`) whose targets ORCA resolved. The first rollout.
+ * - `edit`: a write ORCA itself performs through its file gate (`fs/writeTextFile`), to an existing regular file ORCA
+ *   resolved inside the workspace. Its allow is for that one operation, bound to that file. Experimental.
+ * - `mcp`: a tool call to an MCP server ORCA itself runs and relays, so the server, tool and arguments are ORCA's
+ *   own facts about that one request. Experimental.
+ * - `command`: a shell command the agent describes. Advisory only: a covered verdict is a recommendation shown to
+ *   the person, never an allow (`advise`). Experimental.
+ */
+export type PlainRuleActionClass = "read" | "edit" | "mcp" | "command";
+export const PLAIN_RULE_ACTION_CLASSES: readonly PlainRuleActionClass[] = Object.freeze([
+  "read",
+  "edit",
+  "mcp",
+  "command",
+]);
+
+/** The request schema, and so the disclosure grant, for each class. `read` keeps the first rollout's. */
+export const PLAIN_RULE_REQUEST_SCHEMAS = Object.freeze({
+  read: PLAIN_RULE_REQUEST_SCHEMA,
+  edit: "orca-plain-rule-request/edit/v1",
+  mcp: "orca-plain-rule-request/mcp/v1",
+  command: "orca-plain-rule-request/command/v1",
+} as const) satisfies Readonly<Record<PlainRuleActionClass, string>>;
+/** One of the request schemas: what a disclosure grant names. */
+export type PlainRuleRequestSchema = (typeof PLAIN_RULE_REQUEST_SCHEMAS)[PlainRuleActionClass];
+
 export interface PlainRuleCandidate {
   readonly ruleId: string;
   readonly ruleRevision: string;
@@ -57,6 +87,13 @@ export interface PlainRuleJudgeInput {
      * is not enough. Anything else goes to the person.
      */
     readonly targetsVerified: boolean;
+    /**
+     * `mcp` only: the relayed request as ORCA sends it, never the agent's claim. `arguments` is the tool call's
+     * arguments as a JSON string, bounded like a command and redacted of the session's secrets by the caller.
+     */
+    readonly mcp?: { readonly server: string; readonly tool: string; readonly arguments: string };
+    /** `command` only: the command as the agent describes it. Agent-controlled, carried as a JSON string. */
+    readonly command?: string;
   };
 }
 
@@ -100,7 +137,11 @@ export type PlainRuleVerdict =
   | "outside-envelope";
 
 export interface PlainRuleJudgeOutcome {
-  readonly outcome: "allow" | "no-match";
+  /**
+   * `advise` is a `command` judge's covered verdict: a recommendation for the person, never an allow. Anything that
+   * is not `allow` is `no-match` to the slot: the typed answer stands.
+   */
+  readonly outcome: "allow" | "no-match" | "advise";
   /**
    * With `allow`: `covered`. Otherwise a refusal before any call (`hard-boundary`, `outside-envelope`,
    * `injection-suspected`, `over-budget`), the call's own failure (`unavailable`, `malformed`, `timeout`) or, from
@@ -203,9 +244,13 @@ function validLimits(limits: PlainRuleJudgeLimits): boolean {
 }
 
 /** The ref a decision records: changes with the transport, the wire schemas and every limit. */
-export function plainRuleJudgeConfigRef(transportVersion: string, limits: PlainRuleJudgeLimits): string {
+export function plainRuleJudgeConfigRef(
+  transportVersion: string,
+  limits: PlainRuleJudgeLimits,
+  actionClass: PlainRuleActionClass = "read",
+): string {
   const fields = [
-    PLAIN_RULE_REQUEST_SCHEMA,
+    PLAIN_RULE_REQUEST_SCHEMAS[actionClass] ?? PLAIN_RULE_REQUEST_SCHEMA,
     PLAIN_RULE_VERDICT_SCHEMA,
     transportVersion,
     limits.timeoutMs,
@@ -243,11 +288,28 @@ function snapshot(input: PlainRuleJudgeInput, limits: PlainRuleJudgeLimits) {
   if (!Array.isArray(locations) || locations.length > MAX_LOCATIONS) return null;
   const copied = [...(locations as unknown[])];
   if (!copied.every((l): l is string => typeof l === "string" && bytes(l) <= limits.maxCommandBytes)) return null;
+  const rawMcp = (input.action as { mcp?: unknown }).mcp;
+  let mcp: { server: string; tool: string; arguments: string } | undefined;
+  if (rawMcp !== undefined) {
+    if (rawMcp === null || typeof rawMcp !== "object") return null;
+    const { server, tool, arguments: args } = rawMcp as Record<string, unknown>;
+    if (!text(server) || !text(tool) || typeof args !== "string") return null;
+    mcp = { server, tool, arguments: args };
+  }
+  const rawCommand = (input.action as { command?: unknown }).command;
+  if (rawCommand !== undefined && !text(rawCommand)) return null;
   return {
     rules,
     restricted: deny || ask,
     targetsVerified,
-    action: { kind, title, locations: copied, inWorkspace },
+    action: {
+      kind,
+      title,
+      locations: copied,
+      inWorkspace,
+      ...(mcp ? { mcp } : {}),
+      ...(rawCommand !== undefined ? { command: rawCommand } : {}),
+    },
   };
 }
 
@@ -262,12 +324,35 @@ function workspaceRelative(path: string): boolean {
  * a second, lexical line behind that check) every location workspace-relative. Absent or ambiguous facts are
  * outside it.
  */
-function insideEnvelope(selected: NonNullable<ReturnType<typeof snapshot>>): boolean {
+function insideEnvelope(
+  selected: NonNullable<ReturnType<typeof snapshot>>,
+  actionClass: PlainRuleActionClass,
+): boolean {
   const { action } = selected;
-  if (selected.targetsVerified !== true || action.inWorkspace !== true) return false;
-  if (!PLAIN_RULE_JUDGED_KINDS.has(action.kind)) return false;
-  if (action.locations.length === 0) return false;
-  return action.locations.every(workspaceRelative);
+  switch (actionClass) {
+    case "read":
+      if (selected.targetsVerified !== true || action.inWorkspace !== true) return false;
+      if (!PLAIN_RULE_JUDGED_KINDS.has(action.kind)) return false;
+      if (action.mcp !== undefined || action.command !== undefined) return false;
+      if (action.locations.length === 0) return false;
+      return action.locations.every(workspaceRelative);
+    case "edit":
+      // A write ORCA performs itself, to one file it resolved: exactly one verified workspace-relative target.
+      if (selected.targetsVerified !== true || action.inWorkspace !== true) return false;
+      if (action.kind !== "edit" || action.mcp !== undefined || action.command !== undefined) return false;
+      return action.locations.length === 1 && action.locations.every(workspaceRelative);
+    case "mcp":
+      // A relayed request: ORCA's own server, tool and arguments, and nothing else.
+      if (selected.targetsVerified !== true) return false;
+      if (action.kind !== "other" || action.mcp === undefined || action.command !== undefined) return false;
+      return action.locations.length === 0;
+    case "command":
+      // Advisory only, so the agent's own description is all there is; it must be one.
+      if (action.kind !== "execute" || action.command === undefined || action.mcp !== undefined) return false;
+      return true;
+    default:
+      return false;
+  }
 }
 
 type Entry = {
@@ -324,12 +409,16 @@ function decode(
 export function createPlainRuleJudge(options: {
   readonly transport: PlainRuleTransport;
   readonly limits?: PlainRuleJudgeLimits;
+  /** The one class this judge decides (default `read`). It refuses every other as `outside-envelope`. */
+  readonly actionClass?: PlainRuleActionClass;
 }): JudgePermission {
   const limits: PlainRuleJudgeLimits = Object.freeze({ ...(options.limits ?? DEFAULT_PLAIN_RULE_LIMITS) });
   const send = options.transport.send;
   const version = options.transport.version;
-  const usable = typeof send === "function" && text(version) && validLimits(limits);
-  const judgeConfigRef = plainRuleJudgeConfigRef(text(version) ? version : "invalid", limits);
+  const actionClass = options.actionClass ?? "read";
+  const schema = PLAIN_RULE_REQUEST_SCHEMAS[actionClass];
+  const usable = typeof send === "function" && text(version) && validLimits(limits) && text(schema);
+  const judgeConfigRef = plainRuleJudgeConfigRef(text(version) ? version : "invalid", limits, actionClass);
   let inFlight = 0;
   let calls = 0;
 
@@ -343,7 +432,8 @@ export function createPlainRuleJudge(options: {
     const winner = entries.find((e) => e.verdict === "covered");
     if (winner)
       return Object.freeze({
-        outcome: "allow",
+        // A command judge recommends; it never allows (#701, Cal 2026-11-23).
+        outcome: actionClass === "command" ? ("advise" as const) : ("allow" as const),
         verdict: "covered",
         ruleId: winner.ruleId,
         ruleRevision: winner.ruleRevision,
@@ -369,16 +459,21 @@ export function createPlainRuleJudge(options: {
       if (selected === null) return result("malformed");
       // Hard boundaries first, in code: a judge is never asked about what it could not allow.
       if (selected.restricted) return result("hard-boundary");
-      if (!insideEnvelope(selected)) return result("outside-envelope");
-      const command = selected.action.title;
-      if (bytes(command) > limits.maxCommandBytes || TRIPWIRES.some((t) => t.test(command)))
+      if (!insideEnvelope(selected, actionClass)) return result("outside-envelope");
+      // Every agent- or tool-controlled text the judge would see is bounded and screened alike.
+      const screened = [
+        selected.action.title,
+        ...(selected.action.command !== undefined ? [selected.action.command] : []),
+        ...(selected.action.mcp ? [selected.action.mcp.arguments] : []),
+      ];
+      if (screened.some((t) => bytes(t) > limits.maxCommandBytes || TRIPWIRES.some((w) => w.test(t))))
         return result("injection-suspected");
       if (inFlight >= limits.maxPending || calls >= limits.maxCalls) return result("over-budget");
       calls++;
       inFlight++;
       const requestId = randomUUID();
       const frame = JSON.stringify({
-        schema: PLAIN_RULE_REQUEST_SCHEMA,
+        schema,
         requestId,
         rules: selected.rules.map((r) => ({ id: r.ruleId, revision: r.ruleRevision, criterion: r.criterion })),
         action: selected.action,

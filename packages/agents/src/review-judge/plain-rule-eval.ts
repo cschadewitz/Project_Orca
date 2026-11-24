@@ -425,7 +425,9 @@ export async function runPlainRuleEval(options: {
     };
     const judge = createPlainRuleJudge({ transport, limits: { ...limits, maxCalls: 1 } });
     const input: PlainRuleJudgeInput = { rules: c.rules, restrictions: c.restrictions, action: c.action };
-    const out = await judge(input, new AbortController().signal);
+    const judged = await judge(input, new AbortController().signal);
+    // The eval set is the read class's: an `advise` (command class only) is not an allow.
+    const out = { ...judged, outcome: judged.outcome === "advise" ? ("no-match" as const) : judged.outcome };
     judgeConfigRef = out.judgeConfigRef;
     const done = call;
     const error = scored(c, out.verdict, out.outcome, done !== undefined, out.ruleId);

@@ -279,6 +279,11 @@ export const EffectiveJudgedRuleSchema = z.object({
   source: z.enum(["config", "permissions"]),
   match: PermissionRuleSchema.shape.match,
   criterion: z.string(),
+  /**
+   * A rule about one relayed MCP tool (#701 experimental `mcpCalls` class): its server and tool,
+   * and the argument names the judge may see. Configured rules only; its `match` is then empty.
+   */
+  mcp: z.object({ server: z.string(), tool: z.string(), arguments: z.array(z.string()).optional() }).optional(),
   /** Sidecar provenance. Absent on a configured rule. */
   addedAt: z.string().optional(),
   expiresAt: z.string().optional(),

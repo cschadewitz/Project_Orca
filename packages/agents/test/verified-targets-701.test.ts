@@ -63,8 +63,25 @@ describe("#701 plain-rule target check", () => {
     expect(check({ locations: ["alias.ts"] })).toMatchObject({ targetsVerified: true, locations: ["src/a.ts"] });
   });
 
-  it.each(["execute", "edit", "delete", "move", "fetch", "other", undefined])("refuses kind %s", (kind) => {
+  it.each(["execute", "delete", "move", "fetch", "other", undefined])("refuses kind %s", (kind) => {
     expect(check({ kind })).toEqual({ targetsVerified: false, reason: "kind" });
+  });
+
+  it("verifies one existing file for an edit, and keeps it from read-only as well as no-access paths (#701)", () => {
+    expect(check({ kind: "edit" })).toMatchObject({ targetsVerified: true, locations: ["src/a.ts"] });
+    // One file per write: ORCA's file gate writes one.
+    expect(check({ kind: "edit", locations: ["src/a.ts", "README.md"] })).toMatchObject({
+      reason: "too-many-locations",
+    });
+    // A read-only path can be read but never judged writable.
+    expect(check({ locations: [".orca/orca.permissions.json"] })).toMatchObject({ targetsVerified: true });
+    expect(check({ kind: "edit", locations: [".orca/orca.permissions.json"] })).toMatchObject({ reason: "protected" });
+    expect(check({ kind: "edit", locations: ["secrets/key.pem"] })).toMatchObject({ reason: "protected" });
+    // A new file is not an existing one: it stays with the person.
+    expect(check({ kind: "edit", locations: ["src/new.ts"] })).toMatchObject({ reason: "missing" });
+    expect(check({ kind: "edit", locations: [join(outside, "passwd")] })).toMatchObject({
+      reason: "outside-workspace",
+    });
   });
 
   it("refuses missing facts", () => {

@@ -185,13 +185,23 @@ export function grantCovers(
  * asks for (`plainRuleDisclosureQuery` in `@orca/agents`), so a changed destination, provider,
  * model, prompt or wire format is not covered until it is granted again. There is no wildcard.
  */
+/** The request schemas a disclosure grant may name: `PLAIN_RULE_REQUEST_SCHEMAS` in `@orca/agents`. */
+export const JUDGE_DISCLOSURE_REQUEST_SCHEMAS = [
+  "orca-plain-rule-request/v1",
+  "orca-plain-rule-request/edit/v1",
+  "orca-plain-rule-request/mcp/v1",
+  "orca-plain-rule-request/command/v1",
+] as const;
+
 export const DisclosureGrantSchema = z.array(
   z
     .object({
       purpose: z.literal("review-judge"),
       destination: z.string().min(1).max(2048),
       providerVersion: z.string().regex(/^plain-rule-provider\/v1:sha256:[0-9a-f]{64}$/),
-      requestSchema: z.literal("orca-plain-rule-request/v1"),
+      // One entry per class the owner lets a judge see (#701 per-kind switches): reads and searches,
+      // and the experimental edit, MCP and command classes, each its own wire format and grant.
+      requestSchema: z.enum(JUDGE_DISCLOSURE_REQUEST_SCHEMAS),
     })
     .strict(),
 );

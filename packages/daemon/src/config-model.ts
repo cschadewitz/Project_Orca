@@ -653,6 +653,7 @@ export class ConfigModel {
             source: "config",
             match: definedOnly(rule.match),
             criterion: rule.judge.criterion,
+            ...(rule.mcp ? { mcp: rule.mcp } : {}),
           });
       });
       (doc.agents[agent.id]?.rules ?? []).forEach((rule, index) => {

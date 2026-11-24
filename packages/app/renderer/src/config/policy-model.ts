@@ -319,6 +319,8 @@ function asRule(value: unknown): SidecarRule | undefined {
     // daemon would refuse refuses the document here too. Editing one would otherwise rebuild it
     // as `{ criterion }` and could turn a refused row into a valid rule during an unrelated edit.
     if (decision !== undefined) return undefined;
+    // An MCP tool rule is written in the config only; the daemon refuses one in the sidecar.
+    if (row["mcp"] !== undefined) return undefined;
     if (typeof judge !== "object" || judge === null || Array.isArray(judge)) return undefined;
     const keys = Object.keys(judge);
     if (keys.length !== 1 || keys[0] !== "criterion") return undefined;

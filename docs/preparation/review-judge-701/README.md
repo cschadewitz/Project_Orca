@@ -10,6 +10,7 @@ transport seam with a fake provider; it is not a hosted/BYOK implementation.
 adapter and proposed disclosure-grant/credential-reference contracts, with fake services only.
 [BYOK credentials](byok-credentials.md) implements the credential half on the merged #336 secret references.
 [Plain-language rules](plain-language-rules.md) designs judged permission rules; `plain-rule.ts` is their judge.
+[Experimental kinds](experimental-kinds.md) lets the judge also answer edits and MCP calls ORCA checks itself, and advise on commands.
 [Plain-rule eval set](plain-rule-eval.md) measures that judge offline and, unattended, against real providers.
 This directory is standalone preparation for [#701](https://github.com/cschadewitz/Project_Orca/issues/701),
 coordinated under [#699](https://github.com/cschadewitz/Project_Orca/issues/699).

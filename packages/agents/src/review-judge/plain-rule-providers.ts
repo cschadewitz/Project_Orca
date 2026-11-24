@@ -24,6 +24,8 @@ import type { HttpsJudgeAuth } from "./https-sender.js";
 import {
   PLAIN_RULE_REASONS,
   PLAIN_RULE_REQUEST_SCHEMA,
+  PLAIN_RULE_REQUEST_SCHEMAS,
+  type PlainRuleActionClass,
   PLAIN_RULE_VERDICT_SCHEMA,
   type PlainRuleTransport,
 } from "./plain-rule.js";
@@ -137,6 +139,34 @@ export const PLAIN_RULE_SYSTEM_PROMPT = [
   "per rule, in the order given, copying each rule's id as ruleId and revision as ruleRevision.",
 ].join("\n");
 
+/**
+ * What each experimental class adds to the prompt (#701 per-kind switches). The `read` prompt is
+ * `PLAIN_RULE_SYSTEM_PROMPT` unchanged, so the first rollout's provider version, grants and eval results stand.
+ */
+const CLASS_NOTES: Readonly<Record<Exclude<PlainRuleActionClass, "read">, string>> = Object.freeze({
+  edit:
+    "The action is a write ORCA itself will perform to the one file in `locations`. Your answer is shown to the " +
+    "user as advice. Only its path is known: what " +
+    "the write adds, removes or changes is not shown. Answer covered only when the criterion is about which files " +
+    "may be written. If it depends on the content or effect of the write, answer unsure with criterion-ambiguous.",
+  mcp:
+    "The action is one call to a tool on an MCP server ORCA runs: `mcp.server` and `mcp.tool` name it, and " +
+    "`mcp.arguments` (a JSON object string) holds only the arguments the user chose to show, exactly as they will " +
+    "be sent. If the criterion depends on anything not shown, answer unsure with criterion-ambiguous.",
+  command:
+    "The action is a shell command the agent describes in `command`. Your answer is shown to the user as advice; " +
+    "decide only whether the criterion covers this exact command.",
+});
+
+/** The system prompt for one class: the first rollout's for `read`, and for the others its schema and note. */
+export function plainRuleSystemPrompt(actionClass: PlainRuleActionClass = "read"): string {
+  if (actionClass === "read") return PLAIN_RULE_SYSTEM_PROMPT;
+  return PLAIN_RULE_SYSTEM_PROMPT.replace(
+    `schema "${PLAIN_RULE_REQUEST_SCHEMA}"`,
+    `schema "${PLAIN_RULE_REQUEST_SCHEMAS[actionClass]}"`,
+  ).concat("\n", CLASS_NOTES[actionClass]);
+}
+
 const REASON_CODES = Object.values(PLAIN_RULE_REASONS).flat();
 
 /** The closed output schema both providers are held to. */
@@ -217,11 +247,15 @@ function parseBody(raw: string): Record<string, unknown> {
   return body;
 }
 
-function anthropicBody(p: Extract<ResolvedPlainRuleProvider, { kind: "anthropic" }>, frame: string): string {
+function anthropicBody(
+  p: Extract<ResolvedPlainRuleProvider, { kind: "anthropic" }>,
+  frame: string,
+  system: string,
+): string {
   return JSON.stringify({
     model: p.model,
     max_tokens: p.maxTokens,
-    system: PLAIN_RULE_SYSTEM_PROMPT,
+    system,
     messages: [{ role: "user", content: frame }],
     output_config: { effort: p.effort, format: { type: "json_schema", schema: PLAIN_RULE_OUTPUT_SCHEMA } },
   });
@@ -249,13 +283,17 @@ function anthropicAnswer(raw: string): string {
   return plainRuleVerdictText(texts[0]!.text);
 }
 
-function openAiBody(p: Extract<ResolvedPlainRuleProvider, { kind: "openai-compatible" }>, frame: string): string {
+function openAiBody(
+  p: Extract<ResolvedPlainRuleProvider, { kind: "openai-compatible" }>,
+  frame: string,
+  system: string,
+): string {
   return JSON.stringify({
     model: p.model,
     [p.tokenParam]: p.maxTokens,
     n: 1,
     messages: [
-      { role: "system", content: PLAIN_RULE_SYSTEM_PROMPT },
+      { role: "system", content: system },
       { role: "user", content: frame },
     ],
     response_format: {
@@ -283,10 +321,14 @@ function openAiAnswer(raw: string): string {
 }
 
 /** The version a decision records: changes with the provider, model, limits, prompt, schema and API version. */
-export function plainRuleProviderVersion(provider: ResolvedPlainRuleProvider): string {
+export function plainRuleProviderVersion(
+  provider: ResolvedPlainRuleProvider,
+  actionClass: PlainRuleActionClass = "read",
+): string {
   const fields = [
     PLAIN_RULE_PROMPT_VERSION,
-    createHash("sha256").update(PLAIN_RULE_SYSTEM_PROMPT).digest("hex"),
+    // The `read` prompt is the first rollout's, so its version is unchanged by the other classes.
+    createHash("sha256").update(plainRuleSystemPrompt(actionClass)).digest("hex"),
     createHash("sha256").update(JSON.stringify(PLAIN_RULE_OUTPUT_SCHEMA)).digest("hex"),
     provider.kind === "anthropic" ? ANTHROPIC_API_VERSION : "chat-completions",
     ...Object.entries(provider).sort(([a], [b]) => a.localeCompare(b)),
@@ -305,12 +347,18 @@ export type PlainRuleProviderResult =
 export function createPlainRuleProviderTransport(options: {
   readonly config: unknown;
   readonly post: (body: string, signal: AbortSignal) => Promise<string>;
+  /** The class the judge decides (default `read`): its prompt, and so its provider version. */
+  readonly actionClass?: PlainRuleActionClass;
 }): PlainRuleProviderResult {
   const provider = resolvePlainRuleProvider(options?.config);
   const post = options?.post;
-  if (provider === null || typeof post !== "function") return { status: "invalid" };
+  const actionClass = options?.actionClass ?? "read";
+  if (provider === null || typeof post !== "function" || !Object.hasOwn(PLAIN_RULE_REQUEST_SCHEMAS, actionClass))
+    return { status: "invalid" };
+  const system = plainRuleSystemPrompt(actionClass);
   const send = async (frame: string, signal: AbortSignal): Promise<string> => {
-    const body = provider.kind === "anthropic" ? anthropicBody(provider, frame) : openAiBody(provider, frame);
+    const body =
+      provider.kind === "anthropic" ? anthropicBody(provider, frame, system) : openAiBody(provider, frame, system);
     const raw = await post(body, signal);
     if (typeof raw !== "string") throw new PlainRuleProviderFailed("provider-http-body");
     return provider.kind === "anthropic" ? anthropicAnswer(raw) : openAiAnswer(raw);
@@ -318,6 +366,6 @@ export function createPlainRuleProviderTransport(options: {
   return {
     status: "ready",
     provider,
-    transport: Object.freeze({ version: plainRuleProviderVersion(provider), send }),
+    transport: Object.freeze({ version: plainRuleProviderVersion(provider, actionClass), send }),
   };
 }
