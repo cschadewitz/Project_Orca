@@ -234,6 +234,9 @@ describe.skipIf(process.platform !== "linux")("what a process's descriptors are"
 
 describe.skipIf(process.platform !== "linux")("what a command would reach outside its namespace", () => {
   const user = () => ({ uid: userInfo().uid, name: userInfo().username, home: join(root, "home"), keep: [] });
+  /** What was found for the variables and for this test's own paths: the machine's own well-known places are left out. */
+  const said = (reach: ReturnType<typeof codexExecOutsideReach>) =>
+    reach.unhidden.filter(({ from }) => !from.startsWith("/") || from.startsWith(root));
 
   it("names the user's runtime directory and the agent's, and leaves their variables out", async () => {
     const runtime = join(root, "runtime");
@@ -248,14 +251,22 @@ describe.skipIf(process.platform !== "linux")("what a command would reach outsid
         DBUS_SESSION_BUS_ADDRESS: `unix:path=${runtime}/bus`,
         SSH_AUTH_SOCK: join(agent, "agent.1"),
         DISPLAY: ":0",
+        WAYLAND_DISPLAY: "wayland-0",
         NOT_SET: undefined,
       },
       user(),
     );
     expect(reach.hidden).toEqual(expect.arrayContaining([runtime, agent]));
     expect(reach.env).toEqual({ PATH: "/usr/bin:/bin", HOME: join(root, "home") });
-    expect(reach.dropped.sort()).toEqual(["DBUS_SESSION_BUS_ADDRESS", "DISPLAY", "SSH_AUTH_SOCK", "XDG_RUNTIME_DIR"]);
-    expect(reach.unhidden.filter(({ path }) => path.startsWith(root))).toEqual([]);
+    expect(reach.dropped.sort()).toEqual([
+      "DBUS_SESSION_BUS_ADDRESS",
+      "DISPLAY",
+      "SSH_AUTH_SOCK",
+      "WAYLAND_DISPLAY",
+      "XDG_RUNTIME_DIR",
+    ]);
+    // Everything the environment named was followed to a directory that is hidden.
+    expect(said(reach)).toEqual([]);
     // Each can be masked as it is: a real directory's own path, none inside another.
     for (const path of reach.hidden) expect(await realpath(path)).toBe(path);
   });
@@ -272,6 +283,39 @@ describe.skipIf(process.platform !== "linux")("what a command would reach outsid
     expect(reach.hidden.filter((path) => path.startsWith(root))).toEqual([runtime]);
   });
 
+  it("follows each socket the environment names to its directory, wherever the name really leads", async () => {
+    await mkdir(join(root, "home"));
+    const places = ["bus", "keyring", "gpg", "tmux", "docker", "editor", "wayland"].map((name) => join(root, name));
+    for (const dir of places) await mkdir(dir, { mode: 0o700 });
+    const [bus, keyring, gpg, tmux, docker, editor, wayland] = places as [
+      string,
+      string,
+      string,
+      string,
+      string,
+      string,
+      string,
+    ];
+    await writeFile(join(docker, "docker.sock"), "");
+    // A name for the container daemon's socket that leads into another directory.
+    await symlink(join(docker, "docker.sock"), join(root, "docker-by-link.sock"));
+    const reach = codexExecOutsideReach(
+      {
+        DBUS_SESSION_BUS_ADDRESS: `unix:path=${bus}/a%20bus,guid=0123`,
+        GNOME_KEYRING_CONTROL: keyring,
+        GPG_AGENT_INFO: `${gpg}/S.gpg-agent:4242:1`,
+        TMUX: `${tmux}/default,4242,0`,
+        DOCKER_HOST: `unix://${join(root, "docker-by-link.sock")}`,
+        VSCODE_IPC_HOOK_CLI: `${editor}/ipc.sock`,
+        WAYLAND_DISPLAY: `${wayland}/wayland-1`,
+      },
+      user(),
+    );
+    expect(reach.hidden.filter((path) => path.startsWith(root)).sort()).toEqual([...places].sort());
+    expect(said(reach)).toEqual([]);
+    expect(reach.env).toEqual({});
+  });
+
   it("says what it cannot hide without hiding more: a home, a working directory, a directory that is not the user's own", async () => {
     const home = join(root, "home");
     const shared = join(root, "shared");
@@ -285,20 +329,86 @@ describe.skipIf(process.platform !== "linux")("what a command would reach outsid
     for (const runtime of [home, join(home, "project")]) {
       const reach = codexExecOutsideReach({ XDG_RUNTIME_DIR: runtime }, { ...user(), keep: [join(home, "project")] });
       expect(reach.hidden.filter((path) => path.startsWith(root))).toEqual([]);
-      expect(reach.unhidden).toContainEqual({
-        path: runtime,
-        why: "it holds the user's home or a directory a command works in",
-      });
+      expect(said(reach)).toEqual([
+        { from: "XDG_RUNTIME_DIR", why: "it holds the user's home or a directory a command works in" },
+      ]);
       // The variable is still left out: a command is not pointed at what could not be hidden.
       expect(reach.env).toEqual({});
     }
     // The agent's socket is in a directory others may write.
     const open = codexExecOutsideReach({ SSH_AUTH_SOCK: join(shared, "agent.sock") }, user());
     expect(open.hidden.filter((path) => path.startsWith(root))).toEqual([]);
-    expect(open.unhidden).toContainEqual({ path: shared, why: "it is not a directory of the user's own" });
+    expect(said(open)).toEqual([{ from: "SSH_AUTH_SOCK", why: "it is not a directory of the user's own" }]);
+    // A runtime directory the environment names is held to the same: one others may write is not the user's own.
+    const loose = codexExecOutsideReach({ XDG_RUNTIME_DIR: shared }, user());
+    expect(loose.hidden.filter((path) => path.startsWith(root))).toEqual([]);
+    expect(said(loose)).toEqual([{ from: "XDG_RUNTIME_DIR", why: "it is not a directory of the user's own" }]);
     // The runtime directory is a file.
     const file = codexExecOutsideReach({ XDG_RUNTIME_DIR: join(root, "not-a-directory") }, user());
-    expect(file.unhidden).toContainEqual({ path: join(root, "not-a-directory"), why: "it is not a directory" });
+    expect(said(file)).toEqual([{ from: "XDG_RUNTIME_DIR", why: "it is not a directory" }]);
+  });
+
+  it("lists what the environment names and ORCA cannot follow, by the variable's name and never its value", async () => {
+    await mkdir(join(root, "home"));
+    // A path through links that lead back to each other: what is there cannot be looked at.
+    await symlink(join(root, "loop-b"), join(root, "loop-a"));
+    await symlink(join(root, "loop-a"), join(root, "loop-b"));
+    const reach = codexExecOutsideReach(
+      {
+        XDG_RUNTIME_DIR: "run/user/secret-relative",
+        SSH_AUTH_SOCK: join(root, "nowhere-secret", "agent.1"),
+        GNOME_KEYRING_CONTROL: join(root, "loop-a", "secret-keyring"),
+        GPG_AGENT_INFO: "",
+        DBUS_SESSION_BUS_ADDRESS: "unix:abstract=/tmp/dbus-secret;tcp:host=secret.example,port=1",
+        DOCKER_HOST: "tcp://secret.example:2375",
+        CONTAINER_HOST: "ssh://someone@secret.example/run/podman.sock",
+        DISPLAY: "secret.example:0",
+        TMUX_TMPDIR: "secret-relative",
+      },
+      user(),
+    );
+    expect(reach.hidden.filter((path) => path.startsWith(root))).toEqual([]);
+    expect(said(reach)).toEqual([
+      { from: "XDG_RUNTIME_DIR", why: "its value is not a path ORCA can follow" },
+      { from: "GNOME_KEYRING_CONTROL", why: "it could not be looked at" },
+      { from: "SSH_AUTH_SOCK", why: "it names nothing that is there" },
+      { from: "GPG_AGENT_INFO", why: "its value is not a path ORCA can follow" },
+      { from: "DBUS_SESSION_BUS_ADDRESS", why: "it names a service that is not reached through a directory" },
+      { from: "DOCKER_HOST", why: "it names a service that is not reached through a directory" },
+      { from: "CONTAINER_HOST", why: "it names a service that is not reached through a directory" },
+      { from: "DISPLAY", why: "it names a service that is not reached through a directory" },
+      { from: "TMUX_TMPDIR", why: "its value is not a path ORCA can follow" },
+    ]);
+    // No value is in what is said, and every one of the variables is left out of the environment.
+    expect(JSON.stringify(reach)).not.toMatch(/secret/);
+    expect(reach.env).toEqual({});
+    expect(reach.dropped).toHaveLength(9);
+  });
+
+  it("passes over a well-known directory only when it is not there", async () => {
+    await mkdir(join(root, "home"));
+    const mine = codexExecOutsideReach({}, user());
+    // On this machine, each well-known place is hidden, said not to be, or not there. None is hidden twice.
+    const wellKnown = [
+      `/run/user/${userInfo().uid}`,
+      "/tmp/.X11-unix",
+      "/tmp/.ICE-unix",
+      `/tmp/tmux-${userInfo().uid}`,
+    ];
+    for (const place of wellKnown) {
+      const there = existsSync(place);
+      const accounted = mine.hidden.includes(place) || mine.unhidden.some(({ from }) => from === place);
+      expect([place, accounted]).toEqual([place, there]);
+    }
+    // A multiplexer directory the environment places elsewhere, which is someone else's to write.
+    const elsewhere = join(root, "multiplexers");
+    await mkdir(join(elsewhere, `tmux-${userInfo().uid}`), { recursive: true });
+    await chmod(join(elsewhere, `tmux-${userInfo().uid}`), 0o777);
+    expect(said(codexExecOutsideReach({ TMUX_TMPDIR: elsewhere }, user()))).toEqual([
+      { from: "TMUX_TMPDIR", why: "it is not a directory of the user's own" },
+    ]);
+    // With nothing of a multiplexer's there, the variable named a place where there is none to hide.
+    expect(said(codexExecOutsideReach({ TMUX_TMPDIR: join(root, "home") }, user()))).toEqual([]);
   });
 });
 
@@ -836,6 +946,39 @@ describe.skipIf(!USABLE && !REQUIRED)("an executor in namespaces ORCA makes", ()
       for (const read of stuck.out) read.back();
     }
     await expect.poll(codexExecReadsOut).toBe(0);
+  });
+
+  /** The kernel's status of a process, with what it says of new privileges turned round for the reads `which` picks. */
+  const couldGain = (which: (read: number) => boolean) => {
+    let reads = 0;
+    return (file: string): string => {
+      const status = readFileSync(file, "utf8");
+      reads += 1;
+      return which(reads) ? status.replace(/^NoNewPrivs:\t1$/m, "NoNewPrivs:\t0") : status;
+    };
+  };
+
+  it("never runs the executor when the holder could gain privileges from a file it runs", async () => {
+    // The first status ORCA reads is the holder's, through its descriptor for that process.
+    const { backend, exit } = isolate({ status: couldGain((read) => read === 1) });
+    let flushed = 0;
+    backend.send("echo never > never.txt", () => (flushed += 1));
+    await expect(backend.isolated).rejects.toThrow(/the holder could gain privileges from a file it runs/);
+    await exit;
+    // Refused before the holder was asked to start anything: the stand-in executor never ran.
+    expect(existsSync(started())).toBe(false);
+    expect(flushed).toBe(1);
+    expect(existsSync(join(work, "never.txt"))).toBe(false);
+  });
+
+  it("sends the executor nothing when only it could gain privileges from a file it runs", async () => {
+    const { backend, exit } = isolate({ status: couldGain((read) => read > 1) });
+    backend.send("echo never > never.txt", () => undefined);
+    await expect(backend.isolated).rejects.toThrow(/the executor could gain privileges from a file it runs/);
+    await exit;
+    // It had been started, which is how ORCA came to look at it. What was waiting never reached it.
+    expect(existsSync(started())).toBe(true);
+    expect(existsSync(join(work, "never.txt"))).toBe(false);
   });
 
   /** Three things a program outside the namespace might listen on, and a command's way to try each. */
