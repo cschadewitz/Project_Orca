@@ -91,6 +91,27 @@
  * whoever runs it another user's rights gives a command nothing: ORCA starts the executor
  * only after the kernel listed it as unable to gain privileges that way.
  *
+ * **A closed executor has nothing of the host's to write but what it is given, and no socket
+ * with a name.** With `closed`, the whole file system is read-only in the namespace but the
+ * directories named writable, `/tmp` is a temporary directory of the namespace's own, `/run`
+ * is empty, `/dev` is the namespace's own (no other terminal, no shared memory of the
+ * host's), and the namespace has no inter-process objects of the host's. So nothing a
+ * command writes outside its own directories is left for a program outside to run later.
+ * And every process in the namespace is under a filter the kernel applies
+ * (`codexExecSocketFilter`): no socket is made but one of the network's, which in a network
+ * with nothing in it reaches nobody, one that asks the kernel about that network, and an
+ * unnamed pair of connected ones. A socket that could be connected to a path cannot be made
+ * at all, so a program listening on one is out of reach wherever its socket is, not by a
+ * list of the places sockets usually are. ORCA reads the mount table, the namespaces and
+ * the kernel's word that a filter is in place from outside, and has the holder try a named
+ * socket inside, before the executor is started. `codexExecProofShortfalls` says what a
+ * proof lacks for all this to hold.
+ *
+ * What a closed executor does not close, said plainly. What a command writes inside its own
+ * writable directories is still there after it, for whoever runs it later. And a named pipe
+ * is not a socket and not a file a read-only file system protects: where a program outside
+ * reads from one that the user may write, a command can still write to it by its path.
+ *
  * Limits, said plainly. Where the system lets one process trace an unrelated process of the same user
  * (`ptrace_scope` 0), such a command can also alter the executor and the holder beside it.
  * A file that had a second name before the session is reached by that name whatever is
@@ -155,6 +176,16 @@ export interface CodexExecMasks {
   /** Bound read-only. */
   readOnly: readonly string[];
   /** Inside a read-only directory, and bound writable again. */
+  writable: readonly string[];
+}
+
+/** What a closed executor is given of the host's to write. */
+export interface CodexExecClosed {
+  /**
+   * The directories of the host's a command can write, each a real directory's own path:
+   * the workspace, and whatever else the agent's work is to land in. Everything else is
+   * read-only, apart from what the masks make writable inside a directory of ORCA's.
+   */
   writable: readonly string[];
 }
 
@@ -559,8 +590,8 @@ export function codexExecOutsideReach(
   };
 }
 
-/** One mask, as bubblewrap is told to make it. */
-function maskArguments(masks: CodexExecMasks): string[] {
+/** One mask, as bubblewrap is told to make it, after a closed executor's writable directories. */
+function maskArguments(masks: CodexExecMasks, writable: readonly string[] = []): string[] {
   const seen = new Map<string, string>();
   const real = (path: string, what: string): string => {
     if (!isAbsolute(path) || path.includes("\0") || path === sep || !isDirectory(path) || realpathSync(path) !== path)
@@ -570,6 +601,11 @@ function maskArguments(masks: CodexExecMasks): string[] {
     return path;
   };
   const steps: { path: string; args: string[] }[] = [];
+  for (const path of writable) {
+    if (masks.hidden.some((root) => path === root || inside(path, root)))
+      throw new CodexExecIsolationError(`a writable directory is hidden: ${path}`);
+    steps.push({ path, args: ["--bind", real(path, "writable"), path] });
+  }
   for (const path of [...masks.readOnly, ...masks.writable])
     if (masks.hidden.some((root) => inside(path, root)))
       throw new CodexExecIsolationError(`a path inside a hidden directory cannot be shown: ${path}`);
@@ -681,6 +717,13 @@ export interface CodexExecIsolatedSpawn extends CodexExecServerSpawn {
    * be asked for.
    */
   network?: "host" | "none" | undefined;
+  /**
+   * Make the executor closed: a read-only file system but for `writable`, a temporary
+   * directory, devices and inter-process objects of its own, and no socket with a name. Not
+   * with `network: "host"`, and on x64 only. Without it a command can write wherever the
+   * user can, and connect to any socket it can name by a path.
+   */
+  closed?: CodexExecClosed | undefined;
 }
 
 /** What ORCA saw of an isolated executor before it was sent anything. */
@@ -694,10 +737,17 @@ export interface CodexExecIsolationProof {
    * are never ORCA's. The network namespace is ORCA's with `network: "host"`, and never with
    * `network: "none"`.
    */
-  namespaces: { pid: string; mnt: string; user: string; net: string };
+  namespaces: { pid: string; mnt: string; user: string; net: string; ipc: string };
   /** The network a command has: ORCA's own, or none. Seen from the namespaces, not taken from the request. */
   network: "host" | "none";
   masks: CodexExecMasks;
+  /**
+   * Set when the executor is closed, and only after ORCA saw it: the file system read-only
+   * in the holder's mount table but for these directories and what the namespace made for
+   * itself, an inter-process namespace that is not ORCA's, the kernel listing the holder and
+   * the executor as filtered, and the holder refused a named socket.
+   */
+  closed?: { writable: string[] } | undefined;
   /** The system's `ptrace_scope`, when it has one. */
   ptraceScope?: number | undefined;
 }
@@ -757,6 +807,29 @@ const act = (m) => {
       try { fs.accessSync(path, fs.constants.W_OK); } catch { wrong.push("not writable: " + path); }
     }
     say({ id: m.id, wrong });
+  } else if (m.op === "closed") {
+    // What ORCA could not settle from the mount table: whether a path leads a process here
+    // to a mount at all. One that is not there or cannot be entered is not reached. Any
+    // other answer, an error ORCA does not know included, counts as reached.
+    const reached = m.look.filter((path) => {
+      try { fs.lstatSync(path); return true; } catch (error) { return !["EACCES", "ENOENT", "ENOTDIR"].includes(error.code); }
+    });
+    const kept = m.writable.filter((path) => {
+      try { fs.accessSync(path, fs.constants.W_OK); return false; } catch { return true; }
+    });
+    let answered = false;
+    const answer = (socket) => {
+      if (answered) return;
+      answered = true;
+      say({ id: m.id, reached, kept, socket });
+    };
+    try {
+      const tried = net.connect({ path: "/proc/self/no-socket-of-orca" });
+      tried.on("error", (error) => answer(String(error && error.code)));
+      tried.on("connect", () => { tried.destroy(); answer("connected"); });
+    } catch (error) {
+      answer(String(error && error.code));
+    }
   } else if (m.op === "start" && child === undefined) {
     child = spawn(m.program, m.args, { cwd: m.cwd, env: m.env, stdio: "inherit" });
     child.on("error", () => leave(71));
@@ -806,6 +879,11 @@ interface Mount {
   point: string;
   options: string[];
   type: string;
+  /** The file system the mount is of, as the kernel numbers it (`major:minor`). */
+  device: string;
+  /** The mount's own number, and the number of the mount it is mounted in. */
+  id: string;
+  parent: string;
 }
 
 /** The mount table of a process, later mounts last. */
@@ -815,9 +893,199 @@ export function parseMountInfo(text: string): Mount[] {
     const fields = line.split(" ");
     const dash = fields.indexOf("-");
     if (fields.length < 7 || dash < 6 || fields[dash + 1] === undefined) continue;
-    mounts.push({ point: mountPath(fields[4]!), options: fields[5]!.split(","), type: fields[dash + 1]! });
+    mounts.push({
+      point: mountPath(fields[4]!),
+      options: fields[5]!.split(","),
+      type: fields[dash + 1]!,
+      device: fields[2]!,
+      id: fields[0]!,
+      parent: fields[1]!,
+    });
   }
   return mounts;
+}
+
+/** What bubblewrap makes of the host's devices in a `/dev` of the namespace's own. */
+const OWN_DEVICES = ["null", "zero", "full", "random", "urandom", "tty", "console"].map((name) => `/dev/${name}`);
+/** The kinds of file system a namespace makes for itself, with nothing of the host's in them. */
+const OWN_KINDS = ["tmpfs", "devpts", "proc"];
+
+/**
+ * What the mount table of a closed executor's namespace shows, against ORCA's own.
+ *
+ * `wrong` is why it is not closed, when that can be read from the table alone. `look` are
+ * the mounts the table does not settle: listed writable, of a file system of the host's,
+ * and not among the directories a command was given. Bubblewrap leaves such a mount as it
+ * was only when the user cannot get to it, so whether a path leads a process there at all
+ * is asked inside the namespace. One that is reached is not closed, whether or not its top
+ * directory is the user's to write: what is below it may be.
+ *
+ * No mount but the namespace's own devices lets a device be opened: a device of the host's
+ * that lies somewhere other than `/dev` and that the user may write is as good as writable
+ * on a read-only file system.
+ *
+ * A mount is the namespace's own when its file system is of a kind a namespace makes for
+ * itself and is not one of the file systems in ORCA's table: whatever is written there is
+ * gone with the namespace.
+ *
+ * Only mounts a path can lead into count. A mount is entered from the one it is mounted in,
+ * so one that sits under the point of a later mount in the same parent is out of reach (the
+ * host's own `/dev/shm`, under the `/dev` the namespace made), and one with another mounted
+ * on its root is only passed through.
+ */
+export function codexExecClosedMounts(
+  theirs: readonly Mount[],
+  mine: readonly Mount[],
+  writable: readonly string[],
+): { wrong?: string; look: string[] } {
+  const host = new Set(mine.map((mount) => mount.device));
+  const own = (mount: Mount | undefined, kind: string): boolean =>
+    mount !== undefined && mount.type === kind && !host.has(mount.device);
+  const top = (path: string): Mount | undefined => theirs.filter((mount) => mount.point === path).at(-1);
+  if (!top(sep)?.options.includes("ro")) return { wrong: "the file system is not read-only", look: [] };
+  for (const [path, kind] of [
+    ["/proc", "proc"],
+    ["/dev", "tmpfs"],
+    ["/run", "tmpfs"],
+    ["/tmp", "tmpfs"],
+  ] as const)
+    if (!own(top(path), kind)) return { wrong: `${path} is not the namespace's own`, look: [] };
+  for (const path of writable)
+    if (!top(path)?.options.includes("rw"))
+      return { wrong: `a writable directory is not bound writable: ${path}`, look: [] };
+  const ids = new Set(theirs.map((mount) => mount.id));
+  const children = (of: Mount): Mount[] => theirs.filter((mount) => mount.parent === of.id && mount !== of);
+  const entered: Mount[] = [];
+  const enter = (mount: Mount): void => {
+    const inIt = children(mount);
+    // With another mounted on its root, nothing of its own is reached.
+    if (!inIt.some((child) => child.point === mount.point)) entered.push(mount);
+    for (const child of inIt)
+      if (!inIt.some((other) => other !== child && inside(child.point, other.point))) enter(child);
+  };
+  for (const mount of theirs) if (!ids.has(mount.parent)) enter(mount);
+  const look = new Set<string>();
+  for (const mount of entered) {
+    const ownDevice = OWN_DEVICES.includes(mount.point) || own(mount, "devpts");
+    if (!ownDevice && !mount.options.includes("nodev"))
+      return { wrong: `a device of the host's could be opened under ${mount.point}`, look: [] };
+    if (mount.options.includes("ro")) continue;
+    if (OWN_KINDS.includes(mount.type) && !host.has(mount.device)) continue;
+    if (OWN_DEVICES.includes(mount.point)) continue;
+    if (writable.some((root) => mount.point === root || inside(mount.point, root))) continue;
+    look.add(mount.point);
+  }
+  return { look: [...look] };
+}
+
+/** The numbers the kernel knows these by on x64, the one machine the filter is written for. */
+const X64 = { arch: 0xc000003e, x32: 0x40000000, socket: 41, socketpair: 53, ioUringSetup: 425 } as const;
+const AF_UNIX = 1;
+const AF_INET = 2;
+const AF_INET6 = 10;
+const AF_NETLINK = 16;
+const NETLINK_ROUTE = 0;
+const SOCK_STREAM = 1;
+const SOCK_SEQPACKET = 5;
+const EACCES = 13;
+const ENOSYS = 38;
+
+/**
+ * The filter a closed executor's namespace runs under, as the kernel takes it: classic BPF
+ * for seccomp, on x64.
+ *
+ * - `socket` makes an IPv4 or IPv6 socket, or a netlink socket of the routing kind (what a
+ *   program asks its own network's addresses and routes with), and no other: not a unix
+ *   socket, which is the kind that connects to a path or an abstract name, not one of the
+ *   kinds that reach past a network namespace (a hypervisor's, for one), and no other kind
+ *   of netlink socket (device events, the audit log, process events).
+ * - `socketpair` makes a connected unix pair of stream or sequenced-packet type and no
+ *   other. Those two types cannot be connected again; a datagram pair can be sent to a
+ *   named socket, so it is refused.
+ * - `io_uring_setup` is refused as not there: a ring makes sockets the filter never sees,
+ *   and programs that use one fall back without it.
+ * - A call made any other way than as an x64 program (a 32-bit call, the x32 numbers) kills
+ *   the process: the numbers above would mean other calls there.
+ *
+ * Everything else is allowed. A refused socket fails with "permission denied". The filter
+ * stays with every process a command starts, and none of them can take it off.
+ */
+export function codexExecSocketFilter(): Buffer {
+  const LOAD = 0x20; // BPF_LD | BPF_W | BPF_ABS
+  const EQUAL = 0x15; // BPF_JMP | BPF_JEQ | BPF_K
+  const AT_LEAST = 0x35; // BPF_JMP | BPF_JGE | BPF_K
+  const AND = 0x54; // BPF_ALU | BPF_AND | BPF_K
+  const RETURN = 0x06; // BPF_RET | BPF_K
+  const ALLOW = 0x7fff0000;
+  const KILL = 0x80000000;
+  const refuse = (errno: number): number => 0x00050000 | errno;
+  // In `struct seccomp_data`: the call's number at 0, the machine at 4, its arguments from 16, eight bytes each.
+  const NUMBER = 0;
+  const MACHINE = 4;
+  const FIRST = 16;
+  const SECOND = 24;
+  const THIRD = 32;
+  type Step = [label: string, code: number, yes: string | 0, no: string | 0, value: number];
+  // Jumps only go forward, so every place jumped to is below what jumps to it.
+  const steps: Step[] = [
+    ["", LOAD, 0, 0, MACHINE],
+    ["", EQUAL, 0, "kill", X64.arch],
+    ["", LOAD, 0, 0, NUMBER],
+    ["", AT_LEAST, "kill", 0, X64.x32],
+    ["", EQUAL, "socket", 0, X64.socket],
+    ["", EQUAL, "pair", 0, X64.socketpair],
+    ["", EQUAL, "absent", 0, X64.ioUringSetup],
+    ["", RETURN, 0, 0, ALLOW],
+    ["socket", LOAD, 0, 0, FIRST],
+    ["", EQUAL, "allow", 0, AF_INET],
+    ["", EQUAL, "allow", 0, AF_INET6],
+    ["", EQUAL, 0, "refuse", AF_NETLINK],
+    ["", LOAD, 0, 0, THIRD],
+    ["", EQUAL, "allow", "refuse", NETLINK_ROUTE],
+    ["pair", LOAD, 0, 0, FIRST],
+    ["", EQUAL, 0, "refuse", AF_UNIX],
+    ["", LOAD, 0, 0, SECOND],
+    // The type shares its argument with flags, above its low four bits.
+    ["", AND, 0, 0, 0xf],
+    ["", EQUAL, "allow", 0, SOCK_STREAM],
+    ["", EQUAL, "allow", "refuse", SOCK_SEQPACKET],
+    ["refuse", RETURN, 0, 0, refuse(EACCES)],
+    ["absent", RETURN, 0, 0, refuse(ENOSYS)],
+    ["kill", RETURN, 0, 0, KILL],
+    ["allow", RETURN, 0, 0, ALLOW],
+  ];
+  const filter = Buffer.alloc(steps.length * 8);
+  steps.forEach(([, code, yes, no, value], at) => {
+    const to = (target: string | 0): number =>
+      target === 0 ? 0 : steps.findIndex(([label]) => label === target) - at - 1;
+    filter.writeUInt16LE(code, at * 8);
+    filter.writeUInt8(to(yes), at * 8 + 2);
+    filter.writeUInt8(to(no), at * 8 + 3);
+    filter.writeUInt32LE(value >>> 0, at * 8 + 4);
+  });
+  return filter;
+}
+
+/**
+ * What a proof lacks of what this backend can show, each thing by name: the network, the
+ * closed file system and filter, and a system that keeps a command from altering the
+ * executor. What the namespace is, ORCA saw before it gave the proof. What the system
+ * allows inside it is read here from what the proof recorded.
+ *
+ * An empty answer is not a claim that nothing leads out. What a closed executor does not
+ * close is the same for every proof and is not listed here: what a command writes into its
+ * writable directories, and a named pipe of the user's that a program outside reads.
+ */
+export function codexExecProofShortfalls(proof: CodexExecIsolationProof): string[] {
+  const lacks: string[] = [];
+  if (proof.network !== "none") lacks.push("a command has the host's network");
+  if (proof.closed === undefined)
+    lacks.push("a command can write wherever the user can, and connect to a socket it can name by a path");
+  // Where one process may trace another of the same user, a command can become the executor
+  // that ran it, and nothing it then does is a request ORCA decided.
+  if (proof.ptraceScope === undefined || proof.ptraceScope < 1)
+    lacks.push("the system lets a command alter the executor that started it (no ptrace_scope of 1 or more)");
+  return lacks;
 }
 
 /**
@@ -914,12 +1182,23 @@ function childrenOf(first: FirstProcess): number[] {
   }
 }
 
+/**
+ * An environment without the variables that name a temporary directory of the host's: in a
+ * closed executor that directory is not there to write, and `/tmp` is the namespace's own.
+ */
+function withoutTemporary(env: Record<string, string>): Record<string, string> {
+  const without = { ...env };
+  for (const name of ["TMPDIR", "TMP", "TEMP", "TEMPDIR"]) delete without[name];
+  return without;
+}
+
 /** The namespaces of the process whose `/proc` directory this is. */
-const namespacesOf = (directory: string): { pid: string; mnt: string; user: string; net: string } => ({
+const namespacesOf = (directory: string): { pid: string; mnt: string; user: string; net: string; ipc: string } => ({
   pid: readlinkSync(`${directory}/ns/pid`),
   mnt: readlinkSync(`${directory}/ns/mnt`),
   user: readlinkSync(`${directory}/ns/user`),
   net: readlinkSync(`${directory}/ns/net`),
+  ipc: readlinkSync(`${directory}/ns/ipc`),
 });
 
 /** A descriptor for the kernel's directory of the process a pid means now, or undefined when there is none. */
@@ -964,6 +1243,11 @@ export function spawnIsolatedCodexExecServer(spec: CodexExecIsolatedSpawn): Code
     throw new CodexExecIsolationError("the system has no bubblewrap (bwrap) that only root can change");
   const network = spec.network ?? "none";
   const statusOf = spec.status ?? ((file: string): string => readFileSync(file, "utf8"));
+  const sealed = spec.closed === undefined ? undefined : { writable: [...spec.closed.writable] };
+  if (sealed !== undefined && network !== "none")
+    throw new CodexExecIsolationError("a closed executor has no network: the host's cannot be asked for with it");
+  if (sealed !== undefined && process.arch !== "x64")
+    throw new CodexExecIsolationError("a closed executor is made on x64 only");
   const masks: CodexExecMasks = {
     hidden: [...spec.masks.hidden],
     readOnly: [...spec.masks.readOnly],
@@ -982,12 +1266,25 @@ export function spawnIsolatedCodexExecServer(spec: CodexExecIsolatedSpawn): Code
       "ALL",
       "--info-fd",
       "4",
-      "--dev-bind",
-      "/",
-      "/",
-      "--proc",
-      "/proc",
-      ...maskArguments(masks),
+      ...(sealed === undefined
+        ? ["--dev-bind", "/", "/", "--proc", "/proc"]
+        : [
+            "--unshare-ipc",
+            "--ro-bind",
+            "/",
+            "/",
+            "--dev",
+            "/dev",
+            "--proc",
+            "/proc",
+            "--tmpfs",
+            "/run",
+            "--tmpfs",
+            "/tmp",
+            "--seccomp",
+            "5",
+          ]),
+      ...maskArguments(masks, sealed?.writable),
       "--chdir",
       "/",
       "--",
@@ -995,10 +1292,20 @@ export function spawnIsolatedCodexExecServer(spec: CodexExecIsolatedSpawn): Code
       "-e",
       HOLDER,
     ],
-    { cwd: "/", env: { ...(spec.runtimeEnv ?? {}) }, stdio: ["pipe", "pipe", "pipe", "pipe", "pipe"] },
+    {
+      cwd: "/",
+      env: { ...(spec.runtimeEnv ?? {}) },
+      stdio: ["pipe", "pipe", "pipe", "pipe", "pipe", ...(sealed === undefined ? [] : ["pipe" as const])],
+    },
   );
   const control = child.stdio[3] as unknown as Socket;
   const info = child.stdio[4] as unknown as Readable;
+  if (sealed !== undefined) {
+    // Bubblewrap reads the filter to its end and puts it in place before it runs the holder.
+    const filter = (child.stdio as unknown as Socket[])[5]!;
+    filter.on("error", () => undefined);
+    filter.end(codexExecSocketFilter());
+  }
   const grace = spec.stopGraceMs ?? 2000;
 
   let diagnostics = "";
@@ -1269,7 +1576,7 @@ export function spawnIsolatedCodexExecServer(spec: CodexExecIsolatedSpawn): Code
     const candidate = openProcess(named as number);
     if (candidate === undefined) wrong("the holder is not there");
     const at = candidate!.directory;
-    let namespaces: { pid: string; mnt: string; user: string; net: string };
+    let namespaces: { pid: string; mnt: string; user: string; net: string; ipc: string };
     let status: string;
     try {
       status = statusOf(`${at}/status`);
@@ -1293,6 +1600,9 @@ export function spawnIsolatedCodexExecServer(spec: CodexExecIsolatedSpawn): Code
             ? "the holder is not in ORCA's network namespace"
             : "the holder is in ORCA's own network namespace",
         );
+      if (sealed !== undefined && namespaces.ipc === mine.ipc) wrong("the holder is in ORCA's own ipc namespace");
+      // The kernel's word that a filter is in place. Which filter it is, the holder shows below.
+      if (sealed !== undefined && field(status, "Seccomp")[0] !== "2") wrong("the holder is not under a filter");
       if (codexExecProcessSeen(at) !== "there") wrong("the holder is not there");
     } catch (error) {
       closeSync(candidate!.fd);
@@ -1356,6 +1666,31 @@ export function spawnIsolatedCodexExecServer(spec: CodexExecIsolatedSpawn): Code
     if ((probe["wrong"] as unknown[]).length > 0)
       wrong(`a mask does not hold inside the namespace (${String((probe["wrong"] as unknown[])[0])})`);
 
+    if (sealed !== undefined) {
+      // From outside: the mount table shows a read-only file system, the namespace's own
+      // devices and temporary directory, and nothing of the host's writable but what was given.
+      const given = [...sealed.writable, ...masks.writable];
+      const table = codexExecClosedMounts(mounts, parseMountInfo(readFileSync("/proc/self/mountinfo", "utf8")), given);
+      if (table.wrong !== undefined) wrong(`the executor is not closed: ${table.wrong}`);
+      // From inside: whether what the table left open is reached at all, and that the filter
+      // refuses a socket with a name. Without it, the answer would be that there is no such
+      // socket. That the filter refuses the rest of what ORCA's does rests on bubblewrap
+      // having been handed ORCA's filter and no other.
+      const tried = await ask({ op: "closed", look: table.look, writable: given });
+      stillThere(holder);
+      const reached = tried["reached"];
+      const kept = tried["kept"];
+      if (!Array.isArray(reached) || !Array.isArray(kept)) wrong("the holder did not try what is closed");
+      if ((reached as unknown[]).length > 0)
+        wrong(
+          `the executor is not closed: a path leads a command to ${String((reached as unknown[])[0])}, which is the host's and writable`,
+        );
+      if ((kept as unknown[]).length > 0)
+        wrong(`a writable directory cannot be written in the namespace: ${String((kept as unknown[])[0])}`);
+      if (tried["socket"] !== "EACCES")
+        wrong(`the executor is not closed: a socket with a name was not refused (${String(tried["socket"])})`);
+    }
+
     // Only now is there an executor. It is the holder's child, in the holder's namespaces.
     // Asked here, with nothing between the question and the request: is the setup over, or late?
     stillThere(holder);
@@ -1365,7 +1700,7 @@ export function spawnIsolatedCodexExecServer(spec: CodexExecIsolatedSpawn): Code
         program: spec.program,
         args: ["exec-server", "--listen", "stdio"],
         cwd: spec.cwd,
-        env: codexExecServerEnv(spec.env),
+        env: sealed === undefined ? codexExecServerEnv(spec.env) : withoutTemporary(codexExecServerEnv(spec.env)),
       },
       waitMs,
     );
@@ -1394,8 +1729,9 @@ export function spawnIsolatedCodexExecServer(spec: CodexExecIsolatedSpawn): Code
       // acts as another user for whoever runs it (sudo, a policy agent's helper) does not.
       if (field(itsStatus, "NoNewPrivs")[0] !== "1") wrong("the executor could gain privileges from a file it runs");
       const its = namespacesOf(theirs!.directory);
-      for (const kind of ["pid", "mnt", "user", "net"] as const)
+      for (const kind of ["pid", "mnt", "user", "net", "ipc"] as const)
         if (its[kind] !== namespaces[kind]) wrong(`the executor is not in the holder's ${kind} namespace`);
+      if (sealed !== undefined && field(itsStatus, "Seccomp")[0] !== "2") wrong("the executor is not under a filter");
       // The holder's channel is a socket, which no path opens. The executor was not handed it
       // either: ORCA has to have seen what each of its descriptors is to say so.
       const channel = readlinkSync(`${at}/fd/3`);
@@ -1416,6 +1752,7 @@ export function spawnIsolatedCodexExecServer(spec: CodexExecIsolatedSpawn): Code
       namespaces,
       network,
       masks,
+      ...(sealed !== undefined ? { closed: sealed } : {}),
       ...(ptraceScope !== undefined && Number.isInteger(ptraceScope) ? { ptraceScope } : {}),
     };
   };

@@ -38,10 +38,12 @@
  *   bubblewrap is killed, and the gate records what ORCA saw of that;
  * - a command a rule allowed cannot read or change what ORCA masks, under the directory's own
  *   name, through a link, after renaming its parent, or from a user namespace of its own;
- * - the executor has no network in any of these runs, which is how it is started unless
- *   the host's is asked for: the pinned executor runs commands all the same, and a command
- *   reaches neither a program listening on the loopback address outside the namespace nor
- *   one whose socket is in a directory ORCA hid.
+ * - the executor is closed in every one of these runs: no network, a read-only file system
+ *   but for the workspace and a temporary directory of its own, devices of its own, and no
+ *   socket with a name. The pinned executor runs commands, typed input on a terminal,
+ *   patches and Codex's own sandbox all the same. A command reaches neither a program
+ *   listening on the loopback address outside the namespace nor one listening on a socket
+ *   in the workspace itself, and leaves nothing outside the workspace.
  *
  * Nothing here wires the gate into ORCA's sessions or claims a support tier.
  */
@@ -136,8 +138,6 @@ describe.skipIf(ADAPTER === undefined).each([
   let executors: number[] = [];
   /** Every message the gate passed to an executor, as the executor received it. */
   let passed: string[] = [];
-  /** Directories a run has hidden from the executor beyond ORCA's masks. */
-  let hidden: string[] = [];
 
   beforeEach(async () => {
     root = await realpath(await mkdtemp(join(tmpdir(), "orca-1026-acceptance-")));
@@ -156,7 +156,6 @@ describe.skipIf(ADAPTER === undefined).each([
     records = [];
     executors = [];
     passed = [];
-    hidden = [];
     asks.length = 0;
     onTestFailed(() =>
       console.error(
@@ -227,12 +226,16 @@ describe.skipIf(ADAPTER === undefined).each([
 
   const startExecutor = ({ budget }: CodexExecGateConnection) => {
     const spec = { program: RUNTIME, env: { ...process.env, ...agentEnv({}) }, cwd: workspace, budget };
-    // The masks are the directories of ORCA's that exist when the executor is started.
+    // The masks are the directories of ORCA's that exist when the executor is started. The
+    // executor is closed: of the host's, a command can write the workspace and nothing else.
+    // This run's own directory is in the host's temporary directory, which a closed executor
+    // does not have, so it is bound for it to read as the rest of a host is.
     const masks = codexExecMasks(protectedPaths);
     const backend = isolated
       ? spawnIsolatedCodexExecServer({
           ...spec,
-          masks: { ...masks, hidden: [...masks.hidden, ...hidden] },
+          masks: { ...masks, readOnly: [...masks.readOnly, root] },
+          closed: { writable: [workspace] },
         })
       : spawnCodexExecServer(spec);
     if (backend.pid !== undefined) executors.push(backend.pid);
@@ -870,9 +873,10 @@ describe.skipIf(ADAPTER === undefined).each([
       expect(await readFile(join(store, "work", "out.txt"), "utf8")).toBe("deliverable\n");
     }, 240_000);
 
-    it("runs commands with no network of the host's, out of reach of a program outside on the loopback address or behind a hidden directory", async () => {
-      // Two programs outside the namespace, as a service acting for the user would be.
-      const runtime = join(root, "runtime");
+    it("runs commands closed: no network, no socket with a name wherever it is, and nothing written outside the workspace", async () => {
+      // Two programs outside the namespace, as a service acting for the user would be. One
+      // listens in the workspace itself, where nothing hides its socket from a command.
+      const runtime = join(workspace, "runtime");
       await mkdir(runtime, { mode: 0o700 });
       const servers: Server[] = [];
       const listening = (where: Parameters<Server["listen"]>[0]): Promise<Server> =>
@@ -896,16 +900,35 @@ describe.skipIf(ADAPTER === undefined).each([
       );
       const reach = (kind: string, target: string | number) =>
         shell(`${process.execPath} ${join(root, "reach.js")} ${kind} ${target}`);
+      const name = `orca-1026-closed-${process.pid}-${Date.now()}`;
       try {
-        hidden = [runtime];
+        // Every command is allowed: what stops these is where the executor runs, not a rule.
         const s = await gated({ default: "allow", rules: [] });
-        await s.prompt(script(reach("tcp", port), reach("path", join(runtime, "bus")), shell("echo ran > ran.txt")));
-        // The pinned executor needs no network of its own to run a command.
+        await s.prompt(
+          script(
+            reach("tcp", port),
+            reach("path", join(runtime, "bus")),
+            shell(`test -S ${runtime}/bus && echo socket-is-there`),
+            shell(`echo left > ${root}/left.txt; echo left > /var/tmp/${name}`),
+            shell(`echo temporary > /tmp/${name} && cat /tmp/${name}`),
+            shell("echo ran > ran.txt"),
+          ),
+        );
+        // The pinned executor needs neither a network nor a named socket to run a command.
         expect(await exists("ran.txt")).toBe("ran\n");
-        // Each try ran and said what it met. Neither met the program outside.
+        // Each try ran and said what it met. Neither met the program outside, though the
+        // command could see the socket: making one to connect to it is what was refused.
         expect(told(/tcp-E[A-Z]+/)).toBe(true);
-        expect(told(/path-ENOENT/)).toBe(true);
+        expect(told(/socket-is-there/)).toBe(true);
+        expect(told(/path-EACCES/)).toBe(true);
         expect(model.outputs.join("\n")).not.toMatch(/-reached/);
+        // Nothing was left outside the workspace, read from outside: not beside it, not in a
+        // directory of the host's anyone may write, and not in the host's temporary directory.
+        expect(told(/Read-only file system/)).toBe(true);
+        expect(await readFile(join(root, "left.txt"), "utf8").catch(() => undefined)).toBeUndefined();
+        expect(await readFile(`/var/tmp/${name}`, "utf8").catch(() => undefined)).toBeUndefined();
+        expect(told(/temporary/)).toBe(true);
+        expect(await readFile(join(tmpdir(), name), "utf8").catch(() => undefined)).toBeUndefined();
       } finally {
         await Promise.all(servers.map((server) => new Promise((resolve) => server.close(resolve))));
       }
