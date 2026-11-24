@@ -98,7 +98,19 @@
         "That Codex trusts and blocks on the hook; ORCA's startup probe is not run here",
         "Reads through the shell; only view_image is hooked by name",
         "That events, logs and stored records about the call are redacted"
-      ]
+      ],
+      "installed": {
+        "live": "codex-connected",
+        "program": {
+          "F01": "A live Codex cannot make this call: Codex builds the hook's input itself; a live run cannot hand the hook malformed bytes.",
+          "F02": "A live Codex cannot make this call: The session's context file is written by ORCA's factory; damaging it mid-session is a hook-program case.",
+          "P02": "A live Codex cannot make this call: No raw input or context file can be damaged from inside a live run (see F01 and F02).",
+          "A04": "A live Codex cannot make this call: Codex reports a call's working directory only for a shell command's workdir; the case's granted calls are an MCP call and a patch, which always carry the session's directory.",
+          "F05": "Codex refuses this call itself before ORCA answers, so ORCA's decision is run on the installed program instead: Codex answers a tool it does not offer with \"unsupported call\" before any hook runs, so ORCA's decision is never observed.",
+          "P03": "Codex refuses this call itself before ORCA answers, so ORCA's decision is run on the installed program instead: The call to a 4 KB unknown tool name is answered \"unsupported call\" by Codex before any hook runs, so ORCA's answer for it is unobserved; the other calls' short answers cannot stand in for it.",
+          "B01": "No independent evidence on a live Codex, so ORCA's decision is run on the installed program instead: Codex reads files only through view_image, which hands back nothing of a file that is not an image, so the allowed read of ORCA's YAML config shows no effect; the denied writes and edits in the same case cannot stand in for it."
+        }
+      }
     },
     {
       "id": "claude-connected",
@@ -126,6 +138,33 @@
         "A02": "The relative Edit (../elsewhere/a.md) is refused by Claude Code (the file does not exist from its working directory) before any hook runs, so that assertion's ORCA decision is unobserved; the case's other calls are observed but cannot stand in for it.",
         "B01": "Claude Code refuses Edits of ORCA files that do not exist yet, and a change to a file whose read ORCA denied, before any hook runs, so those assertions' ORCA decisions are unobserved; the denied writes in the same case cannot stand in for them.",
         "P03": "The call to a 4 KB unknown tool name is refused by Claude Code (not offered) before any hook runs, so ORCA's answer for it is unobserved; the other calls' short answers cannot stand in for it."
+      }
+    },
+    {
+      "id": "codex-connected",
+      "connected": true,
+      "proves": "codex-native-hook",
+      "what": "A real Codex through the real Codex ACP adapter, in a session opened by ORCA's session factory with the pre-tool hook installed through CODEX_CONFIG, Codex in the adapter's full-access mode (no sandbox, no approvals of its own), and a model stand-in making each case's tool calls (tools/guard-qualification/connected/codex.js)",
+      "capabilities": ["agent-turn", "mcp-grant-allows"],
+      "excluded": {
+        "L08": "Codex cannot pause a call for a person from a hook: ORCA's ask is a block, so there is no answerer and no turn that ends while one waits.",
+        "F01": "Codex builds the hook's input itself; a live run cannot hand the hook malformed bytes. Run on codex-native-hook.",
+        "F02": "The session's context file is written by ORCA's factory; damaging it mid-session is a hook-program case. Run on codex-native-hook.",
+        "F03": "Codex's hook config is session flags with a trust hash, not Claude settings; ORCA's startup probe and codex-hook-acceptance.yml check it.",
+        "F04": "The hook offers no options, so there is no option for ORCA to pick on this route.",
+        "A04": "Codex reports a call's working directory only for a shell command's workdir; MCP calls and patches carry the session's directory.",
+        "P02": "No raw input or context file can be damaged from inside a live run (see F01 and F02)."
+      },
+      "verifies": "End to end, for calls Codex would otherwise run unasked: whether each case's call took effect or came back to the model as ORCA's denial or block (an ORCA ask is a block on Codex), judged from the files, the MCP recorder, the shell recorder (the login profile of the shell Codex runs commands in) and a token in the image a read hands back",
+      "unverified": [
+        "Behaviour of a real model, which may make calls in shapes the stand-in does not",
+        "Agent versions other than the pinned pair; hosts other than linux-x64",
+        "Calls Codex refuses itself before the hook (a tool it does not offer). Nothing runs, but ORCA's decision is unobserved: each is recorded as orcaDecision unobserved and does not count",
+        "That events, logs and stored records about the call are redacted"
+      ],
+      "unobserved": {
+        "F05": "Codex answers a tool it does not offer with \"unsupported call\" before any hook runs, so ORCA's decision is never observed. Run as a diagnostic: nothing runs, shown by the request's tool list.",
+        "P03": "The call to a 4 KB unknown tool name is answered \"unsupported call\" by Codex before any hook runs, so ORCA's answer for it is unobserved; the other calls' short answers cannot stand in for it."
       }
     }
   ],
@@ -161,29 +200,30 @@
       "tuple": "Codex ACP adapter 2.9.0 with Codex 0.171.0, linux-x64 (CODEX_HOOK_VERIFIED_PAIRS); not pinned here until a trusted receipt exists",
       "pin": null,
       "tier": "none",
-      "routes": ["acp-ask"],
-      "pendingRoutes": {
-        "codex-native-hook": "#705 Codex adapter, shipped as an experimental, unqualified opt-in (nativeToolHook: experimental, off by default). An ORCA ask blocks the call; the hook runner fails open after the session-open probe; typed stdin is outside. No tier"
-      },
+      "routes": ["codex-native-hook"],
       "receipts": [],
       "unverified": [
-        "Connects and first-run preflight recognises it; no installed receipt",
-        "The uncovered routes below are refused or asked about",
-        "That Codex runs, trusts and blocks on the hook: shown by codex-hook-acceptance.yml on the installed pair, not yet as a trusted receipt",
+        "Any tier: only with nativeToolHook: experimental, on the pinned pair and host; without the hook Codex runs calls in its full-access mode without asking ORCA",
+        "Behaviour of a real model, which may make calls in shapes the stand-in does not",
+        "Subagents (multi_agent_v1, which Codex offers for models other than gpt-5.5): whether the hook runs for their calls is not shown",
         "Events and logs about its calls are redacted"
       ],
       "unsupportedRoutes": [
-        "Tool calls Codex does not ask about until the hook is on",
-        "Text typed into a running command (write_stdin) is never hooked",
-        "Hosted web search runs at the provider (ORCA turns it off)",
-        "Files a shell command reads; only view_image is hooked as a read",
-        "ORCA's ask: Codex cannot pause a call for a person from a hook, so the hook blocks it"
+        "Remote sessions over SSH while the hook is on",
+        "A Codex other than the pinned one",
+        "An agent whose own CODEX_CONFIG already sets hooks",
+        "Tool calls Codex makes without asking (its full-access mode, its own approval settings)",
+        "Hosted web search, which runs at the model provider",
+        "A call ORCA would ask a person about: Codex cannot pause a call from a hook"
       ],
       "residualRisks": [
-        "Codex lets a call through when its hook runner fails (exit 1, quiet exit 2, timeout); ORCA's startup probe refuses the session unless the hook blocks with a receipt, but cannot watch later calls",
-        "A hook is not an operating-system boundary; Codex's sandbox and ORCA's protected-path rules stay in force beside it"
+        "Text typed into a running command (write_stdin) is never shown to the hook; Codex 0.171.0 has no setting that removes write_stdin and keeps its shell (features.unified_exec=false does not)",
+        "Codex lets a call through when its hook runner fails (exit 1, a quiet exit 2, a timeout); ORCA's startup probe refuses the session unless the hook blocks with a receipt, but cannot watch later calls",
+        "Files a shell command reads, and what it spawns, writes or fetches: one decision covers the command text; only view_image is hooked as a read",
+        "A hook is not an operating-system boundary; Codex's sandbox and ORCA's protected-path rules stay in force beside it",
+        "Admission checks (adapter, runtime image, startup probe) run once when the session opens; nothing re-checks them during the session"
       ],
-      "next": "Tier C, receipts and promotion move to 0.9.0 (#1026): pin the tuple and commit installed receipts per route there. No connected proof exists for Codex (#1016 is diagnostic and Claude-only)."
+      "next": "Cal on #1051: a route that can continue when its guard fails does not meet tier A, so Codex stays none while its hook runner fails open. Installed receipts on codex-native-hook come from guard-receipts.yml (#1026); C after #1026's independent observer."
     },
     {
       "id": "gemini",
