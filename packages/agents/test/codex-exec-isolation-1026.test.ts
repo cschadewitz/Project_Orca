@@ -16,6 +16,7 @@ import {
   link,
   mkdir,
   mkdtemp,
+  readdir,
   readFile,
   realpath,
   rename,
@@ -35,6 +36,7 @@ import {
   codexExecMasks,
   codexExecProcessSeen,
   codexExecReadsOut,
+  codexExecReadsWaiting,
   parseMountInfo,
   spawnIsolatedCodexExecServer,
   systemBubblewrap,
@@ -722,6 +724,46 @@ describe.skipIf(!USABLE && !REQUIRED)("an executor in namespaces ORCA makes", ()
     } finally {
       for (const read of stuck.out) read.back();
     }
+  });
+
+  it("makes no read for a setup whose time was up when a place came to it, and gives the place to the next", async () => {
+    const stuck = stuckReads();
+    try {
+      for (let n = 0; n < CODEX_EXEC_READS_AT_ONCE; n += 1) {
+        const { backend } = isolate({ reads: stuck.reads, setupWaitMs: 120_000 });
+        await expect.poll(() => stuck.out.length, { timeout: 10_000 }).toBe(n + 1);
+        await backend.stop();
+        await expect(backend.isolated).rejects.toThrow(/stopped/);
+      }
+      // Two setups wait for a place, in this order. The first has a clock the test can put
+      // past its deadline, and a timer a minute away that never says so. Both read for real.
+      let ahead = 0;
+      let asked = 0;
+      const counted: CodexExecSetupReads = {
+        readdir: (path) => ((asked += 1), readdir(path)),
+        stat: (path) => ((asked += 1), stat(path, { bigint: true })),
+      };
+      const late = isolate({ reads: counted, setupWaitMs: 60_000, clock: () => performance.now() + ahead });
+      await expect.poll(codexExecReadsWaiting, { timeout: 10_000 }).toBe(1);
+      const next = isolate();
+      await expect.poll(codexExecReadsWaiting, { timeout: 10_000 }).toBe(2);
+      ahead = 120_000;
+
+      // One place comes free. It is offered to the first, whose time is up: no read is made
+      // for it, and it is refused. The place goes on to the second, which is shown.
+      stuck.out[0]!.back();
+      await expect(late.backend.isolated).rejects.toThrow(/isolation was not shown in time/);
+      expect(asked).toBe(0);
+      await next.backend.isolated;
+      expect(await next.run("echo here")).toBe("here\n");
+      expect(asked).toBe(0);
+      // The other read is still out, and nothing else is: the place was given back.
+      expect(codexExecReadsWaiting()).toBe(0);
+      expect(codexExecReadsOut()).toBe(1);
+    } finally {
+      for (const read of stuck.out) read.back();
+    }
+    await expect.poll(codexExecReadsOut).toBe(0);
   });
 
   it("keeps a hidden directory out of reach by its name, through a link and after its parent is renamed", async () => {

@@ -65,7 +65,7 @@
  * the few threads Node reads files on, so ORCA has no more than
  * `CODEX_EXEC_READS_AT_ONCE` of them out for all its setups together: a setup that finds no
  * place waits for one, within its own deadline, and its read is never made if it is refused
- * first. A read that never comes back keeps its place for as long as ORCA runs. With every
+ * first, or if its time is found to be up when a place comes to it. A read that never comes back keeps its place for as long as ORCA runs. With every
  * place kept, a later setup that has a hidden directory to look into is refused at its
  * deadline, and says why. What ORCA reads
  * from `/proc` itself (a process's status, namespaces, mount table and descriptors) it
@@ -229,11 +229,26 @@ export interface CodexExecSetupReads {
 }
 
 let readsOut = 0;
-const readsWaiting = new Set<() => void>();
+/** Setups waiting for a place, first come first. Each says, when given one, whether it took it. */
+const readsWaiting = new Set<() => boolean>();
 
 /** How many reads of a file system ORCA's setups have out now: asked for, and not come back. */
 export function codexExecReadsOut(): number {
   return readsOut;
+}
+
+/** How many reads of a file system are waiting for one of those to come back. */
+export function codexExecReadsWaiting(): number {
+  return readsWaiting.size;
+}
+
+/** A place is free. It goes to the first setup waiting that still takes it, or back. */
+function passOn(): void {
+  for (const next of readsWaiting) {
+    readsWaiting.delete(next);
+    if (next()) return;
+  }
+  readsOut -= 1;
 }
 
 /**
@@ -242,32 +257,37 @@ export function codexExecReadsOut(): number {
  * setups ask for them: one more waits for one of those to come back, and is not made at all
  * if its setup is over first. A setup that is over has its answer at once, a refusal, and
  * what its read comes to later is nobody's. The read's place stays taken until it is back.
+ *
+ * `over` is asked when the read is given its place, right before the read is made. A setup
+ * whose time is up may not have heard so yet, when its timer has not run, and a read made
+ * for it could keep the place for good. It is refused there, and the place goes to the next.
  */
-function readOutside<T>(read: () => Promise<T>, setupOver: AbortSignal): Promise<T> {
+function readOutside<T>(read: () => Promise<T>, setupOver: AbortSignal, over: () => string | undefined): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const gaveUp = (): void => {
-      readsWaiting.delete(start);
+      readsWaiting.delete(placed);
       reject(new CodexExecIsolationError("the setup was over before a read of the file system came back"));
     };
-    const start = (): void => {
+    const placed = (): boolean => {
+      const why = over();
+      if (why !== undefined) {
+        setupOver.removeEventListener("abort", gaveUp);
+        reject(new CodexExecIsolationError(why));
+        return false;
+      }
       void (async () => read())()
         .then(resolve, reject)
         .finally(() => {
           setupOver.removeEventListener("abort", gaveUp);
-          const next = readsWaiting.values().next();
-          if (next.done === true) readsOut -= 1;
-          else {
-            readsWaiting.delete(next.value);
-            next.value();
-          }
+          passOn();
         });
+      return true;
     };
     if (setupOver.aborted) return gaveUp();
     setupOver.addEventListener("abort", gaveUp, { once: true });
-    if (readsOut < CODEX_EXEC_READS_AT_ONCE) {
-      readsOut += 1;
-      start();
-    } else readsWaiting.add(start);
+    if (readsOut >= CODEX_EXEC_READS_AT_ONCE) return void readsWaiting.add(placed);
+    readsOut += 1;
+    if (!placed()) passOn();
   });
 }
 
@@ -798,16 +818,20 @@ export function spawnIsolatedCodexExecServer(spec: CodexExecIsolatedSpawn): Code
    */
   const outside = <T>(read: () => Promise<T>): Promise<T> => {
     queued = readsOut >= CODEX_EXEC_READS_AT_ONCE;
-    return readOutside(() => {
-      queued = false;
-      reading += 1;
-      return (async () => read())().finally(() => {
-        reading -= 1;
-        if (reading > 0 || closeAfterReads === undefined) return;
-        closeSync(closeAfterReads);
-        closeAfterReads = undefined;
-      });
-    }, setup.signal);
+    return readOutside(
+      () => {
+        queued = false;
+        reading += 1;
+        return (async () => read())().finally(() => {
+          reading -= 1;
+          if (reading > 0 || closeAfterReads === undefined) return;
+          closeSync(closeAfterReads);
+          closeAfterReads = undefined;
+        });
+      },
+      setup.signal,
+      over,
+    );
   };
 
   const prove = async (): Promise<CodexExecIsolationProof> => {
