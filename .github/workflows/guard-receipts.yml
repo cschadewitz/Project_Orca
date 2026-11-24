@@ -61,8 +61,10 @@ concurrency:
 env:
   CLAUDE_ADAPTER_VERSION: 0.109.1
   OTHER_CLAUDE_SDK_VERSION: 0.3.329
-  # As in claude-hook-acceptance.yml: remove once npm serves @anthropic-ai/sdk 1.13.0.
-  ANTHROPIC_SDK_OVERRIDE: 1.12.0
+  # The adapter takes @anthropic-ai/sdk as a floating peer, and the receipt records only the
+  # adapter's own integrity, so pin the peer here: a PR run and a later signed run must install
+  # the same SDK. (A checked-in lockfile installed with `npm ci` would pin the whole tree.)
+  ANTHROPIC_SDK_VERSION: 1.13.0
 
 jobs:
   claude:
@@ -90,7 +92,7 @@ jobs:
           mkdir -p "$d"
           cd "$d"
           npm init -y >/dev/null
-          npm pkg set "overrides.@anthropic-ai/sdk=${ANTHROPIC_SDK_OVERRIDE}"
+          npm pkg set "overrides.@anthropic-ai/sdk=${ANTHROPIC_SDK_VERSION}"
           npm install --no-audit --no-fund --ignore-scripts "@agentclientprotocol/claude-agent-acp@${CLAUDE_ADAPTER_VERSION}"
           entry="$d/node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js"
           test -f "$entry"
