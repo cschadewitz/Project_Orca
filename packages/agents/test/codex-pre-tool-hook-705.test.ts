@@ -5,7 +5,8 @@
  * in `packages/cli/test/codex-hook-acceptance-705.test.ts`.
  */
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,9 +19,14 @@ import {
   codexHookTrustHash,
   codexPatchFiles,
   codexPreToolHookCommand,
+  codexPreToolHookProgram,
+  CODEX_HOOK_FAILED_REASON,
+  CODEX_HOOK_OUTPUT_LIMIT,
+  checkCodexFailClosedLine,
   codexProbeReceipt,
   permissionPolicyPath,
   probeCodexHook,
+  openHookTelemetrySpool,
   codexHookEnvironment,
   codexHookShell,
   runClaudePreToolHook,
@@ -225,11 +231,159 @@ describe("answering Codex", () => {
   });
 });
 
+describe("the fail-closed line around ORCA's program (#1026)", () => {
+  // Codex runs the hook in the account's login shell: bash, zsh or sh (`codexHookShell`).
+  const SHELLS = ["/bin/sh", "/bin/bash", "/bin/dash", "/bin/zsh"].filter((p) => existsSync(p));
+  /** Run the installed command line as Codex does, with a stand-in for ORCA's program. */
+  const runLine = async (programBody: string | undefined, shell = SH.program) => {
+    const script = join(root, "program.sh");
+    if (programBody !== undefined) await writeFile(script, programBody, "utf8");
+    const runtime = programBody === undefined ? join(root, "no-such-runtime") : "/bin/sh";
+    return new Promise<{ exitCode: number | null; stdout: string; stderr: string }>((done) => {
+      const child = spawn(shell, ["-c", codexPreToolHookCommand(runtime, script, contextFile)], { cwd: workspace });
+      let stdout = "";
+      let stderr = "";
+      child.stdout.on("data", (d: Buffer) => (stdout += d.toString()));
+      child.stderr.on("data", (d: Buffer) => (stderr += d.toString()));
+      child.on("close", (exitCode) => done({ exitCode, stdout, stderr }));
+      child.stdin.end("{}");
+    });
+  };
+  const failed = { exitCode: 2, stdout: "", stderr: `${CODEX_HOOK_FAILED_REASON}\n` };
+  const receipt = `orca-hook-receipt: ${"0123456789abcdef".repeat(4)}`;
+
+  for (const shell of SHELLS)
+    it.skipIf(process.platform === "win32")(
+      `passes on ORCA's allow and ORCA's block, and nothing else (${shell})`,
+      async () => {
+        expect(await runLine("cat >/dev/null; exit 0", shell)).toEqual({ exitCode: 0, stdout: "", stderr: "" });
+        // Only the verdict's capture is capped: the program may write other files (a telemetry
+        // spool) past the limit.
+        const spool = join(root, "spool");
+        expect(
+          await runLine(`cat >/dev/null; head -c ${4 * CODEX_HOOK_OUTPUT_LIMIT} /dev/zero >'${spool}'; exit 0`, shell),
+        ).toEqual({ exitCode: 0, stdout: "", stderr: "" });
+        expect((await readFile(spool)).length).toBe(4 * CODEX_HOOK_OUTPUT_LIMIT);
+        expect(await runLine("cat >/dev/null; echo 'Denied by ORCA: its policy.' >&2; exit 2", shell)).toEqual({
+          exitCode: 2,
+          stdout: "",
+          stderr: "Denied by ORCA: its policy.\n",
+        });
+        expect(
+          await runLine(`cat >/dev/null; printf 'Blocked by ORCA: a.\\n${receipt}\\n' >&2; exit 2`, shell),
+        ).toEqual({
+          exitCode: 2,
+          stdout: "",
+          stderr: `Blocked by ORCA: a.\n${receipt}\n`,
+        });
+      },
+    );
+
+  for (const shell of SHELLS)
+    it.skipIf(process.platform === "win32")(
+      `blocks, with a fixed reason, whenever the program fails (${shell})`,
+      async () => {
+        for (const body of [
+          "cat >/dev/null; exit 1",
+          // Codex lets a quiet exit 2 through; the line does not.
+          "cat >/dev/null; exit 2",
+          "cat >/dev/null; echo 'something else' >&2; exit 2",
+          "cat >/dev/null; echo 'Denied by ORCA: x' >&2; exit 3",
+          // An allow with output is not ORCA's allow.
+          'cat >/dev/null; echo \'{"decision":"allow"}\'; exit 0',
+          "cat >/dev/null; printf '\\n' ; exit 0",
+          "cat >/dev/null; kill -9 $$",
+          // A block in any form but ORCA's strict one.
+          "cat >/dev/null; echo 'Denied by ORCA: ' >&2; exit 2",
+          "cat >/dev/null; printf 'Denied by ORCA: a\\nDenied by ORCA: b\\n' >&2; exit 2",
+          "cat >/dev/null; printf 'Denied by ORCA: a\\nsomething else\\n' >&2; exit 2",
+          "cat >/dev/null; printf 'Denied by ORCA: a\\norca-hook-receipt: 00\\n' >&2; exit 2",
+          `cat >/dev/null; printf 'Denied by ORCA: a\\n${receipt.toUpperCase()}\\n' >&2; exit 2`,
+          `cat >/dev/null; printf 'Denied by ORCA: a\\n${receipt}\\n${receipt}\\n' >&2; exit 2`,
+          "cat >/dev/null; printf 'Denied by ORCA: a\\033[2Kb\\n' >&2; exit 2",
+          "cat >/dev/null; printf 'x\\nDenied by ORCA: a\\n' >&2; exit 2",
+          // Output past the limit is cut, and a cut answer is never an allow.
+          `cat >/dev/null; head -c ${2 * CODEX_HOOK_OUTPUT_LIMIT} /dev/zero | tr '\\0' x; exit 0`,
+          `cat >/dev/null; head -c ${2 * CODEX_HOOK_OUTPUT_LIMIT} /dev/zero | tr '\\0' x >&2; printf '\\n0'; exit 0`,
+        ])
+          expect([body, await runLine(body, shell)]).toEqual([body, failed]);
+        // The runtime itself is missing.
+        expect(await runLine(undefined, shell)).toEqual(failed);
+      },
+    );
+
+  it("stops the program short of Codex's own timeout", () => {
+    expect(codexPreToolHookCommand("/n", "/s", "/c")).toContain("timeout -s KILL 25 '/n' '/s' '--codex' '/c' <&3");
+  });
+
+  it("has no newline in the command line itself", () => {
+    expect(codexPreToolHookCommand("/n", "/s", "/c")).not.toContain("\n");
+  });
+
+  it.skipIf(process.platform === "win32")("is checked at admission: it blocks on this install", async () => {
+    expect(await checkCodexFailClosedLine({ runtime: process.execPath, cwd: workspace, shell: SH })).toEqual({
+      ok: true,
+    });
+  });
+
+  it.skipIf(process.platform !== "linux")(
+    "stops at once when its signal aborts, with everything the running check started",
+    async () => {
+      // A runtime that never ends: the check is mid-run when the signal aborts.
+      const marker = join(root, "check.pid");
+      const runtime = join(root, "hangs.sh");
+      await writeFile(runtime, `#!/bin/sh\necho $$ > '${marker}'\nexec sleep 30\n`, { mode: 0o755 });
+      const cancel = new AbortController();
+      setTimeout(() => cancel.abort("session closed"), 300);
+      const started = Date.now();
+      const got = await checkCodexFailClosedLine({ runtime, cwd: workspace, shell: SH, signal: cancel.signal });
+      expect(got).toEqual({ ok: false, check: "crash", detail: "the session was cancelled" });
+      expect(Date.now() - started).toBeLessThan(5_000);
+      const pid = Number(await readFile(marker, "utf8"));
+      await new Promise((r) => setTimeout(r, 100));
+      const state = await readFile(`/proc/${pid}/stat`, "utf8").then(
+        (t) => t.slice(t.lastIndexOf(")") + 2, t.lastIndexOf(")") + 3),
+        () => "gone",
+      );
+      expect(["gone", "Z"]).toContain(state);
+      // At its deadline the same way, and with an aborted signal nothing starts at all.
+      expect(
+        await checkCodexFailClosedLine({ runtime, cwd: workspace, shell: SH, signal: AbortSignal.timeout(200) }),
+      ).toEqual({ ok: false, check: "crash", detail: "the admission deadline passed" });
+      await rm(marker, { force: true });
+      expect(
+        await checkCodexFailClosedLine({ runtime, cwd: workspace, shell: SH, signal: AbortSignal.abort("gone") }),
+      ).toEqual({ ok: false, check: "crash", detail: "the session was cancelled" });
+      expect(existsSync(marker)).toBe(false);
+    },
+    30_000,
+  );
+
+  it.skipIf(process.platform === "win32")("refuses an install where it does not block", async () => {
+    // A shell that runs nothing: every check exits 0, which the line must never do on a failure.
+    const got = await checkCodexFailClosedLine({
+      runtime: process.execPath,
+      cwd: workspace,
+      shell: { program: "/bin/true", args: [] },
+    });
+    expect(got).toMatchObject({ ok: false, check: "crash", detail: "exit 0" });
+    // With no `timeout` or `head` on the path every call is blocked, so this check passes;
+    // the startup probe then refuses the session, as ORCA's own block cannot pass either.
+    const noTimeout = await checkCodexFailClosedLine({
+      runtime: process.execPath,
+      cwd: workspace,
+      shell: SH,
+      env: { PATH: join(root, "empty") },
+    });
+    expect(noTimeout).toEqual({ ok: true });
+  });
+});
+
 describe("installing it in Codex", () => {
   it("hashes the hook the way Codex 0.171 does", () => {
     // Both values were read from the real Codex 0.171 (`hooks/list` on its app server, with
     // this hook passed as a session flag).
-    const command = codexPreToolHookCommand("/usr/bin/node", "/opt/orca/claude-pre-tool-hook.mjs", "/x/ctx.json");
+    const command = codexPreToolHookProgram("/usr/bin/node", "/opt/orca/claude-pre-tool-hook.mjs", "/x/ctx.json");
     expect(codexHookTrustHash(command, 10)).toBe(
       "sha256:b90b4753446a395a8b1c43ebf10ba44ec9feeebeba9153a2ea3372c2f04bf306",
     );
@@ -239,7 +393,7 @@ describe("installing it in Codex", () => {
   });
 
   it("quotes every word of the command for the shell", () => {
-    expect(codexPreToolHookCommand("/usr/bin/node", "/opt/it's here/hook.mjs", "/x/ctx.json")).toBe(
+    expect(codexPreToolHookProgram("/usr/bin/node", "/opt/it's here/hook.mjs", "/x/ctx.json")).toBe(
       `'/usr/bin/node' '/opt/it'\\''s here/hook.mjs' '--codex' '/x/ctx.json'`,
     );
   });
@@ -310,6 +464,42 @@ describe("installing it in Codex", () => {
       },
     );
 
+    it.skipIf(bundled === undefined || process.platform !== "linux")(
+      "keeps the real hook's telemetry working through the line: its recorder appends to the spool (#1000)",
+      async () => {
+        const dir = join(configDir, ".orca", "private-execution", "tool-hooks");
+        await chmod(dir, 0o700);
+        const spool = await openHookTelemetrySpool({
+          dir,
+          protectedPaths: { readOnly: [], noAccess: [join(configDir, ".orca", "private-execution")] },
+        });
+        await writeFile(contextFile, JSON.stringify({ ...context(), telemetry: spool.target }), "utf8");
+        const got: unknown[] = [];
+        spool.attach(async (lines) => void got.push(...lines));
+        const command = codexPreToolHookCommand(process.execPath, bundled!, contextFile);
+        const run = (input: string) =>
+          new Promise<{ code: number | null; stderr: string }>((done) => {
+            const child = spawn(SH.program, [...SH.args, command], { cwd: workspace });
+            let stderr = "";
+            child.stderr.on("data", (d: Buffer) => (stderr += d.toString()));
+            child.on("close", (code) => done({ code, stderr }));
+            child.stdin.end(input);
+          });
+        // A call ORCA's rules deny, decided and blocked as usual.
+        const denied = await run(frame("view_image", { path: contextFile }));
+        expect(denied.code).toBe(2);
+        expect(denied.stderr).toMatch(/^(Denied|Blocked) by ORCA: /);
+        // The detached recorder appends after the answer; wait for its line.
+        for (let i = 0; i < 50 && got.length === 0; i++) {
+          await new Promise((r) => setTimeout(r, 100));
+          await spool.drain();
+        }
+        expect(got.length).toBeGreaterThan(0);
+        await spool.finish();
+      },
+      20_000,
+    );
+
     it.skipIf(bundled === undefined || process.platform === "win32")(
       "does not take the real hook's block as proof under another key",
       async () => {
@@ -352,9 +542,10 @@ describe("installing it in Codex", () => {
           // Never answers.
           "sleep 30",
           // Answers, but leaves a descendant holding stderr open, so the stream never closes.
-          `(sleep 30 >&2 & echo $! > '${marker}'); exit 2`,
+          // Its shell has exited, so ORCA no longer owns that group and signals nothing.
+          "(sleep 30 >&2 &); exit 2",
           // A descendant in the background holding stdin and stderr, the shell waiting on it.
-          "sleep 30 <&0 >&2 & wait",
+          `sleep 30 <&0 >&2 & echo $! > '${marker}'; wait`,
         ]) {
           const started = Date.now();
           const r = await probeCodexHook({
@@ -373,9 +564,9 @@ describe("installing it in Codex", () => {
           // The caller is released at the deadline, not when the descendant finally lets go.
           expect(took).toBeLessThan(5_000);
         }
-        // And the descendant went with the command's process group.
+        // And while the shell still ran, its descendant went with the group ORCA owned.
         const pid = Number(await readFile(marker, "utf8"));
-        await new Promise((r) => setTimeout(r, 100));
+        await new Promise((r) => setTimeout(r, 1_500));
         // Gone, or a zombie its reaper has not collected yet: either way it no longer runs.
         const state = await readFile(`/proc/${pid}/stat`, "utf8").then(
           (t) => t.slice(t.lastIndexOf(")") + 2, t.lastIndexOf(")") + 3),
@@ -406,6 +597,37 @@ describe("installing it in Codex", () => {
         expect(missing.diagnostics.outcome).toBe("spawn-error");
       },
     );
+
+    it.skipIf(process.platform !== "linux")("stops when the session's signal aborts, and says so", async () => {
+      const cancel = new AbortController();
+      setTimeout(() => cancel.abort("session closed"), 200);
+      const started = Date.now();
+      const r = await probeCodexHook({
+        command: "sleep 30",
+        cwd: workspace,
+        contextFile,
+        probeKey: PROBE_KEY,
+        shell: SH,
+        env: process.env,
+        signal: cancel.signal,
+      });
+      expect(r.blocked).toBe(false);
+      expect(r.diagnostics.outcome).toBe("cancelled");
+      expect(r.detail).toBe("the session was cancelled");
+      expect(Date.now() - started).toBeLessThan(5_000);
+      // The admission's deadline, given as the signal, reads as a timeout.
+      const late = await probeCodexHook({
+        command: "sleep 30",
+        cwd: workspace,
+        contextFile,
+        probeKey: PROBE_KEY,
+        shell: SH,
+        env: process.env,
+        signal: AbortSignal.timeout(200),
+      });
+      expect(late.diagnostics.outcome).toBe("timeout");
+      expect(late.detail).toBe("the admission deadline passed");
+    });
 
     it.skipIf(process.platform === "win32")("does not accept a receipt from an earlier probe", async () => {
       // A receipt for a nonce of the test's choosing, replayed to a probe that picked its own.
