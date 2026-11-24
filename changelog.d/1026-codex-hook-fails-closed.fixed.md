@@ -1,4 +1,6 @@
-- **agents:** With the experimental Codex tool hook on, Codex let a call run when ORCA's hook
-  program crashed, hung, was killed or answered with something other than ORCA's allow or
-  block. ORCA now runs its program inside a fail-closed line: any of those blocks the call,
-  and a program that does not answer within 25 seconds is stopped and the call blocked.
+- **agents:** With the experimental Codex tool hook on the pinned Codex (0.171.0 through its
+  ACP adapter 2.9.0, on Linux), a failure of ORCA's own hook program no longer lets the call
+  run. A crash, a kill, a hang past 25 seconds, a missing runtime, or an answer that is not
+  exactly ORCA's allow or block now blocks the call. The hook still runs under Codex's own
+  hook runner, which lets a call through if that runner fails. A session opens only after ORCA
+  has checked that this protection blocks on that install. Codex's support tier is unchanged.

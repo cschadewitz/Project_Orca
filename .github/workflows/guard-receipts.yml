@@ -63,10 +63,6 @@ env:
   OTHER_CLAUDE_SDK_VERSION: 0.3.329
   # As in claude-hook-acceptance.yml: remove once npm serves @anthropic-ai/sdk 1.13.0.
   ANTHROPIC_SDK_OVERRIDE: 1.12.0
-  # As in codex-hook-acceptance.yml.
-  CODEX_ADAPTER_VERSION: 2.9.0
-  CODEX_VERSION: 0.171.0
-  OTHER_CODEX_VERSION: 0.170.0
 
 jobs:
   claude:
@@ -136,75 +132,6 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-  codex:
-    name: installed receipt (codex, linux)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: 24
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-        env:
-          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
-
-      - name: Install the pinned Codex ACP adapter and Codex outside the workspace
-        shell: bash
-        run: |
-          set -euo pipefail
-          d="$RUNNER_TEMP/codex-adapter"
-          mkdir -p "$d"
-          cd "$d"
-          npm init -y >/dev/null
-          npm install --no-audit --no-fund --ignore-scripts \
-            "@agentclientprotocol/codex-acp@${CODEX_ADAPTER_VERSION}" "@openai/codex@${CODEX_VERSION}"
-          test "$(node -p 'require("@openai/codex/package.json").version')" = "$CODEX_VERSION"
-          entry="$d/node_modules/@agentclientprotocol/codex-acp/dist/index.js"
-          test -f "$entry"
-          echo "ORCA_CODEX_ADAPTER=$entry" >> "$GITHUB_ENV"
-
-      - name: Install a Codex the adapter is not paired with
-        shell: bash
-        run: |
-          set -euo pipefail
-          d="$RUNNER_TEMP/codex-other"
-          mkdir -p "$d"
-          cd "$d"
-          npm init -y >/dev/null
-          npm install --no-audit --no-fund --ignore-scripts \
-            "@openai/codex-linux-x64@npm:@openai/codex@${OTHER_CODEX_VERSION}-linux-x64"
-          bin="$d/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex"
-          test "$("$bin" --version)" = "codex-cli ${OTHER_CODEX_VERSION}"
-          echo "ORCA_CODEX_OTHER_RUNTIME=$bin" >> "$GITHUB_ENV"
-
-      - name: Run the installed receipt test
-        shell: bash
-        env:
-          ORCA_ENFORCEMENT_RECEIPT_DIR: ${{ runner.temp }}/receipts
-        run: |
-          set -euo pipefail
-          pnpm exec vitest run tools/test/enforcement-installed-codex-1026.test.js \
-            --reporter=default --reporter=json --outputFile="$RUNNER_TEMP/installed.json"
-          # Skipped without the adapter; here every test has to have run and passed.
-          node -e '
-            const r = require(process.argv[1]);
-            if (r.numTotalTests === 0 || r.numPendingTests > 0 || r.numPassedTests !== r.numTotalTests)
-              throw new Error(`expected every installed test to run and pass: ${JSON.stringify({total: r.numTotalTests, passed: r.numPassedTests, skipped: r.numPendingTests})}`);
-          ' "$RUNNER_TEMP/installed.json"
-          test -f "$RUNNER_TEMP/receipts/codex-codex-native-hook.json"
-
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: guard-receipt-codex
-          path: ${{ runner.temp }}/receipts/
-          if-no-files-found: error
-          retention-days: 30
-
   # Signs this run's validated receipts and nothing else. It can attest, and cannot write to the
   # repository: no write token, no release App, no environment. It runs only when a person
   # dispatches the workflow on main or a release line with `sign`; pushes, the schedule and pull
@@ -214,7 +141,7 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch' && inputs.sign &&
       (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/'))
-    needs: [claude, codex]
+    needs: [claude]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -247,11 +174,9 @@ jobs:
           set -euo pipefail
           node tools/guard-qualification/stage-receipts.js stage "$RUNNER_TEMP/signed" "$RUNNER_TEMP"/downloaded/receipts/*.json
           mkdir -p "$RUNNER_TEMP/made"
-          for pair in claude:claude-native-hook codex:codex-native-hook; do
-            node tools/guard-qualification/e2e-check.js make-test \
-              "$RUNNER_TEMP/signed/${pair%%:*}-${pair#*:}.json" "$RUNNER_TEMP/made/test-${pair#*:}.json"
-          done
-          node tools/guard-qualification/stage-receipts.js stage "$RUNNER_TEMP/test" "$RUNNER_TEMP"/made/test-*.json
+          node tools/guard-qualification/e2e-check.js make-test \
+            "$RUNNER_TEMP/signed/claude-claude-native-hook.json" "$RUNNER_TEMP/made/test-claude-native-hook.json"
+          node tools/guard-qualification/stage-receipts.js stage "$RUNNER_TEMP/test" "$RUNNER_TEMP/made/test-claude-native-hook.json"
 
       - name: Attest the receipts
         id: attest
@@ -290,12 +215,10 @@ jobs:
             # Every staged receipt's attestation verifies, whatever tier any row claims.
             node tools/guard-qualification/stage-receipts.js verify "$RUNNER_TEMP/$d"
           done
-          # With each row at B and pinned to this run's receipt, the checker must accept it,
-          # refuse its verifier test receipt and refuse a byte-tampered copy.
-          for pair in claude:claude-native-hook codex:codex-native-hook; do
-            node tools/guard-qualification/e2e-check.js \
-              "$RUNNER_TEMP/signed/${pair%%:*}-${pair#*:}.json" "$RUNNER_TEMP/test/test-${pair#*:}.json"
-          done
+          # With the Claude row at B and pinned to this run's receipt, the checker must accept it,
+          # refuse the verifier test receipt and refuse a byte-tampered copy.
+          node tools/guard-qualification/e2e-check.js \
+            "$RUNNER_TEMP/signed/claude-claude-native-hook.json" "$RUNNER_TEMP/test/test-claude-native-hook.json"
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

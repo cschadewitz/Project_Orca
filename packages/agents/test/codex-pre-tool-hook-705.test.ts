@@ -5,6 +5,7 @@
  * in `packages/cli/test/codex-hook-acceptance-705.test.ts`.
  */
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -20,6 +21,8 @@ import {
   codexPreToolHookCommand,
   codexPreToolHookProgram,
   CODEX_HOOK_FAILED_REASON,
+  CODEX_HOOK_OUTPUT_LIMIT,
+  checkCodexFailClosedLine,
   codexProbeReceipt,
   permissionPolicyPath,
   probeCodexHook,
@@ -228,56 +231,109 @@ describe("answering Codex", () => {
 });
 
 describe("the fail-closed line around ORCA's program (#1026)", () => {
+  // Codex runs the hook in the account's login shell: bash, zsh or sh (`codexHookShell`).
+  const SHELLS = ["/bin/sh", "/bin/bash", "/bin/dash", "/bin/zsh"].filter((p) => existsSync(p));
   /** Run the installed command line as Codex does, with a stand-in for ORCA's program. */
-  const runLine = (programBody: string | undefined, input = "{}") =>
+  const runLine = (programBody: string | undefined, shell = SH.program) =>
     new Promise<{ exitCode: number | null; stdout: string; stderr: string }>(async (done) => {
       const script = join(root, "program.sh");
       if (programBody !== undefined) await writeFile(script, programBody, "utf8");
       const runtime = programBody === undefined ? join(root, "no-such-runtime") : "/bin/sh";
-      const child = spawn(SH.program, [...SH.args, codexPreToolHookCommand(runtime, script, contextFile)], {
-        cwd: workspace,
-      });
+      const child = spawn(shell, ["-c", codexPreToolHookCommand(runtime, script, contextFile)], { cwd: workspace });
       let stdout = "";
       let stderr = "";
       child.stdout.on("data", (d: Buffer) => (stdout += d.toString()));
       child.stderr.on("data", (d: Buffer) => (stderr += d.toString()));
       child.on("close", (exitCode) => done({ exitCode, stdout, stderr }));
-      child.stdin.end(input);
+      child.stdin.end("{}");
     });
   const failed = { exitCode: 2, stdout: "", stderr: `${CODEX_HOOK_FAILED_REASON}\n` };
+  const receipt = `orca-hook-receipt: ${"0123456789abcdef".repeat(4)}`;
 
-  it.skipIf(process.platform === "win32")("passes on ORCA's allow and ORCA's block, and nothing else", async () => {
-    expect(await runLine("cat >/dev/null; exit 0")).toEqual({ exitCode: 0, stdout: "", stderr: "" });
-    expect(await runLine("cat >/dev/null; echo 'Denied by ORCA: its policy.' >&2; exit 2")).toEqual({
-      exitCode: 2,
-      stdout: "",
-      stderr: "Denied by ORCA: its policy.\n",
-    });
-    expect(await runLine("cat >/dev/null; printf 'Blocked by ORCA: a.\\norca-hook-receipt:x\\n' >&2; exit 2")).toEqual({
-      exitCode: 2,
-      stdout: "",
-      stderr: "Blocked by ORCA: a.\norca-hook-receipt:x\n",
-    });
-  });
+  for (const shell of SHELLS)
+    it.skipIf(process.platform === "win32")(
+      `passes on ORCA's allow and ORCA's block, and nothing else (${shell})`,
+      async () => {
+        expect(await runLine("cat >/dev/null; exit 0", shell)).toEqual({ exitCode: 0, stdout: "", stderr: "" });
+        expect(await runLine("cat >/dev/null; echo 'Denied by ORCA: its policy.' >&2; exit 2", shell)).toEqual({
+          exitCode: 2,
+          stdout: "",
+          stderr: "Denied by ORCA: its policy.\n",
+        });
+        expect(
+          await runLine(`cat >/dev/null; printf 'Blocked by ORCA: a.\\n${receipt}\\n' >&2; exit 2`, shell),
+        ).toEqual({
+          exitCode: 2,
+          stdout: "",
+          stderr: `Blocked by ORCA: a.\n${receipt}\n`,
+        });
+      },
+    );
 
-  it.skipIf(process.platform === "win32")("blocks, with a fixed reason, whenever the program fails", async () => {
-    for (const body of [
-      "cat >/dev/null; exit 1",
-      // Codex lets a quiet exit 2 through; the line does not.
-      "cat >/dev/null; exit 2",
-      "cat >/dev/null; echo 'something else' >&2; exit 2",
-      "cat >/dev/null; echo 'Denied by ORCA: x' >&2; exit 3",
-      // An allow with output is not ORCA's allow.
-      'cat >/dev/null; echo \'{"decision":"allow"}\'; exit 0',
-      "cat >/dev/null; kill -9 $$",
-    ])
-      expect([body, await runLine(body)]).toEqual([body, failed]);
-    // The runtime itself is missing.
-    expect(await runLine(undefined)).toEqual(failed);
-  });
+  for (const shell of SHELLS)
+    it.skipIf(process.platform === "win32")(
+      `blocks, with a fixed reason, whenever the program fails (${shell})`,
+      async () => {
+        for (const body of [
+          "cat >/dev/null; exit 1",
+          // Codex lets a quiet exit 2 through; the line does not.
+          "cat >/dev/null; exit 2",
+          "cat >/dev/null; echo 'something else' >&2; exit 2",
+          "cat >/dev/null; echo 'Denied by ORCA: x' >&2; exit 3",
+          // An allow with output is not ORCA's allow.
+          'cat >/dev/null; echo \'{"decision":"allow"}\'; exit 0',
+          "cat >/dev/null; printf '\\n' ; exit 0",
+          "cat >/dev/null; kill -9 $$",
+          // A block in any form but ORCA's strict one.
+          "cat >/dev/null; echo 'Denied by ORCA: ' >&2; exit 2",
+          "cat >/dev/null; printf 'Denied by ORCA: a\\nDenied by ORCA: b\\n' >&2; exit 2",
+          "cat >/dev/null; printf 'Denied by ORCA: a\\nsomething else\\n' >&2; exit 2",
+          "cat >/dev/null; printf 'Denied by ORCA: a\\norca-hook-receipt: 00\\n' >&2; exit 2",
+          `cat >/dev/null; printf 'Denied by ORCA: a\\n${receipt.toUpperCase()}\\n' >&2; exit 2`,
+          `cat >/dev/null; printf 'Denied by ORCA: a\\n${receipt}\\n${receipt}\\n' >&2; exit 2`,
+          "cat >/dev/null; printf 'Denied by ORCA: a\\033[2Kb\\n' >&2; exit 2",
+          "cat >/dev/null; printf 'x\\nDenied by ORCA: a\\n' >&2; exit 2",
+          // Output past the limit is cut, and a cut answer is never an allow.
+          `cat >/dev/null; head -c ${2 * CODEX_HOOK_OUTPUT_LIMIT} /dev/zero | tr '\\0' x; exit 0`,
+          `cat >/dev/null; head -c ${2 * CODEX_HOOK_OUTPUT_LIMIT} /dev/zero | tr '\\0' x >&2; printf '\\n0'; exit 0`,
+        ])
+          expect([body, await runLine(body, shell)]).toEqual([body, failed]);
+        // The runtime itself is missing.
+        expect(await runLine(undefined, shell)).toEqual(failed);
+      },
+    );
 
   it("stops the program short of Codex's own timeout", () => {
     expect(codexPreToolHookCommand("/n", "/s", "/c")).toContain("timeout -s KILL 25 '/n' '/s' '--codex' '/c' 2>&1");
+  });
+
+  it("has no newline in the command line itself", () => {
+    expect(codexPreToolHookCommand("/n", "/s", "/c")).not.toContain("\n");
+  });
+
+  it.skipIf(process.platform === "win32")("is checked at admission: it blocks on this install", async () => {
+    expect(await checkCodexFailClosedLine({ runtime: process.execPath, cwd: workspace, shell: SH })).toEqual({
+      ok: true,
+    });
+  });
+
+  it.skipIf(process.platform === "win32")("refuses an install where it does not block", async () => {
+    // A shell that runs nothing: every check exits 0, which the line must never do on a failure.
+    const got = await checkCodexFailClosedLine({
+      runtime: process.execPath,
+      cwd: workspace,
+      shell: { program: "/bin/true", args: [] },
+    });
+    expect(got).toMatchObject({ ok: false, check: "crash", detail: "exit 0" });
+    // With no `timeout` or `head` on the path every call is blocked, so this check passes;
+    // the startup probe then refuses the session, as ORCA's own block cannot pass either.
+    const noTimeout = await checkCodexFailClosedLine({
+      runtime: process.execPath,
+      cwd: workspace,
+      shell: SH,
+      env: { PATH: join(root, "empty") },
+    });
+    expect(noTimeout).toEqual({ ok: true });
   });
 });
 

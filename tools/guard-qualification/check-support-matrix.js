@@ -263,8 +263,7 @@ export function programEvidenceProblems(receipt, neededCases, assertions = loadA
   const inventory = assertions.programs?.[receipt.route];
   if (!inventory) return [`no committed program inventory for route ${receipt.route}`];
   const problems = [];
-  const judge = PROGRAM_JUDGES[receipt.route] ?? PROGRAM_JUDGES["claude-native-hook"];
-  const settingsProblems = judge.settings(receipt.installedSettings);
+  const settingsProblems = installedSettingsProblems(receipt.installedSettings);
   problems.push(...settingsProblems.map((p) => `installed settings: ${p}`));
   const command =
     settingsProblems.length === 0 ? receipt.installedSettings.hooks.PreToolUse[0].hooks[0].command : undefined;
@@ -295,11 +294,10 @@ export function programEvidenceProblems(receipt, neededCases, assertions = loadA
         problems.push(`${run}: needs its input digest, exit code, stdout and stderr`);
         return;
       }
-      if (command !== undefined && judge.command(call.command) !== judge.command(command))
-        problems.push(`${run}: not the installed command`);
+      if (command !== undefined && call.command !== command) problems.push(`${run}: not the installed command`);
       if (call.args !== want.args)
         problems.push(`${run}: ran with ${call.args} arguments, the inventory's run uses ${want.args}`);
-      const outcome = judge.outcome(call);
+      const outcome = programOutcome(call);
       if (outcome !== call.outcome) problems.push(`${run}: its output shows ${outcome}, not ${call.outcome}`);
       else if (!want.expected.includes(outcome))
         problems.push(`${run}: outcome ${outcome} is not one the inventory accepts (${want.expected.join("|")})`);
@@ -326,111 +324,6 @@ function programOutcome(call) {
     return "invalid:output";
   }
   return decision === "ask" || decision === "deny" ? decision : `invalid:${String(decision)}`;
-}
-
-/**
- * How the installed program's runs are judged, by route: what the agent does with the
- * program's exit and output, and what its installed settings must hold.
- */
-const PROGRAM_JUDGES = {
-  "claude-native-hook": {
-    outcome: programOutcome,
-    settings: (s) => installedSettingsProblems(s),
-    command: (c) => c,
-  },
-  "codex-native-hook": {
-    outcome: codexProgramOutcome,
-    settings: (s) => codexInstalledHookProblems(s),
-    // Codex's command line names the session's own context file; each case's world opens its
-    // own session, so runs are compared with that one word set aside.
-    command: (c) =>
-      typeof c === "string" ? c.replace(new RegExp(`'--codex' ${QUOTED} 2>&1`), "'--codex' <context> 2>&1") : c,
-  },
-};
-
-/**
- * The outcome Codex 0.171.0 takes from one run of ORCA's installed command line (as `paths.js`
- * `codexHookOutcome`): it blocks only on exit 2 with a reason on stderr, so exit 0 with no
- * output is an allow, exit 2 with nothing on stdout and ORCA's reason on stderr is ORCA's
- * deny, ask (a block on Codex) or block, and anything else, which Codex would let through, is a
- * defect the case sees.
- */
-function codexProgramOutcome(call) {
-  if (call.exitCode === 0) return call.stdout === "" && call.stderr === "" ? "allow" : "invalid:exit-0-with-output";
-  if (call.exitCode !== 2) return `invalid:exit-${String(call.exitCode)}`;
-  if (call.stdout !== "") return "invalid:stdout";
-  if (call.stderr.startsWith("Denied by ORCA: ")) return "deny";
-  if (call.stderr.startsWith("Blocked by ORCA: its policy asks a person first")) return "ask";
-  if (call.stderr.startsWith("Blocked by ORCA: ")) return "block";
-  return "invalid:unrecognised-stderr";
-}
-
-/** Codex's own timeout for a hook, in seconds, and how far short of it ORCA stops its program. */
-const CODEX_HOOK_TIMEOUT = 30;
-const CODEX_PROGRAM_SECONDS = CODEX_HOOK_TIMEOUT - 5;
-/** The key Codex lists a session-flag hook under (`CODEX_HOOK_KEY`). */
-const CODEX_HOOK_KEY = "/<session-flags>/config.toml:pre_tool_use:0:0";
-const CODEX_HOOK_FAILED =
-  "Blocked by ORCA: its hook did not answer, so the call does not run (ORCA's permission policy).";
-const quoteWord = (s) => `'${s.replaceAll("'", `'\\''`)}'`;
-const QUOTED = String.raw`'(?:[^']|'\\'')*'`;
-const unquoteWord = (w) => w.slice(1, -1).replaceAll(`'\\''`, "'");
-
-/**
- * ORCA's fail-closed command line around its program, as `codexPreToolHookCommand` in
- * native-tool-hook-session.ts writes it (the acceptance test holds the two equal).
- */
-export function codexFailClosedLine(runtime, script, contextFile) {
-  const program = [runtime, script, "--codex", contextFile].map(quoteWord).join(" ");
-  return [
-    `{ out=$(timeout -s KILL ${CODEX_PROGRAM_SECONDS} ${program} 2>&1); s=$?; } 2>/dev/null`,
-    `if [ "$s" -eq 0 ] && [ -z "$out" ]; then exit 0; fi`,
-    `case "$s:$out" in "2:Denied by ORCA: "*|"2:Blocked by ORCA: "*) printf '%s\\n' "$out" >&2 ;; *) printf '%s\\n' ${quoteWord(CODEX_HOOK_FAILED)} >&2 ;; esac`,
-    "exit 2",
-  ].join("; ");
-}
-
-/** Codex's trust hash for a session-flag hook (`codexHookTrustHash`). */
-function codexTrustHash(command, timeout) {
-  const identity = {
-    event_name: "pre_tool_use",
-    hooks: [{ async: false, command, timeout, type: "command" }],
-    matcher: "*",
-  };
-  return `sha256:${createHash("sha256").update(JSON.stringify(identity)).digest("hex")}`;
-}
-
-/**
- * Why the hook a Codex session installed (the `hooks` and `web_search` of the CODEX_CONFIG
- * ORCA handed the agent) does not hold ORCA's program in front of every tool: one PreToolUse
- * entry matching every tool, one command hook with Codex's timeout, trusted by its hash, whose
- * command is exactly ORCA's fail-closed line around ORCA's program with absolute paths, and
- * hosted web search off.
- */
-export function codexInstalledHookProblems(settings) {
-  const entries = settings?.hooks?.PreToolUse;
-  if (!Array.isArray(entries) || entries.length !== 1) return ["needs exactly one PreToolUse entry"];
-  const problems = [];
-  if (entries[0].matcher !== "*") problems.push("the PreToolUse entry must match every tool");
-  const hooks = entries[0].hooks;
-  if (!Array.isArray(hooks) || hooks.length !== 1) return [...problems, "needs exactly one hook"];
-  const hook = hooks[0];
-  if (hook.type !== "command") problems.push("the hook must be a command hook");
-  if (hook.timeout !== CODEX_HOOK_TIMEOUT) problems.push(`needs Codex's timeout of ${CODEX_HOOK_TIMEOUT} seconds`);
-  const words = new RegExp(
-    `timeout -s KILL ${CODEX_PROGRAM_SECONDS} (${QUOTED}) (${QUOTED}) '--codex' (${QUOTED}) 2>&1`,
-  ).exec(typeof hook.command === "string" ? hook.command : "");
-  const [runtime, script, context] = words ? words.slice(1).map(unquoteWord) : [];
-  if (!words || hook.command !== codexFailClosedLine(runtime, script, context))
-    problems.push("the command must be ORCA's fail-closed line around its program");
-  else if (![runtime, script, context].every((p) => p.startsWith("/")))
-    problems.push("needs absolute paths for the runtime, the program and its context");
-  if (settings.hooks.state?.[CODEX_HOOK_KEY]?.trusted_hash !== codexTrustHash(hook.command, hook.timeout))
-    problems.push("the hook must be trusted by its own hash");
-  if (settings.web_search !== "disabled") problems.push("hosted web search must be off");
-  if (Object.keys(settings).sort().join() !== "hooks,web_search")
-    problems.push("records more of the agent's config than its hooks and web search");
-  return problems;
 }
 
 /**

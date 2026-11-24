@@ -304,24 +304,131 @@ export const CODEX_HOOK_FAILED_REASON =
   "Blocked by ORCA: its hook did not answer, so the call does not run (ORCA's permission policy).";
 
 /**
- * The command line Codex runs (through `codexHookShell`) for the hook: ORCA's program inside a
- * fail-closed line (#1026). Codex 0.171.0 lets a call through when its hook exits 1, exits 2
- * with nothing on stderr, or runs out of time, and has no setting that changes that. So the
- * line, not Codex, decides what a failure means: it runs the program under `timeout -s KILL`
- * short of Codex's own timeout, and passes on only ORCA's two answers, an allow (exit 0 with
- * no output) and a block (exit 2 with a reason in ORCA's form). Anything else (a crash, a
- * kill, a missing runtime, a hang, any other exit or output) becomes exit 2 with a fixed reason,
- * which Codex blocks on. Only the line's own shell being killed from outside is left open.
+ * How much of the program's output the fail-closed line reads, in bytes. ORCA's answers are far
+ * shorter; anything longer is cut there, and a cut answer is never an allow.
  */
-export function codexPreToolHookCommand(runtime: string, script: string, contextFile: string): string {
-  const program = codexPreToolHookProgram(runtime, script, contextFile);
+export const CODEX_HOOK_OUTPUT_LIMIT = 4096;
+
+/**
+ * The fail-closed line around one program, given as shell words (#1026). It reads at most
+ * `CODEX_HOOK_OUTPUT_LIMIT` bytes of the program's stdout and stderr together, followed by its
+ * exit status, and accepts only two verdicts, each in a strict form:
+ *
+ * - allow: exit 0 and no output at all;
+ * - block: exit 2 and exactly one line of printable text beginning `Denied by ORCA: ` or
+ *   `Blocked by ORCA: `, optionally followed by exactly one `orca-hook-receipt: ` line of 64
+ *   lowercase hex digits (the startup probe's receipt). That answer is passed on as is.
+ *
+ * Every other outcome (a crash, a kill, a missing runtime, a hang stopped by `timeout`, any
+ * other exit, output in any other form, output cut at the limit) is exit 2 with
+ * `CODEX_HOOK_FAILED_REASON`, which Codex blocks on. The line itself still runs under Codex,
+ * which lets a call through if the line's own shell fails; `checkCodexFailClosedLine` checks
+ * at admission that the line blocks on this install.
+ */
+export function codexFailClosedLine(programWords: string): string {
+  const fail = `{ printf '%s\\n' ${shellWord(CODEX_HOOK_FAILED_REASON)} >&2; exit 2; }`;
   return [
-    // The shell's own notice of a killed program ("Killed") is not ORCA's answer either.
-    `{ out=$(timeout -s KILL ${CODEX_PRE_TOOL_PROGRAM_SECONDS} ${program} 2>&1); s=$?; } 2>/dev/null`,
-    `if [ "$s" -eq 0 ] && [ -z "$out" ]; then exit 0; fi`,
-    `case "$s:$out" in "2:Denied by ORCA: "*|"2:Blocked by ORCA: "*) printf '%s\\n' "$out" >&2 ;; *) printf '%s\\n' ${shellWord(CODEX_HOOK_FAILED_REASON)} >&2 ;; esac`,
+    // A newline, without one in the command line itself.
+    "nl=$(printf '\\nx')",
+    "nl=${nl%x}",
+    // The status follows the output on a line of its own; both go through head, so the shell
+    // never holds more than the limit. The shell's own notice of a killed program ("Killed")
+    // is not part of the answer either.
+    `{ out=$( { timeout -s KILL ${CODEX_PRE_TOOL_PROGRAM_SECONDS} ${programWords} 2>&1; printf '\\n%s' "$?"; } | head -c ${CODEX_HOOK_OUTPUT_LIMIT}); } 2>/dev/null`,
+    `s=\${out##*"$nl"}`,
+    `out=\${out%"$nl"*}`,
+    `if [ "$s" = 0 ] && [ -z "$out" ]; then exit 0; fi`,
+    `[ "$s" = 2 ] || ${fail}`,
+    `out=\${out%"$nl"}`,
+    `r=\${out%%"$nl"*}`,
+    `rest=\${out#"$r"}`,
+    `rest=\${rest#"$nl"}`,
+    `case "$r" in "Denied by ORCA: "?*|"Blocked by ORCA: "?*) ;; *) ${fail} ;; esac`,
+    `case "$r" in *[![:print:]]*) ${fail} ;; esac`,
+    `h=\${rest#"orca-hook-receipt: "}`,
+    `if [ -n "$rest" ]; then if [ "$h" = "$rest" ] || [ \${#h} -ne 64 ]; then ${fail}; fi; case "$h" in *[!0-9a-f]*) ${fail} ;; esac; fi`,
+    `printf '%s\\n' "$out" >&2`,
     "exit 2",
   ].join("; ");
+}
+
+/**
+ * The command line Codex runs (through `codexHookShell`) for the hook: ORCA's program inside
+ * the fail-closed line (`codexFailClosedLine`). Codex 0.171.0 lets a call through when its
+ * hook exits 1, exits 2 with nothing on stderr, or runs out of time, and has no setting that
+ * changes that; the line turns each of those failures of ORCA's program into a block.
+ */
+export function codexPreToolHookCommand(runtime: string, script: string, contextFile: string): string {
+  return codexFailClosedLine(codexPreToolHookProgram(runtime, script, contextFile));
+}
+
+/**
+ * Programs that fail in the ways the line must block, for `checkCodexFailClosedLine`: each a
+ * Node one-liner run by the same runtime as ORCA's hook.
+ */
+const FAIL_CLOSED_CHECKS: readonly { name: string; code: string }[] = [
+  { name: "crash", code: 'process.stderr.write("TypeError: x\\n");process.exit(1)' },
+  { name: "quiet exit 2", code: "process.exit(2)" },
+  { name: "exit 0 with output", code: 'process.stdout.write("{}\\n")' },
+  { name: "a block in another form", code: 'process.stderr.write("Denied by ORCA: x\\nmore\\n");process.exit(2)' },
+  { name: "output past the limit", code: `process.stdout.write("x".repeat(${2 * CODEX_HOOK_OUTPUT_LIMIT}))` },
+];
+
+/**
+ * Check at admission that the fail-closed line blocks on this install (#1026): run it, as
+ * Codex would (`codexHookShell`, in the session's directory), around programs that crash,
+ * exit 2 quietly, answer allow with output, answer a block in another form and overflow the
+ * limit, and require exit 2 with exactly `CODEX_HOOK_FAILED_REASON` each time. A shell, a
+ * `timeout` or a `head` that does not behave as the line needs fails here, and the session is
+ * refused, rather than letting a later failure of ORCA's program through. The startup probe
+ * (`probeCodexHook`) checks the other half: that ORCA's own block passes through the line.
+ */
+export async function checkCodexFailClosedLine(opts: {
+  runtime: string;
+  cwd: string;
+  shell: { program: string; args: string[] };
+  env?: NodeJS.ProcessEnv | undefined;
+  timeoutMs?: number | undefined;
+}): Promise<{ ok: true } | { ok: false; check: string; detail: string }> {
+  const expected = `${CODEX_HOOK_FAILED_REASON}\n`;
+  for (const check of FAIL_CLOSED_CHECKS) {
+    const line = codexFailClosedLine([opts.runtime, "-e", check.code].map(shellWord).join(" "));
+    const got = await new Promise<{ code: number | null; stderr: string; error?: string }>((resolve) => {
+      const child = spawn(opts.shell.program, [...opts.shell.args, line], {
+        cwd: opts.cwd,
+        env: opts.env ?? process.env,
+        stdio: ["ignore", "ignore", "pipe"],
+        detached: true,
+      });
+      let stderr = "";
+      const timer = setTimeout(() => {
+        try {
+          if (child.pid !== undefined) process.kill(-child.pid, "SIGKILL");
+        } catch {
+          // Already gone.
+        }
+        resolve({ code: null, stderr, error: "timeout" });
+      }, opts.timeoutMs ?? 10_000);
+      child.stderr.on("data", (d: Buffer) => {
+        if (stderr.length <= expected.length) stderr += d.toString();
+      });
+      child.on("error", (e: NodeJS.ErrnoException) => {
+        clearTimeout(timer);
+        resolve({ code: null, stderr, error: errnoCode(e.code) });
+      });
+      child.on("close", (code) => {
+        clearTimeout(timer);
+        resolve({ code, stderr });
+      });
+    });
+    if (got.code !== 2 || got.stderr !== expected)
+      return {
+        ok: false,
+        check: check.name,
+        detail: got.error ?? (got.code !== 2 ? `exit ${got.code}` : "another reason than the line's own"),
+      };
+  }
+  return { ok: true };
 }
 
 /** Sorted keys, as `serde_json`'s `sort_all_objects` leaves them. */
@@ -880,6 +987,12 @@ export function nativeToolHookSession(opts: NativeToolHookSessionOptions): Nativ
         const shell = (opts.codexShell ?? codexHookShell)();
         if ("error" in shell)
           throw refuse(`ORCA could not run its startup check as Codex runs the hook: ${shell.error}`);
+        const line = await checkCodexFailClosedLine({ runtime: opts.runtime, cwd: opts.workspaceCwd, shell, env });
+        if (!line.ok)
+          throw refuse(
+            `the fail-closed line around the hook does not block on this install (${line.check}: ${line.detail})`,
+            { failClosedCheck: line.check },
+          );
         const probe = await probeCodexHook({
           command: codexCommand,
           cwd: opts.workspaceCwd,
