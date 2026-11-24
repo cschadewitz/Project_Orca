@@ -31,10 +31,10 @@
  *
  * Nothing here wires the gate into ORCA's sessions or claims a support tier.
  */
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { mkdir, mkdtemp, readFile, realpath, rename, rm, rmdir, symlink, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, onTestFailed } from "vitest";
 import { AgentSpecSchema, silentLogger } from "@orca/core";
@@ -109,6 +109,8 @@ describe.skipIf(ADAPTER === undefined)("ORCA's exec gate in the real Codex (#102
   let records: CodexExecGateRecord[] = [];
   /** The pid of each executor ORCA started behind the gate. */
   let executors: number[] = [];
+  /** Every message the gate passed to an executor, as the executor received it. */
+  let passed: string[] = [];
 
   beforeEach(async () => {
     root = await realpath(await mkdtemp(join(tmpdir(), "orca-1026-acceptance-")));
@@ -121,6 +123,7 @@ describe.skipIf(ADAPTER === undefined)("ORCA's exec gate in the real Codex (#102
     model.outputs.length = 0;
     records = [];
     executors = [];
+    passed = [];
     asks.length = 0;
     onTestFailed(() =>
       console.error(
@@ -196,6 +199,11 @@ describe.skipIf(ADAPTER === undefined)("ORCA's exec gate in the real Codex (#102
       budget,
     });
     if (backend.pid !== undefined) executors.push(backend.pid);
+    const send = backend.send.bind(backend);
+    backend.send = (message, flushed) => {
+      passed.push(message);
+      send(message, flushed);
+    };
     return backend;
   };
 
@@ -444,6 +452,57 @@ describe.skipIf(ADAPTER === undefined)("ORCA's exec gate in the real Codex (#102
     expect(await exists("moved/where.txt")).toBe(`${join(workspace, "moved")}\n`);
     expect(await readFile(join(outside, "where.txt"), "utf8").catch(() => undefined)).toBeUndefined();
     expect(recorded("process/start", "forwarded")[0]!.subject).toMatchObject({ cwd: join(workspace, "sub") });
+  }, 180_000);
+
+  it("passes Codex's own sandbox on with the directory ORCA decided, and a command runs inside both", async () => {
+    // Codex's workspace-write mode, the one a session is in unless a person chooses another.
+    // Codex then names a sandbox in each request, and the executor applies it.
+    const beyond = join(homedir(), `.orca-1026-sandbox-${randomUUID()}`);
+    const cmd = `pwd > where.txt; echo x > ${beyond}; true`;
+    try {
+      const s = await gated(
+        { rules: [{ match: { kind: "execute" }, decision: "allow" }] },
+        {
+          env: {
+            CODEX_CONFIG: JSON.stringify(codexConfig({ sandbox_mode: "workspace-write" })),
+            INITIAL_AGENT_MODE: "agent",
+          },
+        },
+      );
+      await s.prompt(script(shell(cmd), patch("*** Add File: patched.txt", "+orca-1026")));
+
+      // What the executor was given: the sandbox Codex named, and the directory ORCA holds open.
+      const starts = passed
+        .map((m) => JSON.parse(m) as { method?: string; params?: Record<string, unknown> })
+        .filter((m) => m.method === "process/start");
+      expect(starts).toHaveLength(1);
+      expect(starts[0]!.params!["cwd"]).toMatch(/^file:\/\/\/proc\/\d+\/fd\/\d+$/);
+      expect(starts[0]!.params!["sandbox"]).toMatchObject({ permissions: { type: "managed" } });
+      expect(recorded("process/start", "forwarded")[0]!.subject).toMatchObject({ cwd: workspace });
+
+      // Nothing was written beyond what the sandbox allows, whether or not it could start here.
+      expect(await readFile(beyond, "utf8").catch(() => undefined)).toBeUndefined();
+      const where = await exists("where.txt");
+      if (where === undefined) {
+        // A machine that cannot start Codex's sandbox runs nothing. It does not run unsandboxed.
+        expect(told(/sandbox|denied|not permitted|failed/i)).toBe(true);
+        return;
+      }
+      expect(where).toBe(`${workspace}\n`);
+      expect(told(/Read-only file system|Permission denied|Operation not permitted/)).toBe(true);
+      // A patch is written through the same sandbox, by the path ORCA decided.
+      expect(await exists("patched.txt")).toBe("orca-1026\n");
+      const writes = passed
+        .map((m) => JSON.parse(m) as { method?: string; params?: Record<string, unknown> })
+        .filter((m) => m.method === "fs/writeFile");
+      expect(writes.at(-1)!.params).toMatchObject({
+        path: `file://${join(workspace, "patched.txt")}`,
+        followSymlinks: false,
+        sandbox: { permissions: { type: "managed" } },
+      });
+    } finally {
+      await rm(beyond, { force: true });
+    }
   }, 180_000);
 
   it("holds the pinned executor to a path with no link in it, for every file request it passes", async () => {
