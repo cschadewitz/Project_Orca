@@ -41,6 +41,7 @@ import {
   skillDigest,
   startDryRun,
   type GenerationMaterial,
+  type SessionOrigin,
 } from "@orca/engine";
 import { memoryStores } from "@orca/store";
 import type * as acp from "@agentclientprotocol/sdk";
@@ -252,7 +253,12 @@ function setup(
   const registry = AgentRegistry.fromConfig(config);
   const workflows = new WorkflowRegistry();
   for (const w of [opts.workflow ?? flow].flat()) workflows.register(parseWorkflow(w));
-  const opened: { mcp: string[]; envKeys: string[][]; commands: string[] }[] = [];
+  const opened: {
+    mcp: string[];
+    envKeys: string[][];
+    commands: string[];
+    origin?: SessionOrigin | undefined;
+  }[] = [];
   const prompts: (string | acp.ContentBlock[])[] = [];
   let n = 0;
   const orchestrator = new Orchestrator({
@@ -264,9 +270,10 @@ function setup(
     workflows,
     templates: new TemplateRegistry(),
     workspaceProvider: new LocalWorkspaceProvider(process.cwd()),
-    sessionFactory: async (o: OpenSessionOptions) => {
+    sessionFactory: async (o: OpenSessionOptions & { origin?: SessionOrigin }) => {
       n++;
       opened.push({
+        origin: o.origin,
         mcp: o.agent.mcpServers.map((m) => m.name),
         envKeys: o.agent.mcpServers.map((m) => Object.keys(m.env)),
         commands: o.agent.mcpServers.map((m) => m.command),
@@ -1007,5 +1014,44 @@ describe("scoped capabilities in launch provenance", () => {
     expect(registry.withOverrides({ roles: { planner: "claude" } }).capabilities().catalog).toBe(
       registry.capabilities().catalog,
     );
+  });
+});
+
+describe("the judge settings a session opens with (#701)", () => {
+  const reviewA = { plainRules: { judge: { provider: { kind: "anthropic" }, credential: "a" } } };
+  const reviewB = { plainRules: { judge: { provider: { kind: "anthropic" }, credential: "b" } } };
+
+  it("are the run's pinned generation's, also after a restart under other settings, with the run's cancellation", async () => {
+    const stores = memoryStores();
+    const first = await withGenerations({ review: reviewA }, { workflow: [nested, plain], stores, pause: true });
+    const launch = await first.generations.captureLaunch({ purpose: "workflow", workflowId: "nested" });
+    const id = await launch.startRun({});
+    expect((await first.orchestrator.run(id)).run.status).toBe("paused");
+    const [opened] = first.opened;
+    // The first session is the nested child run's, bound to the same generation as its root.
+    expect(opened!.origin).toMatchObject({ review: reviewA });
+    expect(opened!.origin!.generationId).toEqual(expect.any(String));
+    expect(opened!.origin!.signal).toBeInstanceOf(AbortSignal);
+    expect(opened!.origin!.signal!.aborted).toBe(false);
+
+    // A new daemon over the same store with other judge settings: the run keeps its own.
+    const second = await withGenerations({ review: reviewB }, { workflow: [nested, plain], stores });
+    expect(second.generations.effectiveConfig().review).toEqual(reviewB);
+    const [request] = await second.orchestrator.pendingInputs();
+    await second.orchestrator.answer(request!.id, "approve", request!.runId);
+    expect((await second.orchestrator.resume(request!.runId)).run.status).toBe("completed");
+    expect(second.opened.length).toBeGreaterThan(0);
+    for (const o of second.opened) {
+      expect(o.origin!.generationId).toBe(opened!.origin!.generationId);
+      expect(o.origin!.review).toEqual(reviewA);
+    }
+  });
+
+  it("are absent for a run bound to no generation, which still carries its cancellation", async () => {
+    const { orchestrator, opened } = setup({ review: reviewA });
+    await orchestrator.startAndRun({ workflowId: "flow" });
+    expect(opened[0]!.origin).not.toHaveProperty("review");
+    expect(opened[0]!.origin).not.toHaveProperty("generationId");
+    expect(opened[0]!.origin!.signal).toBeInstanceOf(AbortSignal);
   });
 });

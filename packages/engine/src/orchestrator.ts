@@ -83,7 +83,7 @@ import {
   type Workspace,
   type SecretRef,
 } from "@orca/core";
-import { reduceRun } from "@orca/core";
+import { reduceRun, type OrcaConfig } from "@orca/core";
 import {
   DEFAULT_LEASE_TTL_MS,
   executionEvents,
@@ -154,8 +154,27 @@ export interface SessionOrigin {
   runId: string;
   generationId?: string;
   remotes?: readonly RemoteDaemonSpec[];
+  /**
+   * The `review` settings of the generation the run is bound to (#701), present exactly when
+   * `generationId` is. A session's plain-rule judge is prepared from these, never from boot config.
+   */
+  review?: OrcaConfig["review"];
+  /** Aborts when the run is cancelled, so work done to open the session stops with it. */
+  signal?: AbortSignal;
 }
 export type SessionFactory = (options: OpenSessionOptions & { origin?: SessionOrigin }) => Promise<AgentSession>;
+
+const cancelledBeforeOpen = new WeakSet<object>();
+/**
+ * The error a session factory throws when the run was cancelled before it opened the agent at
+ * all (#701: during judge preparation). It is no handshake, so it is not counted against the
+ * agent's health; every other error from the factory still is.
+ */
+export function sessionCancelledBeforeOpen(message: string): OrcaError {
+  const error = new OrcaError("CANCELLED", message);
+  cancelledBeforeOpen.add(error);
+  return error;
+}
 
 export interface OrchestratorOptions {
   /** Trusted current authority for bounded first attachment of admitted roots. */
@@ -2477,8 +2496,14 @@ export class Orchestrator {
   private sessionOrigin(rc: RunContext): SessionOrigin {
     const generation = this.contextGenerations.get(rc);
     return generation
-      ? { runId: rc.id, generationId: generation.snapshot.id, remotes: generation.snapshot.config.remotes }
-      : { runId: rc.id };
+      ? {
+          runId: rc.id,
+          generationId: generation.snapshot.id,
+          remotes: generation.snapshot.config.remotes,
+          review: generation.snapshot.config.review,
+          signal: rc.abort.signal,
+        }
+      : { runId: rc.id, signal: rc.abort.signal };
   }
 
   private interruptedChild(rc: RunContext, step: StepRun, branch: string | undefined): string | undefined {
@@ -3301,7 +3326,9 @@ export class Orchestrator {
         },
       });
     } catch (e) {
-      if (!deniedAtDelivery) handshake.failed(e);
+      // Neither a refusal at delivery nor a run cancelled before the agent was opened is a
+      // failed handshake.
+      if (!deniedAtDelivery && !(e instanceof Error && cancelledBeforeOpen.has(e))) handshake.failed(e);
       // A failed open whose process was spawned carries that process's exit; its bounded
       // cleanup may have given up before observing it, so the slot waits for the exit too.
       // An exit that cannot be observed at all (the handle's promise rejects) is not evidence
