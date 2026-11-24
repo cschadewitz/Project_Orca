@@ -35,6 +35,7 @@ import type { JudgedDecision, JudgedPolicyRule, PermissionExplanation, Permissio
 import { callFacts, explainPermission, type PermissionEvalContext } from "./permissions.js";
 import {
   PLAIN_RULE_JUDGED_KINDS,
+  PLAIN_RULE_REASONS,
   type JudgePermission,
   type PlainRuleJudgeOutcome,
 } from "./review-judge/plain-rule.js";
@@ -540,4 +541,24 @@ function disclosedArguments(
     return undefined;
   }
   return clean(text) ? text : undefined;
+}
+
+/**
+ * The judge's note a permission ask carries (#701; `JudgeAskNoteSchema` in `@orca/protocol`), from what a lane
+ * decided: the verdict, the class asked about, whether it is a recommendation, and only what still holds for that
+ * verdict. A reason code is kept only when it belongs to the verdict's own family, and the rule only with
+ * `covered`: a favourable verdict that a later check overturned (`changed-since`, `malformed`, `unavailable`)
+ * keeps neither, so the note never repeats "your rule covers this" about a call it no longer covers. Never the
+ * rule's revision (a content digest) or which judge configuration decided: as on `agent.permission`.
+ */
+export function askJudgeNote(judged: JudgedDecision): Record<string, unknown> {
+  const family = (PLAIN_RULE_REASONS as Readonly<Record<string, readonly string[]>>)[judged.verdict];
+  const reasonFits = judged.reasonCode !== undefined && family !== undefined && family.includes(judged.reasonCode);
+  return {
+    verdict: judged.verdict,
+    ...(judged.kind ? { kind: judged.kind } : {}),
+    ...(judged.advisory ? { advisory: true } : {}),
+    ...(reasonFits ? { reasonCode: judged.reasonCode } : {}),
+    ...(judged.verdict === "covered" && judged.ruleId ? { ruleId: judged.ruleId } : {}),
+  };
 }

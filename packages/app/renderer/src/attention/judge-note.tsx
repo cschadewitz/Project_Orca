@@ -26,6 +26,14 @@ const REASON_TEXT: Readonly<Record<JudgeAskReason, string>> = {
   "criterion-ambiguous": "It isn't clear whether your rule covers this.",
 };
 
+const REASON_FAMILY: Readonly<Record<JudgeAskReason, JudgeAskNote["verdict"]>> = {
+  "matches-criterion": "covered",
+  "outside-criterion": "not-covered",
+  "excluded-by-criterion": "not-covered",
+  "action-ambiguous": "unsure",
+  "criterion-ambiguous": "unsure",
+};
+
 export interface JudgeNoteText {
   /** One sentence: what the judge said. */
   headline: string;
@@ -40,7 +48,9 @@ export interface JudgeNoteText {
 /** ORCA's wording for a note. */
 export function judgeNoteText(note: JudgeAskNote): JudgeNoteText {
   const advice = note.advisory === true;
-  const reason = note.reasonCode ? REASON_TEXT[note.reasonCode] : undefined;
+  // A reason only from the verdict's own family, as the daemon sends it: never a stale "your rule covers this".
+  const reason =
+    note.reasonCode && REASON_FAMILY[note.reasonCode] === note.verdict ? REASON_TEXT[note.reasonCode] : undefined;
   const headline = ((): string => {
     switch (note.verdict) {
       case "covered":
@@ -64,7 +74,9 @@ export function judgeNoteText(note: JudgeAskNote): JudgeNoteText {
       case "injection-suspected":
         return "The judge wasn't asked: this request looked like it was trying to steer the judge.";
       case "hard-boundary":
-        return "The judge wasn't asked: a rule you wrote asks or denies this.";
+        return "The judge wasn't asked: a safety restriction applies to this call, so it's your call.";
+      case "changed-since":
+        return "The judge's answer no longer applies: the rules or what this call touches changed while it was deciding, so it's your call.";
       case "outside-envelope":
         return "The judge wasn't asked: it can't vouch for this kind of call.";
     }

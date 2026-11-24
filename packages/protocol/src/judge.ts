@@ -111,8 +111,9 @@ export type JudgeStatusResult = z.infer<typeof JudgeStatusResultSchema>;
 /**
  * What the judge said about a call before a person was asked (#701), on a permission ask's
  * `context.judge` (`inputs.list`, `inputs.open`). It answers nothing: it is shown with the ask.
- * The verdicts are `PlainRuleVerdict` in `@orca/agents`, the reason codes its fixed
- * `PLAIN_RULE_REASONS`: never model prose. A note this build does not know is not shown.
+ * The verdicts are `PlainRuleVerdict` in `@orca/agents` plus the lanes' own `changed-since`, the
+ * reason codes its fixed `PLAIN_RULE_REASONS`, kept only within their verdict's family
+ * (`askJudgeNote`): never model prose. A note this build does not know is not shown.
  */
 export const JUDGE_ASK_VERDICTS = [
   "covered",
@@ -125,6 +126,8 @@ export const JUDGE_ASK_VERDICTS = [
   "injection-suspected",
   "hard-boundary",
   "outside-envelope",
+  /** The judge said yes, but the rules or what the call touches changed before ORCA's check afterwards. */
+  "changed-since",
 ] as const;
 export type JudgeAskVerdict = (typeof JUDGE_ASK_VERDICTS)[number];
 

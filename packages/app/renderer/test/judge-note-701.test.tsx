@@ -78,8 +78,19 @@ describe("judgeNoteText", () => {
     ).toBeUndefined();
   });
 
+  it("never repeats a reason from another verdict's family", () => {
+    for (const verdict of ["changed-since", "malformed", "unavailable", "not-covered"] as const)
+      expect(judgeNoteText({ verdict, reasonCode: "matches-criterion", ruleId: "config:1" })).toEqual({
+        headline: judgeNoteText({ verdict }).headline,
+        advice: false,
+      });
+  });
+
   it("says why the judge was not asked", () => {
-    expect(judgeNoteText({ verdict: "hard-boundary" }).headline).toMatch(/a rule you wrote asks or denies this/);
+    // Neutral: an unreadable policy or another safety restriction closes the lane too, not only a user's rule.
+    expect(judgeNoteText({ verdict: "hard-boundary" }).headline).toBe(
+      "The judge wasn't asked: a safety restriction applies to this call, so it's your call.",
+    );
     expect(judgeNoteText({ verdict: "over-budget" }).headline).toMatch(/daily budget is used up/);
   });
 });

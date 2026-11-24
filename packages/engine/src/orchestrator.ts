@@ -11,6 +11,7 @@ import { configuredGenerationSecrets, launchProvenance } from "./configuration-p
 
 import {
   AgentRegistry,
+  askJudgeNote,
   LocalHost,
   isAbsoluteCommand,
   mcpServerDefinitionDigest,
@@ -83,7 +84,7 @@ import {
   type Workspace,
   type SecretRef,
 } from "@orca/core";
-import { reduceRun, type JudgedDecision, type OrcaConfig } from "@orca/core";
+import { reduceRun, type OrcaConfig } from "@orca/core";
 import {
   DEFAULT_LEASE_TTL_MS,
   executionEvents,
@@ -174,22 +175,6 @@ export function sessionCancelledBeforeOpen(message: string): OrcaError {
   const error = new OrcaError("CANCELLED", message);
   cancelledBeforeOpen.add(error);
   return error;
-}
-
-/**
- * The judge's note a permission ask carries in `context.judge` (#701; `JudgeAskNoteSchema` in
- * `@orca/protocol`): the verdict, its fixed reason code, the class asked about, whether it is a
- * recommendation, and which rule by its id. Not the rule's revision, which digests its content,
- * nor which judge configuration decided: the same fields the public `agent.permission` keeps.
- */
-function askJudgeNote(judged: JudgedDecision): Record<string, unknown> {
-  return {
-    verdict: judged.verdict,
-    ...(judged.kind ? { kind: judged.kind } : {}),
-    ...(judged.advisory ? { advisory: true } : {}),
-    ...(judged.reasonCode ? { reasonCode: judged.reasonCode } : {}),
-    ...(judged.ruleId ? { ruleId: judged.ruleId } : {}),
-  };
 }
 
 export interface OrchestratorOptions {
@@ -3240,8 +3225,8 @@ export class Orchestrator {
             // opens the card is a pure function of the event it comes from.
             agent: { id: agent.id, hostId: host.spec.id },
             // What a plain-language rule's judge said before the person was asked (#701), so the
-            // card can show it where they answer. Field by field, as on `agent.permission`: never
-            // the rule's revision (a content digest) or which judge configuration decided.
+            // card can show it where they answer: `askJudgeNote` keeps only what still holds, and
+            // never the rule's revision (a content digest) or which judge configuration decided.
             context: { toolCall: req.toolCall, ...(judged ? { judge: askJudgeNote(judged) } : {}) },
             onRequested: () => {
               pendingAsks++;
