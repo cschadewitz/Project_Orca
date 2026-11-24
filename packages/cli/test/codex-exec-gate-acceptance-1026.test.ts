@@ -526,7 +526,10 @@ describe.skipIf(ADAPTER === undefined)("ORCA's exec gate in the real Codex (#102
     const waiting = new Map<number, (answer: Record<string, unknown>) => void>();
     ws.addEventListener("message", (event) => {
       const message = JSON.parse(String(event.data)) as Record<string, unknown>;
-      if (typeof message["id"] === "number" && message["method"] === undefined) waiting.get(message["id"])?.(message);
+      const id = message["id"];
+      if (typeof id !== "number" || message["method"] !== undefined) return;
+      const answered = waiting.get(id);
+      if (typeof answered === "function") answered(message);
     });
     let next = 0;
     const call = (method: string, params: unknown) =>
