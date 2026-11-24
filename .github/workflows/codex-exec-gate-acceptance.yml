@@ -1,0 +1,94 @@
+# ORCA's gate in Codex's executor path (#1026) against the real Codex ACP adapter and the
+# Codex it depends on, pinned below. A scripted local stand-in for the OpenAI Responses API
+# answers for the model, so the run needs no account, key or secret and costs nothing.
+#
+# It observes on the installed pair what the unit tests cannot: with CODEX_EXEC_SERVER_URL
+# pointing at the gate, every shell command, every byte typed into a running command
+# (`write_stdin`, which no hook sees), every patch and every image read arrives at the gate,
+# and one the gate refuses does not happen. It also observes that a call fails when ORCA's
+# part fails: the policy cannot be decided, the gate is closed, the gate never admitted the
+# runtime, or the connection lacks the session's token. No run weakens a guard that is in
+# use: the gate is not wired into ORCA's sessions here, and nothing claims a support tier.
+#
+# CODEX_ADAPTER_VERSION and CODEX_VERSION are the pair ORCA has verified
+# (CODEX_HOOK_VERIFIED_PAIRS in packages/agents/src/native-tool-hook-session.ts). The suite
+# checks that the Codex it puts behind the gate is the image pinned for that adapter, so
+# moving to another pair is a reviewed change to both. `codex exec-server` is experimental
+# upstream; the weekly run sees a change in behaviour behind the pins.
+name: Codex exec gate acceptance
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - packages/agents/src/codex-exec-gate.ts
+      - packages/agents/src/codex-exec-gate-policy.ts
+      - packages/agents/src/claude-pre-tool-hook.ts
+      - packages/agents/src/native-tool-hook-session.ts
+      - packages/agents/src/acp-session.ts
+      - packages/agents/src/permissions.ts
+      - packages/cli/test/codex-exec-gate-acceptance-1026.test.ts
+      - packages/cli/test/codex-model-stand-in.ts
+      - .github/workflows/codex-exec-gate-acceptance.yml
+  schedule:
+    - cron: "52 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codex-exec-gate-acceptance-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CODEX_ADAPTER_VERSION: 2.9.0
+  CODEX_VERSION: 0.171.0
+
+jobs:
+  linux:
+    name: codex exec gate acceptance (linux)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+
+      - name: Install the pinned Codex ACP adapter and Codex outside the workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          d="$RUNNER_TEMP/codex-adapter"
+          mkdir -p "$d"
+          cd "$d"
+          npm init -y >/dev/null
+          npm install --no-audit --no-fund --ignore-scripts \
+            "@agentclientprotocol/codex-acp@${CODEX_ADAPTER_VERSION}" "@openai/codex@${CODEX_VERSION}"
+          test "$(node -p 'require("@openai/codex/package.json").version')" = "$CODEX_VERSION"
+          entry="$d/node_modules/@agentclientprotocol/codex-acp/dist/index.js"
+          test -f "$entry"
+          bin="$d/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex"
+          test "$("$bin" --version)" = "codex-cli ${CODEX_VERSION}"
+          echo "ORCA_CODEX_ADAPTER=$entry" >> "$GITHUB_ENV"
+
+      - name: Run the acceptance tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm exec vitest run packages/cli/test/codex-exec-gate-acceptance-1026.test.ts \
+            --reporter=default --reporter=json --outputFile="$RUNNER_TEMP/acceptance.json"
+          # The suite is skipped without the adapter; here every test has to have run.
+          node -e '
+            const r = require(process.argv[1]);
+            if (r.numTotalTests === 0 || r.numPendingTests > 0 || r.numPassedTests !== r.numTotalTests)
+              throw new Error(`expected every acceptance test to run and pass: ${JSON.stringify({total: r.numTotalTests, passed: r.numPassedTests, skipped: r.numPendingTests})}`);
+          ' "$RUNNER_TEMP/acceptance.json"

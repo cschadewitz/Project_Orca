@@ -51,6 +51,7 @@ import {
   type ConfiguredPermissionPolicy,
   type HookTelemetryLine,
   type PermissionDecision,
+  type PermissionPolicy,
 } from "@orca/core";
 import { fitHookTelemetryLine, type HookTelemetryTarget } from "./hook-telemetry.js";
 import {
@@ -397,10 +398,35 @@ export async function checkClaudePreTool(
   context: ClaudeHookContext,
   frame: ClaudePreToolFrame,
 ): Promise<ClaudePreToolVerdict> {
-  const toolCall = claudeToolCall(frame);
+  return checkPreToolCall(context, claudeToolCall(frame), frame);
+}
+
+/** Where a call that is already in ACP shape runs, and the ids it is recorded under. */
+export interface PreToolCallSite {
+  /** The directory the call runs in. A relative location is read against it. */
+  cwd: string;
+  toolUseId?: string | undefined;
+  sessionId?: string | undefined;
+}
+
+/**
+ * Decide a call that is already in ACP shape: `checkClaudePreTool` without the reading of a
+ * hook frame. ORCA's gate in Codex's executor path (#1026, `codex-exec-gate-policy.ts`) builds
+ * its calls from the executor request itself and decides them here, so one rule answers a call
+ * the same way whether it arrives as an ask, through the hook or at the gate.
+ *
+ * `narrow` sees the policy as loaded, before it decides, and returns the policy to decide by.
+ * It may only take grants away.
+ */
+export async function checkPreToolCall(
+  context: ClaudeHookContext,
+  toolCall: ClaudePreToolVerdict["toolCall"],
+  site: PreToolCallSite,
+  narrow?: (policy: PermissionPolicy) => PermissionPolicy,
+): Promise<ClaudePreToolVerdict> {
   const request: acp.RequestPermissionRequest = {
-    sessionId: frame.sessionId ?? "",
-    toolCall: { toolCallId: frame.toolUseId ?? "", ...toolCall },
+    sessionId: site.sessionId ?? "",
+    toolCall: { toolCallId: site.toolUseId ?? "", ...toolCall },
     options: [],
   };
   const scope = {
@@ -415,23 +441,24 @@ export async function checkClaudePreTool(
       : toolCall.kind === "delete" || toolCall.kind === "move"
         ? "remove"
         : "write";
-  if (toolCall.locations.some((l) => protectedPathFor(l.path, access, context.protectedPaths, frame.cwd)))
+  if (toolCall.locations.some((l) => protectedPathFor(l.path, access, context.protectedPaths, site.cwd)))
     return { decision: "deny", reason: "protected", toolCall };
 
   let unreadable = false;
-  const policy = await loadEffectivePermissionPolicy(
+  const loaded = await loadEffectivePermissionPolicy(
     { id: context.agentId, permissions: context.permissions },
     context.permissionFiles,
     () => {
       unreadable = true;
     },
   );
+  const policy = narrow ? narrow(loaded) : loaded;
   const decision = decidePermission(policy, request, scope);
   if (decision !== "allow") return { decision, reason: unreadable ? "sidecar-unreadable" : "policy", toolCall };
 
   // A rule is relative to the workspace; a call running somewhere else is not the call it granted.
   const roots = [context.workspaceCwd, ...(context.additionalDirectories ?? [])];
-  if (!roots.some((root) => inside(frame.cwd, root)))
+  if (!roots.some((root) => inside(site.cwd, root)))
     return { decision: "ask", reason: "cwd-outside-workspace", toolCall };
   return { decision, reason: "policy", toolCall };
 }
