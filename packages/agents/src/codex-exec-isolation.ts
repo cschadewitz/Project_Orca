@@ -212,8 +212,9 @@ const inside = (path: string, root: string): boolean =>
  * user. Each has a rule in `codexExecOutsideReach`: a variable that is set is followed to a
  * directory that is hidden, or it is listed as not hidden. There is no third outcome. They
  * are followed in this order: the runtime directory comes before the names that are inside
- * it, and the variable that names a program's place before those that only tell of the
- * program (its process, its pane, its credentials).
+ * it, the variable that names a program's place before those that only tell of the program
+ * (its process, its pane), and the file of credentials last, which is hidden only by what
+ * the others hid.
  */
 export const CODEX_EXEC_OUTSIDE_VARIABLES = [
   "XDG_RUNTIME_DIR",
@@ -224,7 +225,6 @@ export const CODEX_EXEC_OUTSIDE_VARIABLES = [
   "GNOME_KEYRING_CONTROL",
   "DISPLAY",
   "WAYLAND_DISPLAY",
-  "XAUTHORITY",
   "SESSION_MANAGER",
   "DOCKER_HOST",
   "CONTAINER_HOST",
@@ -234,6 +234,7 @@ export const CODEX_EXEC_OUTSIDE_VARIABLES = [
   "SCREENDIR",
   "STY",
   "VSCODE_IPC_HOOK_CLI",
+  "XAUTHORITY",
 ] as const;
 
 /** What `codexExecOutsideReach` found. */
@@ -271,7 +272,9 @@ function whatIsAt(path: string): "directory" | "absent" | "other" | "unseen" {
  * `transport:key=value,key=value` joined by `;`, where a value is made of the bytes
  * `-0-9A-Za-z_/.\*` and of `%HH` for every other byte. Undefined for anything else: an
  * empty address, a key given twice, a byte that should have been escaped, an escape that is
- * not two hex digits, or bytes that are not text. What is not read exactly is not guessed at.
+ * not two hex digits, or bytes that are not text. A value is given only when it is, byte
+ * for byte, what the address held: nothing is dropped (a byte-order mark stays where it is)
+ * and nothing replaced. What is not read exactly is not guessed at.
  */
 function busAddresses(text: string): { transport: string; keys: Map<string, string> }[] | undefined {
   const addresses: { transport: string; keys: Map<string, string> }[] = [];
@@ -290,11 +293,15 @@ function busAddresses(text: string): { transport: string; keys: Map<string, stri
           at += 2;
         } else bytes.push(match[2]!.charCodeAt(at));
       }
+      let value: string;
       try {
-        keys.set(match[1]!, new TextDecoder("utf-8", { fatal: true }).decode(Uint8Array.from(bytes)));
+        value = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(Uint8Array.from(bytes));
       } catch {
         return undefined;
       }
+      // The text has to be those bytes again, every one.
+      if (!Buffer.from(value, "utf8").equals(Buffer.from(bytes))) return undefined;
+      keys.set(match[1]!, value);
     }
     addresses.push({ transport, keys });
   }
@@ -324,8 +331,10 @@ function busAddresses(text: string): { transport: string; keys: Map<string, stri
  * variable's name: a value that is no path, one that leads nowhere or cannot be looked at,
  * a directory that is someone else's, a service that is not reached through a directory at
  * all, a name in a runtime directory that is not hidden, a value written in a way ORCA does
- * not read exactly, and a variable that tells of a program (its process, its pane, its
- * credentials) when nothing names where that program is reached. The only thing passed over
+ * not read exactly, a variable that tells of a program (its process, its pane) when nothing
+ * names where that program is reached, and a file of credentials (`XAUTHORITY`) that is not
+ * itself inside a directory hidden for another reason: this function hides no directory for
+ * credentials, it says whether they are behind one. The only thing passed over
  * in silence is a well-known directory nothing named that is not there; one that is there
  * and cannot be hidden is listed too. An incomplete finding is told from a complete one by
  * that list.
@@ -395,8 +404,8 @@ export function codexExecOutsideReach(
   /** Which of the variables that are set were followed to a hidden directory. */
   const followed = new Map<Name, boolean>();
   /**
-   * A variable that tells of a program and is no place (its process, its pane, its
-   * credentials): it is as hidden as the place of that program, which another variable names.
+   * A variable that tells of a program and is no place (its process, its pane): it is as
+   * hidden as the place of that program, which another variable names.
    */
   const alongside = (place: Name, from: Name): boolean => {
     if (!followed.has(place)) not(from, "it tells of a program, and nothing names where that is reached");
@@ -506,11 +515,26 @@ export function codexExecOutsideReach(
     },
     SSH_AGENT_PID: () => alongside("SSH_AUTH_SOCK", "SSH_AGENT_PID"),
     TMUX_PANE: () => alongside("TMUX", "TMUX_PANE"),
-    XAUTHORITY: () => alongside("DISPLAY", "XAUTHORITY"),
+    // A file of credentials is not a place a program is reached through, and no directory is
+    // hidden for it. It is behind a mask only when where it really is was hidden already.
+    XAUTHORITY: (value) => {
+      if (!isAbsolute(value) || value.includes("\0")) return not("XAUTHORITY", noPath) !== undefined;
+      const file = physicalPathOf(value);
+      if (file === undefined) return not("XAUTHORITY", "it could not be looked at") !== undefined;
+      if ([...hidden].some((root) => inside(file, root))) return true;
+      return not("XAUTHORITY", "it names credentials in a place that is not hidden") !== undefined;
+    },
   };
 
+  // The well-known places, whatever the environment says. One that is not there is not a place.
+  const run = `${system.run}/user/${user.uid}`;
+  hide(run, run, false, true);
+  for (const shared of [`${system.temporary}/.X11-unix`, `${system.temporary}/.ICE-unix`])
+    hide(shared, shared, false, false);
+  for (const own of [`${system.temporary}/tmux-${user.uid}`, ...screens]) hide(own, own, false, true);
+
   // What the environment names, in the order of the list: the runtime directory before the
-  // names inside it, and a program's place before what else tells of the program.
+  // names inside it, a program's place before what else tells of the program, credentials last.
   const dropped: string[] = [];
   for (const name of CODEX_EXEC_OUTSIDE_VARIABLES) {
     const value = env[name];
@@ -521,13 +545,6 @@ export function codexExecOutsideReach(
     if (!followed.get(name) && !unhidden.some((entry) => entry.from === name))
       not(name, "ORCA did not follow it to a directory");
   }
-
-  // The well-known places, whatever the environment says. One that is not there is not a place.
-  const run = `${system.run}/user/${user.uid}`;
-  hide(run, run, false, true);
-  for (const shared of [`${system.temporary}/.X11-unix`, `${system.temporary}/.ICE-unix`])
-    hide(shared, shared, false, false);
-  for (const own of [`${system.temporary}/tmux-${user.uid}`, ...screens]) hide(own, own, false, true);
 
   const without: Record<string, string> = {};
   for (const [key, value] of Object.entries(env))

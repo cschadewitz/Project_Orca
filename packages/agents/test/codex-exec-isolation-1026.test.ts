@@ -446,7 +446,9 @@ describe.skipIf(process.platform !== "linux")("what a command would reach outsid
     for (const dir of Object.values(d)) await mkdir(dir, { mode: 0o700 });
     const multiplexers = join(root, "multiplexers");
     const usual = join(made.run, "screen", `S-${name}`);
-    for (const dir of [join(multiplexers, `tmux-${uid}`), usual]) await mkdir(dir, { recursive: true, mode: 0o700 });
+    const ownRun = join(made.run, "user", String(uid));
+    for (const dir of [join(multiplexers, `tmux-${uid}`), usual, ownRun])
+      await mkdir(dir, { recursive: true, mode: 0o700 });
     const shared = join(root, "shared");
     await mkdir(shared);
     await chmod(shared, 0o777);
@@ -463,6 +465,7 @@ describe.skipIf(process.platform !== "linux")("what a command would reach outsid
     const noRuntime = "it is a name in the runtime directory, and no runtime directory is hidden";
     const noPlace = "it tells of a program, and nothing names where that is reached";
     const placeShown = "it tells of a program at a place that is not hidden";
+    const unmasked = "it names credentials in a place that is not hidden";
     const notOwn = "it is not a directory of the user's own";
     type Variable = (typeof CODEX_EXEC_OUTSIDE_VARIABLES)[number];
     /** A variable and its value, what else is set, and the outcome: the directory hidden for it, or why it is listed. */
@@ -490,6 +493,8 @@ describe.skipIf(process.platform !== "linux")("what a command would reach outsid
       ["DBUS_SESSION_BUS_ADDRESS", `unix:path=${d.bus}/secret bus`, { why: unread }],
       ["DBUS_SESSION_BUS_ADDRESS", `unix:path=${d.bus}/secret%zz`, { why: unread }],
       ["DBUS_SESSION_BUS_ADDRESS", `unix:path=${d.bus}/secret%ff`, { why: unread }],
+      // A byte-order mark is a byte of the path like any other: it is not dropped to make the path a good one.
+      ["DBUS_SESSION_BUS_ADDRESS", `unix:path=%EF%BB%BF${d.bus}/secret`, { why: noPath }],
       ["DBUS_SESSION_BUS_ADDRESS", `unix:path=${d.bus}/bus,path=${d.agent}/secret`, { why: unread }],
       ["DBUS_SESSION_BUS_ADDRESS", `unix:path=${d.bus}/bus,secret=1`, { why: unread }],
       ["DBUS_SESSION_BUS_ADDRESS", `unix:tmpdir=${d.bus}`, { why: unread }],
@@ -520,9 +525,18 @@ describe.skipIf(process.platform !== "linux")("what a command would reach outsid
       ["WAYLAND_DISPLAY", "secret-wayland-0", { why: noRuntime }, { XDG_RUNTIME_DIR: shared }],
       ["WAYLAND_DISPLAY", "../secret-missing/wayland-0", { why: nothing }, { XDG_RUNTIME_DIR: d.runtime! }],
       ["WAYLAND_DISPLAY", "", { why: unread }],
-      ["XAUTHORITY", join(d.home!, ".Xauthority"), { hidden: x }, { DISPLAY: ":0" }],
-      ["XAUTHORITY", join(d.home!, "secret-authority"), { why: noPlace }],
-      ["XAUTHORITY", join(d.home!, "secret-authority"), { why: placeShown }, { DISPLAY: "secret.example:0" }],
+      ["XAUTHORITY", join(d.runtime!, "xauth_secret"), { hidden: d.runtime! }, { XDG_RUNTIME_DIR: d.runtime! }],
+      ["XAUTHORITY", join(ownRun, "xauth_secret"), { hidden: ownRun }],
+      [
+        "XAUTHORITY",
+        join(d.editor!, "xauth_secret"),
+        { hidden: d.editor! },
+        { VSCODE_IPC_HOOK_CLI: `${d.editor}/ipc.sock` },
+      ],
+      ["XAUTHORITY", join(d.home!, "secret-authority"), { why: unmasked }, { DISPLAY: ":0" }],
+      ["XAUTHORITY", join(d.home!, "secret-authority"), { why: unmasked }],
+      ["XAUTHORITY", join(d.runtime!, "xauth_secret"), { why: unmasked }],
+      ["XAUTHORITY", "secret/relative", { why: noPath }],
       ["SESSION_MANAGER", `unix/here:${d.ice}/4242`, { hidden: d.ice! }],
       ["SESSION_MANAGER", `local/here:@/tmp/.ICE-unix/secret,unix/here:${d.ice}/4242`, { why: elsewhere }],
       ["SESSION_MANAGER", "tcp/secret.example:6000", { why: elsewhere }],
