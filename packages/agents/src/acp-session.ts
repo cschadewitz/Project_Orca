@@ -21,6 +21,7 @@ import {
   systemClock,
   type AgentSpec,
   type Clock,
+  type JudgedDecision,
   type Logger,
   type PermissionPolicy,
   type SecretsConfig,
@@ -155,8 +156,16 @@ export interface OpenSessionOptions {
   env?: Record<string, string>;
   logger?: Logger;
   clock?: Clock;
-  /** Human/upstream escalation for `ask` permissions. */
-  askPermission?: (req: acp.RequestPermissionRequest, invocation?: PermissionInvocation) => Promise<string | undefined>;
+  /**
+   * Human/upstream escalation for `ask` permissions. `judged` is what a plain-language rule's
+   * judge said about the call before it was asked (#701): a verdict or a recommendation to show
+   * with the ask. It answers nothing; the person does.
+   */
+  askPermission?: (
+    req: acp.RequestPermissionRequest,
+    invocation?: PermissionInvocation,
+    judged?: JudgedDecision,
+  ) => Promise<string | undefined>;
   /** Explicit opt-in only. Loading context never restores a pending tool callback. */
   resumeSessionId?: string;
   /**
@@ -459,12 +468,16 @@ async function openPlanned(
    * turn. A host-side persistence or parking error fails the prompt unchanged; sending only
    * a JSON-RPC error would let the agent continue or retry it.
    */
-  const askThrough = (turn: ActiveTurn, invocation: PermissionInvocation) =>
+  /** `advice`: a verdict reached before this ask outside the judged lane (an edit's or MCP call's), shown with it. */
+  const askThrough = (turn: ActiveTurn, invocation: PermissionInvocation, advice?: JudgedDecision) =>
     opts.askPermission
       ? {
-          ask: async (request: acp.RequestPermissionRequest) => {
+          ask: async (request: acp.RequestPermissionRequest, judged?: JudgedDecision) => {
+            const said = judged ?? advice;
             try {
-              return await opts.askPermission!(request, invocation);
+              return await (said
+                ? opts.askPermission!(request, invocation, said)
+                : opts.askPermission!(request, invocation));
             } catch (error) {
               // An ask that was retired (its turn ended, or the request it was for) has nothing
               // left to fail: a callback that rejects late must not take the live turn with it.
@@ -549,9 +562,10 @@ async function openPlanned(
     if (decision !== "ask") return refuse(decision, `not allowed: ${decision}`, rule);
     // The experimental edit class (#701): a judge's recommendation on this write, recorded with the ask.
     // It allows nothing: a path does not show what a write changes (#701 review), so the person answers.
+    let advice: JudgedDecision | undefined;
     if (access === "write" && judgedEdit) {
       const advise = judgedEditAdvice({ judge: judgedEdit, localHost: opts.host.spec.type === "local", explain });
-      const advice = await advise(
+      advice = await advise(
         policy,
         {
           request: { sessionId: acpSessionId, toolCall: fsToolCall(resolved ?? path, access), options: [] },
@@ -578,7 +592,8 @@ async function openPlanned(
         ],
       },
       signal: invocation.signal,
-      ...askThrough(turn, invocation),
+      // The recommendation goes with the ask, so the person sees it where they answer (#701).
+      ...askThrough(turn, invocation, advice),
       scope: evalScope,
     });
     // Only a person's one-time allow for this very operation.
@@ -785,6 +800,7 @@ async function openPlanned(
     }
     if (decision !== "ask") return refuse(decision, `ORCA's policy says ${decision}`);
     // The experimental MCP class (#701): a judged rule naming this exact tool may allow this one call, once.
+    let notAllowed: JudgedDecision | undefined;
     if (judgedMcp) {
       const ask = { sessionId: acpSessionId, toolCall: toolCall(""), options: [] };
       const lane = judgedMcpLane({
@@ -805,6 +821,7 @@ async function openPlanned(
         stillCovered = outcome.stillCovered;
         return gate;
       }
+      notAllowed = outcome.judged;
       if (outcome.judged)
         record(
           title,
@@ -830,7 +847,8 @@ async function openPlanned(
         ],
       },
       signal: invocation.signal,
-      ...askThrough(turn, invocation),
+      // Why the judge did not allow it goes with the ask (#701).
+      ...askThrough(turn, invocation, notAllowed),
       scope: evalScope,
     });
     if (asked.decision !== "ask:allow_once") return refuse(asked.decision, `not allowed: ${asked.decision}`);

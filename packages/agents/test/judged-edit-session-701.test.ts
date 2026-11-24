@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type * as acp from "@agentclientprotocol/sdk";
-import { AgentSpecSchema } from "@orca/core";
+import { AgentSpecSchema, type JudgedDecision } from "@orca/core";
 import { LocalHost, openAcpSession, type PermissionRuleRecord } from "@orca/agents";
 import type { JudgePermission, PlainRuleJudgeOutcome } from "../src/review-judge/plain-rule.js";
 
@@ -85,6 +85,7 @@ async function turn(opts: { edit?: JudgePermission; read?: JudgePermission; answ
   const decisions: string[] = [];
   const rules: (PermissionRuleRecord | undefined)[] = [];
   const asked: acp.RequestPermissionRequest[] = [];
+  const advice: (JudgedDecision | undefined)[] = [];
   const session = await openAcpSession({
     host: new LocalHost({ id: "local", type: "local" }),
     agent,
@@ -96,8 +97,9 @@ async function turn(opts: { edit?: JudgePermission; read?: JudgePermission; answ
       decisions.push(info.decision);
       rules.push(info.rule);
     },
-    askPermission: async (request: acp.RequestPermissionRequest) => {
+    askPermission: async (request: acp.RequestPermissionRequest, _invocation, judged) => {
       asked.push(request);
+      advice.push(judged);
       return opts.answer;
     },
   });
@@ -107,7 +109,7 @@ async function turn(opts: { edit?: JudgePermission; read?: JudgePermission; answ
     await session.close();
   }
   const outcomes = JSON.parse(await readFile(log, "utf8")) as { result?: unknown; error?: unknown }[];
-  return { outcomes, decisions, rules, asked, content: await readFile(join(dir, "docs", "a.md"), "utf8") };
+  return { outcomes, decisions, rules, asked, advice, content: await readFile(join(dir, "docs", "a.md"), "utf8") };
 }
 
 describe("ORCA's own write, with a judge's advice (#701 edit class)", () => {
@@ -119,6 +121,10 @@ describe("ORCA's own write, with a judge's advice (#701 edit class)", () => {
     expect(rejected.decisions[0]).toBe("fs:judged:advisory");
     expect(rejected.rules[0]).toMatchObject({ judge: { kind: "edit", advisory: true, verdict: "covered" } });
     expect(edit.mock.calls[0]![0].action).toMatchObject({ kind: "edit", locations: ["docs/a.md"] });
+    // The same advice goes with the ask, so the person sees it where they answer.
+    expect(rejected.advice).toEqual([
+      expect.objectContaining({ kind: "edit", advisory: true, verdict: "covered", reasonCode: "matches-criterion" }),
+    ]);
 
     const allowed = await turn({ read: fakeJudge(), edit: fakeJudge(), answer: "allow" });
     expect(allowed.asked).toHaveLength(1);
@@ -129,6 +135,7 @@ describe("ORCA's own write, with a judge's advice (#701 edit class)", () => {
     const without = await turn({ read: fakeJudge(), answer: "reject" });
     expect(without.asked).toHaveLength(1);
     expect(without.decisions).not.toContain("fs:judged:advisory");
+    expect(without.advice).toEqual([undefined]);
     expect(without.content).toBe("before\n");
   });
 

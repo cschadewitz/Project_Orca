@@ -11,6 +11,7 @@ import { configuredGenerationSecrets, launchProvenance } from "./configuration-p
 
 import {
   AgentRegistry,
+  askJudgeNote,
   LocalHost,
   isAbsoluteCommand,
   mcpServerDefinitionDigest,
@@ -3164,7 +3165,7 @@ export class Orchestrator {
         // Each `ask` permission is its own human-input request: an agent may block on
         // several tool calls at once, and every one must be listed, answerable and
         // logged independently (one id per session made concurrent asks collide).
-        askPermission: async (req, invocation) => {
+        askPermission: async (req, invocation, judged) => {
           const stepRunId = current.step.id;
           const live =
             this.liveInput && invocation
@@ -3223,7 +3224,10 @@ export class Orchestrator {
             // where it is known: an attention card has to name the agent, and the push that
             // opens the card is a pure function of the event it comes from.
             agent: { id: agent.id, hostId: host.spec.id },
-            context: { toolCall: req.toolCall },
+            // What a plain-language rule's judge said before the person was asked (#701), so the
+            // card can show it where they answer: `askJudgeNote` keeps only what still holds, and
+            // never the rule's revision (a content digest) or which judge configuration decided.
+            context: { toolCall: req.toolCall, ...(judged ? { judge: askJudgeNote(judged) } : {}) },
             onRequested: () => {
               pendingAsks++;
             },

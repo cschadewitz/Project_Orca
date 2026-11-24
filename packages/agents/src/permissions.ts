@@ -81,6 +81,7 @@ import type {
   PermissionPolicyFile,
   PermissionRule,
   PermissionRuleOrigin,
+  JudgedDecision,
   JudgedPermissionRule,
   JudgedPolicyRule,
   RecordedPermissionRule,
@@ -90,8 +91,11 @@ import type {
 
 export interface PermissionContext {
   request: acp.RequestPermissionRequest;
-  /** Called for `ask`; returns the chosen optionId, or undefined to cancel. */
-  ask?: (request: acp.RequestPermissionRequest) => Promise<string | undefined>;
+  /**
+   * Called for `ask`; returns the chosen optionId, or undefined to cancel. `judged` is what the
+   * judged lane said about this call, when it looked (#701): shown with the ask, never an answer.
+   */
+  ask?: (request: acp.RequestPermissionRequest, judged?: JudgedDecision) => Promise<string | undefined>;
   /** Passed through to `decidePermission`, so workspace-relative rules can resolve. */
   scope?: PermissionEvalContext | undefined;
   /** The exact invocation's lifetime; late answers cannot authorize a subsequent turn. */
@@ -439,7 +443,7 @@ async function answerPermission(
       // decision rather than logging a bare "cancelled", because "the policy wanted a person
       // and there was none" is the one a person reading the log has to act on (#140).
       if (!ctx.ask) return { response: { outcome: { outcome: "cancelled" } }, decision: "ask:no-answerer" };
-      const chosen = await permissionWhileLive(() => ctx.ask!(ctx.request), ctx.signal);
+      const chosen = await permissionWhileLive(() => ctx.ask!(ctx.request, explained.judged), ctx.signal);
       if (ctx.signal?.aborted) return { response: { outcome: { outcome: "cancelled" } }, decision: "ask:expired" };
       const o = chosen ? options.find((x) => x.optionId === chosen) : undefined;
       return o

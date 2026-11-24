@@ -925,12 +925,14 @@ describe("a relayed tool call, judged (#701 MCP class)", () => {
   it("asks the person without the MCP judge, or on the judge's no", async () => {
     for (const judgeKinds of [undefined, { mcp: judge("no-match") }]) {
       const asked: unknown[] = [];
+      const said: unknown[] = [];
       const t = await setup({
         permissions: { default: "ask", rules: [RULE] },
         judgePermission: judge(),
         ...(judgeKinds ? { judgeKinds } : {}),
-        askPermission: async (req) => {
+        askPermission: async (req, _invocation, judged) => {
           asked.push(req);
+          said.push(judged);
           return "reject";
         },
       });
@@ -939,6 +941,12 @@ describe("a relayed tool call, judged (#701 MCP class)", () => {
       const [call] = await t.turn(s);
       expect(call).toEqual(refused(/not allowed/));
       expect(asked).toHaveLength(1);
+      // The judge's no goes with the ask, so the person sees why it came to them (#701).
+      expect(said).toEqual([
+        judgeKinds
+          ? expect.objectContaining({ kind: "mcp", verdict: "not-covered", reasonCode: "outside-criterion" })
+          : undefined,
+      ]);
       expect(await t.serverLog()).not.toContain("tools/call");
     }
   });

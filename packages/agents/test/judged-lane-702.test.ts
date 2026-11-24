@@ -295,6 +295,26 @@ describe("answering with the judged lane", () => {
     });
   });
 
+  it("hands the judge's no to the person's ask, so the card can say why it came to them (#701)", async () => {
+    const policy = await policyOf([READ_RULE]);
+    const ask = vi.fn(async () => "once");
+    const answered = await resolvePermission(policy, {
+      request: call("read", join(ws, "src", "a.ts")),
+      scope: ctx,
+      ask,
+      judged: judgedLane({
+        judge: fakeJudge(() => ({ outcome: "no-match", verdict: "not-covered", reasonCode: "outside-criterion" })),
+        reload: async () => policy,
+        localHost: true,
+      }),
+    });
+    expect(answered.decision).toBe("ask:allow_once");
+    expect(ask).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ verdict: "not-covered", reasonCode: "outside-criterion" }),
+    );
+  });
+
   it("answers a turn that ended while the judge was thinking as expired, not allowed", async () => {
     const policy = await policyOf([READ_RULE]);
     const controller = new AbortController();
