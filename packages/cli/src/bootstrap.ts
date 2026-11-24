@@ -334,7 +334,7 @@ export function makeSessionFactory(
       () => undefined,
       () => undefined,
     ));
-  return async (options: OpenSessionOptions) => {
+  return async (options: Parameters<SessionFactory>[0]) => {
     const bound = { ...options, permissionFiles, protectedPaths };
     // ORCA's pre-tool hook (#704, #705): prepared before the agent starts, decided once it
     // says who it is, and the session refused wherever it cannot be put in force.
@@ -368,6 +368,8 @@ export function makeSessionFactory(
       codexEnvironment: hook.codexEnvironment,
       codexShell: hook.codexShell,
       codexAdmissionDeadlineMs: hook.codexAdmissionDeadlineMs,
+      // A cancelled run stops the hook's admission checks too.
+      signal: options.origin?.signal,
       agentEnv: { ...process.env, ...literalEnv(options.agent.env), ...(options.env ?? {}) },
       toolCallTelemetry: options.agent.diagnostics?.toolCalls,
       // In the desktop app ORCA's runtime is the Electron binary, which runs a script as Node

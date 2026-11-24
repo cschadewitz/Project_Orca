@@ -305,7 +305,7 @@ describe("the fail-closed line around ORCA's program (#1026)", () => {
     );
 
   it("stops the program short of Codex's own timeout", () => {
-    expect(codexPreToolHookCommand("/n", "/s", "/c")).toContain("timeout -s KILL 25 '/n' '/s' '--codex' '/c' 2>&1");
+    expect(codexPreToolHookCommand("/n", "/s", "/c")).toContain("timeout -s KILL 25 '/n' '/s' '--codex' '/c' <&3");
   });
 
   it("has no newline in the command line itself", () => {
@@ -519,9 +519,9 @@ describe("installing it in Codex", () => {
           // The caller is released at the deadline, not when the descendant finally lets go.
           expect(took).toBeLessThan(5_000);
         }
-        // And the descendant went with the command's process group.
+        // And the descendant went with the command's process group, within the stop grace.
         const pid = Number(await readFile(marker, "utf8"));
-        await new Promise((r) => setTimeout(r, 100));
+        await new Promise((r) => setTimeout(r, 1_500));
         // Gone, or a zombie its reaper has not collected yet: either way it no longer runs.
         const state = await readFile(`/proc/${pid}/stat`, "utf8").then(
           (t) => t.slice(t.lastIndexOf(")") + 2, t.lastIndexOf(")") + 3),

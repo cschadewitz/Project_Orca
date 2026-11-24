@@ -145,9 +145,10 @@ async function setup(
     },
     child: () => logger,
   };
-  const open = (host: AgentHost = new LocalHost({ id: "local", type: "local" })) =>
+  const open = (host: AgentHost = new LocalHost({ id: "local", type: "local" }), run?: AbortSignal) =>
     factory({
       host,
+      ...(run ? { origin: { runId: "run-1", signal: run } } : {}),
       logger,
       agent: AgentSpecSchema.parse({
         id: "claude",
@@ -518,6 +519,19 @@ describe("installing the hook in Codex (#705)", () => {
     await expect(t.open()).rejects.toMatchObject({
       code: "NOT_SUPPORTED",
       message: expect.stringMatching(/session ended before ORCA's startup checks of the hook finished/),
+    });
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(await t.left()).toEqual([]);
+  });
+
+  it("stops its startup checks when the run is cancelled", async () => {
+    const run = new AbortController();
+    const t = await codexSetup({}, { ext: () => new Promise(() => undefined) });
+    setTimeout(() => run.abort("cancelled by the user"), 100);
+    const started = Date.now();
+    await expect(t.open(undefined, run.signal)).rejects.toMatchObject({
+      code: "CANCELLED",
+      message: expect.stringMatching(/run was cancelled while ORCA checked the agent's hook/),
     });
     expect(Date.now() - started).toBeLessThan(5_000);
     expect(await t.left()).toEqual([]);
