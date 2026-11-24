@@ -470,7 +470,7 @@ ORCA found, numbered. Nothing falls back to the hook or to running Codex without
 remove `codexExecGate` to run the agent without it. The reasons, in order:
 
 - **Layout.** ORCA's config directory, its store, and the directory of a config file loaded
-  with `--config` must be outside every directory the agent may write (the workspace and any
+  with `--config` (both where it is named and, for a link, where it leads) must be outside every directory the agent may write (the workspace and any
   additional directory), and none of those may be inside them, compared by resolved path. The
   default layout, where the config directory is the workspace, is refused: set `workspace:` to a
   directory outside the config directory. A single file in a directory a command can write
@@ -478,10 +478,10 @@ remove `codexExecGate` to run the agent without it. The reasons, in order:
 - **Host.** Linux x64, the system's own bubblewrap and `unshare`, and no `/etc/codex` (host-wide
   Codex configuration can override or add to the settings ORCA would give Codex; an
   administrator-configured host is a separate configuration).
-- **The closed executor.** ORCA makes it once and checks it, then lists what it still cannot
-  close: a named pipe a program outside reads, what a command leaves in its writable
-  directories, and that the filter in place is not read back (plus, on a system that lets a
-  process trace its parent, that).
+- **The closed executor.** What it still cannot close: a named pipe a program outside reads,
+  what a command leaves in its writable directories, and that the filter in place is not read
+  back. These are stated, not probed; admission starts nothing. Whether a host lets ORCA make
+  the closed executor at all is checked by a separate probe (`tools/codex-exec-host-probe.mjs`).
 - **Wiring.** ORCA does not start Codex on this route yet.
 
 The route claims no support tier.

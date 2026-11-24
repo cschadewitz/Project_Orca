@@ -322,8 +322,8 @@ export function makeSessionFactory(
     runtime: process.execPath,
     script: claudePreToolHookScript(),
   },
-  /** For tests: the host, the executor maker and path resolution the Codex gate route reads. */
-  gate?: Pick<CodexExecGateAdmission, "host" | "isolate" | "real">,
+  /** For tests: the host and path resolution the Codex gate route reads. */
+  gate?: Pick<CodexExecGateAdmission, "host" | "real">,
 ): SessionFactory {
   const permissionFiles = [permissionPolicyPath(layout.configDir)];
   const protectedPaths = orcaProtectedPaths(layout);
@@ -366,8 +366,6 @@ export function makeSessionFactory(
           workspace: options.cwd,
           additionalDirectories: options.additionalDirectories,
         },
-        protectedPaths,
-        runtimeEnv: process.versions["electron"] !== undefined ? { ELECTRON_RUN_AS_NODE: "1" } : undefined,
         ...(gate ?? {}),
       });
     }

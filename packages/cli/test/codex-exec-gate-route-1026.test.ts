@@ -2,12 +2,10 @@
  * The opt-in route for ORCA's gate in Codex's executor path (#1026), `codexExecGate:
  * experimental`, as this step ships it: every session that asks for it is refused before the
  * agent starts, with each reason found (the layout, the host, the closed executor's standing
- * shortfalls, and that the route is not wired yet), and no entry point runs the agent another
- * way. The live part makes the closed executor on this machine where bubblewrap can, and has
- * to wherever `ORCA_REQUIRE_EXEC_ISOLATION=1` says it can.
+ * shortfalls, and that the route is not wired yet), admission starts nothing, and no entry
+ * point runs the agent another way, session metadata or not.
  */
-import { spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, realpath, rm, symlink } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -22,21 +20,12 @@ import {
   codexExecGateRequested,
   LocalHost,
   openAcpSession,
-  systemBubblewrap,
   type AgentHost,
   type CodexExecGateHost,
-  type CodexExecIsolationProof,
   type OpenSessionOptions,
 } from "@orca/agents";
 import { delegatingSessionFactory } from "@orca/daemon";
-import { makeSessionFactory, orcaProtectedPaths } from "../src/bootstrap.js";
-
-const BUBBLEWRAP = process.platform === "linux" ? systemBubblewrap() : undefined;
-const USABLE =
-  BUBBLEWRAP !== undefined &&
-  spawnSync(BUBBLEWRAP, ["--unshare-user", "--unshare-pid", "--dev-bind", "/", "/", "--proc", "/proc", "/bin/true"])
-    .status === 0;
-const REQUIRED = process.env["ORCA_REQUIRE_EXEC_ISOLATION"] === "1";
+import { makeSessionFactory } from "../src/bootstrap.js";
 
 let root: string;
 let config: string;
@@ -75,8 +64,8 @@ const codex = (more: Record<string, unknown> = {}) =>
   AgentSpecSchema.parse({ id: "codex", command: "codex-acp", codexExecGate: "experimental", ...more });
 
 /** What a refusal says, reason by reason. */
-const reasonsOf = async (refused: Promise<unknown>): Promise<string[]> => {
-  const error = (await refused.then(
+const reasonsOf = async (refused: Promise<unknown> | (() => unknown)): Promise<string[]> => {
+  const error = (await (typeof refused === "function" ? Promise.resolve().then(refused) : refused).then(
     () => undefined,
     (e: unknown) => e,
   )) as OrcaError | undefined;
@@ -133,7 +122,8 @@ describe("what keeps a layout off the route", () => {
     ]);
   });
 
-  it("refuses ORCA's files inside a directory the agent may write, and the other way round", () => {
+  it("refuses ORCA's files inside a directory the agent may write, and the other way round", async () => {
+    await writeFile(join(work, "orca.config.yaml"), "");
     expect(codexExecGateLayoutProblems(layout({ workspace: root }))).toEqual([
       `ORCA's config directory ${config} is inside the workspace ${root}, which the agent may write`,
       `ORCA's store ${join(config, ".orca")} is inside the workspace ${root}, which the agent may write`,
@@ -159,6 +149,71 @@ describe("what keeps a layout off the route", () => {
       expect.stringContaining(`the workspace ${config} is ORCA's config directory`),
       `ORCA's store ${join(config, ".orca")} is inside the workspace ${config}, which the agent may write`,
     ]);
+  });
+});
+
+describe("a config file and its link, and containment by component", () => {
+  const layout = (more: Partial<Parameters<typeof codexExecGateLayoutProblems>[0]> = {}) => ({
+    configDir: config,
+    storeDir: ".orca",
+    workspace: work,
+    ...more,
+  });
+
+  it("refuses a config file named apart that is a link into a directory the agent may write", async () => {
+    const apart = join(root, "apart");
+    await mkdir(apart);
+    await writeFile(join(work, "orca.config.yaml"), "");
+    await symlink(join(work, "orca.config.yaml"), join(apart, "orca.config.yaml"));
+    expect(codexExecGateLayoutProblems(layout({ configFile: join(apart, "orca.config.yaml") }))).toEqual([
+      `the workspace ${work} is the directory the config file ORCA loaded leads to: on this route ORCA's files have to be outside every directory the agent may write. Set \`workspace:\` in the config to a directory outside ${work}`,
+    ]);
+  });
+
+  it("refuses a config file whose directory is a link into a directory the agent may write", async () => {
+    await mkdir(join(work, "conf"));
+    await writeFile(join(work, "conf", "orca.config.yaml"), "");
+    await symlink(join(work, "conf"), join(root, "conf"));
+    expect(codexExecGateLayoutProblems(layout({ configFile: join(root, "conf", "orca.config.yaml") }))).toEqual([
+      `the directory of the config file ORCA loaded ${join(work, "conf")} is inside the workspace ${work}, which the agent may write`,
+    ]);
+  });
+
+  it("takes a config file apart, and a link to one apart, as apart", async () => {
+    const apart = join(root, "apart");
+    const elsewhere = join(root, "elsewhere");
+    await mkdir(apart);
+    await mkdir(elsewhere);
+    await writeFile(join(elsewhere, "orca.config.yaml"), "");
+    await symlink(join(elsewhere, "orca.config.yaml"), join(apart, "orca.config.yaml"));
+    expect(codexExecGateLayoutProblems(layout({ configFile: join(elsewhere, "orca.config.yaml") }))).toEqual([]);
+    expect(codexExecGateLayoutProblems(layout({ configFile: join(apart, "orca.config.yaml") }))).toEqual([]);
+  });
+
+  it("refuses a config file that does not resolve, since what it names is not known", () => {
+    expect(codexExecGateLayoutProblems(layout({ configFile: join(config, "gone.yaml") }))).toEqual([
+      expect.stringMatching(/^the config file ORCA loaded .*gone\.yaml cannot be resolved \(ENOENT\)$/),
+    ]);
+  });
+
+  it("compares by path component, not by the start of a name", async () => {
+    // `work2` is not inside `work`; a directory named `..x` is a name, not a step up.
+    const work2 = join(root, "work2");
+    const dots = join(root, "..x");
+    await mkdir(work2);
+    await mkdir(dots);
+    expect(codexExecGateLayoutProblems(layout({ configDir: work2, workspace: work }))).toEqual([
+      expect.stringMatching(/^ORCA's store .*work2\/\.orca cannot be resolved/),
+    ]);
+    await mkdir(join(work2, ".orca"));
+    expect(codexExecGateLayoutProblems(layout({ configDir: work2, workspace: work }))).toEqual([]);
+    // A store in `..x` under the workspace's parent is inside that parent, and not inside `work`.
+    await mkdir(join(dots, ".orca"));
+    expect(codexExecGateLayoutProblems(layout({ configDir: dots, workspace: root }))).toEqual([
+      `ORCA's config directory ${dots} is inside the workspace ${root}, which the agent may write`,
+      `ORCA's store ${join(dots, ".orca")} is inside the workspace ${root}, which the agent may write`,
+    ]);
+    expect(codexExecGateLayoutProblems(layout({ configDir: dots, workspace: work }))).toEqual([]);
   });
 });
 
@@ -189,77 +244,49 @@ describe("admission", () => {
   const admission = (more: Partial<Parameters<typeof admitCodexExecGateSession>[0]> = {}) => ({
     agentId: "codex",
     layout: { configDir: config, storeDir: ".orca", workspace: work },
-    protectedPaths: orcaProtectedPaths({ configDir: config, storeDir: ".orca" }),
     host: goodHost,
     ...more,
   });
-  const proof: CodexExecIsolationProof = {
-    holder: 2,
-    executor: 3,
-    namespaces: { pid: "pid:[1]", mnt: "mnt:[1]", user: "user:[1]", net: "net:[1]", ipc: "ipc:[1]" },
-    network: "none",
-    masks: { hidden: [], readOnly: [], writable: [] },
-    closed: { writable: [] },
-    ptraceScope: 1,
-  };
-  /** A stand-in for the namespace backend: what it was asked for, and what it shows. */
-  const isolating = (shows: Promise<CodexExecIsolationProof>) => {
-    const asked: unknown[] = [];
-    const stopped = vi.fn(async () => undefined);
-    const isolate = vi.fn((spec: unknown) => {
-      asked.push(spec);
-      shows.catch(() => undefined);
-      return { isolated: shows, stop: stopped } as unknown as ReturnType<
-        NonNullable<Parameters<typeof admitCodexExecGateSession>[0]["isolate"]>
-      >;
-    });
-    return { isolate, asked, stopped };
-  };
 
   it("refuses with the closed executor's standing shortfalls, and that the route is not wired, when all else holds", async () => {
-    const { isolate, asked, stopped } = isolating(Promise.resolve(proof));
-    const reasons = await reasonsOf(admitCodexExecGateSession(admission({ isolate })));
-    expect(reasons).toEqual([...CODEX_EXEC_NOT_CLOSED, "ORCA does not start Codex on this route yet (#1026)"]);
-    // Made closed, with the workspace as the only writable directory of the host's, and ended.
-    expect(asked).toEqual([expect.objectContaining({ program: "/bin/cat", cwd: work, closed: { writable: [work] } })]);
-    expect(stopped).toHaveBeenCalledTimes(1);
-  });
-
-  it("refuses with what the namespace backend said when it could not make or show the executor", async () => {
-    const { isolate, stopped } = isolating(Promise.reject(new Error("setting up uid map: Permission denied")));
-    const reasons = await reasonsOf(admitCodexExecGateSession(admission({ isolate })));
-    expect(reasons).toEqual([
-      "the closed executor could not be made and shown: setting up uid map: Permission denied",
+    expect(await reasonsOf(() => admitCodexExecGateSession(admission()))).toEqual([
+      ...CODEX_EXEC_NOT_CLOSED,
       "ORCA does not start Codex on this route yet (#1026)",
     ]);
-    expect(stopped).toHaveBeenCalledTimes(1);
   });
 
-  it("does not make the executor on a layout or host that could not hold it", async () => {
-    const { isolate } = isolating(Promise.resolve(proof));
-    const reasons = await reasonsOf(
-      admitCodexExecGateSession(
-        admission({
-          isolate,
-          layout: { configDir: config, storeDir: ".orca", workspace: config },
-          host: { ...goodHost, systemCodexConfig: ["config.toml"] },
-        }),
+  it("names the layout's and the host's reasons first, then the same standing ones", async () => {
+    expect(
+      await reasonsOf(() =>
+        admitCodexExecGateSession(
+          admission({
+            layout: { configDir: config, storeDir: ".orca", workspace: config },
+            host: { ...goodHost, systemCodexConfig: ["config.toml"] },
+          }),
+        ),
       ),
-    );
-    expect(reasons).toEqual([
+    ).toEqual([
       expect.stringContaining("is ORCA's config directory"),
       expect.stringContaining("is inside the workspace"),
       expect.stringContaining("/etc/codex holds host-wide Codex configuration (config.toml)"),
+      ...CODEX_EXEC_NOT_CLOSED,
       "ORCA does not start Codex on this route yet (#1026)",
     ]);
-    expect(isolate).not.toHaveBeenCalled();
   });
 
-  it("says every reason in its message, numbered, and that nothing falls back", async () => {
-    const { isolate } = isolating(Promise.resolve(proof));
-    await expect(admitCodexExecGateSession(admission({ isolate }))).rejects.toThrow(
+  it("says every reason in its message, numbered, and that nothing falls back", () => {
+    expect(() => admitCodexExecGateSession(admission())).toThrow(
       /^agent codex has codexExecGate: experimental, and ORCA refuses the session: \(1\) .*named pipe.*\(4\) ORCA does not start Codex on this route yet \(#1026\)\. Nothing falls back to running Codex without the gate; remove codexExecGate to run the agent without it\.$/,
     );
+  });
+
+  it("reads the host as it is when not given one", async () => {
+    const reasons = await reasonsOf(() => admitCodexExecGateSession(admission({ host: undefined })));
+    expect(reasons).toEqual([
+      ...codexExecGateHostProblems(codexExecGateHost()),
+      ...CODEX_EXEC_NOT_CLOSED,
+      "ORCA does not start Codex on this route yet (#1026)",
+    ]);
   });
 });
 
@@ -268,18 +295,13 @@ describe("the session factory and the other entry points", () => {
     const open = vi.fn(async (_: OpenSessionOptions) => {
       throw new Error("a session was opened");
     });
-    const isolate = vi.fn();
-    const factory = makeSessionFactory({ configDir: config, storeDir: ".orca" }, open, undefined, {
-      host: goodHost,
-      isolate,
-    });
+    const factory = makeSessionFactory({ configDir: config, storeDir: ".orca" }, open, undefined, { host: goodHost });
     const { host, spawned } = watchedHost();
     const reasons = await reasonsOf(factory({ host, agent: codex(), cwd: config }));
     expect(reasons[0]).toContain("is ORCA's config directory");
     expect(reasons.at(-1)).toBe("ORCA does not start Codex on this route yet (#1026)");
     expect(open).not.toHaveBeenCalled();
     expect(spawned).not.toHaveBeenCalled();
-    expect(isolate).not.toHaveBeenCalled();
   });
 
   it("the factory refuses an agent on another machine, and one with both routes built past the schema", async () => {
@@ -296,12 +318,15 @@ describe("the session factory and the other entry points", () => {
     expect(open).not.toHaveBeenCalled();
   });
 
-  it("openAcpSession without the factory refuses before the host starts anything", async () => {
+  it("openAcpSession refuses before the host starts anything, with session metadata or without", async () => {
     const { host, spawned } = watchedHost();
-    await expect(openAcpSession({ host, agent: codex(), cwd: work })).rejects.toThrow(
-      /codexExecGate: experimental, but ORCA takes this route only in sessions its daemon or a workflow run opens/,
-    );
+    const meta = vi.fn(async () => ({}));
+    for (const withMeta of [{}, { sessionMeta: meta }])
+      await expect(openAcpSession({ host, agent: codex(), cwd: work, ...withMeta })).rejects.toThrow(
+        /codexExecGate: experimental, but ORCA does not launch Codex on this route yet \(#1026\); the session factory names every reason/,
+      );
     expect(spawned).not.toHaveBeenCalled();
+    expect(meta).not.toHaveBeenCalled();
   });
 
   it("remote delegation refuses a spec built past the schema before any dispatch", async () => {
@@ -318,33 +343,5 @@ describe("the session factory and the other entry points", () => {
     );
     expect(base).not.toHaveBeenCalled();
     expect(remotes).not.toHaveBeenCalled();
-  });
-});
-
-describe.skipIf(!USABLE && !REQUIRED)("admission on this machine, with the closed executor made for real", () => {
-  it("has bubblewrap that can make a user namespace", () => {
-    // Failing here, not skipping, where the machine is said to have it.
-    expect(USABLE).toBe(true);
-  });
-
-  it("refuses with exactly the standing shortfalls, having made and shown the closed executor", async () => {
-    const host = codexExecGateHost();
-    expect(codexExecGateHostProblems(host)).toEqual([]);
-    const reasons = await reasonsOf(
-      admitCodexExecGateSession({
-        agentId: "codex",
-        layout: { configDir: config, storeDir: ".orca", workspace: work },
-        protectedPaths: orcaProtectedPaths({ configDir: config, storeDir: ".orca" }),
-        host,
-      }),
-    );
-    // Not refused on the way: the executor was made and shown closed. What is left is the list
-    // that is never empty, after what this machine lets a process do to its parent, if anything.
-    const ptrace = reasons.filter((r) => r.includes("ptrace_scope"));
-    expect(reasons).toEqual([
-      ...ptrace,
-      ...CODEX_EXEC_NOT_CLOSED,
-      "ORCA does not start Codex on this route yet (#1026)",
-    ]);
   });
 });

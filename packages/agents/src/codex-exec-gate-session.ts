@@ -22,30 +22,22 @@
  *   settings ORCA would give Codex (a managed config that overrides them, requirements that
  *   constrain them, a system config). A host with any of it is administrator-configured, which
  *   is a separate configuration with its own evidence, not this one.
- * - **The closed executor.** ORCA makes it once with a stand-in program and checks it as the
- *   gate would (`spawnIsolatedCodexExecServer` with `closed`), then reads
- *   `codexExecProofShortfalls`. Any entry is a reason. That list is never empty today: a named
- *   pipe is still reached, what a command leaves in its writable directories stays, and the
- *   filter in place is not read back.
+ * - **The closed executor**, as it stands: what it still cannot close or show
+ *   (`CODEX_EXEC_NOT_CLOSED`: a named pipe is still reached, what a command leaves in its
+ *   writable directories stays, and the filter in place is not read back). These are stated, not
+ *   probed: admission makes no executor. Whether a host lets ORCA make the closed executor at
+ *   all is a separate, explicit probe (`tools/codex-exec-host-probe.mjs`), not part of a
+ *   session's admission.
  * - **The wiring**, which is not there yet: ORCA does not start Codex on this route.
- *
  * So the answer is always a refusal, with the reasons. Nothing falls back to the hook or to a
- * session without the gate: an agent that asks for this route runs on it or not at all.
+ * session without the gate: an agent that asks for this route runs on it or not at all. Where
+ * ORCA launches an ACP agent (`openAcpSession`), the route is refused outright as well, with
+ * session metadata or without: metadata is not an admission, and nothing admits yet.
  */
 import { lstatSync, readdirSync, realpathSync, statSync } from "node:fs";
-import { dirname, isAbsolute, relative, resolve } from "node:path";
+import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { OrcaError } from "@orca/core";
-import {
-  codexExecMasks,
-  codexExecProofShortfalls,
-  CodexExecIsolationError,
-  spawnIsolatedCodexExecServer,
-  systemBubblewrap,
-  systemUnshare,
-  type CodexExecIsolatedSpawn,
-  type CodexExecIsolationProof,
-} from "./codex-exec-isolation.js";
-import type { ProtectedPaths } from "./permissions.js";
+import { CODEX_EXEC_NOT_CLOSED, systemBubblewrap, systemUnshare } from "./codex-exec-isolation.js";
 
 type GateSetting = "off" | "experimental" | undefined;
 
@@ -55,18 +47,19 @@ export function codexExecGateRequested(agent: { codexExecGate?: GateSetting }): 
 }
 
 /**
- * The refusal for `codexExecGate` wherever ORCA would open the agent other than through its
- * session factory (`openAcpSession` called directly), or on a remote daemon (delegation).
+ * The refusal for `codexExecGate` where ORCA launches an ACP agent (`openAcpSession`), whatever
+ * session metadata it is given, and on a remote daemon (delegation). The session factory refuses
+ * first, with every reason; this is the boundary under it, so that nothing reaches a launch.
  */
 export function codexExecGateRefused(
   agent: { id: string; codexExecGate?: GateSetting },
-  where: "outside-factory" | "remote-delegation",
+  where: "launch" | "remote-delegation",
 ): OrcaError | undefined {
   if (!codexExecGateRequested(agent)) return undefined;
   const why =
     where === "remote-delegation"
       ? "it is an orca-daemon agent, and the gate route applies to agents ORCA starts itself"
-      : "ORCA takes this route only in sessions its daemon or a workflow run opens, not in this one-off session";
+      : "ORCA does not launch Codex on this route yet (#1026); the session factory names every reason";
   return new OrcaError(
     "NOT_SUPPORTED",
     `agent ${agent.id} has codexExecGate: experimental, but ${why}. ORCA refuses the session rather than run ` +
@@ -88,10 +81,14 @@ export interface CodexExecGateLayout {
   additionalDirectories?: readonly string[] | undefined;
 }
 
-/** `path` is `root` or inside it. Both resolved. */
+/**
+ * `path` is `root` or inside it, component by component (`/a/work2` is not inside `/a/work`, and
+ * `/a/..x` is inside `/a`). Both resolved.
+ */
 function within(path: string, root: string): boolean {
   const rel = relative(root, path);
-  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+  if (rel === "") return true;
+  return !isAbsolute(rel) && rel.split(sep)[0] !== "..";
 }
 
 /**
@@ -118,11 +115,15 @@ export function codexExecGateLayoutProblems(
     { what: "ORCA's store", path: resolved("ORCA's store", resolve(configDir, layout.storeDir)) },
   ];
   if (layout.configFile !== undefined) {
-    const dir = dirname(resolve(layout.configFile));
-    orca.push({
-      what: "the directory of the config file ORCA loaded",
-      path: resolved("the config file's directory", dir),
-    });
+    // Both where the file is named and where it leads: a link kept apart can lead into a
+    // directory the agent may write, and a file kept apart can sit in one by a link above it.
+    const named = resolve(layout.configFile);
+    const linkDir = resolved("the config file's directory", dirname(named));
+    const file = resolved("the config file ORCA loaded", named);
+    orca.push({ what: "the directory of the config file ORCA loaded", path: linkDir });
+    const targetDir = file === undefined ? undefined : dirname(file);
+    if (targetDir !== undefined && targetDir !== linkDir)
+      orca.push({ what: "the directory the config file ORCA loaded leads to", path: targetDir });
   }
   const agentRoots = [
     { what: "the workspace", path: resolved("the workspace", layout.workspace) },
@@ -204,70 +205,25 @@ export function codexExecGateHostProblems(host: CodexExecGateHost): string[] {
   return problems;
 }
 
-/** How the route's admission is checked. Every field but the first three is for tests. */
+/** How the route's admission is checked. Every field but the first two is for tests. */
 export interface CodexExecGateAdmission {
   agentId: string;
   layout: CodexExecGateLayout;
-  /** ORCA's protected paths, as every session lists them (`orcaProtectedPaths`). */
-  protectedPaths: ProtectedPaths;
   /** The host as read; `codexExecGateHost()` unless given. */
   host?: CodexExecGateHost | undefined;
-  /** What ORCA's runtime needs in its environment to run as Node (the desktop app's Electron). */
-  runtimeEnv?: Readonly<Record<string, string>> | undefined;
-  /** What makes the closed executor; `spawnIsolatedCodexExecServer` unless given. */
-  isolate?: ((spec: CodexExecIsolatedSpawn) => ReturnType<typeof spawnIsolatedCodexExecServer>) | undefined;
   /** How resolved paths are found; `realpathSync.native` unless given. */
   real?: ((path: string) => string) | undefined;
 }
 
 /**
- * The closed executor, made once with a stand-in for the executor and checked as the gate
- * would check it: the proof, or the reason it was refused.
- */
-async function tryClosedExecutor(
-  admission: CodexExecGateAdmission,
-  host: CodexExecGateHost,
-): Promise<{ proof: CodexExecIsolationProof } | { refused: string }> {
-  const workspace = resolve(admission.layout.workspace);
-  const writable = [workspace, ...(admission.layout.additionalDirectories ?? []).map((dir) => resolve(dir))];
-  let backend: ReturnType<typeof spawnIsolatedCodexExecServer> | undefined;
-  try {
-    backend = (admission.isolate ?? spawnIsolatedCodexExecServer)({
-      // A program every such host has, which waits on its input and does nothing else.
-      program: "/bin/cat",
-      env: { PATH: "/usr/bin:/bin" },
-      cwd: workspace,
-      masks: codexExecMasks(admission.protectedPaths),
-      closed: { writable },
-      bubblewrap: host.bubblewrap,
-      unshare: host.unshare,
-      runtimeEnv: admission.runtimeEnv,
-      stopGraceMs: 1000,
-    });
-    return { proof: await backend.isolated };
-  } catch (error) {
-    return {
-      refused: error instanceof CodexExecIsolationError || error instanceof Error ? error.message : String(error),
-    };
-  } finally {
-    await backend?.stop().catch(() => undefined);
-  }
-}
-
-/**
  * Decide whether a session may take the gate route, before its agent starts. It never may
- * yet: this throws, with every reason found, in the order the module's notes give.
+ * yet: this throws, with every reason found, in the order the module's notes give. It starts
+ * nothing: no executor, no namespace, no agent.
  */
-export async function admitCodexExecGateSession(admission: CodexExecGateAdmission): Promise<never> {
+export function admitCodexExecGateSession(admission: CodexExecGateAdmission): never {
   const reasons = codexExecGateLayoutProblems(admission.layout, admission.real);
-  const host = admission.host ?? codexExecGateHost();
-  reasons.push(...codexExecGateHostProblems(host));
-  // The closed executor is made only on a host and layout that could hold it.
-  if (reasons.length === 0) {
-    const tried = await tryClosedExecutor(admission, host);
-    if ("refused" in tried) reasons.push(`the closed executor could not be made and shown: ${tried.refused}`);
-    else reasons.push(...codexExecProofShortfalls(tried.proof));
-  }
+  reasons.push(...codexExecGateHostProblems(admission.host ?? codexExecGateHost()));
+  reasons.push(...CODEX_EXEC_NOT_CLOSED);
   reasons.push("ORCA does not start Codex on this route yet (#1026)");
   throw new OrcaError(
     "NOT_SUPPORTED",
