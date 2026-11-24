@@ -109,8 +109,9 @@
  * What ORCA holds a closed executor to is the mount table itself, not what a look inside
  * found at one moment. A mount that is the host's and writable, and is not a directory a
  * command was given, is refused whether or not a path of the user's leads into it. Each
- * writable directory has to be that very directory in the namespace (the same file system
- * and place in it, and the same directory by ORCA's own look from outside). What a command
+ * writable directory, a command's or an agent's area in the masks, has to be that very
+ * directory in the namespace (the same file system and place in it, and the same directory
+ * by ORCA's own look from outside). What a command
  * is given never opens what ORCA protects: a writable directory that is, or is inside, a
  * directory the masks keep read-only is refused before anything is started, and so is one
  * inside another. A protected directory inside a writable one is refused too, whether a
@@ -1823,6 +1824,15 @@ export function spawnIsolatedCodexExecServer(spec: CodexExecIsolatedSpawn): Code
     if ("unreadable" in tree) return wrong(`the holder's mount table cannot be read (${tree.unreadable})`);
     // At most one at a path: two at one point in one mount do not read as a tree.
     const top = (path: string): Mount | undefined => tree.entered.find((mount) => mount.point === path);
+    /** That what is at `path` through the holder's root is the directory ORCA has at `path`. */
+    const sameDirectory = async (path: string): Promise<void> => {
+      const through = await outside(() => reads.stat(`${at}/root${path}`));
+      stillThere(holder);
+      const real = await outside(() => reads.stat(path));
+      stillThere(holder);
+      if (through.dev !== real.dev || through.ino !== real.ino)
+        wrong(`a writable directory is not the directory itself in the namespace: ${path}`);
+    };
     for (const path of masks.hidden) {
       const mount = top(path);
       if (mount?.type !== "tmpfs" || !mount.options.includes("ro")) wrong(`a hidden directory is not masked: ${path}`);
@@ -1843,6 +1853,10 @@ export function spawnIsolatedCodexExecServer(spec: CodexExecIsolatedSpawn): Code
       if (!top(path)?.options.includes("ro")) wrong(`a read-only directory is not bound read-only: ${path}`);
     for (const path of masks.writable)
       if (!top(path)?.options.includes("rw")) wrong(`a writable directory is not bound writable: ${path}`);
+    // And through the holder's root: what is at an agent's area in the namespace is the
+    // directory ORCA has at that path, as for a closed executor's writable directories below.
+    // The table alone shows a writable mount at the right place, not which directory it is.
+    for (const path of masks.writable) await sameDirectory(path);
 
     // From inside, by the holder: what the masks do to a process in the namespace.
     const probe = await ask({ op: "probe", ...masks });
@@ -1862,14 +1876,7 @@ export function spawnIsolatedCodexExecServer(spec: CodexExecIsolatedSpawn): Code
       if (notClosed !== undefined) wrong(`the executor is not closed: ${notClosed}`);
       // And through the holder's root: what is at a writable directory's path in the namespace
       // is the directory ORCA has at that path.
-      for (const path of sealed.writable) {
-        const through = await outside(() => reads.stat(`${at}/root${path}`));
-        stillThere(holder);
-        const real = await outside(() => reads.stat(path));
-        stillThere(holder);
-        if (through.dev !== real.dev || through.ino !== real.ino)
-          wrong(`a writable directory is not the directory itself in the namespace: ${path}`);
-      }
+      for (const path of sealed.writable) await sameDirectory(path);
       // From inside: a command can write what it was given, and the filter refuses a socket
       // with a name. Without it, the answer would be that there is no such socket. That the
       // filter refuses the rest of what ORCA's does rests on bubblewrap having been handed
