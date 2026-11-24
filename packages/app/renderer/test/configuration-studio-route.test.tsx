@@ -33,6 +33,36 @@ it("withholds current config source after read authority is withdrawn while reta
   await waitFor(() => expect(command().value).toBe("private-retained-command"));
   expect(f.writes).toHaveLength(0);
 });
+it("shows the judge's setup on the connected Config route, only from a daemon that lists judge.status (#701)", async () => {
+  const f = setup();
+  await screen.findByRole("group", { name: "Configuration" });
+  expect(screen.queryByLabelText("Plain-language rule judge")).toBeNull();
+  let reads = 0;
+  f.fake.bridge.config.judgeStatus = async () => {
+    reads++;
+    return {
+      ok: true,
+      result: {
+        active: false,
+        config: { state: "none" },
+        auth: "token",
+        principal: "casey",
+        grants: [],
+        budget: { state: "uninitialized" },
+      },
+    };
+  };
+  act(() =>
+    f.fake.connect({ ...f.fake.connection, methods: ["config.get", "config.set", "config.apply", "judge.status"] }),
+  );
+  const section = await screen.findByLabelText("Plain-language rule judge");
+  await waitFor(() => expect(section.textContent).toContain("orca judge budget init"));
+  expect(reads).toBeGreaterThan(0);
+  // Another daemon: what was shown goes, and is read again for that one.
+  const before = reads;
+  act(() => f.changeTarget());
+  await waitFor(() => expect(reads).toBeGreaterThan(before));
+});
 function setup({ metadata = true, writable = true, deferIdentity = false, width = 1280, variant = false } = {}) {
   stubMatchMedia(width);
   const fake = fakeBridge();

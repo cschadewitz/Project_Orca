@@ -50,6 +50,7 @@ import { ObjectHeader, StateView, Text, textClass } from "../ui/index.js";
 import { ConfigForm } from "./config-form.js";
 import { DraftBar } from "./draft-bar.js";
 import { PermissionsView } from "./permissions-view.js";
+import { JudgeSetup } from "./judge-setup.js";
 import { PreferencesSection } from "./preferences-section.js";
 import { StorageSection } from "./storage-section.js";
 import { RawView } from "./raw-view.js";
@@ -263,6 +264,7 @@ function LegacyConfigSurface({ connection, open }: ConfigSurfaceProps): JSX.Elem
           )}
 
           <PermissionsView policies={policies} live={live} path={permissions.path} exists={permissions.exists} />
+          <JudgeSetup />
           {/* Read-only in this issue: #176 is where a grant is edited or removed. */}
           <RawView
             path={permissions.path}

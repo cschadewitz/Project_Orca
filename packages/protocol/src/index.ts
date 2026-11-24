@@ -19,6 +19,7 @@ export * from "./artifacts.js";
 export * from "./search.js";
 export * from "./agents.js";
 export * from "./secrets.js";
+export * from "./judge.js";
 export * from "./control.js";
 export * from "./recovery.js";
 export * from "./event-support.js";

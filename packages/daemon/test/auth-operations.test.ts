@@ -68,6 +68,9 @@ function everyAnsweredMethod(): string[] {
     planControl: present,
     agents: present,
     config: { canApply: true } as never,
+    judgeStatus: async () => {
+      throw new Error("inventory fixture must not execute");
+    },
   };
   return Object.keys(methodsFor(full));
 }

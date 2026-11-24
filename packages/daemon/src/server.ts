@@ -42,7 +42,7 @@ import type { EventStore, LeaseStore } from "@orca/store";
  * before its body is read, and every method runs behind the guard. `GET /health` is the one
  * unauthenticated answer, and all it ever says is `{ "ok": true }`.
  */
-import { isOrcaError, OrcaError } from "@orca/core";
+import { isOrcaError, OrcaError, type OrcaConfig } from "@orca/core";
 import type { createRevisionInputServices, createRevisionRuntime } from "@orca/engine";
 import { createDaemonIdentity } from "./daemon-identity.js";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
@@ -64,6 +64,9 @@ import { Authorizer, bindPrincipal, principalOf } from "./auth/guard.js";
 import { SecretsReadModel, type SecretsSource } from "./secrets-model.js";
 import { directAdmissionAuthority } from "./admission-retry.js";
 import { holds, type Principal } from "./auth/principal.js";
+import type { JudgeBudgetInspection } from "./judge-budget.js";
+import { judgeKeyStatus, judgeStatus } from "./judge-status.js";
+import type { JudgeKeyState } from "@orca/protocol";
 import {
   HostResourceReadModel,
   resourceResponseForPublication,
@@ -83,6 +86,16 @@ export interface DaemonOptions extends MethodContext {
   hostResourceSource?: HostResourceReadSource;
   /** The live secret reference catalog and its hosts, for `secrets.list` and `secrets.check` (#336). */
   secretsSource?: () => SecretsSource;
+  /**
+   * `judge.status` (#701): the active generation's configuration and a read-only inspection of
+   * the judge's budget. The caller's grants are read from its own current credentials.
+   */
+  judgeStatusSource?: {
+    config: () => Pick<OrcaConfig, "review" | "secrets" | "hosts"> | undefined;
+    budget: () => Promise<JudgeBudgetInspection>;
+    /** The key check (`judgeKeyStatus` by default); tests inject one to count probes. */
+    key?: (config: Pick<OrcaConfig, "review" | "secrets" | "hosts"> | undefined) => Promise<JudgeKeyState>;
+  };
   /** Installed protected evidence reader; never a callback that attaches execution. */
   admissionExecutionSource?: ((runId: string) => Promise<AdmissionExecutionView | undefined>) | undefined;
   /** Actual protected runtime and registered retry services; never a placeholder capability. */
@@ -670,6 +683,50 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
     ctx.secretsRead = {
       list: async (invocation) => model.list(current(invocation)),
       check: (params, invocation) => model.check(current(invocation), params.id),
+    };
+  }
+  if (opts.judgeStatusSource) {
+    const source = opts.judgeStatusSource;
+    // Who may see the judge's key reference: the same boundary as `secrets.check`.
+    const secretsModel = opts.secretsSource ? new SecretsReadModel(opts.secretsSource) : undefined;
+    /** The caller as it is now: a revoked or narrowed credential stops answering. */
+    const current = (invocation: MethodContext): Principal => {
+      const bound = principalOf(invocation);
+      if (!bound) throw authRequired();
+      if (auth.mode !== "token") return bound.principal;
+      const credentialId = bound.principal.credentialId;
+      if (!credentialId) throw authRequired();
+      const latest = auth.credentials.current(credentialId);
+      if (!latest.ok) throw authInvalid();
+      if (latest.principal.id !== bound.principal.id || !holds(latest.principal, "config.read")) throw authForbidden();
+      return latest.principal;
+    };
+    ctx.judgeStatus = async (invocation) => {
+      const before = current(invocation);
+      const config = source.config();
+      const credential = (config?.review?.plainRules?.judge as { credential?: unknown } | undefined)?.credential;
+      // The key is probed only for a caller who may see that reference; otherwise it is withheld unprobed.
+      const sees = (principal: Principal) =>
+        typeof credential === "string" && secretsModel !== undefined && secretsModel.sees(principal, credential);
+      const mayProbe = sees(before);
+      const budget = await source.budget();
+      // Authorized again immediately before the probe: a caller revoked or narrowed during the
+      // budget read causes no secret-specific inspection at all.
+      const probe = mayProbe && sees(current(invocation));
+      const key: JudgeKeyState = probe ? await (source.key ?? judgeKeyStatus)(config) : "withheld";
+      // Again after the awaits, before anything is answered: the caller, its permission, its
+      // secret visibility and its grants as they are now.
+      const after = current(invocation);
+      const visible = probe && sees(after);
+      return judgeStatus({
+        config,
+        key: visible ? key : "withheld",
+        auth:
+          auth.mode === "token"
+            ? { mode: "token", principal: after.id, principals: auth.credentials.currentForPrincipal(after.id) }
+            : { mode: "loopback" },
+        budget,
+      });
     };
   }
   if (opts.hostResourceSource && identity && auth.mode === "token") {
