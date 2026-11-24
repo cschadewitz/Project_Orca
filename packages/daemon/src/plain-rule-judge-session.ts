@@ -1,7 +1,7 @@
 /**
  * The active half of `withPlainRuleJudge` (#701): what a session factory does once the judge is
  * switched on. Kept in its own module, which the package index does not export, so the only way
- * to reach it outside tests is `withPlainRuleJudge`, behind `PLAIN_RULE_JUDGE_ACTIVE`.
+ * to reach it outside tests is `withPlainRuleJudge`, behind the build switch `PLAIN_RULE_JUDGE_ACTIVE`.
  *
  * - Bounded: preparation gets the run's cancellation and `PLAIN_RULE_JUDGE_PREPARE_MS`, and the
  *   factory stops waiting at either, whether or not the source does. A cancelled run opens no

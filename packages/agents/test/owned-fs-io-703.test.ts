@@ -1,5 +1,5 @@
 /** The local I/O of ORCA's own file executor is bound to the file it was authorized for (#703 review). */
-import { mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { link, mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -42,6 +42,18 @@ describe("bound I/O", () => {
     expect(await readBound(binding)).toBe("before, and longer");
     await writeBound(binding, "after");
     expect(await readFile(a, "utf8")).toBe("after");
+  });
+
+  it("with singleLink, refuses before any byte a file that has gained another name (a judged read, #701)", async () => {
+    const d = await dir();
+    const a = join(d, "a");
+    await writeFile(a, "one name");
+    const binding = bindOwnedFs(a)!;
+    expect(await readBound(binding, { singleLink: true })).toBe("one name");
+    await link(a, join(d, "elsewhere"));
+    await expect(readBound(binding, { singleLink: true })).rejects.toBeInstanceOf(OwnedFsNotDispatched);
+    // Without it, an ordinary read of the same file is unchanged.
+    expect(await readBound(binding)).toBe("one name");
   });
 
   it("refuses, before any byte, a file replaced under the same name", async () => {

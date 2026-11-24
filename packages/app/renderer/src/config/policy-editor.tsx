@@ -55,14 +55,7 @@ import {
   textClass,
 } from "../ui/index.js";
 import { configUrl } from "../route-table.js";
-import {
-  PLAIN_RULES_ACTIVE,
-  PLAIN_RULES_INACTIVE_NOTE,
-  POLICY_LAYERS,
-  agentPolicies,
-  describeRule,
-  rowsFrom,
-} from "./config-model.js";
+import { PLAIN_RULES_SETUP_NOTE, POLICY_LAYERS, agentPolicies, describeRule, rowsFrom } from "./config-model.js";
 import { DraftBar } from "./draft-bar.js";
 import {
   JUDGED_RULE_CRITERION_MAX,
@@ -393,7 +386,6 @@ export function PolicyEditor({ agentId, feed, onOpen, onClose, live, now }: Poli
               <div className="orca-policy__section-head">
                 <Text style="label-strong">Plain-language rules</Text>
                 <Chip>sidecar</Chip>
-                {!PLAIN_RULES_ACTIVE && <Chip>inactive</Chip>}
                 <span className="orca-spacer" />
                 {editable && (
                   <Button
@@ -405,15 +397,11 @@ export function PolicyEditor({ agentId, feed, onOpen, onClose, live, now }: Poli
                   </Button>
                 )}
               </div>
-              {!PLAIN_RULES_ACTIVE && (
-                <Text style="caption" className="orca-policy__none" data-plain-rules-inactive="">
-                  {PLAIN_RULES_INACTIVE_NOTE}
-                </Text>
-              )}
               <Text style="caption" className="orca-policy__none">
-                A rule in a sentence, for reads and searches. {PLAIN_RULES_ACTIVE ? "When" : "Once active, when"} the
-                rules above answer ask, a judge on your own key decides whether the call fits the sentence. A yes allows
-                that one call once; anything else goes to you. A judge is used only in a session given one.
+                A rule in a sentence, for reads. When the rules above answer ask on a file ORCA reads for the agent, a
+                judge on your own key decides whether the read fits the sentence. A yes allows that one read once;
+                anything else goes to you, searches and reads the agent makes itself included. A judge is used only in a
+                session given one. {PLAIN_RULES_SETUP_NOTE}
               </Text>
               {judged.length === 0 ? (
                 <Text style="caption" className="orca-policy__none">

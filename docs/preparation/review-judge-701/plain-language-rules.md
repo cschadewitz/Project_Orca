@@ -1,8 +1,8 @@
 # Plain-language permission rules, decided by a review judge (#701)
 
-Status: **design for review (Cal) and owner decisions (Casey).** Only `judgePermission` (section 5)
-is built, with fake judges, and nothing calls it yet. It stays inactive until the real sender and
-the evaluation slot have each had their own independent review.
+Status: **built and active** (the activation change, after every piece below was reviewed as
+inactive). The user guide is [docs/plain-language-rules.md](../../plain-language-rules.md). This
+page stays the design record; parts of it describe the order the pieces were built in.
 Builds on: the live layered permission policy (`packages/agents/src/permissions.ts`), the
 inactive judge adapters and connection (`packages/agents/src/review-judge/`), BYOK judge keys
 (#964), and the typed command rules planned in #702.
@@ -508,9 +508,8 @@ disclosure grants (`credentialJudgeDisclosure`) and the key's use decision (`sec
 session no judge, so its plain-language rules are not consulted and the typed rules decide
 alone. A fixed reason is logged for anything except "not configured": not on the local host,
 budget unavailable or not durable, run not authorized, or a preparation refusal. The whole step is
-inactive: `PLAIN_RULE_JUDGE_ACTIVE` is `false`, and while it is, the wrapper returns the factory
-unchanged and prepares nothing. No parameter or setting can turn it on; that is the reviewed
-activation change.
+switched by the build constant `PLAIN_RULE_JUDGE_ACTIVE`, now `true` after the reviewed
+activation change. No parameter or setting can turn it on or off.
 
 ## 11. Coordination
 

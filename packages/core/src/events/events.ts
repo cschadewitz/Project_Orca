@@ -312,11 +312,23 @@ export const OrcaEventSchema = z.discriminatedUnion("type", [
       decision: z.string(),
       rule: z
         .object({
-          basis: z.enum(["protected", "rule", "default", "command-restricted", "unverified-identity"]),
+          basis: z.enum(["protected", "rule", "default", "command-restricted", "unverified-identity", "judged"]),
           layer: z.enum(["config", "sidecar", "default"]).optional(),
           index: z.number().int().nonnegative().optional(),
           file: z.number().int().nonnegative().optional(),
           capped: z.boolean().optional(),
+          /**
+           * A read a plain-language rule allowed (#701, decision `judged`): the judge's verdict and the rule by its
+           * id, as on `agent.permission`. Never the rule's revision (a content digest).
+           */
+          judge: z
+            .object({
+              verdict: z.string(),
+              ruleId: z.string().optional(),
+              reasonCode: z.string().optional(),
+              judgeConfigRef: z.string().optional(),
+            })
+            .optional(),
         })
         .optional(),
     }),

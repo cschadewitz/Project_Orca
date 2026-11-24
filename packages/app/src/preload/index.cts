@@ -380,6 +380,7 @@ const bridge: OrcaBridge = {
     set: (params) => call("orca:config.set", params),
     apply: (params) => call("orca:config.apply", params),
     saveJudgedRule: (params) => call("orca:permissions.saveJudgedRule", params),
+    judgeStatus: () => call("orca:judge.status", {}),
   },
   notifications: {
     // The one channel the main process pushes on rather than answers on. Each renderer

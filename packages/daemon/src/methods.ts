@@ -92,6 +92,9 @@ import type { Maintenance } from "./maintenance.js";
 import { OrcaError, type MutationActor } from "@orca/core";
 import {
   SECRETS_CHECK_METHOD,
+  JUDGE_STATUS_METHOD,
+  JudgeStatusParamsSchema,
+  type JudgeStatusResult,
   SECRETS_LIST_METHOD,
   SecretsCheckParamsSchema,
   SecretsListParamsSchema,
@@ -277,6 +280,8 @@ export interface MethodContext {
     list(invocation: MethodContext): Promise<SecretsListResult>;
     check(params: SecretsCheckParams, invocation: MethodContext): Promise<SecretsCheckResult>;
   };
+  /** `judge.status` (#701), answered for the caller's current principal. */
+  judgeStatus?: (invocation: MethodContext) => Promise<JudgeStatusResult>;
   operatorMutations?: OperatorMutationComposition | undefined;
   /** Internal exact decision guard; never parsed from legacy RPC params. */
   operatorDecisionTarget?:
@@ -994,6 +999,10 @@ export function methodsFor(ctx: MethodContext): MethodTable {
       params: SecretsCheckParamsSchema,
       handle: (p: SecretsCheckParams, call) => secrets.check(p, call),
     };
+  }
+  if (ctx.judgeStatus) {
+    const status = ctx.judgeStatus;
+    table[JUDGE_STATUS_METHOD] = { params: JudgeStatusParamsSchema, handle: (_p, call) => status(call) };
   }
   if (ctx.hostResourceRead) {
     table["operator.hostResources"] = {
