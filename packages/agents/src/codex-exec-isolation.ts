@@ -13,9 +13,16 @@
  * executor starts, and every descendant, is in that namespace and cannot leave it. When the
  * holder ends, the kernel kills the rest, and it does not let the holder be reaped until
  * they are gone. The holder ends when the executor exits and when ORCA's channel to it
- * closes, so ORCA ending ends them too. `nothingLeft` is ORCA's own reading of that: the
- * holder's process, which ORCA knows by pid and start time, is no longer there. Bubblewrap's
- * exit status is not what is believed.
+ * closes, so ORCA ending ends them too.
+ *
+ * **ORCA says the tree ended only when the kernel showed it.** The pid bubblewrap names is a
+ * claim. ORCA opens the kernel's directory of the process that pid means, verifies through
+ * that descriptor that the process is the first of namespaces that are not ORCA's, and from
+ * then on knows it by the descriptor, which never comes to mean another process. `nothingLeft`
+ * is said when the kernel answers through it that the process was reaped, or lists it
+ * finished with no thread left. A reading that fails or cannot be understood is not an
+ * ending, and neither is an exit ORCA heard before it had verified a first process: ORCA
+ * then says it did not see the tree end. Bubblewrap's exit status is not what is believed.
  *
  * **A directory is held where the executor can reach it.** ORCA's own descriptors cannot be
  * opened from another user namespace, which is also what keeps a command from reading them
@@ -41,7 +48,8 @@
  * inside, by the holder: each mask refuses a write, each hidden directory lists nothing.
  * Then the executor is started, and seen to be the holder's child in the same namespaces
  * without the holder's channel. A check that fails ends the namespace, and the gate's
- * connection with it.
+ * connection with it. So does the deadline for all of it: when it passes, ORCA closes its
+ * channel and signals bubblewrap then, and waits for nothing bubblewrap might still do or say.
  *
  * Limits, said plainly. A command ORCA allowed runs as the user and can ask a service outside
  * the namespace to act for it (a user service manager, a container daemon's socket, a login
@@ -56,7 +64,17 @@
  * else is refused before an executor is started.
  */
 import { spawn } from "node:child_process";
-import { lstatSync, readdirSync, readFileSync, readlinkSync, realpathSync, statSync } from "node:fs";
+import {
+  closeSync,
+  constants,
+  lstatSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  readlinkSync,
+  realpathSync,
+  statSync,
+} from "node:fs";
 import type { Socket } from "node:net";
 import { isAbsolute, sep } from "node:path";
 import type { Readable } from "node:stream";
@@ -74,6 +92,10 @@ export const CODEX_EXEC_BUBBLEWRAP_PATHS = ["/usr/bin/bwrap", "/bin/bwrap"] as c
 
 /** How long the namespace has to be made, shown and given its executor. */
 const SETUP_WAIT_MS = 10_000;
+/** How long ORCA waits, after it refused a namespace, for what bubblewrap had to say about it. */
+const DIAGNOSTICS_WAIT_MS = 500;
+/** `O_CLOEXEC`, as `/proc/<pid>/fdinfo/<n>` shows it among a descriptor's flags. */
+const CLOSE_ON_EXEC = 0o2000000;
 /** How long the holder has to answer one request. */
 const HOLDER_WAIT_MS = 2000;
 /** Bytes of the namespace's error stream kept to explain a failure. */
@@ -277,6 +299,16 @@ control.on("data", (chunk) => {
 control.on("end", () => leave(70));
 control.on("error", () => leave(70));
 control.on("close", () => leave(70));
+// What ORCA's own process was handed open, and would hand on, came here through bubblewrap.
+// None of it is the executor's. Whatever this runtime opened for itself closes when a
+// program is started; anything that would not is closed here. ORCA looks from outside too.
+for (const name of fs.readdirSync("/proc/self/fd")) {
+  const fd = Number(name);
+  if (!(fd > 3)) continue;
+  let flags;
+  try { flags = /^flags:\s*([0-7]+)$/m.exec(fs.readFileSync("/proc/self/fdinfo/" + fd, "utf8")); } catch { continue; }
+  if (flags && (parseInt(flags[1], 8) & 0o2000000) === 0) { try { fs.closeSync(fd); } catch {} }
+}
 say({ ready: process.pid });
 `;
 
@@ -302,40 +334,61 @@ export function parseMountInfo(text: string): Mount[] {
   return mounts;
 }
 
-/** A process by pid and the time it started, so that the pid coming to mean another is seen. */
-interface Seen {
+/**
+ * The first process of the executor's pid namespace, once ORCA has verified that it is that.
+ *
+ * It is known by a descriptor for the kernel's own directory of the process, not by its pid:
+ * a pid can come to mean another process, and that directory cannot. Everything ORCA reads
+ * about the process, when it verifies it and when it looks for its end, is read through
+ * `directory`, so what was verified and what is later seen are one process.
+ */
+interface FirstProcess {
   pid: number;
-  started: string;
+  fd: number;
+  /** `/proc/self/fd/<fd>`: the process's `/proc` directory, by ORCA's descriptor for it. */
+  directory: string;
 }
 
-/** `state` and `starttime` of a process, or undefined when no such process is there. */
-function processStat(pid: number): { state: string; started: string } | undefined {
+/**
+ * What the kernel shows of a process, read through a descriptor for its `/proc` directory.
+ *
+ * `ended` is said only on the kernel's own word, and there are two such words. One: the read
+ * is answered "no such process" (`ESRCH`), which through a descriptor means this very process
+ * was reaped. Two: the process is listed finished (`Z`) with no thread but its first left.
+ * A finished first thread alone is not that, because the others can still be running. For
+ * the first process of a pid namespace either word also says the rest of the namespace is
+ * gone: its last thread ends every other process there and waits for them before it finishes.
+ *
+ * Anything else that is not a readable, running process is `unseen`: a read that failed for
+ * another reason (no descriptor to spare, no leave, no such file), or text ORCA cannot read
+ * the state and thread count from. Not being able to look is not having seen it end.
+ */
+export function codexExecProcessSeen(directory: string): "there" | "ended" | "unseen" {
   let stat: string;
   try {
-    stat = readFileSync(`/proc/${pid}/stat`, "utf8");
-  } catch {
-    return undefined;
+    stat = readFileSync(`${directory}/stat`, "utf8");
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ESRCH" ? "ended" : "unseen";
   }
   // The name is in brackets and can hold anything, so the fields are counted from its end.
-  const rest = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+  const named = stat.lastIndexOf(") ");
+  const rest = named < 0 ? [] : stat.slice(named + 2).split(" ");
   const state = rest[0];
-  const started = rest[19];
-  return state === undefined || started === undefined ? undefined : { state, started };
-}
-
-/** Whether the process once seen is no longer there: gone, a zombie, or its pid another process's. */
-function isGone(seen: Seen): boolean {
-  const now = processStat(seen.pid);
-  return now === undefined || now.started !== seen.started || now.state === "Z" || now.state === "X";
+  const threads = rest[17];
+  if (state === undefined || !/^[A-Za-z]$/.test(state) || threads === undefined || !/^\d+$/.test(threads))
+    return "unseen";
+  if (state === "Z") return threads === "1" ? "ended" : "unseen";
+  // `X` is a process on its way out of the table: not running, and not yet said to be gone.
+  return state === "X" ? "unseen" : "there";
 }
 
 const field = (status: string, name: string): string[] =>
   (new RegExp(`^${name}:\\s*(.*)$`, "m").exec(status)?.[1] ?? "").split(/\s+/).filter((word) => word !== "");
 
-/** The pids here of the processes whose parent is `pid`. */
-function childrenOf(pid: number): number[] {
+/** The pids here of the processes whose parent is the first process. */
+function childrenOf(first: FirstProcess): number[] {
   try {
-    return readFileSync(`/proc/${pid}/task/${pid}/children`, "utf8")
+    return readFileSync(`${first.directory}/task/${first.pid}/children`, "utf8")
       .split(" ")
       .filter((word) => /^\d+$/.test(word))
       .map(Number);
@@ -346,7 +399,7 @@ function childrenOf(pid: number): number[] {
       .map(Number)
       .filter((candidate) => {
         try {
-          return field(readFileSync(`/proc/${candidate}/status`, "utf8"), "PPid")[0] === String(pid);
+          return field(readFileSync(`/proc/${candidate}/status`, "utf8"), "PPid")[0] === String(first.pid);
         } catch {
           return false;
         }
@@ -354,21 +407,39 @@ function childrenOf(pid: number): number[] {
   }
 }
 
-const namespacesOf = (pid: number | "self"): { pid: string; mnt: string; user: string } => ({
-  pid: readlinkSync(`/proc/${pid}/ns/pid`),
-  mnt: readlinkSync(`/proc/${pid}/ns/mnt`),
-  user: readlinkSync(`/proc/${pid}/ns/user`),
+/** The namespaces of the process whose `/proc` directory this is. */
+const namespacesOf = (directory: string): { pid: string; mnt: string; user: string } => ({
+  pid: readlinkSync(`${directory}/ns/pid`),
+  mnt: readlinkSync(`${directory}/ns/mnt`),
+  user: readlinkSync(`${directory}/ns/user`),
 });
+
+/** A descriptor for the kernel's directory of the process a pid means now, or undefined when there is none. */
+function openProcess(pid: number): { fd: number; directory: string } | undefined {
+  try {
+    const fd = openSync(`/proc/${pid}`, constants.O_RDONLY | constants.O_DIRECTORY);
+    return { fd, directory: `/proc/self/fd/${fd}` };
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * Start `codex exec-server --listen stdio` in a user, pid and mount namespace of its own,
  * and speak its line-delimited JSON once ORCA has seen the isolation for itself.
  *
- * What is sent before then waits, and is dropped if the isolation cannot be shown: the
- * namespace is ended, and `onExit` and `isolated` give the reason. `stop` closes the
- * executor's input, then ORCA's channel to the holder, which ends the namespace, and only
- * then signals bubblewrap. `onExit` says `nothingLeft` when ORCA can see that the holder's
- * process is no longer there, and says it is not known when it cannot.
+ * What is sent before then waits, and is dropped if the isolation cannot be shown, or is not
+ * shown by the deadline (`setupWaitMs`): ORCA then ends the namespace itself, at once and
+ * whatever bubblewrap does or says, and `onExit` and `isolated` give the reason. A `stop`
+ * before the isolation is shown does the same: the setup ends there, no executor is started
+ * after it, and `isolated` rejects. Once the isolation is shown, `stop` closes the executor's
+ * input, then ORCA's channel to the holder, which ends the namespace, and only then signals
+ * bubblewrap.
+ *
+ * `onExit` always says whether ORCA saw the tree end. It says `nothingLeft` only when ORCA
+ * verified the first process of the namespace and the kernel then showed that process ended
+ * (`codexExecProcessSeen`). With no first process verified, or with a reading that failed or
+ * showed anything else, it says ORCA did not see it.
  *
  * Throws `CodexExecIsolationError`, with nothing started, when this is not Linux, there is
  * no bubblewrap the system installed, or a mask is not a real directory's own path.
@@ -420,9 +491,27 @@ export function spawnIsolatedCodexExecServer(spec: CodexExecIsolatedSpawn): Code
   const grace = spec.stopGraceMs ?? 2000;
 
   let diagnostics = "";
-  let holder: Seen | undefined;
+  /**
+   * The first process of the namespace. Set only once ORCA has verified that it is that, and
+   * unset when ORCA's descriptor for it is closed. The pid bubblewrap names is a claim, and
+   * is never kept here.
+   */
+  let first: FirstProcess | undefined;
+
+  /* ---- the channel to the holder ---- */
+  const answers = new Map<number, (message: Record<string, unknown>) => void>();
+  let requests = 0;
+  let onReady: ((pid: unknown) => void) | undefined;
+  let line = "";
+  let closed = false;
+  const lost = (): void => {
+    closed = true;
+    for (const answer of answers.values()) answer({ error: "closed" });
+    answers.clear();
+  };
   const endNamespace = (): void => {
     // Closing the channel ends the holder, and with it everything in its pid namespace.
+    lost();
     control.destroy();
   };
   const core = codexExecServerOver({
@@ -433,33 +522,43 @@ export function spawnIsolatedCodexExecServer(spec: CodexExecIsolatedSpawn): Code
     steps: [endNamespace, () => void child.kill("SIGKILL")],
     kill: () => {
       endNamespace();
-      setTimeout(() => void child.kill("SIGKILL"), grace).unref();
+      // Bubblewrap is given the grace to reap the first process only where ORCA could then see
+      // that it did. With none verified there is nothing to see by waiting.
+      if (first === undefined) child.kill("SIGKILL");
+      else setTimeout(() => void child.kill("SIGKILL"), grace).unref();
     },
-    // An executor is started only once the holder has been seen. So with no holder seen there
-    // was no executor, and otherwise the holder has to be gone.
-    nothingLeft: () => holder === undefined || isGone(holder),
+    // Only the kernel's word about the verified first process counts. See `codexExecProcessSeen`.
+    nothingLeft: () => first !== undefined && codexExecProcessSeen(first.directory) === "ended",
     onDiagnostics: (chunk) => {
       if (diagnostics.length < DIAGNOSTIC_BYTES)
         diagnostics = (diagnostics + chunk.toString("utf8")).slice(0, DIAGNOSTIC_BYTES);
     },
   });
 
-  /** What bubblewrap had to say has arrived, or is not waited for any longer. */
-  const said = new Promise<void>((resolve) => {
+  /**
+   * What bubblewrap had to say has arrived, or is not waited for any longer. The wait has an
+   * end of its own, because bubblewrap may never exit or close its error stream, and nothing
+   * ORCA does to end the namespace waits for this.
+   */
+  const closedOrExited = new Promise<void>((resolve) => {
     child.stderr.once("close", () => resolve());
     child.once("exit", () => setTimeout(resolve, 200).unref());
   });
+  const said = (): Promise<void> =>
+    Promise.race([
+      closedOrExited,
+      new Promise<void>((resolve) => void setTimeout(resolve, DIAGNOSTICS_WAIT_MS).unref()),
+    ]);
+  /** A reason, with the first thing bubblewrap said beside it when it said anything. */
+  const explained = (reason: string): string => {
+    const why = diagnostics.trim().split("\n")[0];
+    return why && !reason.includes(why) ? `${reason}: ${why}` : reason;
+  };
 
-  /* ---- the channel to the holder ---- */
-  const answers = new Map<number, (message: Record<string, unknown>) => void>();
-  let requests = 0;
-  let onReady: ((pid: unknown) => void) | undefined;
-  let line = "";
-  let closed = false;
   control.setEncoding("utf8");
   control.on("data", (chunk: string) => {
     line += chunk;
-    if (line.length > HOLDER_LINE_BYTES) return core.fail("the holder in its namespace wrote too much");
+    if (line.length > HOLDER_LINE_BYTES) return giveUp("the holder in its namespace wrote too much");
     for (;;) {
       const end = line.indexOf("\n");
       if (end < 0) break;
@@ -481,11 +580,6 @@ export function spawnIsolatedCodexExecServer(spec: CodexExecIsolatedSpawn): Code
       }
     }
   });
-  const lost = (): void => {
-    closed = true;
-    for (const answer of answers.values()) answer({ error: "closed" });
-    answers.clear();
-  };
   control.on("error", lost);
   control.on("close", lost);
   const tell = (message: Record<string, unknown>): void => {
@@ -509,25 +603,71 @@ export function spawnIsolatedCodexExecServer(spec: CodexExecIsolatedSpawn): Code
   /* ---- what is sent before the isolation is shown waits ---- */
   let shown = false;
   let refused: string | undefined;
+  /** What the setup is waiting for, for the reason given when the deadline passes. */
+  let making = true;
+  let onRefused: (() => void) | undefined;
   const waiting: { message: string; flushed: () => void }[] = [];
   const dropWaiting = (): void => {
     for (const { flushed } of waiting.splice(0)) flushed();
   };
+  /**
+   * Give the executor up before it was shown. The teardown is asked for here and now: the
+   * channel is closed, which ends the holder, and bubblewrap is signalled. Nothing that is
+   * still awaited (an answer, an exit, what bubblewrap wrote) stands between the refusal and it.
+   */
+  const refuse = (why: string): void => {
+    if (shown || refused !== undefined) return;
+    refused = why;
+    clearTimeout(deadline);
+    dropWaiting();
+    core.fail(why);
+    onRefused?.();
+  };
+  /** Give it up for a reason of ORCA's own, shown or not. */
+  function giveUp(why: string): void {
+    if (shown) core.fail(why);
+    else refuse(why);
+  }
+  /**
+   * Why the setup can go no further, once it cannot: ORCA refused or stopped it, its channel
+   * to the holder closed, or bubblewrap exited. The setup asks this after everything it
+   * waited for, before it has the executor started and before it says the isolation is shown.
+   */
+  const over = (): string | undefined =>
+    refused ?? (closed ? "ORCA's channel to the holder closed before the isolation was shown" : undefined);
+  const waitMs = spec.setupWaitMs ?? SETUP_WAIT_MS;
+  const deadline = setTimeout(
+    () =>
+      refuse(
+        making
+          ? "the executor's namespace could not be made: it was not made in time"
+          : "the executor's isolation was not shown in time",
+      ),
+    waitMs,
+  );
+  deadline.unref();
 
   const prove = async (): Promise<CodexExecIsolationProof> => {
     const wrong = (what: string): never => {
       throw new CodexExecIsolationError(what);
     };
-    const waitMs = spec.setupWaitMs ?? SETUP_WAIT_MS;
-    const made = await new Promise<{ pid: unknown; first: unknown } | string>((resolve) => {
+    /** After anything awaited: a setup that was refused, stopped or cut off meanwhile goes no further. */
+    const unlessOver = (): void => {
+      const why = over();
+      if (why !== undefined) wrong(why);
+    };
+    /** And neither does one whose first process ended meanwhile: ORCA's descriptor for it is closed. */
+    const stillThere = (holder: FirstProcess): void => {
+      unlessOver();
+      if (first !== holder) wrong("the holder is not there");
+    };
+    const made = await new Promise<{ pid: unknown; first: unknown } | string | undefined>((resolve) => {
       let text = "";
       let pid: unknown;
-      let first: unknown;
+      let pid1: unknown;
       const done = (): void => {
-        if (pid !== undefined && first !== undefined) resolve({ pid, first });
+        if (pid !== undefined && pid1 !== undefined) resolve({ pid, first: pid1 });
       };
-      const timer = setTimeout(() => resolve("it was not made in time"), waitMs);
-      timer.unref();
       info.on("data", (chunk: Buffer) => {
         text += chunk.toString("utf8");
         if (text.length > HOLDER_LINE_BYTES) return resolve("bubblewrap wrote too much about it");
@@ -538,44 +678,78 @@ export function spawnIsolatedCodexExecServer(spec: CodexExecIsolatedSpawn): Code
           // Not all of it yet.
         }
       });
-      onReady = (pid1) => {
-        first = pid1;
+      onReady = (inner) => {
+        pid1 = inner;
         done();
       };
+      onRefused = () => resolve(undefined);
       core.onExit((detail) => resolve(`bubblewrap ended (${detail})`));
     });
-    if (typeof made === "string") {
-      await said;
-      const why = diagnostics.trim().split("\n")[0];
-      wrong(`the executor's namespace could not be made: ${made}${why ? `: ${why}` : ""}`);
-    }
-    const { pid, first } = made as { pid: unknown; first: unknown };
-    if (typeof pid !== "number" || !Number.isSafeInteger(pid) || pid <= 1) wrong("bubblewrap named no process");
-    const at = pid as number;
-    const stat = processStat(at);
-    if (stat === undefined) wrong("the holder is not there");
-    holder = { pid: at, started: stat!.started };
+    if (refused !== undefined) wrong(refused);
+    if (typeof made === "string") wrong(`the executor's namespace could not be made: ${made}`);
+    unlessOver();
+    making = false;
+    const { pid: named, first: saidInside } = made as { pid: unknown; first: unknown };
+    if (typeof named !== "number" || !Number.isSafeInteger(named) || named <= 1) wrong("bubblewrap named no process");
 
-    // From outside: the holder is our child's child, and process 1 of namespaces that are not ours.
-    const status = readFileSync(`/proc/${at}/status`, "utf8");
-    if (field(status, "PPid")[0] !== String(child.pid)) wrong("the holder is not the child of ORCA's bubblewrap");
-    const inner = field(status, "NSpid");
-    if (first !== 1 || inner.length < 2 || inner.at(-1) !== "1" || inner[0] !== String(at))
-      wrong("the holder is not the first process of a pid namespace of its own");
+    // The pid bubblewrap named is a candidate. ORCA takes a descriptor for the process that pid
+    // means now, and verifies through that descriptor that the process is the first of
+    // namespaces that are not ORCA's. Only then is it the process whose end ORCA will speak of.
+    const candidate = openProcess(named as number);
+    if (candidate === undefined) wrong("the holder is not there");
+    const at = candidate!.directory;
+    let namespaces: { pid: string; mnt: string; user: string };
+    let status: string;
+    try {
+      status = readFileSync(`${at}/status`, "utf8");
+      // A child of ORCA's bubblewrap, which is ORCA's own child and has not been reaped: its pid
+      // is no other process's while that is so.
+      if (child.pid === undefined || child.exitCode !== null || child.signalCode !== null)
+        wrong("bubblewrap ended before the holder was seen");
+      if (field(status, "PPid")[0] !== String(child.pid)) wrong("the holder is not the child of ORCA's bubblewrap");
+      const inner = field(status, "NSpid");
+      if (saidInside !== 1 || inner.length < 2 || inner.at(-1) !== "1" || inner[0] !== String(named))
+        wrong("the holder is not the first process of a pid namespace of its own");
+      namespaces = namespacesOf(at);
+      const mine = namespacesOf("/proc/self");
+      for (const kind of ["pid", "mnt", "user"] as const)
+        if (namespaces[kind] === mine[kind]) wrong(`the holder is in ORCA's own ${kind} namespace`);
+      if (codexExecProcessSeen(at) !== "there") wrong("the holder is not there");
+    } catch (error) {
+      closeSync(candidate!.fd);
+      throw error;
+    }
+    first = { pid: named as number, ...candidate! };
+    const holder = first;
+
     if (!/^0+$/.test(field(status, "CapEff")[0] ?? "")) wrong("the holder holds capabilities over its namespace");
-    const namespaces = namespacesOf(at);
-    const mine = namespacesOf("self");
-    for (const kind of ["pid", "mnt", "user"] as const)
-      if (namespaces[kind] === mine[kind]) wrong(`the holder is in ORCA's own ${kind} namespace`);
+
+    // From outside: the holder would hand the executor its input and output and nothing else.
+    // A descriptor ORCA's own process was handed open comes through bubblewrap to the holder,
+    // and one such would be an object in a command's hands that no mask and no decision covers.
+    for (const name of readdirSync(`${at}/fd`)) {
+      if (name === "0" || name === "1" || name === "2") continue;
+      let about: string;
+      try {
+        about = readFileSync(`${at}/fdinfo/${name}`, "utf8");
+      } catch (error) {
+        // Closed since it was listed, so not there to hand on.
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+        throw error;
+      }
+      const flags = /^flags:\s*([0-7]+)$/m.exec(about)?.[1];
+      if (flags === undefined || (Number.parseInt(flags, 8) & CLOSE_ON_EXEC) === 0)
+        wrong(`the holder would hand descriptor ${name} on to the executor`);
+    }
 
     // From outside: its mount table shows each mask, and a hidden directory is empty through its root.
-    const mounts = parseMountInfo(readFileSync(`/proc/${at}/mountinfo`, "utf8"));
+    const mounts = parseMountInfo(readFileSync(`${at}/mountinfo`, "utf8"));
     const top = (path: string): Mount | undefined => mounts.filter((mount) => mount.point === path).at(-1);
     for (const path of masks.hidden) {
       const mount = top(path);
       if (mount?.type !== "tmpfs" || !mount.options.includes("ro")) wrong(`a hidden directory is not masked: ${path}`);
-      if (readdirSync(`/proc/${at}/root${path}`).length > 0) wrong(`a hidden directory is not empty: ${path}`);
-      const through = statSync(`/proc/${at}/root${path}`, { bigint: true });
+      if (readdirSync(`${at}/root${path}`).length > 0) wrong(`a hidden directory is not empty: ${path}`);
+      const through = statSync(`${at}/root${path}`, { bigint: true });
       const real = statSync(path, { bigint: true });
       if (through.dev === real.dev && through.ino === real.ino)
         wrong(`a hidden directory is the directory itself: ${path}`);
@@ -587,6 +761,7 @@ export function spawnIsolatedCodexExecServer(spec: CodexExecIsolatedSpawn): Code
 
     // From inside, by the holder: what the masks do to a process in the namespace.
     const probe = await ask({ op: "probe", ...masks });
+    stillThere(holder);
     if (!Array.isArray(probe["wrong"])) wrong("the holder did not try the masks");
     if ((probe["wrong"] as unknown[]).length > 0)
       wrong(`a mask does not hold inside the namespace (${String((probe["wrong"] as unknown[])[0])})`);
@@ -602,31 +777,42 @@ export function spawnIsolatedCodexExecServer(spec: CodexExecIsolatedSpawn): Code
       },
       waitMs,
     );
+    stillThere(holder);
     const innerPid = begun["started"];
     if (typeof innerPid !== "number") wrong("the holder did not start the executor");
-    const executor = childrenOf(at).find((candidate) => {
+    const isIt = (directory: string): boolean => {
       try {
-        return field(readFileSync(`/proc/${candidate}/status`, "utf8"), "NSpid").at(-1) === String(innerPid);
+        const theirs = readFileSync(`${directory}/status`, "utf8");
+        return field(theirs, "NSpid").at(-1) === String(innerPid) && field(theirs, "PPid")[0] === String(holder.pid);
       } catch {
         return false;
       }
-    });
+    };
+    const executor = childrenOf(holder).find((pid) => isIt(`/proc/${pid}`));
     if (executor === undefined) wrong("the executor is not the holder's child");
-    if (!/^0+$/.test(field(readFileSync(`/proc/${executor!}/status`, "utf8"), "CapEff")[0] ?? ""))
-      wrong("the executor holds capabilities over its namespace");
-    const theirs = namespacesOf(executor!);
-    for (const kind of ["pid", "mnt", "user"] as const)
-      if (theirs[kind] !== namespaces[kind]) wrong(`the executor is not in the holder's ${kind} namespace`);
-    // The holder's channel is a socket, which no path opens. The executor was not handed it either.
-    const channel = readlinkSync(`/proc/${at}/fd/3`);
-    for (const fd of readdirSync(`/proc/${executor!}/fd`)) {
-      let target: string;
-      try {
-        target = readlinkSync(`/proc/${executor!}/fd/${fd}`);
-      } catch {
-        continue;
+    // As with the holder: one descriptor, so that every reading below is of one process.
+    const theirs = openProcess(executor!);
+    if (theirs === undefined) wrong("the executor is not there");
+    try {
+      if (!isIt(theirs!.directory)) wrong("the executor is not the holder's child");
+      if (!/^0+$/.test(field(readFileSync(`${theirs!.directory}/status`, "utf8"), "CapEff")[0] ?? ""))
+        wrong("the executor holds capabilities over its namespace");
+      const its = namespacesOf(theirs!.directory);
+      for (const kind of ["pid", "mnt", "user"] as const)
+        if (its[kind] !== namespaces[kind]) wrong(`the executor is not in the holder's ${kind} namespace`);
+      // The holder's channel is a socket, which no path opens. The executor was not handed it either.
+      const channel = readlinkSync(`${at}/fd/3`);
+      for (const fd of readdirSync(`${theirs!.directory}/fd`)) {
+        let target: string;
+        try {
+          target = readlinkSync(`${theirs!.directory}/fd/${fd}`);
+        } catch {
+          continue;
+        }
+        if (target === channel) wrong("the executor holds the holder's channel");
       }
-      if (target === channel) wrong("the executor holds the holder's channel");
+    } finally {
+      closeSync(theirs!.fd);
     }
     let ptraceScope: number | undefined;
     try {
@@ -635,7 +821,7 @@ export function spawnIsolatedCodexExecServer(spec: CodexExecIsolatedSpawn): Code
       ptraceScope = undefined;
     }
     return {
-      holder: at,
+      holder: holder.pid,
       executor: executor!,
       namespaces,
       masks,
@@ -643,30 +829,40 @@ export function spawnIsolatedCodexExecServer(spec: CodexExecIsolatedSpawn): Code
     };
   };
 
-  const isolated = prove().then(
-    (proof) => {
-      shown = true;
-      for (const { message, flushed } of waiting.splice(0)) {
-        try {
-          core.send(message, flushed);
-        } catch {
-          flushed();
-        }
+  const isolated = (async (): Promise<CodexExecIsolationProof> => {
+    let proof: CodexExecIsolationProof;
+    try {
+      proof = await prove();
+      // Asked once more, here where the isolation would be said to be shown.
+      const why = over();
+      if (why !== undefined) throw new CodexExecIsolationError(why);
+    } catch (error) {
+      // The teardown starts with the refusal. What bubblewrap wrote is then waited for only to
+      // explain the refusal, and only so long: it may never exit or close its error stream.
+      refuse(error instanceof Error ? error.message : "the executor's isolation could not be shown");
+      await said();
+      throw new CodexExecIsolationError(explained(refused ?? "the executor's isolation could not be shown"));
+    }
+    shown = true;
+    clearTimeout(deadline);
+    for (const { message, flushed } of waiting.splice(0)) {
+      try {
+        core.send(message, flushed);
+      } catch {
+        flushed();
       }
-      return proof;
-    },
-    (error: unknown) => {
-      refused = error instanceof Error ? error.message : "the executor's isolation could not be shown";
-      dropWaiting();
-      core.fail(refused);
-      throw error instanceof CodexExecIsolationError ? error : new CodexExecIsolationError(refused);
-    },
-  );
+    }
+    return proof;
+  })();
   // A caller that never looks is told through `onExit`.
   isolated.catch(() => undefined);
   core.onExit(() => {
+    clearTimeout(deadline);
     dropWaiting();
     lost();
+    // The exit was judged, through this descriptor, before any listener heard of it.
+    if (first !== undefined) closeSync(first.fd);
+    first = undefined;
   });
 
   return {
@@ -680,26 +876,38 @@ export function spawnIsolatedCodexExecServer(spec: CodexExecIsolatedSpawn): Code
     onMessage: (listener) => core.onMessage(listener),
     onExit: (listener) =>
       core.onExit((detail, nothingLeft) => {
-        if (shown) return listener(detail, nothingLeft);
+        // This backend always says which: an exit it could not judge is one it did not see.
+        const seen = nothingLeft === true;
+        if (shown) return listener(detail, seen);
         // An executor that was never shown ended for a reason bubblewrap or ORCA gave.
-        void said.then(() => {
-          const why = refused ?? diagnostics.trim().split("\n")[0];
-          listener(why && why !== detail ? `${detail}: ${why}` : detail, nothingLeft);
+        void said().then(() => {
+          listener(explained(refused !== undefined && refused !== detail ? `${detail}: ${refused}` : detail), seen);
         });
       }),
-    stop: () => core.stop(),
+    stop() {
+      // A stop before the isolation was shown ends the setup there and then: what it is
+      // waiting for is cut short, no executor is started after this, and no proof is given.
+      // The namespace is ended at once, with none of the grace an executor at work is given.
+      refuse("ORCA stopped it before its isolation was shown");
+      return core.stop();
+    },
     async hold(held) {
+      const holder = first;
       if (!shown || holder === undefined || closed) return undefined;
-      const at = holder.pid;
       const answer = await ask({ op: "hold", path: held.real });
       const fd = answer["fd"];
       if (typeof fd !== "number" || !Number.isSafeInteger(fd) || fd < 0) return undefined;
       const drop = (): void => tell({ op: "drop", fd });
       try {
+        // ORCA's descriptor for the holder is closed, and may mean something else, once it is gone.
+        if (first !== holder || codexExecProcessSeen(holder.directory) !== "there") {
+          drop();
+          return undefined;
+        }
         // Seen from here, not taken on the holder's word: its descriptor and ORCA's are one directory.
-        const theirs = statSync(`/proc/${at}/fd/${fd}`, { bigint: true });
+        const theirs = statSync(`${holder.directory}/fd/${fd}`, { bigint: true });
         const ours = statSync(held.reach, { bigint: true });
-        if (isGone(holder) || !theirs.isDirectory() || theirs.dev !== ours.dev || theirs.ino !== ours.ino) {
+        if (!theirs.isDirectory() || theirs.dev !== ours.dev || theirs.ino !== ours.ino) {
           drop();
           return undefined;
         }

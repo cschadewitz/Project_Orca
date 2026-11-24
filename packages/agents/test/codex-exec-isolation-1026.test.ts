@@ -9,8 +9,8 @@
  * `codex-exec-gate-acceptance.yml` does. The real Codex executor runs in these namespaces in
  * `packages/cli/test/codex-exec-gate-acceptance-1026.test.ts`.
  */
-import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, readFileSync, readlinkSync } from "node:fs";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { closeSync, constants, existsSync, openSync, readFileSync, readlinkSync } from "node:fs";
 import { chmod, link, mkdir, mkdtemp, readFile, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -19,6 +19,7 @@ import {
   CodexExecIsolationError,
   codexExecGateBinder,
   codexExecMasks,
+  codexExecProcessSeen,
   parseMountInfo,
   spawnIsolatedCodexExecServer,
   systemBubblewrap,
@@ -144,6 +145,130 @@ describe.skipIf(process.platform !== "linux")("what is refused before anything i
   });
 });
 
+describe.skipIf(process.platform !== "linux")("what the kernel shows of a process", () => {
+  /** A `/proc` directory's `stat`, as the kernel writes it: state third, thread count twentieth. */
+  const stat = (state: string, threads: string, name = "node") =>
+    `4242 (${name}) ${state} 1 4242 4242 0 -1 4194560 100 0 0 0 1 1 0 0 20 0 ${threads} 0 123456 1000 100 1 1\n`;
+  const listed = async (text: string): Promise<string> => {
+    const dir = join(root, `proc-${Math.random().toString(36).slice(2)}`);
+    await mkdir(dir);
+    await writeFile(join(dir, "stat"), text);
+    return dir;
+  };
+
+  it("says a process ended only on the kernel's word, read through a descriptor for it", async () => {
+    const child = spawn("/bin/sleep", ["300"], { stdio: "ignore" });
+    const fd = openSync(`/proc/${child.pid!}`, constants.O_RDONLY | constants.O_DIRECTORY);
+    try {
+      expect(codexExecProcessSeen(`/proc/self/fd/${fd}`)).toBe("there");
+      child.kill("SIGKILL");
+      await new Promise((resolve) => child.once("exit", resolve));
+      // Reaped: the kernel answers "no such process" for the directory it gave for that process.
+      expect(codexExecProcessSeen(`/proc/self/fd/${fd}`)).toBe("ended");
+    } finally {
+      closeSync(fd);
+    }
+  });
+
+  it("does not take a reading it could not make for an ending", async () => {
+    // No such directory, no such file, a file that is no process's: none of them is the kernel's word.
+    expect(codexExecProcessSeen(join(root, "missing"))).toBe("unseen");
+    await mkdir(join(root, "empty"));
+    expect(codexExecProcessSeen(join(root, "empty"))).toBe("unseen");
+    expect(codexExecProcessSeen("/proc/self/fd/987654")).toBe("unseen");
+    expect(codexExecProcessSeen("/proc/2147483646")).toBe("unseen");
+    for (const text of ["", "garbage", "4242 (node", stat("?", "1"), stat("S", "many"), stat("Z", "")])
+      expect(codexExecProcessSeen(await listed(text))).toBe("unseen");
+  });
+
+  it("takes a finished process for ended only when no thread of it is left", async () => {
+    expect(codexExecProcessSeen(await listed(stat("S", "7")))).toBe("there");
+    expect(codexExecProcessSeen(await listed(stat("R", "1")))).toBe("there");
+    expect(codexExecProcessSeen(await listed(stat("Z", "1")))).toBe("ended");
+    // Its first thread is finished, and another can still be running.
+    expect(codexExecProcessSeen(await listed(stat("Z", "2")))).toBe("unseen");
+    expect(codexExecProcessSeen(await listed(stat("X", "1")))).toBe("unseen");
+    // A name can hold anything, a closing bracket and a state among it.
+    expect(codexExecProcessSeen(await listed(stat("S", "3", "a) Z 1 (b")))).toBe("there");
+  });
+});
+
+describe.skipIf(process.platform !== "linux")("a namespace that is not made in time", () => {
+  const channelClosed = () => join(root, "channel-closed");
+  /**
+   * Start with a stand-in for bubblewrap that makes nothing and answers nothing. It ignores
+   * every signal that can be ignored, never exits, and keeps its error stream open. When
+   * ORCA's channel closes it notes that, and still does not leave.
+   */
+  async function withSilentLauncher(setupWaitMs: number) {
+    const silent = join(root, "silent-bwrap");
+    await writeFile(
+      silent,
+      [
+        "#!/bin/bash",
+        "trap '' TERM HUP INT PIPE",
+        "echo 'the launcher is here and will say no more' >&2",
+        `( while read -r -u 3 _; do :; done; : > ${channelClosed()} ) &`,
+        "while :; do sleep 1; done",
+        "",
+      ].join("\n"),
+    );
+    await chmod(silent, 0o755);
+    return spawnIsolatedCodexExecServer({
+      program: "/bin/true",
+      env: {},
+      cwd: root,
+      masks: { hidden: [], readOnly: [], writable: [] },
+      bubblewrap: silent,
+      runtimeEnv: { PATH: "/usr/bin:/bin" },
+      setupWaitMs,
+      // Far longer than a test: nothing in them comes from a wait for the launcher to go by itself.
+      stopGraceMs: 120_000,
+    });
+  }
+
+  it("is refused at the deadline, and ended by ORCA then, whatever the launcher does", async () => {
+    const began = Date.now();
+    const backend = await withSilentLauncher(300);
+    const exit = new Promise<{ detail: string; nothingLeft: boolean | undefined; at: number }>((resolve) => {
+      backend.onExit((detail, nothingLeft) => resolve({ detail, nothingLeft, at: Date.now() - began }));
+    });
+    let flushed = 0;
+    backend.send("never sent", () => (flushed += 1));
+
+    // Refused soon after the deadline, with what the launcher said, though it is still running.
+    await expect(backend.isolated).rejects.toThrow(/was not made in time: the launcher is here/);
+    expect(Date.now() - began).toBeGreaterThanOrEqual(300);
+    expect(Date.now() - began).toBeLessThan(5000);
+    // What was waiting was dropped, and nothing more can be sent.
+    expect(flushed).toBe(1);
+    expect(() => backend.send("late", () => undefined)).toThrow(/gone/);
+
+    // Ended by ORCA at the deadline: its channel closed, and the launcher killed without the grace.
+    await expect.poll(() => existsSync(channelClosed()), { timeout: 5000 }).toBe(true);
+    const ended = await exit;
+    expect(ended.detail).toMatch(/was not made in time/);
+    expect(ended.at).toBeLessThan(5000);
+    expect(() => process.kill(backend.pid!, 0)).toThrow();
+    // No first process was verified, so ORCA does not say it saw anything end.
+    expect(ended.nothingLeft).toBe(false);
+  });
+
+  it("is ended at once by a stop, long before its deadline", async () => {
+    const backend = await withSilentLauncher(120_000);
+    let flushed = 0;
+    backend.send("never sent", () => (flushed += 1));
+    const began = Date.now();
+    await backend.stop();
+    // Neither the deadline nor the grace was waited for.
+    expect(Date.now() - began).toBeLessThan(5000);
+    await expect(backend.isolated).rejects.toThrow(/stopped it before its isolation was shown/);
+    expect(flushed).toBe(1);
+    expect(() => backend.send("late", () => undefined)).toThrow(/gone/);
+    expect(() => process.kill(backend.pid!, 0)).toThrow();
+  });
+});
+
 describe.skipIf(!USABLE && !REQUIRED)("an executor in namespaces ORCA makes", () => {
   let stub: string;
   let config: string;
@@ -254,6 +379,101 @@ describe.skipIf(!USABLE && !REQUIRED)("an executor in namespaces ORCA makes", ()
     expect(await run("echo $GIVEN; env | grep -c ORCA_STUB")).toBe("to-the-executor\n1\n");
     // The holder's channel is not among what a command inherits: only its own three, and `ls`'s own.
     expect(await run("ls /proc/self/fd | tr '\\n' ' '")).toBe("0 1 2 3 ");
+  });
+
+  it("hands a command nothing that ORCA's own process was handed open", async () => {
+    // Bubblewrap started with two more descriptors open, as whatever started ORCA might leave
+    // them to it: one of them on a file the masks hide. A descriptor is the file itself, and
+    // no mask on a name covers it.
+    const handed = join(root, "bwrap-with-descriptors");
+    await writeFile(
+      handed,
+      [
+        "#!/bin/bash",
+        `exec 142< /dev/null 145< ${join(config, "auth", "owner.token")}`,
+        `exec ${BUBBLEWRAP!} "$@"`,
+        "",
+      ].join("\n"),
+    );
+    await chmod(handed, 0o755);
+    const { backend, run } = isolate({ bubblewrap: handed });
+    await backend.isolated;
+    expect(await run("ls /proc/self/fd | tr '\\n' ' '")).toBe("0 1 2 3 ");
+    expect(await run("cat <&145")).toMatch(/Bad file descriptor/);
+  });
+
+  it("starts no executor behind a holder that would hand a descriptor on, and says what it saw of the end", async () => {
+    // A stand-in for the holder's runtime: a shell, whose descriptors all pass to what it
+    // starts. It is the first process of a real namespace, says so, and leaves when ORCA's
+    // channel closes.
+    const shell = join(root, "holder.sh");
+    await writeFile(shell, ["#!/bin/bash", 'echo "{\\"ready\\": $$}" >&3', "read -r -u 3 _", ""].join("\n"));
+    await chmod(shell, 0o755);
+    const { backend, exit } = isolate({ runtime: shell });
+    await expect(backend.isolated).rejects.toThrow(/would hand descriptor \d+ on to the executor/);
+    const ended = await exit;
+    expect(existsSync(started())).toBe(false);
+    // Refused, but the first process had been verified, and bubblewrap reaped it when ORCA
+    // closed the channel. So here ORCA did see the namespace end, and says so.
+    expect(ended.nothingLeft).toBe(true);
+  });
+
+  it("starts no executor, and gives no proof, once it is stopped while the isolation is being shown", async () => {
+    // A stand-in for the holder that notes what it is asked and is slow to try the masks. It is
+    // the first process of a real namespace, so ORCA's own checks pass, and the setup is
+    // waiting for its answer when the stop comes. It would say yes to everything.
+    const asked = join(root, "asked");
+    const slow = join(root, "slow-holder.js");
+    await writeFile(
+      slow,
+      [
+        'const fs = require("node:fs");',
+        'const net = require("node:net");',
+        "const control = new net.Socket({ fd: 3, readable: true, writable: true });",
+        'const say = (m) => control.write(JSON.stringify(m) + "\\n");',
+        'let text = "";',
+        'control.setEncoding("utf8");',
+        'control.on("data", (chunk) => {',
+        "  text += chunk;",
+        "  for (;;) {",
+        '    const end = text.indexOf("\\n");',
+        "    if (end < 0) break;",
+        "    const m = JSON.parse(text.slice(0, end));",
+        "    text = text.slice(end + 1);",
+        `    fs.appendFileSync(${JSON.stringify(asked)}, m.op + "\\n");`,
+        '    if (m.op === "probe") setTimeout(() => say({ id: m.id, wrong: [] }), 400);',
+        '    if (m.op === "start") say({ id: m.id, started: 2 });',
+        "  }",
+        "});",
+        'control.on("close", () => process.exit(70));',
+        "// As the holder does: what the test's own process was handed open is not passed on.",
+        'for (const name of fs.readdirSync("/proc/self/fd")) {',
+        "  let flags;",
+        '  try { flags = /^flags:\\s*([0-7]+)$/m.exec(fs.readFileSync("/proc/self/fdinfo/" + name, "utf8")); } catch { continue; }',
+        "  if (Number(name) > 3 && flags && (parseInt(flags[1], 8) & 0o2000000) === 0) fs.closeSync(Number(name));",
+        "}",
+        "say({ ready: process.pid });",
+        "",
+      ].join("\n"),
+    );
+    const runtime = join(root, "slow-runtime");
+    await writeFile(runtime, `#!/bin/sh\nexec ${process.execPath} ${slow}\n`);
+    await chmod(runtime, 0o755);
+    const { backend, exit } = isolate({ runtime });
+    let flushed = 0;
+    backend.send("echo never", () => (flushed += 1));
+    await expect.poll(() => existsSync(asked) && readFileSync(asked, "utf8")).toBe("probe\n");
+
+    await backend.stop();
+    await expect(backend.isolated).rejects.toThrow(/stopped it before its isolation was shown/);
+    expect((await exit).detail).toMatch(/stopped it before its isolation was shown/);
+    // Longer than the holder took to answer: it was asked for nothing after the stop, and no
+    // executor was started.
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    expect(readFileSync(asked, "utf8")).toBe("probe\n");
+    expect(existsSync(started())).toBe(false);
+    expect(flushed).toBe(1);
+    expect(() => backend.send("echo late", () => undefined)).toThrow(/gone/);
   });
 
   it("keeps a hidden directory out of reach by its name, through a link and after its parent is renamed", async () => {
@@ -413,6 +633,8 @@ describe.skipIf(!USABLE && !REQUIRED)("an executor in namespaces ORCA makes", ()
     await expect(backend.isolated).rejects.toThrow(/holder is not/);
     const ended = await exit;
     expect(ended.detail).toMatch(/holder is not/);
+    // The process the stand-in named was never verified, so its being gone is no proof of anything.
+    expect(ended.nothingLeft).toBe(false);
     // What was waiting was dropped, nothing more can be sent, and the stand-in executor never ran.
     expect(flushed).toBe(1);
     expect(() => backend.send("echo late", () => undefined)).toThrow(/gone/);
@@ -427,8 +649,8 @@ describe.skipIf(!USABLE && !REQUIRED)("an executor in namespaces ORCA makes", ()
     await expect(backend.isolated).rejects.toThrow(/could not be made.*Permission denied/);
     const ended = await exit;
     expect(ended.detail).toMatch(/^exit 1: /);
-    // No holder was ever seen, so no executor was started and nothing of one is left.
-    expect(ended.nothingLeft).toBe(true);
+    // No executor was started. ORCA verified no first process either, so it claims to have seen nothing end.
+    expect(ended.nothingLeft).toBe(false);
     expect(existsSync(started())).toBe(false);
   });
 

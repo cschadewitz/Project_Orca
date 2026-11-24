@@ -85,22 +85,27 @@ export const claudeNativeHook = {
     return join(world.configDir, ".orca", "hook-context.json");
   },
 
-  /** What ORCA writes when it opens the session; written once, like the session does. */
-  async open(world) {
-    if (world.hookContextWritten) return;
-    await mkdir(join(world.configDir, ".orca"), { recursive: true });
-    await writeFile(
-      claudeNativeHook.contextFile(world),
-      JSON.stringify({
-        version: 1,
-        agentId: world.agentId,
-        permissions: world.configured,
-        permissionFiles: [world.sidecar],
-        workspaceCwd: world.workspace,
-        protectedPaths: world.protectedPaths,
-      }),
-    );
-    world.hookContextWritten = true;
+  /**
+   * What ORCA writes when it opens the session; written once, like the session does. Calls
+   * that start at once share the one write: a second write would empty the file while the
+   * hook of a call whose own write had finished was reading it.
+   */
+  open(world) {
+    world.hookContextWritten ??= (async () => {
+      await mkdir(join(world.configDir, ".orca"), { recursive: true });
+      await writeFile(
+        claudeNativeHook.contextFile(world),
+        JSON.stringify({
+          version: 1,
+          agentId: world.agentId,
+          permissions: world.configured,
+          permissionFiles: [world.sidecar],
+          workspaceCwd: world.workspace,
+          protectedPaths: world.protectedPaths,
+        }),
+      );
+    })();
+    return world.hookContextWritten;
   },
 
   frame(world, action) {
