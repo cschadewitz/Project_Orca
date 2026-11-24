@@ -726,13 +726,19 @@ describe.skipIf(ADAPTER === undefined).each([
     expect(await exists("before.txt")).toBe("ran\n");
     expect(executors).toHaveLength(1);
     process.kill(executors[0]!, "SIGKILL");
-    // The next call is made once the gate has heard of the exit. A call made before that is
-    // one already on its way to an executor that is gone, which is another case: ORCA can hear
-    // of the broken pipe before it hears of the exit, and Codex then fails that call.
-    // On a failure this shows what the gate did record.
+    // The next call is made once the gate has closed the connection because its executor
+    // ended. ORCA hears of that end in one of two ways, whichever comes first: the exit, or a
+    // broken pipe when it passes on a request Codex made in between (Codex goes on asking
+    // about the workspace by itself, whatever the test does). The record gives the one ORCA
+    // heard, and either is the kill. On a failure this shows what the gate did record.
     const closedByTheKill = (): true | string =>
-      records.some((r) => r.method === "connection" && r.outcome === "closed" && /SIGKILL/.test(r.reason ?? "")) ||
-      JSON.stringify(records.map((r) => [r.connection, r.method, r.outcome, r.reason]));
+      records.some(
+        (r) =>
+          r.connection === 1 &&
+          r.method === "connection" &&
+          r.outcome === "closed" &&
+          /^the executor behind the gate ended \((signal SIGKILL|its input closed)\)$/.test(r.reason ?? ""),
+      ) || JSON.stringify(records.map((r) => [r.connection, r.method, r.outcome, r.reason]));
     await expect.poll(closedByTheKill, { timeout: 10_000 }).toBe(true);
     await s.prompt(script(shell("echo ran >> after.txt"), shell("echo denied >> denied.txt")));
     // Codex connects again. It reaches a new executor only through the gate, which starts one

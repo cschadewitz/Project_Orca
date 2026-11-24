@@ -11,20 +11,35 @@
  */
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { closeSync, constants, existsSync, openSync, readFileSync, readlinkSync } from "node:fs";
-import { chmod, link, mkdir, mkdtemp, readFile, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  link,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  CODEX_EXEC_READS_AT_ONCE,
   CodexExecIsolationError,
   codexExecGateBinder,
   codexExecDescriptorsOf,
   codexExecMasks,
   codexExecProcessSeen,
+  codexExecReadsOut,
   parseMountInfo,
   spawnIsolatedCodexExecServer,
   systemBubblewrap,
   type CodexExecIsolatedSpawn,
+  type CodexExecSetupReads,
 } from "@orca/agents";
 
 const BUBBLEWRAP = process.platform === "linux" ? systemBubblewrap() : undefined;
@@ -549,6 +564,164 @@ describe.skipIf(!USABLE && !REQUIRED)("an executor in namespaces ORCA makes", ()
     expect(flushed).toBe(1);
     expect(heard).toBe(0);
     expect(() => backend.send("echo late", () => undefined)).toThrow(/gone/);
+  });
+
+  /**
+   * A stand-in for the file system whose listings do not come back until the test lets them:
+   * as a directory on a mount that has stopped answering would not. Everything else is read
+   * for real.
+   */
+  function stuckReads() {
+    const out: { path: string; back: () => void }[] = [];
+    const reads: CodexExecSetupReads = {
+      readdir: (path) => new Promise((resolve) => void out.push({ path, back: () => resolve([]) })),
+      stat: (path) => stat(path, { bigint: true }),
+    };
+    /** ORCA's descriptor for the first process, which the listing was asked through. */
+    const through = (): number => Number(/^\/proc\/self\/fd\/(\d+)\/root\//.exec(out[0]!.path)![1]);
+    const names = (fd: number): string => {
+      try {
+        return readlinkSync(`/proc/self/fd/${fd}`);
+      } catch {
+        return "closed";
+      }
+    };
+    return { reads, out, through, names };
+  }
+
+  it("is refused at its deadline though a read of the file system never came back, and gives no proof when it does", async () => {
+    const { reads, out, through, names } = stuckReads();
+    try {
+      const { backend, exit } = isolate({
+        runtime: await slowHolder({ probeMs: 0, startMs: 0 }),
+        reads,
+        setupWaitMs: 4000,
+      });
+      let flushed = 0;
+      backend.send("echo never", () => (flushed += 1));
+      // The setup has asked what is in the first hidden directory, and is not answered.
+      await expect.poll(() => out.length, { timeout: 3500 }).toBe(1);
+      expect(codexExecReadsOut()).toBe(1);
+      const fd = through();
+      const named = names(fd);
+      expect(named).toMatch(/^\/proc\/\d+$/);
+
+      // The deadline settles it, with the read still out.
+      await expect(backend.isolated).rejects.toThrow(/not shown in time: a read of the file system has not come back/);
+      const ended = await exit;
+      expect(ended.detail).toMatch(/not shown in time/);
+      // The namespace was ended then, and ORCA saw it end through its descriptor for the holder.
+      expect(ended.nothingLeft).toBe(true);
+      expect(flushed).toBe(1);
+      // The read is still counted, and the descriptor it was asked through is still that one:
+      // the read has yet to follow its name, and must not find another file under it.
+      expect(codexExecReadsOut()).toBe(1);
+      expect(names(fd).startsWith(named)).toBe(true);
+
+      // The read comes back, late. Nobody hears of it: no proof, nothing asked of the holder.
+      out[0]!.back();
+      await expect.poll(codexExecReadsOut).toBe(0);
+      await expect.poll(() => names(fd).startsWith(named)).toBe(false);
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      expect(out.length).toBe(1);
+      expect(askedSoFar()).toBe(false);
+      expect(existsSync(started())).toBe(false);
+      expect(() => backend.send("echo late", () => undefined)).toThrow(/gone/);
+    } finally {
+      for (const read of out) read.back();
+    }
+  });
+
+  it("is ended by a stop though a read of the file system never came back", async () => {
+    const { reads, out, through, names } = stuckReads();
+    try {
+      const { backend, exit } = isolate({
+        runtime: await slowHolder({ probeMs: 0, startMs: 0 }),
+        reads,
+        setupWaitMs: 120_000,
+      });
+      await expect.poll(() => out.length, { timeout: 10_000 }).toBe(1);
+      const fd = through();
+      const named = names(fd);
+
+      const began = Date.now();
+      await backend.stop();
+      await expect(backend.isolated).rejects.toThrow(/stopped it before its isolation was shown/);
+      const ended = await exit;
+      // Neither the read nor the deadline was waited for.
+      expect(Date.now() - began).toBeLessThan(5000);
+      expect(ended.detail).toMatch(/stopped it before its isolation was shown/);
+      expect(ended.nothingLeft).toBe(true);
+      expect(codexExecReadsOut()).toBe(1);
+      expect(names(fd).startsWith(named)).toBe(true);
+
+      out[0]!.back();
+      await expect.poll(codexExecReadsOut).toBe(0);
+      await expect.poll(() => names(fd).startsWith(named)).toBe(false);
+      expect(askedSoFar()).toBe(false);
+      expect(existsSync(started())).toBe(false);
+    } finally {
+      for (const read of out) read.back();
+    }
+  });
+
+  it("is over when its namespace ends by itself, though a read of the file system never came back", async () => {
+    const { reads, out } = stuckReads();
+    try {
+      const { backend, exit } = isolate({ reads, setupWaitMs: 120_000 });
+      await expect.poll(() => out.length, { timeout: 10_000 }).toBe(1);
+      // Not ORCA's doing: its bubblewrap is killed, and the kernel ends the namespace with it.
+      process.kill(backend.pid!, "SIGKILL");
+      await expect(backend.isolated).rejects.toThrow(
+        /the executor's namespace ended before its isolation was shown \(signal SIGKILL\)/,
+      );
+      expect((await exit).detail).toMatch(/signal SIGKILL/);
+      expect(existsSync(started())).toBe(false);
+      expect(() => backend.send("echo late", () => undefined)).toThrow(/gone/);
+    } finally {
+      for (const read of out) read.back();
+    }
+  });
+
+  it("has no more reads of the file system out than its limit, whatever setups ask for them", async () => {
+    const stuck = stuckReads();
+    try {
+      // As many setups as there are places, each given up with its read still out.
+      for (let n = 0; n < CODEX_EXEC_READS_AT_ONCE; n += 1) {
+        const { backend } = isolate({ reads: stuck.reads, setupWaitMs: 120_000 });
+        await expect.poll(() => stuck.out.length, { timeout: 10_000 }).toBe(n + 1);
+        await backend.stop();
+        await expect(backend.isolated).rejects.toThrow(/stopped/);
+      }
+      expect(codexExecReadsOut()).toBe(CODEX_EXEC_READS_AT_ONCE);
+
+      // One more setup: its read waits for a place, and is never made. It is refused at its
+      // own deadline, for that reason.
+      let asked = 0;
+      const counted: CodexExecSetupReads = {
+        readdir: (path) => ((asked += 1), stuck.reads.readdir(path)),
+        stat: (path) => ((asked += 1), stuck.reads.stat(path)),
+      };
+      const waited = isolate({ reads: counted, setupWaitMs: 2500 });
+      await expect(waited.backend.isolated).rejects.toThrow(
+        /not shown in time: reads of the file system that other setups asked for have not come back/,
+      );
+      await waited.exit;
+      expect(asked).toBe(0);
+      expect(codexExecReadsOut()).toBe(CODEX_EXEC_READS_AT_ONCE);
+
+      // The reads come back. The setup that gave up waiting is not given a place after all,
+      // and a new one is shown as any other is.
+      for (const read of stuck.out) read.back();
+      await expect.poll(codexExecReadsOut).toBe(0);
+      expect(asked).toBe(0);
+      const { backend, run } = isolate();
+      await backend.isolated;
+      expect(await run("echo here")).toBe("here\n");
+      expect(codexExecReadsOut()).toBe(0);
+    } finally {
+      for (const read of stuck.out) read.back();
+    }
   });
 
   it("keeps a hidden directory out of reach by its name, through a link and after its parent is renamed", async () => {

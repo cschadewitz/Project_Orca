@@ -57,7 +57,17 @@
  * back: right before it has the executor started, and right before it says the isolation is
  * shown and sends what was waiting. A setup found late there starts no executor after that
  * and gives no proof, however late it is found. The reads that leave `/proc` for a file
- * system, which may be slow or never answer, are made off ORCA's thread. What ORCA reads
+ * system, which may be slow or never answer, are made off ORCA's thread, one at a time. A
+ * refusal (the deadline, a stop, the namespace's own end) settles the setup's result by
+ * itself while such a read is out, and what the read comes to later is not looked at.
+ * ORCA's descriptor for the first process stays open until the read is back, because the
+ * read may still have that descriptor's name to follow. Each read that is out keeps one of
+ * the few threads Node reads files on, so ORCA has no more than
+ * `CODEX_EXEC_READS_AT_ONCE` of them out for all its setups together: a setup that finds no
+ * place waits for one, within its own deadline, and its read is never made if it is refused
+ * first. A read that never comes back keeps its place for as long as ORCA runs. With every
+ * place kept, a later setup that has a hidden directory to look into is refused at its
+ * deadline, and says why. What ORCA reads
  * from `/proc` itself (a process's status, namespaces, mount table and descriptors) it
  * reads on its thread. While the kernel is answering one of those, and while anything else
  * keeps that thread, neither the timer nor a `stop` is acted on: the teardown comes when the
@@ -114,6 +124,13 @@ const DIAGNOSTICS_WAIT_MS = 500;
 const CLOSE_ON_EXEC = 0o2000000;
 /** How long the holder has to answer one request. */
 const HOLDER_WAIT_MS = 2000;
+/**
+ * How many reads of a file system ORCA has out at once for its setups, all of them together.
+ * A read that never comes back keeps one of the few threads Node reads files on until it
+ * does, and those threads are every part of ORCA's. This is the most of them a setup's reads
+ * ever keep.
+ */
+export const CODEX_EXEC_READS_AT_ONCE = 2;
 /** Bytes of the namespace's error stream kept to explain a failure. */
 const DIAGNOSTIC_BYTES = 2048;
 /** The longest line the holder may write. */
@@ -205,6 +222,55 @@ function maskArguments(masks: CodexExecMasks): string[] {
   return steps.flatMap((step) => step.args);
 }
 
+/** The reads a setup makes of a file system, off ORCA's thread. Any of them may never come back. */
+export interface CodexExecSetupReads {
+  readdir(path: string): Promise<readonly string[]>;
+  stat(path: string): Promise<{ dev: bigint; ino: bigint }>;
+}
+
+let readsOut = 0;
+const readsWaiting = new Set<() => void>();
+
+/** How many reads of a file system ORCA's setups have out now: asked for, and not come back. */
+export function codexExecReadsOut(): number {
+  return readsOut;
+}
+
+/**
+ * Make one read of a file system off ORCA's thread, for a setup that may be over before the
+ * read comes back. No more than `CODEX_EXEC_READS_AT_ONCE` are out at a time, whatever
+ * setups ask for them: one more waits for one of those to come back, and is not made at all
+ * if its setup is over first. A setup that is over has its answer at once, a refusal, and
+ * what its read comes to later is nobody's. The read's place stays taken until it is back.
+ */
+function readOutside<T>(read: () => Promise<T>, setupOver: AbortSignal): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const gaveUp = (): void => {
+      readsWaiting.delete(start);
+      reject(new CodexExecIsolationError("the setup was over before a read of the file system came back"));
+    };
+    const start = (): void => {
+      void (async () => read())()
+        .then(resolve, reject)
+        .finally(() => {
+          setupOver.removeEventListener("abort", gaveUp);
+          const next = readsWaiting.values().next();
+          if (next.done === true) readsOut -= 1;
+          else {
+            readsWaiting.delete(next.value);
+            next.value();
+          }
+        });
+    };
+    if (setupOver.aborted) return gaveUp();
+    setupOver.addEventListener("abort", gaveUp, { once: true });
+    if (readsOut < CODEX_EXEC_READS_AT_ONCE) {
+      readsOut += 1;
+      start();
+    } else readsWaiting.add(start);
+  });
+}
+
 /** How to start the executor in its own namespaces. */
 export interface CodexExecIsolatedSpawn extends CodexExecServerSpawn {
   /** What is masked in the executor's mount namespace. */
@@ -219,6 +285,8 @@ export interface CodexExecIsolatedSpawn extends CodexExecServerSpawn {
   setupWaitMs?: number | undefined;
   /** The clock that time is read from, in milliseconds, never running back. For tests. */
   clock?: (() => number) | undefined;
+  /** What reads a file system for the setup. For tests: Node's own, unless one is given. */
+  reads?: CodexExecSetupReads | undefined;
 }
 
 /** What ORCA saw of an isolated executor before it was sent anything. */
@@ -536,6 +604,20 @@ export function spawnIsolatedCodexExecServer(spec: CodexExecIsolatedSpawn): Code
    * is never kept here.
    */
   let first: FirstProcess | undefined;
+  /**
+   * Reads this setup asked for through that descriptor and has not had back. The descriptor
+   * stays open, though the process is no longer known by it, until they are back: a read
+   * that is still to follow the descriptor's name must not find another file under it.
+   */
+  let reading = 0;
+  let closeAfterReads: number | undefined;
+  const letGoOfFirst = (): void => {
+    if (first === undefined) return;
+    const { fd } = first;
+    first = undefined;
+    if (reading === 0) closeSync(fd);
+    else closeAfterReads = fd;
+  };
 
   /* ---- the channel to the holder ---- */
   const answers = new Map<number, (message: Record<string, unknown>) => void>();
@@ -644,7 +726,16 @@ export function spawnIsolatedCodexExecServer(spec: CodexExecIsolatedSpawn): Code
   let refused: string | undefined;
   /** What the setup is waiting for, for the reason given when the deadline passes. */
   let making = true;
-  let onRefused: (() => void) | undefined;
+  /** Whether the setup is waiting for a read that other setups' reads leave no place for. */
+  let queued = false;
+  /**
+   * Aborted when the setup is refused. Everything that waits for the setup's sake hears it:
+   * the wait for the namespace, a read of a file system, and `isolated` itself.
+   */
+  const setup = new AbortController();
+  const whenRefused = new Promise<undefined>((resolve) => {
+    setup.signal.addEventListener("abort", () => resolve(undefined), { once: true });
+  });
   const waiting: { message: string; flushed: () => void }[] = [];
   const dropWaiting = (): void => {
     for (const { flushed } of waiting.splice(0)) flushed();
@@ -660,7 +751,7 @@ export function spawnIsolatedCodexExecServer(spec: CodexExecIsolatedSpawn): Code
     clearTimeout(deadline);
     dropWaiting();
     core.fail(why);
-    onRefused?.();
+    setup.abort();
   };
   /** Give it up for a reason of ORCA's own, shown or not. */
   function giveUp(why: string): void {
@@ -674,7 +765,11 @@ export function spawnIsolatedCodexExecServer(spec: CodexExecIsolatedSpawn): Code
   const late = (): string =>
     making
       ? "the executor's namespace could not be made: it was not made in time"
-      : "the executor's isolation was not shown in time";
+      : queued
+        ? "the executor's isolation was not shown in time: reads of the file system that other setups asked for have not come back"
+        : reading > 0
+          ? "the executor's isolation was not shown in time: a read of the file system has not come back"
+          : "the executor's isolation was not shown in time";
   // The timer ends a setup that is waiting. A setup that is not waiting is ORCA's own thread at
   // work, which no timer of that thread interrupts: it reads the clock itself, in `over`.
   const deadline = setTimeout(() => refuse(late()), waitMs);
@@ -692,6 +787,28 @@ export function spawnIsolatedCodexExecServer(spec: CodexExecIsolatedSpawn): Code
       : clock() >= cutoff
         ? late()
         : undefined);
+
+  const reads: CodexExecSetupReads = spec.reads ?? {
+    readdir: (path) => readdir(path),
+    stat: (path) => stat(path, { bigint: true }),
+  };
+  /**
+   * One read of a file system for this setup. It is counted from when it is asked of the
+   * file system until it is back, which may be long after the setup is over, or never.
+   */
+  const outside = <T>(read: () => Promise<T>): Promise<T> => {
+    queued = readsOut >= CODEX_EXEC_READS_AT_ONCE;
+    return readOutside(() => {
+      queued = false;
+      reading += 1;
+      return (async () => read())().finally(() => {
+        reading -= 1;
+        if (reading > 0 || closeAfterReads === undefined) return;
+        closeSync(closeAfterReads);
+        closeAfterReads = undefined;
+      });
+    }, setup.signal);
+  };
 
   const prove = async (): Promise<CodexExecIsolationProof> => {
     const wrong = (what: string): never => {
@@ -728,7 +845,7 @@ export function spawnIsolatedCodexExecServer(spec: CodexExecIsolatedSpawn): Code
         pid1 = inner;
         done();
       };
-      onRefused = () => resolve(undefined);
+      void whenRefused.then(resolve);
       core.onExit((detail) => resolve(`bubblewrap ended (${detail})`));
     });
     if (refused !== undefined) wrong(refused);
@@ -795,12 +912,13 @@ export function spawnIsolatedCodexExecServer(spec: CodexExecIsolatedSpawn): Code
       const mount = top(path);
       if (mount?.type !== "tmpfs" || !mount.options.includes("ro")) wrong(`a hidden directory is not masked: ${path}`);
       // These leave `/proc` for the file systems the path crosses, which can be slow to answer
-      // or never answer. They are made off ORCA's thread, so the deadline is not kept waiting.
-      const [listed, through, real] = await Promise.all([
-        readdir(`${at}/root${path}`),
-        stat(`${at}/root${path}`, { bigint: true }),
-        stat(path, { bigint: true }),
-      ]);
+      // or never answer. They are made off ORCA's thread, one at a time, and a setup that is
+      // refused while one is out is over then: see `outside`.
+      const listed = await outside(() => reads.readdir(`${at}/root${path}`));
+      stillThere(holder);
+      const through = await outside(() => reads.stat(`${at}/root${path}`));
+      stillThere(holder);
+      const real = await outside(() => reads.stat(path));
       stillThere(holder);
       if (listed.length > 0) wrong(`a hidden directory is not empty: ${path}`);
       if (through.dev === real.dev && through.ino === real.ino)
@@ -880,11 +998,16 @@ export function spawnIsolatedCodexExecServer(spec: CodexExecIsolatedSpawn): Code
   const isolated = (async (): Promise<CodexExecIsolationProof> => {
     let proof: CodexExecIsolationProof;
     try {
-      proof = await prove();
+      // A refusal settles this by itself, whatever the showing is still waiting for and
+      // whether or not that ever comes. What the showing comes to after a refusal is not
+      // looked at: it finds the setup over at its next step, and nothing here hears of it.
+      const outcome = await Promise.race([prove(), whenRefused]);
       // Asked once more, here where the isolation would be said to be shown. Nothing is waited
       // for between this and what follows it: the proof, and the sending of what was waiting.
       const why = over();
       if (why !== undefined) throw new CodexExecIsolationError(why);
+      if (outcome === undefined) throw new CodexExecIsolationError("the executor's isolation could not be shown");
+      proof = outcome;
     } catch (error) {
       // The teardown starts with the refusal. What bubblewrap wrote is then waited for only to
       // explain the refusal, and only so long: it may never exit or close its error stream.
@@ -905,13 +1028,18 @@ export function spawnIsolatedCodexExecServer(spec: CodexExecIsolatedSpawn): Code
   })();
   // A caller that never looks is told through `onExit`.
   isolated.catch(() => undefined);
-  core.onExit(() => {
+  core.onExit((detail) => {
+    // A namespace that ended before it was shown is a setup that is over, here and now.
+    refuse(
+      making
+        ? `the executor's namespace could not be made: bubblewrap ended (${detail})`
+        : `the executor's namespace ended before its isolation was shown (${detail})`,
+    );
     clearTimeout(deadline);
     dropWaiting();
     lost();
     // The exit was judged, through this descriptor, before any listener heard of it.
-    if (first !== undefined) closeSync(first.fd);
-    first = undefined;
+    letGoOfFirst();
   });
 
   return {
