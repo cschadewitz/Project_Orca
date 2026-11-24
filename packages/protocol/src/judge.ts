@@ -107,3 +107,46 @@ export const JudgeStatusResultSchema = z
   })
   .strict();
 export type JudgeStatusResult = z.infer<typeof JudgeStatusResultSchema>;
+
+/**
+ * What the judge said about a call before a person was asked (#701), on a permission ask's
+ * `context.judge` (`inputs.list`, `inputs.open`). It answers nothing: it is shown with the ask.
+ * The verdicts are `PlainRuleVerdict` in `@orca/agents`, the reason codes its fixed
+ * `PLAIN_RULE_REASONS`: never model prose. A note this build does not know is not shown.
+ */
+export const JUDGE_ASK_VERDICTS = [
+  "covered",
+  "not-covered",
+  "unsure",
+  "unavailable",
+  "malformed",
+  "timeout",
+  "over-budget",
+  "injection-suspected",
+  "hard-boundary",
+  "outside-envelope",
+] as const;
+export type JudgeAskVerdict = (typeof JUDGE_ASK_VERDICTS)[number];
+
+export const JUDGE_ASK_REASONS = [
+  "matches-criterion",
+  "outside-criterion",
+  "excluded-by-criterion",
+  "action-ambiguous",
+  "criterion-ambiguous",
+] as const;
+export type JudgeAskReason = (typeof JUDGE_ASK_REASONS)[number];
+
+export const JudgeAskNoteSchema = z
+  .object({
+    verdict: z.enum(JUDGE_ASK_VERDICTS),
+    /** The experimental class asked about; absent for a read or search. */
+    kind: z.enum(["edit", "mcp", "command"]).optional(),
+    /** A recommendation (edits, commands): the person decides either way. */
+    advisory: z.literal(true).optional(),
+    reasonCode: z.enum(JUDGE_ASK_REASONS).optional(),
+    /** The rule the verdict is about, by its id (`config:N`, `sidecar:N`). */
+    ruleId: z.string().min(1).max(64).optional(),
+  })
+  .strict();
+export type JudgeAskNote = z.infer<typeof JudgeAskNoteSchema>;
