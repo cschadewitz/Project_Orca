@@ -150,11 +150,13 @@ an end-to-end check that a real qualifying receipt is accepted and a real nonqua
 refused. C also waits for #1026's independent observer.
 
 `guard-matrix.yml` verifies the attestations on every change to the matrix or its receipts.
-A tier is certified for one build: the release gate (`check-support-matrix.js --release`, in
-`release-publish.yml`) refuses a promoted row whose build differs from the commit being
-released in anything but documentation, changelog fragments, the receipts, a `package.json`'s
+A tier is certified for one build: the release gate (`check-support-matrix.js --release`)
+refuses a promoted row whose build differs from the commit being released in anything but documentation, changelog fragments, the receipts, a `package.json`'s
 `version`, and a matrix row's `tier`, `pin` and `receipts`. Workflows, build and packaging
-configuration, and the routes, cases and requirements in the matrix all count.
+configuration, and the routes, cases and requirements in the matrix all count. The release
+workflow does not run it yet: while no row is promoted the release path is unchanged, and the
+gate is wired in with promotion, as a separate verifier run against the selected commit with an
+explicit path for release lines that have no matrix to check.
 
 What a receipt must show: the row pins agent version, adapter
 version, host and the exact 40-hex ORCA build. For **each route**, a committed

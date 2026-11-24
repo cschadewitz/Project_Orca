@@ -3,8 +3,10 @@
 # attestation.js). The unit tests check the structure with the attestation injected; this is
 # where the attestation itself is verified, against Sigstore's public trust root.
 #
-# Staleness against HEAD is not checked here, so an unrelated change does not fail CI; the
-# release gate in release-publish.yml runs the same checker with --release.
+# Staleness against HEAD is not checked here, so an unrelated change does not fail CI. The
+# release gate (the same checker with --release) is not wired into the release workflow yet:
+# that comes with promotion, as a separate verifier run against the selected commit with an
+# explicit no-promotion path for release lines that predate it (#1026).
 name: Guard support matrix
 
 on:
