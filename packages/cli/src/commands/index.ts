@@ -47,7 +47,7 @@ import {
   credentialSecretUse,
   plainRuleJudgeSource,
   inspectJudgeBudget,
-  qualifiedJudgeBudget,
+  existingJudgeBudget,
   withPlainRuleJudge,
   loopbackCapabilityUse,
   loopbackSecretUse,
@@ -1121,7 +1121,8 @@ async function serveDaemon(ctx: CommandContext, installedPluginRelease?: Install
       plainRuleJudgeSource({
         // The active generation's, which each run's pinned judge settings must still match.
         config: () => app.generations.effectiveConfig(),
-        budget: () => qualifiedJudgeBudget({ storeDir, workspaceId }),
+        // Never creates budget state: only `orca judge budget init` does (#701 activation review).
+        budget: () => existingJudgeBudget({ storeDir, workspaceId }),
         resolver: orchestratorResolver(app.orchestrator),
         ownership: authDir.ownership,
         credentials: authDir.credentials,

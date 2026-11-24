@@ -4,7 +4,7 @@
  * permission request, which the agent carries out itself, goes to the person and the judge is not asked. A real ACP
  * agent over stdio, with a fake judge standing in for #701's.
  */
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -86,6 +86,8 @@ async function turn(opts: {
   answer?: string;
   /** Give the session a secret whose value is `DUMMY_SECRET`. */
   secret?: boolean;
+  /** While the judge decides, put a different file (a new identity) at `docs/a.md`. */
+  swapWhileJudging?: boolean;
 }) {
   const dir = await temp("orca-judged-read-");
   await mkdir(join(dir, "docs"));
@@ -121,7 +123,18 @@ async function turn(opts: {
           authorizeSecretUse: async () => undefined,
         }
       : {}),
-    ...(opts.judge ? { judgePermission: opts.judge } : {}),
+    ...(opts.judge
+      ? {
+          judgePermission: opts.swapWhileJudging
+            ? async (input, signal) => {
+                const answer = await opts.judge!(input, signal);
+                await writeFile(join(dir, "docs", "other.md"), "swapped\n");
+                await rename(join(dir, "docs", "other.md"), join(dir, "docs", "a.md"));
+                return answer;
+              }
+            : opts.judge,
+        }
+      : {}),
     onPermission: (info) => {
       decisions.push(info.decision);
       rules.push(info.rule);
@@ -189,6 +202,17 @@ describe("a plain-language rule allows a read ORCA performs itself (#701)", () =
     const ok = await turn({ judge: clean, reads: ["docs/a.md"], secret: true });
     expect(clean).toHaveBeenCalledTimes(1);
     expect(ok.asked).toHaveLength(0);
+  });
+
+  it("reads only the very file the judge was shown: one replaced while it decided goes to the person", async () => {
+    const judge = fakeJudge();
+    const out = await turn({ judge, reads: ["docs/a.md"], answer: "reject", swapWhileJudging: true });
+    expect(judge).toHaveBeenCalledTimes(1);
+    // The allow was for the file the I/O was bound to; the one now there is another, so a person is asked.
+    expect(out.asked).toHaveLength(1);
+    expect(out.asked[0]!.judged).toMatchObject({ verdict: "changed-since" });
+    expect(out.outcomes[0]).toHaveProperty("error");
+    expect(JSON.stringify(out.outcomes)).not.toContain("swapped");
   });
 
   it("asks without a judge, as before", async () => {

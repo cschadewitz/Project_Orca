@@ -66,7 +66,7 @@ The judge is off for a session until all five of these are in place. The Config 
    orca judge budget init
    ```
 
-   The budget caps the judge at `maxCallsPerDay` across restarts. The day you create it counts as spent, so the judge first answers the next UTC day. The budget needs Linux or macOS. On Windows the judge is not available in this version. If the store is restored from a backup, the budget is refused until you run `orca judge budget reset`.
+   Only this command creates the budget: opening a session never does, and until it exists nothing is sent. The budget caps the judge at `maxCallsPerDay` across restarts. The day you create it counts as spent, so the judge first answers the next UTC day. The budget needs Linux or macOS. On Windows the judge is not available in this version. If the store is restored from a backup, the budget is refused until you run `orca judge budget reset`.
 
 5. **Turn it on** with `enabled: true` (step 1). Each run keeps the settings it started with.
 
@@ -74,7 +74,7 @@ If any step is missing, sessions open without a judge and every ask goes to you.
 
 ## Turning it off
 
-Set `review.plainRules.enabled: false`, or remove it. New runs get no judge and nothing is sent; a run already going keeps the settings it started with, and stops getting a judge for new sessions as soon as its settings no longer match the active configuration. To stop sends for good, also revoke the credential that carries the disclosure grant (`orca auth revoke <credentialId>`), or issue a new one without `--judge-disclosure`.
+Set `review.plainRules.enabled: false`, or remove it. New runs get no judge and nothing is sent; a run already going keeps the settings it started with, and stops getting a judge for new sessions as soon as its settings no longer match the active configuration. To stop sends for good, also revoke every credential that carries the disclosure grant (`orca auth list`, then `orca auth revoke <credentialId>`). Issuing another credential without `--judge-disclosure` does not take the grant away from one that is still valid.
 
 ## Experimental kinds
 

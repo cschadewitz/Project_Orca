@@ -87,7 +87,11 @@ export type QualifiedJudgeBudget =
       readonly storeDir: string;
       readonly anchorDir: string;
     }
-  | { readonly status: "unavailable"; readonly reason: JudgeBudgetUnavailableReason };
+  | {
+      readonly status: "unavailable";
+      /** `not-ready`: only from `existingJudgeBudget`, when no budget was created or it is refused. */
+      readonly reason: JudgeBudgetUnavailableReason | "not-ready";
+    };
 
 export interface JudgeBudgetEnvironment {
   readonly platform?: NodeJS.Platform;
@@ -348,9 +352,24 @@ async function locate(options: QualifiedJudgeBudgetOptions, create: boolean): Pr
  * else. Never throws. The owner's `orca judge budget init` and `reset` use it, so they and the daemon share the files.
  */
 export async function qualifiedJudgeBudget(options: QualifiedJudgeBudgetOptions): Promise<QualifiedJudgeBudget> {
-  const located = await locate(options, true);
+  return qualify(options, true);
+}
+
+/**
+ * For session preparation (#701 activation review): the qualified budget only when the owner already created it
+ * (`orca judge budget init`) and it is ready. Creates nothing (no anchor directory, no budget file, no lock) and
+ * takes no lock to look; anything else is `not-ready`, and the session opens without a judge. Only a reservation,
+ * at a judge call, writes the budget, and only one that already exists.
+ */
+export async function existingJudgeBudget(options: QualifiedJudgeBudgetOptions): Promise<QualifiedJudgeBudget> {
+  return qualify(options, false);
+}
+
+async function qualify(options: QualifiedJudgeBudgetOptions, create: boolean): Promise<QualifiedJudgeBudget> {
+  const located = await locate(options, create);
   if (!located.ok) return Object.freeze({ status: "unavailable", reason: located.reason });
   const { storage } = located;
+  if (!create && !storage.anchorId) return Object.freeze({ status: "unavailable", reason: "not-ready" });
   let inner: FileJudgeBudget;
   try {
     inner = daemonJudgeBudget(
@@ -364,6 +383,15 @@ export async function qualifiedJudgeBudget(options: QualifiedJudgeBudgetOptions)
     );
   } catch {
     return Object.freeze({ status: "unavailable", reason: "not-separate" });
+  }
+  if (!create) {
+    let state;
+    try {
+      state = await inner.inspect();
+    } catch {
+      return Object.freeze({ status: "unavailable", reason: "not-ready" });
+    }
+    if (state.state !== "ready") return Object.freeze({ status: "unavailable", reason: "not-ready" });
   }
   const budget = Object.freeze({
     durable: true as const,
@@ -416,8 +444,10 @@ export async function inspectJudgeBudget(options: QualifiedJudgeBudgetOptions): 
 }
 
 /** Plain words for an unavailable budget, for the owner's command line. */
-export function describeJudgeBudgetUnavailable(reason: JudgeBudgetUnavailableReason): string {
+export function describeJudgeBudgetUnavailable(reason: JudgeBudgetUnavailableReason | "not-ready"): string {
   switch (reason) {
+    case "not-ready":
+      return "The plain-language rule judge's budget has not been created, or it was refused. Run `orca judge budget status` to see which.";
     case "platform":
       return "The plain-language rule judge's budget cannot be kept durably on this platform, so the judge is not available here. It is supported on Linux and macOS; Windows is not supported yet.";
     case "workspace":

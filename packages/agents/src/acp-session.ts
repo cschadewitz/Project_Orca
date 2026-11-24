@@ -529,7 +529,13 @@ async function openPlanned(
    * leads to. Each decision is logged like an ask's, prefixed `fs:`; that log is not a
    * durable authorization or execution record.
    */
-  const authorizeFs = async (path: string, access: FsAccess, resolved?: string): Promise<FsAuthorization> => {
+  const authorizeFs = async (
+    path: string,
+    access: FsAccess,
+    resolved?: string,
+    /** The existing file the I/O is bound to (`ownedTarget`): a judged read must be of this very file. */
+    binding?: OwnedFsBinding,
+  ): Promise<FsAuthorization> => {
     const explain = (policy: PermissionPolicy) => {
       const written = explainFsCall(policy, path, access, evalScope);
       return resolved === undefined || resolved === path
@@ -582,7 +588,10 @@ async function openPlanned(
     let advice: JudgedDecision | undefined;
     // A plain-language rule may allow a read ORCA performs itself (#701): this one read, once. Only for a path that
     // is the file it reaches (no link), so the file the judge is shown is the one decided and read.
-    if (access === "read" && judgedRead && (resolved === undefined || resolved === path)) {
+    // The judge is shown the file the I/O is bound to, by identity, and the read opens that file and checks it again
+    // on the descriptor (`readBound`): so the file judged and the file read are one (#701 activation review). With
+    // no binding to an existing file (a remote host), no read is judged.
+    if (access === "read" && judgedRead && binding?.exists === true && (resolved === undefined || resolved === path)) {
       // ORCA's own words for its own read, with the workspace-relative path: the judge never sees the absolute one.
       const toolCall = { ...fsToolCall(path, access), title: `Read ${relative(opts.cwd, path)}` };
       const lane = await judgedRead(
@@ -590,6 +599,7 @@ async function openPlanned(
         { sessionId: acpSessionId, toolCall, options: [] },
         evalScope,
         turn.abort.signal,
+        [binding.identity],
       );
       if (!live()) return refuse("turn-ended", "the turn ended while the file request was judged", rule);
       if (lane.decision === "allow" && lane.basis === "judged" && lane.judged?.ruleId) {
@@ -1086,7 +1096,7 @@ async function openPlanned(
       if (!withinRoots(path, roots)) throw acp.RequestError.invalidParams({ path, reason: "outside session roots" });
       refuseProtected(path, "read");
       const target = ownedTarget(path, "read");
-      const authorized = await authorizeFs(path, "read", target.resolved);
+      const authorized = await authorizeFs(path, "read", target.resolved, target.binding);
       let content: string;
       try {
         content = await executeOwnedFs(path, "read", target, authorized, (file) =>

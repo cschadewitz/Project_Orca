@@ -104,16 +104,23 @@ function orcaLabel(kind: string, locations: readonly string[]): string {
   return `${kind === "search" ? "Search" : "Read"} ${locations.join(", ")}`;
 }
 
-/** Decides one call with the judged lane open: the typed answer, or an allow once by a judged rule. */
+/**
+ * Decides one call with the judged lane open: the typed answer, or an allow once by a judged rule. `bound` is the
+ * file-system identities (`dev:ino`) of the targets the caller has already bound its own I/O to, index-aligned with
+ * the call's locations (ORCA's file gate, #701 activation review). When given, the files the lane verifies and shows
+ * the judge must be exactly those, before the judge is asked and again after its verdict; so the file the judge was
+ * shown, the file the decision covers and the file the I/O opens (checked again on the descriptor) are one.
+ */
 export type JudgedLane = (
   policy: PermissionPolicy,
   request: acp.RequestPermissionRequest,
   ctx: PermissionEvalContext | undefined,
   signal: AbortSignal,
+  bound?: readonly string[],
 ) => Promise<PermissionExplanation>;
 
 export function judgedLane(options: JudgedLaneOptions): JudgedLane {
-  return async (policy, request, ctx, signal) => {
+  return async (policy, request, ctx, signal, bound) => {
     const typed = explainPermission(policy, request, ctx);
     // Protected paths and a typed allow need no judge: the one can't be opened, the other is
     // already the most a judged rule could give.
@@ -130,6 +137,9 @@ export function judgedLane(options: JudgedLaneOptions): JudgedLane {
     if (options.reads === false) return typed;
     const first = gate(policy, request, ctx, options.io);
     if (first.state === "closed") return first.verdict ? { ...typed, judged: { verdict: first.verdict } } : typed;
+    // The judge is shown only the files the caller's I/O is bound to: anything else is not what would be read.
+    if (bound !== undefined && !sameList(first.identities, bound))
+      return { ...typed, judged: { verdict: "outside-envelope" } };
     const input: PlainRuleJudgeInput = {
       rules: first.candidates.map((r) => ({
         ruleId: r.ruleId,
@@ -182,7 +192,8 @@ export function judgedLane(options: JudgedLaneOptions): JudgedLane {
       again.candidates.some((r) => r.ruleId === allowed.ruleId && r.ruleRevision === allowed.ruleRevision) &&
       // The allow is for the files the judge was shown: the same ones, not ones still eligible.
       sameList(again.locations, first.locations) &&
-      sameList(again.identities, first.identities);
+      sameList(again.identities, first.identities) &&
+      (bound === undefined || sameList(again.identities, bound));
     if (!still) return { ...after, judged: { ...said, verdict: "changed-since" } };
     return {
       decision: "allow",

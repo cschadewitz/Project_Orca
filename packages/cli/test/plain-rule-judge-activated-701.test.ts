@@ -33,6 +33,7 @@ import {
   CredentialStore,
   orchestratorResolver,
   OwnershipStore,
+  credentialSecretUse,
   plainRuleJudgeSource,
   withPlainRuleJudge,
   type QualifiedJudgeBudget,
@@ -175,16 +176,28 @@ afterEach(async () => {
 /** The sender keeps its https destination; the request itself goes to the loopback stand-in. */
 const loopback: HttpsRequestFn = (options) => httpRequest({ ...options, protocol: "http:", port });
 
-async function run(opts: { enabled?: boolean; grant?: boolean }) {
+/** A dummy secret value: never a real credential. */
+const DUMMY_SECRET = "dummy-s3cret-701";
+
+async function run(opts: { enabled?: boolean; grant?: boolean; secretInPath?: boolean }) {
   const dir = await realpath(await mkdtemp(join(tmpdir(), "orca-judge-activated-")));
   dirs.push(dir);
   await mkdir(join(dir, "docs"));
   await writeFile(join(dir, "docs", "a.md"), "hello\n");
+  // With `secretInPath`, the session holds a dummy secret and the file the agent reads is named after it.
+  const readName = opts.secretInPath ? `${DUMMY_SECRET}.md` : "a.md";
+  if (opts.secretInPath) {
+    await writeFile(join(dir, "docs", readName), "hello\n");
+    await writeFile(join(dir, "dummy-token"), DUMMY_SECRET);
+  }
   const log = join(dir, "result.json");
   const destination = `https://127.0.0.1:${port}/v1/messages`;
   const judge = { provider: { kind: "anthropic" }, destination, credential: "judge-key" };
   const config = parseOrcaConfig({
-    secrets: { "judge-key": { host: "local", provider: "env", name: keyEnv, destination } },
+    secrets: {
+      "judge-key": { host: "local", provider: "env", name: keyEnv, destination },
+      ...(opts.secretInPath ? { dummy: { host: "local", provider: "file", path: join(dir, "dummy-token") } } : {}),
+    },
     review: {
       plainRules: {
         judge,
@@ -197,7 +210,11 @@ async function run(opts: { enabled?: boolean; grant?: boolean }) {
         id: "reader",
         command: process.execPath,
         args: ["-e", agentScript],
-        env: { READ: join(dir, "docs", "a.md"), RESULT_LOG: log },
+        env: {
+          READ: join(dir, "docs", readName),
+          RESULT_LOG: log,
+          ...(opts.secretInPath ? { DUMMY_TOKEN: { secret: "dummy" } } : {}),
+        },
         permissions: {
           default: "ask",
           rules: [
@@ -241,6 +258,12 @@ async function run(opts: { enabled?: boolean; grant?: boolean }) {
   });
   await generations.initialize(config, "rev", { workflows: workflows.list(), templates: [] });
   orchestrator.generations = generations;
+  // Secret references are delivered only under the run owner's current grant (#336), as `orca serve` wires it.
+  orchestrator.secretUse = credentialSecretUse({
+    resolver: orchestratorResolver(orchestrator),
+    ownership,
+    credentials,
+  });
   const unavailable: string[] = [];
   // The daemon's own wiring, as `orca serve` does it in token mode.
   orchestrator.sessionFactory = withPlainRuleJudge(
@@ -293,6 +316,17 @@ describe("#701 the activated judge, through the daemon's wiring (offline)", () =
     expect(JSON.stringify(sent)).not.toContain(tmpdir());
     expect(sent.every((s) => s.url === "/v1/messages")).toBe(true);
     expect(out.unavailable).toEqual([]);
+  });
+
+  it("a call whose description would carry a session secret never reaches the provider, and goes to the person", async () => {
+    const out = await run({ enabled: true, secretInPath: true });
+    expect(out.unavailable).toEqual([]);
+    // The read named after the dummy secret was not sent; the command, which holds none, still was.
+    expect(sent.map((s) => s.frame.action.kind)).toEqual(["execute"]);
+    expect(JSON.stringify(sent)).not.toContain(DUMMY_SECRET);
+    expect(out.asks).toHaveLength(2);
+    expect(out.asks[0]!.context).toMatchObject({ judge: { verdict: "outside-envelope" } });
+    expect(out.result.read).toHaveProperty("error");
   });
 
   it("an upgraded config without enabled: true sends nothing, and the read goes to the person", async () => {

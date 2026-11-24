@@ -535,6 +535,22 @@ describe("no session secret reaches a judge, in any part of what it would be sen
     expect(judge).not.toHaveBeenCalled();
   });
 
+  it("never asks the judge about a file other than the one the caller's I/O is bound to", async () => {
+    const policy = await policyOf([{ match: { kind: "read", scope: "workspace" }, judge: { criterion: "Reading." } }]);
+    const judge = fakeJudge();
+    const read: acp.RequestPermissionRequest = {
+      sessionId: "s",
+      toolCall: fsToolCall(join(ws, "docs", "a.md"), "read"),
+      options: [],
+    };
+    const lane = judgedLane({ judge, reload: async () => policy, localHost: true, redact: scrub });
+    expect(await lane(policy, read, ctx, signal(), ["1:1"])).toMatchObject({
+      decision: "ask",
+      judged: { verdict: "outside-envelope" },
+    });
+    expect(judge).not.toHaveBeenCalled();
+  });
+
   it("sends ORCA's own label for a read, never the agent's title", async () => {
     const policy = await policyOf([{ match: { kind: "read", scope: "workspace" }, judge: { criterion: "Reading." } }]);
     const judge = fakeJudge();

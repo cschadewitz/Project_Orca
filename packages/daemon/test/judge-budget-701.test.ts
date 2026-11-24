@@ -31,6 +31,7 @@ import {
   describeJudgeBudgetUnavailable,
   judgeBudgetAnchorDir,
   judgeBudgetAnchorRoot,
+  existingJudgeBudget,
   inspectJudgeBudget,
   qualifiedJudgeBudget,
   supportedRestoreRoots,
@@ -106,6 +107,23 @@ describe.skipIf(process.platform === "win32")("#701 judge budget: qualified on t
   };
   const refused = (result: QualifiedJudgeBudget, reason: string) =>
     expect(result).toEqual({ status: "unavailable", reason });
+
+  it("session preparation creates no budget state: only an initialized, ready budget is handed out", async () => {
+    const existing = () => existingJudgeBudget({ storeDir, workspaceId: WORKSPACE, anchorDir, platform, now: clock });
+    const snapshot = () => [existsSync(anchorDir), readdirSync(storeDir).sort()];
+    const before = snapshot();
+    // Nothing created yet: not ready, and still nothing on disk (no anchor directory, no budget file, no lock).
+    refused(await existing(), "not-ready");
+    expect(snapshot()).toEqual(before);
+    expect(existsSync(anchorDir)).toBe(false);
+    // The owner's explicit step creates it; preparation then gets it, still without creating anything more.
+    const q = await durable();
+    expect(await q.budget.initialize()).toMatchObject({ status: "initialized" });
+    const initialized = [readdirSync(anchorDir).sort(), readdirSync(storeDir).sort()];
+    const ready = await existing();
+    expect(ready.status).toBe("durable");
+    expect([readdirSync(anchorDir).sort(), readdirSync(storeDir).sort()]).toEqual(initialized);
+  });
 
   it("separate private directories are durable: initialize spends the day, the next day is counted", async () => {
     const q = await durable();
