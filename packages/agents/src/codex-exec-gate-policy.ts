@@ -3,6 +3,10 @@
  * the ACP ask and the `PreToolUse` hook use, read fresh for each request, so a grant revoked a
  * moment ago does not decide the next call.
  *
+ * The gate hands over the paths the executor is held to (`codex-exec-gate.ts`), and a rule
+ * reads them as given. It is the executor, not a second resolution here, that holds the
+ * request to them.
+ *
  * The gate cannot pause a request for a person, so an `ask` refuses, as it does at the Codex
  * hook. A person allows the call with a rule.
  */
@@ -36,41 +40,49 @@ export function typedInputPolicy(policy: PermissionPolicy): PermissionPolicy {
 }
 
 /**
- * The call with the file each path really names added beside the path as written. A rule for
- * the workspace covers a call only when every location is inside it, so a link in the
- * workspace that points out of it is not decided as a workspace file. A path inside the
- * workspace as the file system resolves it is named by the workspace's own spelling, so a
- * workspace reached through a link is still the workspace. Undefined when a path cannot be
- * resolved, which nothing allows.
+ * A path the kernel named, in the workspace's own spelling when it is inside the workspace,
+ * so that a workspace reached through a link is still the workspace to a rule. The path
+ * itself is not resolved again: it is the one the executor is held to. Undefined when the
+ * workspace cannot be resolved, which nothing allows.
  */
-export function physicalLocations(
-  toolCall: CodexExecGateCall["toolCall"],
-  workspaceCwd: string,
-): CodexExecGateCall["toolCall"] | undefined {
-  if (toolCall.locations.length === 0) return toolCall;
+export function workspaceNamed(path: string, workspaceCwd: string): string | undefined {
   const workspace = physicalPathOf(workspaceCwd);
   if (workspace === undefined) return undefined;
-  const locations: { path: string }[] = [];
-  for (const { path } of toolCall.locations) {
-    const physical = physicalPathOf(path);
-    if (physical === undefined) return undefined;
-    const within = relative(workspace, physical);
-    const inside = within === "" || (within !== ".." && !within.startsWith(`..${sep}`) && !isAbsolute(within));
-    const named = inside ? join(workspaceCwd, within) : physical;
-    locations.push({ path });
-    if (named !== path) locations.push({ path: named });
-  }
-  return { ...toolCall, locations };
+  const within = relative(workspace, path);
+  const inside = within === "" || (within !== ".." && !within.startsWith(`..${sep}`) && !isAbsolute(within));
+  return inside ? join(workspaceCwd, within) : path;
 }
 
-/** The gate's `decide` for one session, from the context ORCA already writes for its hook. */
+const UNRESOLVED: CodexExecGateDecision = {
+  allow: false,
+  basis: "unresolved",
+  reason: "Blocked by ORCA: it could not tell which file the call names, so no rule covers it.",
+};
+
+/**
+ * The gate's `decide` for one session, from the context ORCA already writes for its hook.
+ *
+ * A call is decided as the executor will carry it out, and again in the request's own words
+ * when they differ. It is allowed only when both are: one decision over both paths would let
+ * a rule written for one of them stand for the other.
+ */
 export function codexExecGateDecider(
   context: ClaudeHookContext,
 ): (call: CodexExecGateCall) => Promise<CodexExecGateDecision> {
   return async (call) => {
+    const named: { path: string }[] = [];
+    for (const { path } of call.toolCall.locations) {
+      const spelled = workspaceNamed(path, context.workspaceCwd);
+      if (spelled === undefined) return UNRESOLVED;
+      named.push({ path: spelled });
+    }
+    const cwd = call.cwd === undefined ? undefined : workspaceNamed(call.cwd, context.workspaceCwd);
+    if (call.cwd !== undefined && cwd === undefined) return UNRESOLVED;
+    const forms = [{ title: call.toolCall.title, locations: named, cwd }, ...(call.asWritten ? [call.asWritten] : [])];
+
     if (call.check === "protected") {
-      const hit = call.toolCall.locations.some((l) =>
-        protectedPathFor(l.path, "read", context.protectedPaths, context.workspaceCwd),
+      const hit = forms.some((form) =>
+        form.locations.some((l) => protectedPathFor(l.path, "read", context.protectedPaths, context.workspaceCwd)),
       );
       return hit
         ? {
@@ -80,22 +92,22 @@ export function codexExecGateDecider(
           }
         : { allow: true, basis: "probe" };
     }
-    const toolCall = physicalLocations(call.toolCall, context.workspaceCwd);
-    if (toolCall === undefined)
-      return {
-        allow: false,
-        basis: "unresolved",
-        reason: "Blocked by ORCA: it could not tell which file the call names, so no rule covers it.",
-      };
-    const verdict = await checkPreToolCall(
-      context,
-      toolCall,
-      { cwd: call.cwd ?? context.workspaceCwd, toolUseId: call.toolCallId },
-      call.typedInput ? typedInputPolicy : undefined,
-    );
-    if (verdict.decision === "allow") return { allow: true, basis: verdict.reason };
-    // The same words the Codex hook answers with: an ask is a block, and says what would allow it.
-    const reason = codexPreToolHookOutput(verdict).stderr.trim();
-    return { allow: false, basis: `${verdict.reason}:${verdict.decision}`, reason };
+
+    let basis = "";
+    for (const form of forms) {
+      const verdict = await checkPreToolCall(
+        context,
+        { title: form.title, kind: call.toolCall.kind, locations: form.locations },
+        { cwd: form.cwd ?? context.workspaceCwd, toolUseId: call.toolCallId },
+        call.typedInput ? typedInputPolicy : undefined,
+      );
+      if (verdict.decision !== "allow") {
+        // The same words the Codex hook answers with: an ask is a block, and says what would allow it.
+        const reason = codexPreToolHookOutput(verdict).stderr.trim();
+        return { allow: false, basis: `${verdict.reason}:${verdict.decision}`, reason };
+      }
+      basis ||= verdict.reason;
+    }
+    return { allow: true, basis };
   };
 }

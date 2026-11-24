@@ -14,6 +14,12 @@
  *   into a running command, every patch and every image read arrives at the gate, and one the
  *   gate refuses does not happen;
  * - typed input (`write_stdin`), which no hook ever sees, is refused unless a rule names it;
+ * - a decision holds for the file the executor uses, not for a name: a path through a link
+ *   is decided as the file it leads to, and when a link is swapped in after ORCA decided,
+ *   the pinned executor refuses it and nothing outside the decision is written. A command
+ *   starts in the directory ORCA decided even when that name leads somewhere else by then;
+ * - the file requests the executor cannot be held to one file for are refused, and Codex
+ *   carries on without them;
  * - a grant revoked mid-session refuses the very next call;
  * - when ORCA's part fails, the call fails: the policy cannot be decided, the gate is closed,
  *   the gate never admitted the runtime, or the connection does not carry the session's
@@ -27,7 +33,7 @@
  */
 import { createHash } from "node:crypto";
 import { once } from "node:events";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rename, rm, rmdir, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, onTestFailed } from "vitest";
@@ -35,7 +41,9 @@ import { AgentSpecSchema, silentLogger } from "@orca/core";
 import {
   CODEX_HOOK_VERIFIED_PAIRS,
   LocalHost,
+  codexExecGateBinder,
   codexExecGateDecider,
+  codexExecGateHeldBytes,
   openAcpSession,
   openCodexExecGate,
   permissionPolicyPath,
@@ -45,7 +53,9 @@ import {
   type AgentSession,
   type ClaudeHookContext,
   type CodexExecGate,
+  type CodexExecGateBinder,
   type CodexExecGateCall,
+  type CodexExecGateConnection,
   type CodexExecGateDecision,
   type CodexExecGateRecord,
   type OpenSessionOptions,
@@ -101,7 +111,7 @@ describe.skipIf(ADAPTER === undefined)("ORCA's exec gate in the real Codex (#102
   let executors: number[] = [];
 
   beforeEach(async () => {
-    root = await mkdtemp(join(tmpdir(), "orca-1026-acceptance-"));
+    root = await realpath(await mkdtemp(join(tmpdir(), "orca-1026-acceptance-")));
     configDir = join(root, "config");
     workspace = join(root, "work");
     codexHome = join(root, "codex-home");
@@ -123,6 +133,8 @@ describe.skipIf(ADAPTER === undefined)("ORCA's exec gate in the real Codex (#102
       await gate?.close();
       session = undefined;
       gate = undefined;
+      // Whatever a session did, a closed gate holds nothing.
+      expect(codexExecGateHeldBytes()).toBe(0);
       // Codex may still be writing its home as the session closes.
       await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
     };
@@ -176,11 +188,12 @@ describe.skipIf(ADAPTER === undefined)("ORCA's exec gate in the real Codex (#102
       () => undefined,
     );
 
-  const startExecutor = () => {
+  const startExecutor = ({ budget }: CodexExecGateConnection) => {
     const backend = spawnCodexExecServer({
       program: RUNTIME,
       env: { ...process.env, ...agentEnv({}) },
       cwd: workspace,
+      budget,
     });
     if (backend.pid !== undefined) executors.push(backend.pid);
     return backend;
@@ -189,14 +202,28 @@ describe.skipIf(ADAPTER === undefined)("ORCA's exec gate in the real Codex (#102
   /** A Codex session whose only executor is ORCA's gate, deciding by `permissions`. */
   async function gated(
     permissions: ClaudeHookContext["permissions"] = { rules: [] },
-    more: { decide?: Decide; admit?: boolean; env?: Record<string, string>; url?: (url: string) => string } = {},
+    more: {
+      decide?: Decide;
+      /** Something to do between ORCA's decision and the request reaching the executor. */
+      afterDeciding?: (call: CodexExecGateCall, decision: CodexExecGateDecision) => Promise<void>;
+      admit?: boolean;
+      env?: Record<string, string>;
+      url?: (url: string) => string;
+      binder?: CodexExecGateBinder;
+    } = {},
   ): Promise<AgentSession> {
     const byPolicy = codexExecGateDecider(context(permissions));
+    const decide: Decide = more.decide ?? ((call) => byPolicy(call));
     gate = await openCodexExecGate({
-      decide: more.decide ?? ((call) => byPolicy(call)),
+      decide: async (call, signal) => {
+        const decision = await decide(call, signal);
+        await more.afterDeciding?.(call, decision);
+        return decision;
+      },
       onRecord: (record) => records.push(record),
       decisionTimeoutMs: 2000,
       admissionWaitMs: 2000,
+      ...(more.binder ? { binder: more.binder } : {}),
     });
     if (more.admit !== false) gate.admit(startExecutor);
     session = await openAcpSession({
@@ -336,6 +363,198 @@ describe.skipIf(ADAPTER === undefined)("ORCA's exec gate in the real Codex (#102
     ]);
     // Only the first image's bytes reached the model.
     expect(model.outputs.filter((o) => o.includes("data:image/png;base64"))).toHaveLength(1);
+  }, 180_000);
+
+  it("decides a path through a link as the file it leads to, and sends the executor that file", async () => {
+    const outside = join(root, "outside");
+    await mkdir(outside);
+    await mkdir(join(workspace, "real"));
+    await symlink(outside, join(workspace, "out"));
+    await symlink(join(workspace, "real"), join(workspace, "alias"));
+    const s = await gated();
+    // A name in the workspace that leads out of it is not a workspace file.
+    await s.prompt(script(patch("*** Add File: out/new.txt", "+x")));
+    expect(await readFile(join(outside, "new.txt"), "utf8").catch(() => undefined)).toBeUndefined();
+    expect(recorded("fs/writeFile", "refused").map((r) => [r.basis, r.subject?.paths, r.subject?.written])).toEqual([
+      ["policy:ask", [join(outside, "new.txt")], [join(workspace, "out", "new.txt")]],
+    ]);
+    // One that leads to another workspace file is written, at the path with no link in it.
+    await s.prompt(script(patch("*** Add File: alias/new.txt", "+orca-1026")));
+    expect(await exists("real/new.txt")).toBe("orca-1026\n");
+    const [written] = recorded("fs/writeFile", "forwarded");
+    expect(written!.subject).toMatchObject({
+      paths: [join(workspace, "real", "new.txt")],
+      written: [join(workspace, "alias", "new.txt")],
+      bytes: 10,
+      sha256: createHash("sha256").update("orca-1026\n").digest("hex"),
+    });
+  }, 180_000);
+
+  it("leaves a link swapped in after ORCA decided to the executor, which refuses it", async () => {
+    const outside = join(root, "outside");
+    await mkdir(outside);
+    await mkdir(join(workspace, "swap"));
+    let swapped = false;
+    const s = await gated(undefined, {
+      // ORCA has decided a write of `work/swap/new.txt`. Before the executor gets it, the
+      // directory becomes a link out of the workspace.
+      afterDeciding: async (call, decision) => {
+        if (call.method !== "fs/writeFile" || !decision.allow || swapped) return;
+        swapped = true;
+        await rmdir(join(workspace, "swap"));
+        await symlink(outside, join(workspace, "swap"));
+      },
+    });
+    await s.prompt(script(patch("*** Add File: swap/new.txt", "+x")));
+    expect(swapped).toBe(true);
+    // ORCA allowed the workspace file and passed that path on; the executor would not follow the link.
+    expect(recorded("fs/writeFile", "forwarded").map((r) => r.subject?.paths)).toEqual([
+      [join(workspace, "swap", "new.txt")],
+    ]);
+    expect(await readFile(join(outside, "new.txt"), "utf8").catch(() => undefined)).toBeUndefined();
+    expect(told(/Failed to write file/)).toBe(true);
+    // Asked again, the name now leads outside, and that is what ORCA decides.
+    await s.prompt(script(patch("*** Add File: swap/again.txt", "+x")));
+    expect(await readFile(join(outside, "again.txt"), "utf8").catch(() => undefined)).toBeUndefined();
+    expect(recorded("fs/writeFile", "refused").map((r) => [r.basis, r.subject?.paths])).toEqual([
+      ["policy:ask", [join(outside, "again.txt")]],
+    ]);
+  }, 180_000);
+
+  it("starts a command in the directory ORCA decided, whatever its name leads to by then", async () => {
+    const outside = join(root, "outside");
+    await mkdir(outside);
+    await mkdir(join(workspace, "sub"));
+    let swapped = false;
+    const s = await gated(
+      { rules: [{ match: { kind: "execute", titlePattern: "^pwd > where\\.txt$" }, decision: "allow" }] },
+      {
+        afterDeciding: async (call, decision) => {
+          if (call.method !== "process/start" || !decision.allow || swapped) return;
+          swapped = true;
+          await rename(join(workspace, "sub"), join(workspace, "moved"));
+          await symlink(outside, join(workspace, "sub"));
+        },
+      },
+    );
+    await s.prompt(script({ tool: "exec_command", args: { cmd: "pwd > where.txt", workdir: join(workspace, "sub") } }));
+    expect(swapped).toBe(true);
+    // The command ran in the directory that was decided, now under its new name, not where
+    // the old name leads.
+    expect(await exists("moved/where.txt")).toBe(`${join(workspace, "moved")}\n`);
+    expect(await readFile(join(outside, "where.txt"), "utf8").catch(() => undefined)).toBeUndefined();
+    expect(recorded("process/start", "forwarded")[0]!.subject).toMatchObject({ cwd: join(workspace, "sub") });
+  }, 180_000);
+
+  it("holds the pinned executor to a path with no link in it, for every file request it passes", async () => {
+    // The gate is given a binder that resolves nothing, which is what a link swapped in at the
+    // worst moment amounts to: every path below reaches the executor as written. What the
+    // executor then does with a link is the contract the gate relies on, so it is pinned here.
+    const outside = join(root, "outside");
+    await mkdir(outside);
+    await writeFile(join(outside, "secret.txt"), "secret");
+    await writeFile(join(workspace, "plain.txt"), "plain");
+    await symlink(outside, join(workspace, "dir-link"));
+    await symlink(join(outside, "secret.txt"), join(workspace, "file-link"));
+    gate = await openCodexExecGate({
+      decide: () => Promise.resolve({ allow: true, basis: "test" }),
+      onRecord: (record) => records.push(record),
+      binder: { ...codexExecGateBinder(), target: (path) => path, entry: (path) => path },
+    });
+    gate.admit(startExecutor);
+    const ws = new WebSocket(gate.url);
+    await once(ws, "open");
+    const waiting = new Map<number, (answer: Record<string, unknown>) => void>();
+    ws.addEventListener("message", (event) => {
+      const message = JSON.parse(String(event.data)) as Record<string, unknown>;
+      if (typeof message["id"] === "number" && message["method"] === undefined) waiting.get(message["id"])?.(message);
+    });
+    let next = 0;
+    const call = (method: string, params: unknown) =>
+      new Promise<Record<string, unknown>>((resolve) => {
+        const id = ++next;
+        waiting.set(id, resolve);
+        ws.send(JSON.stringify({ id, method, params }));
+      });
+    try {
+      expect((await call("initialize", { clientName: "orca-1026" }))["result"]).toBeDefined();
+      ws.send(JSON.stringify({ method: "initialized" }));
+      const uri = (...parts: string[]) => `file://${join(workspace, ...parts)}`;
+      const data = Buffer.from("written").toString("base64");
+      // With no link in the path, each request does what it says.
+      expect((await call("fs/readFile", { path: uri("plain.txt") }))["result"]).toEqual({
+        dataBase64: Buffer.from("plain").toString("base64"),
+      });
+      expect((await call("fs/getMetadata", { path: uri("plain.txt") }))["result"]).toMatchObject({ isFile: true });
+      expect((await call("fs/createDirectory", { path: uri("made") }))["result"]).toEqual({});
+      expect((await call("fs/writeFile", { path: uri("made", "new.txt"), dataBase64: data }))["result"]).toEqual({});
+      expect(await exists("made/new.txt")).toBe("written");
+      expect((await call("fs/remove", { path: uri("made", "new.txt") }))["result"]).toEqual({});
+      expect(await exists("made/new.txt")).toBeUndefined();
+      // With a link at any step, each one is refused by the executor and nothing is touched.
+      for (const [method, params] of [
+        ["fs/readFile", { path: uri("dir-link", "secret.txt") }],
+        ["fs/readFile", { path: uri("file-link") }],
+        ["fs/getMetadata", { path: uri("dir-link", "secret.txt") }],
+        ["fs/getMetadata", { path: uri("file-link") }],
+        ["fs/writeFile", { path: uri("dir-link", "new.txt"), dataBase64: data }],
+        ["fs/writeFile", { path: uri("file-link"), dataBase64: data }],
+        ["fs/createDirectory", { path: uri("dir-link", "made"), recursive: true }],
+        ["fs/remove", { path: uri("dir-link", "secret.txt") }],
+        ["fs/remove", { path: uri("file-link") }],
+      ] as const) {
+        const answer = await call(method, params);
+        expect(answer["error"], `${method} ${params.path}`).toBeDefined();
+        expect(JSON.stringify(answer["error"])).not.toContain("Blocked by ORCA");
+      }
+      expect(records.filter((r) => r.outcome === "refused")).toEqual([]);
+      expect(await readFile(join(outside, "secret.txt"), "utf8")).toBe("secret");
+      expect(await readFile(join(outside, "new.txt"), "utf8").catch(() => undefined)).toBeUndefined();
+      expect(await readFile(join(outside, "made"), "utf8").catch((e: { code?: string }) => e.code)).toBe("ENOENT");
+      expect(await readFile(join(workspace, "file-link"), "utf8")).toBe("secret");
+      // One directory at a time: a create is never passed on as a recursive one.
+      const deep = await call("fs/createDirectory", { path: uri("a", "b"), recursive: true });
+      expect(deep["error"]).toBeDefined();
+      expect(await exists("a")).toBeUndefined();
+    } finally {
+      ws.close();
+    }
+  }, 60_000);
+
+  it("refuses the file requests it cannot hold to one file, and Codex carries on without them", async () => {
+    await mkdir(join(workspace, ".agents", "skills", "demo"), { recursive: true });
+    await writeFile(
+      join(workspace, ".agents", "skills", "demo", "SKILL.md"),
+      "---\nname: demo\ndescription: a demo skill\n---\nNothing.\n",
+    );
+    const s = await gated({ rules: [ALLOW_MARK] });
+    await s.prompt(script(shell("echo orca-1026 >> allowed.txt")));
+    expect(await exists("allowed.txt")).toBe("orca-1026\n");
+    const unbound = /^fs\/(open|readBlock|writeBlock|close|copy|readDirectory|walk|canonicalize|watchMissing)$/;
+    expect(records.filter((r) => unbound.test(r.method) && r.outcome === "forwarded")).toEqual([]);
+    // Codex 0.171 asks for these two to load a workspace's skills, and so does not load them
+    // here. Pinned so a change is noticed.
+    expect(new Set(records.filter((r) => unbound.test(r.method)).map((r) => r.method))).toEqual(
+      new Set(["fs/canonicalize", "fs/walk"]),
+    );
+    expect(records.filter((r) => unbound.test(r.method)).every((r) => r.outcome === "refused")).toBe(true);
+  }, 180_000);
+
+  it("adds a file in one new directory, and not in a chain of new ones", async () => {
+    const s = await gated();
+    await s.prompt(script(patch("*** Add File: one/new.txt", "+orca-1026")));
+    expect(await exists("one/new.txt")).toBe("orca-1026\n");
+    expect(recorded("fs/createDirectory", "forwarded").map((r) => r.subject?.paths)).toEqual([
+      [join(workspace, "one")],
+    ]);
+    // A recursive create would add directories ORCA never decided, so it is passed on as a
+    // create of the one directory, which the executor refuses while its parent is missing.
+    await s.prompt(script(patch("*** Add File: two/deep/new.txt", "+x")));
+    expect(await exists("two")).toBeUndefined();
+    expect(told(/Failed to create parent directories/)).toBe(true);
+    // With no skills directory to load, Codex asks to be told when one appears. That is refused too.
+    expect(recorded("fs/watchMissing", "refused").length).toBeGreaterThan(0);
+    expect(recorded("fs/watchMissing", "forwarded")).toEqual([]);
   }, 180_000);
 
   it("refuses the very next call once the grant is revoked", async () => {
