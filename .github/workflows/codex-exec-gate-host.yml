@@ -97,7 +97,8 @@ jobs:
       - name: Probe as a plain program and as the installed daemon's program
         shell: bash
         run: |
-          set -uo pipefail
+          # The runner's bash has -e: a probe that is refused exits 1, and that is a result.
+          set +e -uo pipefail
           scratch="$RUNNER_TEMP/codex-exec-host"
           mkdir -p "$scratch"
           node tools/codex-exec-host-probe.mjs "$scratch" > plain.json
@@ -117,6 +118,7 @@ jobs:
               ' "$PWD/$f.json" "$([ $f = plain ] && echo $plain || echo $installed)"
             done
           } | tee -a "$GITHUB_STEP_SUMMARY"
+          set -e
           # A plain program is refused on the stock host: the probe would show nothing otherwise.
           test "$plain" = 1
           test "$installed" = 0
