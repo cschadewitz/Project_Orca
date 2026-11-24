@@ -35,6 +35,7 @@ import {
   codexExecGateBinder,
   codexExecDescriptorsOf,
   codexExecMasks,
+  CODEX_EXEC_OUTSIDE_VARIABLES,
   codexExecOutsideReach,
   codexExecProcessSeen,
   codexExecReadsOut,
@@ -237,6 +238,14 @@ describe.skipIf(process.platform !== "linux")("what a command would reach outsid
   /** What was found for the variables and for this test's own paths: the machine's own well-known places are left out. */
   const said = (reach: ReturnType<typeof codexExecOutsideReach>) =>
     reach.unhidden.filter(({ from }) => !from.startsWith("/") || from.startsWith(root));
+  /** A system of the test's own: its temporary directory with the X server's in it, and its runtime directories. */
+  const system = async () => {
+    const made = { temporary: join(root, "tmp"), run: join(root, "run") };
+    await mkdir(join(made.temporary, ".X11-unix"), { recursive: true });
+    await chmod(join(made.temporary, ".X11-unix"), 0o1777);
+    await mkdir(made.run, { recursive: true });
+    return made;
+  };
 
   it("names the user's runtime directory and the agent's, and leaves their variables out", async () => {
     const runtime = join(root, "runtime");
@@ -255,8 +264,9 @@ describe.skipIf(process.platform !== "linux")("what a command would reach outsid
         NOT_SET: undefined,
       },
       user(),
+      await system(),
     );
-    expect(reach.hidden).toEqual(expect.arrayContaining([runtime, agent]));
+    expect(reach.hidden).toEqual(expect.arrayContaining([runtime, agent, join(root, "tmp", ".X11-unix")]));
     expect(reach.env).toEqual({ PATH: "/usr/bin:/bin", HOME: join(root, "home") });
     expect(reach.dropped.sort()).toEqual([
       "DBUS_SESSION_BUS_ADDRESS",
@@ -370,13 +380,13 @@ describe.skipIf(process.platform !== "linux")("what a command would reach outsid
     expect(reach.hidden.filter((path) => path.startsWith(root))).toEqual([]);
     expect(said(reach)).toEqual([
       { from: "XDG_RUNTIME_DIR", why: "its value is not a path ORCA can follow" },
-      { from: "GNOME_KEYRING_CONTROL", why: "it could not be looked at" },
-      { from: "SSH_AUTH_SOCK", why: "it names nothing that is there" },
-      { from: "GPG_AGENT_INFO", why: "its value is not a path ORCA can follow" },
       { from: "DBUS_SESSION_BUS_ADDRESS", why: "it names a service that is not reached through a directory" },
+      { from: "SSH_AUTH_SOCK", why: "it names nothing that is there" },
+      { from: "GPG_AGENT_INFO", why: "its value is written in a way ORCA does not read exactly" },
+      { from: "GNOME_KEYRING_CONTROL", why: "it could not be looked at" },
+      { from: "DISPLAY", why: "it names a service that is not reached through a directory" },
       { from: "DOCKER_HOST", why: "it names a service that is not reached through a directory" },
       { from: "CONTAINER_HOST", why: "it names a service that is not reached through a directory" },
-      { from: "DISPLAY", why: "it names a service that is not reached through a directory" },
       { from: "TMUX_TMPDIR", why: "its value is not a path ORCA can follow" },
     ]);
     // No value is in what is said, and every one of the variables is left out of the environment.
@@ -407,8 +417,159 @@ describe.skipIf(process.platform !== "linux")("what a command would reach outsid
     expect(said(codexExecOutsideReach({ TMUX_TMPDIR: elsewhere }, user()))).toEqual([
       { from: "TMUX_TMPDIR", why: "it is not a directory of the user's own" },
     ]);
-    // With nothing of a multiplexer's there, the variable named a place where there is none to hide.
-    expect(said(codexExecOutsideReach({ TMUX_TMPDIR: join(root, "home") }, user()))).toEqual([]);
+    // With nothing of a multiplexer's there, the variable is listed: only a place nothing named is passed over.
+    expect(said(codexExecOutsideReach({ TMUX_TMPDIR: join(root, "home") }, user()))).toEqual([
+      { from: "TMUX_TMPDIR", why: "it names nothing that is there" },
+    ]);
+  });
+
+  it("follows every variable that is set to a hidden directory or lists it by name, and nothing else", async () => {
+    const made = await system();
+    const name = userInfo().username;
+    const uid = userInfo().uid;
+    const d = Object.fromEntries(
+      [
+        "home",
+        "runtime",
+        "agent",
+        "bus",
+        "keyring",
+        "gpg",
+        "tmux",
+        "screens",
+        "docker",
+        "editor",
+        "wayland",
+        "ice",
+      ].map((dir) => [dir, join(root, dir)]),
+    ) as Record<string, string>;
+    for (const dir of Object.values(d)) await mkdir(dir, { mode: 0o700 });
+    const multiplexers = join(root, "multiplexers");
+    const usual = join(made.run, "screen", `S-${name}`);
+    for (const dir of [join(multiplexers, `tmux-${uid}`), usual]) await mkdir(dir, { recursive: true, mode: 0o700 });
+    const shared = join(root, "shared");
+    await mkdir(shared);
+    await chmod(shared, 0o777);
+    for (const file of [join(d.screens!, "4242.pts-0.here"), join(usual, "4343.pts-1.here")]) await writeFile(file, "");
+    await symlink(join(root, "loop-b"), join(root, "loop-a"));
+    await symlink(join(root, "loop-a"), join(root, "loop-b"));
+    const x = join(made.temporary, ".X11-unix");
+    const noX = { temporary: join(root, "no-x"), run: made.run };
+
+    const noPath = "its value is not a path ORCA can follow";
+    const unread = "its value is written in a way ORCA does not read exactly";
+    const elsewhere = "it names a service that is not reached through a directory";
+    const nothing = "it names nothing that is there";
+    const noRuntime = "it is a name in the runtime directory, and no runtime directory is hidden";
+    const noPlace = "it tells of a program, and nothing names where that is reached";
+    const placeShown = "it tells of a program at a place that is not hidden";
+    const notOwn = "it is not a directory of the user's own";
+    type Variable = (typeof CODEX_EXEC_OUTSIDE_VARIABLES)[number];
+    /** A variable and its value, what else is set, and the outcome: the directory hidden for it, or why it is listed. */
+    type Row = [
+      Variable,
+      string,
+      { hidden: string } | { why: string },
+      Partial<Record<Variable, string>>?,
+      typeof made?,
+    ];
+    const rows: Row[] = [
+      ["XDG_RUNTIME_DIR", d.runtime!, { hidden: d.runtime! }],
+      ["XDG_RUNTIME_DIR", "secret/relative", { why: noPath }],
+      ["XDG_RUNTIME_DIR", join(root, "secret-missing"), { why: nothing }],
+      ["XDG_RUNTIME_DIR", shared, { why: notOwn }],
+      ["DBUS_SESSION_BUS_ADDRESS", `unix:path=${d.bus}/bus`, { hidden: d.bus! }],
+      ["DBUS_SESSION_BUS_ADDRESS", `unix:guid=0123,path=${d.bus}/a%20bus`, { hidden: d.bus! }],
+      ["DBUS_SESSION_BUS_ADDRESS", "unix:runtime=yes", { hidden: d.runtime! }, { XDG_RUNTIME_DIR: d.runtime! }],
+      ["DBUS_SESSION_BUS_ADDRESS", "unix:runtime=yes", { why: noRuntime }],
+      ["DBUS_SESSION_BUS_ADDRESS", "unix:runtime=yes", { why: noRuntime }, { XDG_RUNTIME_DIR: shared }],
+      ["DBUS_SESSION_BUS_ADDRESS", "unix:abstract=/tmp/dbus-secret", { why: elsewhere }],
+      ["DBUS_SESSION_BUS_ADDRESS", "tcp:host=secret.example,port=1", { why: elsewhere }],
+      ["DBUS_SESSION_BUS_ADDRESS", `unix:path=${d.bus}/bus;unix:abstract=/tmp/dbus-secret`, { why: elsewhere }],
+      ["DBUS_SESSION_BUS_ADDRESS", "autolaunch:scope=secret", { why: unread }],
+      ["DBUS_SESSION_BUS_ADDRESS", `unix:path=${d.bus}/secret bus`, { why: unread }],
+      ["DBUS_SESSION_BUS_ADDRESS", `unix:path=${d.bus}/secret%zz`, { why: unread }],
+      ["DBUS_SESSION_BUS_ADDRESS", `unix:path=${d.bus}/secret%ff`, { why: unread }],
+      ["DBUS_SESSION_BUS_ADDRESS", `unix:path=${d.bus}/bus,path=${d.agent}/secret`, { why: unread }],
+      ["DBUS_SESSION_BUS_ADDRESS", `unix:path=${d.bus}/bus,secret=1`, { why: unread }],
+      ["DBUS_SESSION_BUS_ADDRESS", `unix:tmpdir=${d.bus}`, { why: unread }],
+      ["DBUS_SESSION_BUS_ADDRESS", `unix:path=${d.bus}/bus;`, { why: unread }],
+      ["DBUS_SESSION_BUS_ADDRESS", `${d.bus}/secret`, { why: unread }],
+      ["DBUS_SESSION_BUS_ADDRESS", "", { why: unread }],
+      ["SSH_AUTH_SOCK", join(d.agent!, "agent.1"), { hidden: d.agent! }],
+      ["SSH_AUTH_SOCK", join(root, "secret-missing", "agent.1"), { why: nothing }],
+      ["SSH_AUTH_SOCK", "", { why: noPath }],
+      ["SSH_AGENT_PID", "4242", { hidden: d.agent! }, { SSH_AUTH_SOCK: join(d.agent!, "agent.1") }],
+      ["SSH_AGENT_PID", "4242", { why: noPlace }],
+      ["SSH_AGENT_PID", "4242", { why: placeShown }, { SSH_AUTH_SOCK: join(shared, "agent.1") }],
+      ["GPG_AGENT_INFO", `${d.gpg}/S.gpg-agent:4242:1`, { hidden: d.gpg! }],
+      ["GPG_AGENT_INFO", `${d.gpg}/S.gpg-agent`, { why: unread }],
+      ["GPG_AGENT_INFO", "", { why: unread }],
+      ["GNOME_KEYRING_CONTROL", d.keyring!, { hidden: d.keyring! }],
+      ["GNOME_KEYRING_CONTROL", join(root, "loop-a", "secret-keyring"), { why: "it could not be looked at" }],
+      ["DISPLAY", ":0", { hidden: x }],
+      ["DISPLAY", "unix:1.0", { hidden: x }],
+      ["DISPLAY", ":0", { why: nothing }, {}, noX],
+      ["DISPLAY", "secret.example:0", { why: elsewhere }],
+      ["DISPLAY", "tcp/secret.example:0.0", { why: elsewhere }],
+      ["DISPLAY", "secret", { why: unread }],
+      ["DISPLAY", `${d.wayland}/secret:0`, { why: unread }],
+      ["WAYLAND_DISPLAY", `${d.wayland}/wayland-1`, { hidden: d.wayland! }],
+      ["WAYLAND_DISPLAY", "wayland-0", { hidden: d.runtime! }, { XDG_RUNTIME_DIR: d.runtime! }],
+      ["WAYLAND_DISPLAY", "secret-wayland-0", { why: noRuntime }],
+      ["WAYLAND_DISPLAY", "secret-wayland-0", { why: noRuntime }, { XDG_RUNTIME_DIR: shared }],
+      ["WAYLAND_DISPLAY", "../secret-missing/wayland-0", { why: nothing }, { XDG_RUNTIME_DIR: d.runtime! }],
+      ["WAYLAND_DISPLAY", "", { why: unread }],
+      ["XAUTHORITY", join(d.home!, ".Xauthority"), { hidden: x }, { DISPLAY: ":0" }],
+      ["XAUTHORITY", join(d.home!, "secret-authority"), { why: noPlace }],
+      ["XAUTHORITY", join(d.home!, "secret-authority"), { why: placeShown }, { DISPLAY: "secret.example:0" }],
+      ["SESSION_MANAGER", `unix/here:${d.ice}/4242`, { hidden: d.ice! }],
+      ["SESSION_MANAGER", `local/here:@/tmp/.ICE-unix/secret,unix/here:${d.ice}/4242`, { why: elsewhere }],
+      ["SESSION_MANAGER", "tcp/secret.example:6000", { why: elsewhere }],
+      ["SESSION_MANAGER", "unix/here:secret/relative", { why: unread }],
+      ["SESSION_MANAGER", "secret", { why: unread }],
+      ["DOCKER_HOST", `unix://${d.docker}/docker.sock`, { hidden: d.docker! }],
+      ["DOCKER_HOST", "tcp://secret.example:2375", { why: elsewhere }],
+      ["DOCKER_HOST", "secret.example:2375", { why: unread }],
+      ["DOCKER_HOST", "unix://secret/relative.sock", { why: noPath }],
+      ["CONTAINER_HOST", `unix://${d.docker}/podman.sock`, { hidden: d.docker! }],
+      ["CONTAINER_HOST", "ssh://someone@secret.example/run/podman.sock", { why: elsewhere }],
+      ["TMUX", `${d.tmux}/default,4242,0`, { hidden: d.tmux! }],
+      ["TMUX", `${d.tmux}/secret`, { why: unread }],
+      ["TMUX_PANE", "%1", { hidden: d.tmux! }, { TMUX: `${d.tmux}/default,4242,0` }],
+      ["TMUX_PANE", "%secret", { why: noPlace }],
+      ["TMUX_TMPDIR", multiplexers, { hidden: join(multiplexers, `tmux-${uid}`) }],
+      ["TMUX_TMPDIR", "secret/relative", { why: noPath }],
+      ["TMUX_TMPDIR", d.home!, { why: nothing }],
+      ["SCREENDIR", d.screens!, { hidden: d.screens! }],
+      ["SCREENDIR", "secret/relative", { why: noPath }],
+      ["STY", "4242.pts-0.here", { hidden: d.screens! }, { SCREENDIR: d.screens! }],
+      ["STY", "4343.pts-1.here", { hidden: usual }],
+      ["STY", "4343.pts-1.here", { why: nothing }, { SCREENDIR: d.screens! }],
+      ["STY", "secret.session", { why: nothing }],
+      ["STY", "secret/session", { why: unread }],
+      ["VSCODE_IPC_HOOK_CLI", `${d.editor}/ipc.sock`, { hidden: d.editor! }],
+      ["VSCODE_IPC_HOOK_CLI", "secret/relative.sock", { why: noPath }],
+    ];
+    // Every variable has a row for each outcome: a rule that only ever lists, or never does, would show here.
+    for (const variable of CODEX_EXEC_OUTSIDE_VARIABLES)
+      for (const outcome of ["hidden", "why"])
+        expect([variable, outcome, rows.some((row) => row[0] === variable && outcome in row[2])]).toEqual([
+          variable,
+          outcome,
+          true,
+        ]);
+    for (const [variable, value, outcome, others, where] of rows) {
+      const reach = codexExecOutsideReach({ ...others, [variable]: value, PATH: "/usr/bin" }, user(), where ?? made);
+      const listed = reach.unhidden.filter(({ from }) => from === variable).map(({ why }) => why);
+      const row = JSON.stringify([variable, value, others ?? {}]);
+      // Listed with the one reason, or not listed and its directory hidden. Never neither, never both.
+      if ("why" in outcome) expect([row, listed]).toEqual([row, [outcome.why]]);
+      else expect([row, listed, reach.hidden.includes(outcome.hidden)]).toEqual([row, [], true]);
+      // By name only: no value is in what is said, and the variable is not handed on.
+      expect([row, JSON.stringify(reach.unhidden).includes("secret")]).toEqual([row, false]);
+      expect([row, reach.dropped.includes(variable), reach.env]).toEqual([row, true, { PATH: "/usr/bin" }]);
+    }
   });
 });
 

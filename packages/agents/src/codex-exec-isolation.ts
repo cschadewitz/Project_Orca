@@ -207,7 +207,14 @@ function isDirectory(path: string): boolean {
 const inside = (path: string, root: string): boolean =>
   path !== root && path.startsWith(root === sep ? sep : `${root}${sep}`);
 
-/** The variables that point a command at a program outside the namespace that acts for the user. */
+/**
+ * The variables that point a command at a program outside the namespace that acts for the
+ * user. Each has a rule in `codexExecOutsideReach`: a variable that is set is followed to a
+ * directory that is hidden, or it is listed as not hidden. There is no third outcome. They
+ * are followed in this order: the runtime directory comes before the names that are inside
+ * it, and the variable that names a program's place before those that only tell of the
+ * program (its process, its pane, its credentials).
+ */
 export const CODEX_EXEC_OUTSIDE_VARIABLES = [
   "XDG_RUNTIME_DIR",
   "DBUS_SESSION_BUS_ADDRESS",
@@ -224,6 +231,7 @@ export const CODEX_EXEC_OUTSIDE_VARIABLES = [
   "TMUX",
   "TMUX_PANE",
   "TMUX_TMPDIR",
+  "SCREENDIR",
   "STY",
   "VSCODE_IPC_HOOK_CLI",
 ] as const;
@@ -239,10 +247,11 @@ export interface CodexExecOutsideReach {
   /**
    * Every place such a program may be reached through that is known of and not hidden, and
    * why: it cannot be hidden without hiding more, it is not the user's own to hide, ORCA
-   * could not look at it, or a variable names it in a way ORCA cannot follow. `from` is the
-   * variable that named the place, by its name and never by its value, or a well-known
-   * path. What is listed here is not behind the hidden directories. Only when it is empty
-   * is every place this function knows of hidden, and that is still a list of places.
+   * could not look at it, or a variable names it in a way ORCA cannot follow or cannot read
+   * exactly. `from` is the variable that named the place, by its name and never by its
+   * value, or a well-known path. What is listed here is not behind the hidden directories.
+   * Only when it is empty is every place this function knows of hidden, and that is still a
+   * list of places.
    */
   unhidden: { from: string; why: string }[];
 }
@@ -258,49 +267,99 @@ function whatIsAt(path: string): "directory" | "absent" | "other" | "unseen" {
 }
 
 /**
+ * The addresses of a message bus, read exactly as the D-Bus specification writes them:
+ * `transport:key=value,key=value` joined by `;`, where a value is made of the bytes
+ * `-0-9A-Za-z_/.\*` and of `%HH` for every other byte. Undefined for anything else: an
+ * empty address, a key given twice, a byte that should have been escaped, an escape that is
+ * not two hex digits, or bytes that are not text. What is not read exactly is not guessed at.
+ */
+function busAddresses(text: string): { transport: string; keys: Map<string, string> }[] | undefined {
+  const addresses: { transport: string; keys: Map<string, string> }[] = [];
+  for (const address of text.split(";")) {
+    const transport = /^([a-z][a-z0-9-]*):/.exec(address)?.[1];
+    if (transport === undefined) return undefined;
+    const keys = new Map<string, string>();
+    const rest = address.slice(transport.length + 1);
+    for (const pair of rest === "" ? [] : rest.split(",")) {
+      const match = /^([A-Za-z_][A-Za-z0-9_]*)=((?:[-0-9A-Za-z_/.\\*]|%[0-9A-Fa-f]{2})*)$/.exec(pair);
+      if (match === null || keys.has(match[1]!)) return undefined;
+      const bytes: number[] = [];
+      for (let at = 0; at < match[2]!.length; at += 1) {
+        if (match[2]![at] === "%") {
+          bytes.push(parseInt(match[2]!.slice(at + 1, at + 3), 16));
+          at += 2;
+        } else bytes.push(match[2]!.charCodeAt(at));
+      }
+      try {
+        keys.set(match[1]!, new TextDecoder("utf-8", { fatal: true }).decode(Uint8Array.from(bytes)));
+      } catch {
+        return undefined;
+      }
+    }
+    addresses.push({ transport, keys });
+  }
+  return addresses;
+}
+
+/**
  * Where a command would usually reach a program outside the namespace that acts for the
  * user, as far as a directory can be named for it: the user's runtime directory (the session
  * bus with the user service manager and the keyring, rootless container sockets, agents,
  * editors), the directories of the sockets the environment names (the SSH agent's, the
- * session bus's, a keyring's, a container daemon's, an editor's, a terminal multiplexer's),
- * the sockets of the X and session managers, and those of the terminal multiplexers.
- * Whoever starts the executor hides the directories (`masks.hidden`) and gives it the
- * environment without the variables.
+ * session bus's, a keyring's, a container daemon's, an editor's, a display's, the session
+ * manager's, a terminal multiplexer's), the sockets of the X and session managers, and
+ * those of the terminal multiplexers. Whoever starts the executor hides the directories
+ * (`masks.hidden`) and gives it the environment without the variables.
  *
  * This is a list of well-known places, and so it narrows what is reached and does not close
- * it: a program that listens anywhere else is not on it.
+ * it: a program that listens anywhere else is not on it. A name that is not in the file
+ * system (an abstract socket, which an X server usually listens on beside its socket in the
+ * file system) and a network address are not behind any directory: the executor's own
+ * network namespace is what keeps a command from those, not this list.
  *
- * Nothing is passed over in silence but a well-known directory that is not there. A place
- * the environment names is hidden only when it leads to a directory of the user's own that
- * nobody else may write, and that can be hidden without hiding the user's home or a
- * directory a command works in. Every other place the environment names (a value that is
- * no path, one that leads nowhere or cannot be looked at, a directory that is someone
- * else's, a service that is not reached through a directory at all) is listed in
- * `unhidden` by the variable's name, and so is a well-known directory that is there and
- * cannot be hidden. An incomplete finding is told from a complete one by that list.
+ * **Every variable that is set is followed to a hidden directory or listed.** A place the
+ * environment names counts as hidden only when ORCA followed the name to a directory of the
+ * user's own that nobody else may write, and that can be hidden without hiding the user's
+ * home or a directory a command works in. Anything else is listed in `unhidden` by the
+ * variable's name: a value that is no path, one that leads nowhere or cannot be looked at,
+ * a directory that is someone else's, a service that is not reached through a directory at
+ * all, a name in a runtime directory that is not hidden, a value written in a way ORCA does
+ * not read exactly, and a variable that tells of a program (its process, its pane, its
+ * credentials) when nothing names where that program is reached. The only thing passed over
+ * in silence is a well-known directory nothing named that is not there; one that is there
+ * and cannot be hidden is listed too. An incomplete finding is told from a complete one by
+ * that list.
+ *
+ * `system` is where the system keeps its temporary and runtime directories. Tests give it.
  */
 export function codexExecOutsideReach(
   env: Readonly<Record<string, string | undefined>>,
   user: { uid: number; name: string; home: string; keep: readonly string[] },
+  system: { temporary: string; run: string } = { temporary: "/tmp", run: "/run" },
 ): CodexExecOutsideReach {
   const hidden = new Set<string>();
   const unhidden: { from: string; why: string }[] = [];
-  const not = (from: string, why: string): void => {
+  const not = (from: string, why: string): undefined => {
     if (!unhidden.some((entry) => entry.from === from && entry.why === why)) unhidden.push({ from, why });
+    return undefined;
   };
   const kept = [user.home, ...user.keep].map((path) => physicalPathOf(path) ?? path);
+  const noPath = "its value is not a path ORCA can follow";
+  const unread = "its value is written in a way ORCA does not read exactly";
+  const elsewhere = "it names a service that is not reached through a directory";
+  const nothing = "it names nothing that is there";
   /**
-   * Hide the directory at `path`, or say why not. `named` is true for a place the
-   * environment named: there, nothing found is an answer too. `own` asks that the directory
-   * be the user's and nobody else's to write, which is asked of every place the environment
-   * named and of the well-known ones that are one user's.
+   * Hide the directory at `path` and give its real path, or say why not. `named` is true
+   * for a place the environment named: there, nothing found is an answer too. `own` asks
+   * that the directory be the user's and nobody else's to write, which is asked of every
+   * place the environment named and of the well-known ones that are one user's.
    */
-  const hide = (path: string, from: string, named: boolean, own: boolean): void => {
-    if (!isAbsolute(path) || path.includes("\0")) return not(from, "its value is not a path ORCA can follow");
+  const hide = (path: string, from: string, named: boolean, own: boolean): string | undefined => {
+    if (!isAbsolute(path) || path.includes("\0")) return not(from, noPath);
     const real = physicalPathOf(path);
     if (real === undefined) return not(from, "it could not be looked at");
     const found = whatIsAt(real);
-    if (found === "absent") return named ? not(from, "it names nothing that is there") : undefined;
+    if (found === "absent") return named ? not(from, nothing) : undefined;
     if (found === "unseen") return not(from, "it could not be looked at");
     if (found === "other") return not(from, "it is not a directory");
     if (real === sep || kept.some((needed) => needed === real || inside(needed, real)))
@@ -317,76 +376,162 @@ export function codexExecOutsideReach(
       if (owner !== user.uid || (mode & 0o022) !== 0) return not(from, "it is not a directory of the user's own");
     }
     hidden.add(real);
+    return real;
   };
   /** Hide the directory a socket is in, wherever the path to the socket really leads. */
-  const hideSocket = (path: string, from: string): void => {
-    if (!isAbsolute(path) || path.includes("\0")) return not(from, "its value is not a path ORCA can follow");
+  const hideSocket = (path: string, from: string): string | undefined => {
+    if (!isAbsolute(path) || path.includes("\0")) return not(from, noPath);
     const socket = physicalPathOf(path);
     if (socket === undefined) return not(from, "it could not be looked at");
-    hide(socket.slice(0, socket.lastIndexOf(sep)) || sep, from, true, true);
+    return hide(socket.slice(0, socket.lastIndexOf(sep)) || sep, from, true, true);
   };
-  const elsewhere = "it names a service that is not reached through a directory";
-  const set = (name: string): string | undefined => (env[name] === undefined ? undefined : env[name]);
+  /** A name inside the runtime directory the environment gave, which has to be hidden itself first. */
+  let runtime: string | undefined;
+  const inRuntime = (name: string, from: string): string | undefined =>
+    runtime === undefined
+      ? not(from, "it is a name in the runtime directory, and no runtime directory is hidden")
+      : hideSocket(`${runtime}${sep}${name}`, from);
+  type Name = (typeof CODEX_EXEC_OUTSIDE_VARIABLES)[number];
+  /** Which of the variables that are set were followed to a hidden directory. */
+  const followed = new Map<Name, boolean>();
+  /**
+   * A variable that tells of a program and is no place (its process, its pane, its
+   * credentials): it is as hidden as the place of that program, which another variable names.
+   */
+  const alongside = (place: Name, from: Name): boolean => {
+    if (!followed.has(place)) not(from, "it tells of a program, and nothing names where that is reached");
+    else if (!followed.get(place)) not(from, "it tells of a program at a place that is not hidden");
+    return followed.get(place) === true;
+  };
+  /** `unix://<socket>`; any other scheme is a network's or another program's. */
+  const container = (value: string, from: Name): boolean => {
+    const scheme = /^([a-z][a-z0-9+.-]*):\/\//.exec(value)?.[1];
+    if (scheme === undefined) return not(from, unread) !== undefined;
+    if (scheme !== "unix") return not(from, elsewhere) !== undefined;
+    return hideSocket(value.slice("unix://".length), from) !== undefined;
+  };
+  const screens = [
+    `${system.run}/screen/S-${user.name}`,
+    `${system.temporary}/screens/S-${user.name}`,
+    `${system.temporary}/uscreens/S-${user.name}`,
+    `${user.home}/.screen`,
+  ];
 
-  // What the environment names. A variable that is set is followed or listed, never skipped.
-  const runtime = set("XDG_RUNTIME_DIR");
-  if (runtime !== undefined) hide(runtime, "XDG_RUNTIME_DIR", true, true);
-  const keyring = set("GNOME_KEYRING_CONTROL");
-  if (keyring !== undefined) hide(keyring, "GNOME_KEYRING_CONTROL", true, true);
-  for (const name of ["SSH_AUTH_SOCK", "VSCODE_IPC_HOOK_CLI"] as const) {
-    const value = set(name);
-    if (value !== undefined) hideSocket(value, name);
-  }
-  // `<socket>:<pid>:<protocol>` and `<socket>,<pid>,<pane>`.
-  const gpg = set("GPG_AGENT_INFO");
-  if (gpg !== undefined) hideSocket(gpg.split(":")[0]!, "GPG_AGENT_INFO");
-  const tmux = set("TMUX");
-  if (tmux !== undefined) hideSocket(tmux.split(",")[0]!, "TMUX");
-  // One or more addresses; only `unix:path=<socket>` is a place in the file system.
-  const bus = set("DBUS_SESSION_BUS_ADDRESS");
-  if (bus !== undefined)
-    for (const address of bus.split(";")) {
-      const path = /^unix:(?:.*,)?path=([^,]*)/.exec(address)?.[1];
-      if (path === undefined) not("DBUS_SESSION_BUS_ADDRESS", elsewhere);
-      else
-        hideSocket(
-          path.replace(/%([0-9a-fA-F]{2})/g, (_, hex: string) => String.fromCharCode(parseInt(hex, 16))),
-          "DBUS_SESSION_BUS_ADDRESS",
-        );
-    }
-  for (const name of ["DOCKER_HOST", "CONTAINER_HOST"] as const) {
-    const value = set(name);
+  /** One rule for each variable: true when what it names is behind a hidden directory. */
+  const rules: Record<Name, (value: string) => boolean> = {
+    XDG_RUNTIME_DIR: (value) => {
+      runtime = hide(value, "XDG_RUNTIME_DIR", true, true);
+      return runtime !== undefined;
+    },
+    GNOME_KEYRING_CONTROL: (value) => hide(value, "GNOME_KEYRING_CONTROL", true, true) !== undefined,
+    SCREENDIR: (value) => hide(value, "SCREENDIR", true, true) !== undefined,
+    SSH_AUTH_SOCK: (value) => hideSocket(value, "SSH_AUTH_SOCK") !== undefined,
+    VSCODE_IPC_HOOK_CLI: (value) => hideSocket(value, "VSCODE_IPC_HOOK_CLI") !== undefined,
+    // `<socket>:<pid>:<protocol>`.
+    GPG_AGENT_INFO: (value) => {
+      const socket = /^(.*):\d+:\d+$/s.exec(value)?.[1];
+      return (
+        (socket === undefined ? not("GPG_AGENT_INFO", unread) : hideSocket(socket, "GPG_AGENT_INFO")) !== undefined
+      );
+    },
+    // `<socket>,<pid>,<session>`.
+    TMUX: (value) => {
+      const socket = /^(.*),\d+,\d+$/s.exec(value)?.[1];
+      return (socket === undefined ? not("TMUX", unread) : hideSocket(socket, "TMUX")) !== undefined;
+    },
+    // The multiplexer keeps one directory for the user under the one named.
+    TMUX_TMPDIR: (value) =>
+      (isAbsolute(value)
+        ? hide(`${value}${sep}tmux-${user.uid}`, "TMUX_TMPDIR", true, true)
+        : not("TMUX_TMPDIR", noPath)) !== undefined,
+    // A session's name: its socket has that name in the directory given, or in one of the usual ones.
+    STY: (value) => {
+      if (value === "" || value.includes(sep) || value.includes("\0")) return not("STY", unread) !== undefined;
+      const directories = env["SCREENDIR"] === undefined ? screens : [env["SCREENDIR"]];
+      const found = directories
+        .filter((directory) => isAbsolute(directory))
+        .map((directory) => `${directory}${sep}${value}`);
+      const there = found.find((path) => whatIsAt(path) !== "absent");
+      return (there === undefined ? not("STY", nothing) : hideSocket(there, "STY")) !== undefined;
+    },
+    // Only `unix:path=<socket>` and `unix:runtime=yes` are places in the file system.
+    DBUS_SESSION_BUS_ADDRESS: (value) => {
+      const from = "DBUS_SESSION_BUS_ADDRESS";
+      const addresses = busAddresses(value);
+      if (addresses === undefined) return not(from, unread) !== undefined;
+      let all = true;
+      for (const { transport, keys } of addresses) {
+        const places = ["path", "abstract", "runtime", "dir", "tmpdir"].filter((key) => keys.has(key));
+        const known = [...keys.keys()].every((key) => key === "guid" || places.includes(key));
+        let done: string | undefined;
+        if (transport === "tcp" || transport === "nonce-tcp" || transport === "unixexec") done = not(from, elsewhere);
+        else if (transport !== "unix" || !known || places.length !== 1) done = not(from, unread);
+        else if (places[0] === "path") done = hideSocket(keys.get("path")!, from);
+        else if (places[0] === "abstract") done = not(from, elsewhere);
+        else if (places[0] === "runtime" && keys.get("runtime") === "yes") done = inRuntime("bus", from);
+        // `dir` and `tmpdir` say where a server may make a socket, not where one is.
+        else done = not(from, unread);
+        all = all && done !== undefined;
+      }
+      return all;
+    },
+    DOCKER_HOST: (value) => container(value, "DOCKER_HOST"),
+    CONTAINER_HOST: (value) => container(value, "CONTAINER_HOST"),
+    // `local/<host>:@<name>` and `unix/<host>:<socket>` and `tcp/<host>:<port>`, joined by commas.
+    SESSION_MANAGER: (value) => {
+      const from = "SESSION_MANAGER";
+      let all = true;
+      for (const id of value.split(",")) {
+        const local = /^(?:local|unix)\/[^/:]*:(.*)$/s.exec(id)?.[1];
+        let done: string | undefined;
+        if (local === undefined) done = not(from, /^(?:tcp|inet|inet6|decnet)\/[^/]/.test(id) ? elsewhere : unread);
+        else if (local.startsWith("@")) done = not(from, elsewhere);
+        else done = isAbsolute(local) ? hideSocket(local, from) : not(from, unread);
+        all = all && done !== undefined;
+      }
+      return all;
+    },
+    // A display given as a path is a socket; given as a name it is in the runtime directory.
+    WAYLAND_DISPLAY: (value) =>
+      (isAbsolute(value)
+        ? hideSocket(value, "WAYLAND_DISPLAY")
+        : value === "" || value.includes("\0")
+          ? not("WAYLAND_DISPLAY", unread)
+          : inRuntime(value, "WAYLAND_DISPLAY")) !== undefined,
+    // `:0` and `unix:0` are a socket in the X directory. With a host it is the network's.
+    DISPLAY: (value) => {
+      if (/^(?:unix)?:\d+(?:\.\d+)?$/.test(value))
+        return hide(`${system.temporary}/.X11-unix`, "DISPLAY", true, false) !== undefined;
+      return not("DISPLAY", /^[^/:\s]+(?:\/[^/:\s]+)?:\d+(?:\.\d+)?$/.test(value) ? elsewhere : unread) !== undefined;
+    },
+    SSH_AGENT_PID: () => alongside("SSH_AUTH_SOCK", "SSH_AGENT_PID"),
+    TMUX_PANE: () => alongside("TMUX", "TMUX_PANE"),
+    XAUTHORITY: () => alongside("DISPLAY", "XAUTHORITY"),
+  };
+
+  // What the environment names, in the order of the list: the runtime directory before the
+  // names inside it, and a program's place before what else tells of the program.
+  const dropped: string[] = [];
+  for (const name of CODEX_EXEC_OUTSIDE_VARIABLES) {
+    const value = env[name];
     if (value === undefined) continue;
-    const path = /^unix:\/\/(\/.*)$/.exec(value)?.[1];
-    if (path === undefined) not(name, elsewhere);
-    else hideSocket(path, name);
-  }
-  // A display given as a path is a socket; given as a name it is in the runtime directory.
-  const wayland = set("WAYLAND_DISPLAY");
-  if (wayland !== undefined && isAbsolute(wayland)) hideSocket(wayland, "WAYLAND_DISPLAY");
-  // `:0` and `unix:0` are the X sockets below. Anything with a host in it is the network's.
-  const display = set("DISPLAY");
-  if (display !== undefined && !/^(unix)?:\d/.test(display)) not("DISPLAY", elsewhere);
-  const multiplexers = set("TMUX_TMPDIR");
-  if (multiplexers !== undefined) {
-    if (!isAbsolute(multiplexers)) not("TMUX_TMPDIR", "its value is not a path ORCA can follow");
-    else hide(`${multiplexers}/tmux-${user.uid}`, "TMUX_TMPDIR", false, true);
+    dropped.push(name);
+    followed.set(name, rules[name](value));
+    // Whatever a rule does, a variable that is set and not followed to a hidden directory is listed.
+    if (!followed.get(name) && !unhidden.some((entry) => entry.from === name))
+      not(name, "ORCA did not follow it to a directory");
   }
 
   // The well-known places, whatever the environment says. One that is not there is not a place.
-  hide(`/run/user/${user.uid}`, `/run/user/${user.uid}`, false, true);
-  hide("/tmp/.X11-unix", "/tmp/.X11-unix", false, false);
-  hide("/tmp/.ICE-unix", "/tmp/.ICE-unix", false, false);
-  hide(`/tmp/tmux-${user.uid}`, `/tmp/tmux-${user.uid}`, false, true);
-  hide(`/run/screen/S-${user.name}`, `/run/screen/S-${user.name}`, false, true);
+  const run = `${system.run}/user/${user.uid}`;
+  hide(run, run, false, true);
+  for (const shared of [`${system.temporary}/.X11-unix`, `${system.temporary}/.ICE-unix`])
+    hide(shared, shared, false, false);
+  for (const own of [`${system.temporary}/tmux-${user.uid}`, ...screens]) hide(own, own, false, true);
 
-  const dropped: string[] = [];
   const without: Record<string, string> = {};
-  for (const [key, value] of Object.entries(env)) {
-    if (value === undefined) continue;
-    if ((CODEX_EXEC_OUTSIDE_VARIABLES as readonly string[]).includes(key)) dropped.push(key);
-    else without[key] = value;
-  }
+  for (const [key, value] of Object.entries(env))
+    if (value !== undefined && !(CODEX_EXEC_OUTSIDE_VARIABLES as readonly string[]).includes(key)) without[key] = value;
   // One inside another is hidden with it.
   const all = [...hidden];
   return {
