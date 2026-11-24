@@ -1,0 +1,122 @@
+# The host question of the Codex exec gate (#1026): on one exact stock host, with ORCA's
+# installed package and nothing else changed, may the daemon's own program make the closed
+# executor? A closed executor needs a user namespace for two system programs, bubblewrap and
+# `unshare`. Ubuntu 24.04 withholds that from a plain program through AppArmor
+# (`kernel.apparmor_restrict_unprivileged_userns=1`). The acceptance workflow
+# (codex-exec-gate-acceptance.yml) gives it to those two programs with a profile of the test's
+# own; this one loads no profile of its own and changes no host setting.
+#
+# The host: the GitHub-hosted ubuntu-24.04 image, x64, with the distribution's `bubblewrap`
+# package installed from the archive and ORCA's .deb (orca-desktop, #853) built from this
+# commit and installed through apt. The package's postinst loads one AppArmor profile, for
+# /opt/ORCA/orca-desktop. The daemon the desktop app starts is that program run as Node
+# (packages/app/src/main/daemon-process.ts), so the probe is run the same way.
+#
+# What it shows, and only this: whether that program, and a plain program beside it, are
+# allowed the closed executor on this host, and the AppArmor label each part runs under
+# (tools/codex-exec-host-probe.mjs). The executor is a stand-in shell, not Codex; the backend
+# is this commit's build, not the copy bundled in the package. Nothing here is a receipt,
+# wires the gate into sessions or claims a tier.
+name: Codex exec gate host
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - packages/agents/src/codex-exec-isolation.ts
+      - packages/app/build/linux/**
+      - packages/app/electron-builder.yml
+      - tools/codex-exec-host-probe.mjs
+      - .github/workflows/codex-exec-gate-host.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codex-exec-gate-host-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  stock-ubuntu-24-04:
+    name: closed executor on stock Ubuntu 24.04 x64 with the installed .deb
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+      # With the Electron binary: it is what the package carries.
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run build
+      - run: pnpm --filter @orca/app run build:daemon
+      - name: Package the x64 .deb
+        run: pnpm --filter @orca/app exec electron-builder --linux deb --x64 --publish never
+
+      - name: The host as it comes
+        shell: bash
+        run: |
+          set -euo pipefail
+          . /etc/os-release
+          echo "host: $ID $VERSION_ID $(uname -m), kernel $(uname -r), image ${ImageOS:-?} ${ImageVersion:-?}" | tee -a "$GITHUB_STEP_SUMMARY"
+          test "$ID $VERSION_ID $(uname -m)" = "ubuntu 24.04 x86_64"
+          test "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)" = 1
+          # The distribution's bubblewrap, from the archive, if the image lacks it.
+          command -v bwrap || { sudo apt-get update -q && sudo apt-get install -y -q bubblewrap; }
+          dpkg-query -W -f '${Package} ${Version}\n' bubblewrap util-linux | tee -a "$GITHUB_STEP_SUMMARY"
+          # No profile of anyone's for either program, and neither may make a user namespace.
+          sudo aa-status 2>/dev/null | grep -iE 'bwrap|unshare' || echo "no AppArmor profile names bwrap or unshare"
+          ls /etc/apparmor.d | grep -iE 'bwrap|unshare|orca' || true
+          if bwrap --unshare-user --ro-bind / / /bin/true 2>/dev/null; then
+            echo "::error::bubblewrap makes a user namespace on this image as it comes"; exit 1
+          fi
+          if unshare --user --map-current-user true 2>/dev/null; then
+            echo "::error::unshare makes a user namespace on this image as it comes"; exit 1
+          fi
+
+      - name: Install the package
+        shell: bash
+        run: |
+          set -euo pipefail
+          debs=(packages/app/dist/release/ORCA-*-linux-amd64.deb)
+          test "${#debs[@]}" = 1
+          sha256sum "${debs[0]}" | tee -a "$GITHUB_STEP_SUMMARY"
+          sudo apt-get install -y -q "$(readlink -f "${debs[0]}")"
+          sudo grep '^orca-desktop ' /sys/kernel/security/apparmor/profiles
+          test "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)" = 1
+          # Still nothing for a plain program.
+          if bwrap --unshare-user --ro-bind / / /bin/true 2>/dev/null; then
+            echo "::error::installing the package let any program's bubblewrap make a user namespace"; exit 1
+          fi
+
+      - name: Probe as a plain program and as the installed daemon's program
+        shell: bash
+        run: |
+          set -uo pipefail
+          scratch="$RUNNER_TEMP/codex-exec-host"
+          mkdir -p "$scratch"
+          node tools/codex-exec-host-probe.mjs "$scratch" > plain.json
+          plain=$?
+          ELECTRON_RUN_AS_NODE=1 /opt/ORCA/orca-desktop tools/codex-exec-host-probe.mjs "$scratch" > installed.json
+          installed=$?
+          echo "--- plain node (exit $plain) ---"; cat plain.json
+          echo "--- /opt/ORCA/orca-desktop as Node (exit $installed) ---"; cat installed.json
+          {
+            echo "| program | exit | admitted | label | bubblewrap's label | refused |"
+            echo "| --- | --- | --- | --- | --- | --- |"
+            for f in plain installed; do
+              node -e '
+                const r = require(process.argv[1]);
+                const cell = (s) => String(s ?? "").replace(/\|/g, "/").replace(/\n/g, " ").slice(0, 160);
+                console.log(`| ${cell(r.runtime)} | ${process.argv[2]} | ${r.admitted} | ${cell(r.label)} | ${cell(r.bubblewrapAlone?.stdout ?? r.bubblewrapAlone?.stderr)} | ${cell(r.refused)} |`);
+              ' "$PWD/$f.json" "$([ $f = plain ] && echo $plain || echo $installed)"
+            done
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          # A plain program is refused on the stock host: the probe would show nothing otherwise.
+          test "$plain" = 1
+          test "$installed" = 0
