@@ -305,4 +305,61 @@ describe("#701 the judged session factory, once active", () => {
     });
     expect(g.opened).toEqual([]);
   });
+
+  it("checks the run's cancellation before passing a session that already has a judge through", async () => {
+    const run = new AbortController();
+    run.abort("stop");
+    const h = harness(async () => prepared);
+    const own = async () => ({ outcome: "fit" });
+    await expect(
+      h.factory(options({ runId: "run-1", generationId: "g", signal: run.signal }, { judgePermission: own })),
+    ).rejects.toMatchObject({ code: "CANCELLED" });
+    await expect(h.factory(options({ runId: "run-1", generationId: "g", signal: run.signal }))).rejects.toMatchObject({
+      code: "CANCELLED",
+    });
+    expect(h.seen).toEqual([]);
+    expect(h.opened).toEqual([]);
+  });
+
+  it("bounds its own wait: a source that ignores the signal cannot hold the session or hand over a late judge", async () => {
+    // Never settles, and never looks at the signal.
+    let h = harness(() => new Promise(() => undefined), 20);
+    let asked = options({ runId: "run-1", generationId: "g", signal: new AbortController().signal });
+    await h.factory(asked);
+    expect(h.opened).toEqual([asked]);
+    expect(h.unavailable).toEqual([{ runId: "run-1", agentId: "a", reason: "prepare-deadline" }]);
+
+    // Answers `prepared` well after the deadline, ignoring the signal: that judge is not used.
+    let late!: () => void;
+    h = harness(
+      () =>
+        new Promise((resolve) => {
+          late = () => resolve(prepared);
+        }),
+      20,
+    );
+    asked = options({ runId: "run-1", generationId: "g", signal: new AbortController().signal });
+    await h.factory(asked);
+    late();
+    await new Promise((r) => setTimeout(r, 5));
+    expect(h.opened).toEqual([asked]);
+    expect(h.opened[0]).not.toHaveProperty("judgePermission");
+
+    // Stalled, then the run is cancelled: the factory stops at once and opens nothing.
+    const run = new AbortController();
+    h = harness(() => new Promise(() => undefined), 60_000);
+    const pending = h.factory(options({ runId: "run-1", generationId: "g", signal: run.signal }));
+    run.abort("stop");
+    await expect(pending).rejects.toMatchObject({ code: "CANCELLED" });
+    expect(h.opened).toEqual([]);
+
+    // A source that throws gives no judge.
+    h = harness(() => {
+      throw new Error("boom");
+    });
+    asked = options({ runId: "run-1", generationId: "g" });
+    await h.factory(asked);
+    expect(h.opened).toEqual([asked]);
+    expect(h.unavailable).toEqual([{ runId: "run-1", agentId: "a", reason: "run-not-authorized" }]);
+  });
 });
