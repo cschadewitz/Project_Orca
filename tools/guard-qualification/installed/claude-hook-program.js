@@ -11,11 +11,17 @@
  * arguments, the frame on stdin, its timeout, and a hook that cannot start or exits non-zero
  * counted as a block (`onFailure: "block"`).
  *
+ * Every run is recorded on the world (`world.programCalls`) as the receipt's evidence for the
+ * case: the digest and size of the stdin bytes, whether the installed arguments or a case's
+ * replacement ran, and the program's exit code, stdout and stderr, from which the checker
+ * re-derives the outcome (`programEvidenceProblems`).
+ *
  * Unlike the `claude-native-hook` path in `paths.js`, which calls `runClaudePreToolHook` in the
  * test's own process, nothing here is ORCA's code in this process: it is the built program, its
  * output guard and its exit code.
  */
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { claudeNativeHook, hookOutcome } from "../paths.js";
 
 /** The PreToolUse hook entry ORCA installed, from the `_meta` it sent at session/new. */
@@ -28,10 +34,21 @@ export function installedPreToolHook(meta) {
 }
 
 /**
- * @param {{ live: ReturnType<typeof import("../connected/claude.js").claudeConnected> }} env
- *   the live path, whose sessions install the hook this runs
+ * Faults the end-to-end check in `guard-receipts.yml` injects to produce a real nonqualifying
+ * receipt. `lets-everything-through` runs a program that exits 0 with no output (what a broken
+ * install that allows every call looks like) in place of ORCA's. A receipt from such a run
+ * names its fault, and the checker refuses it whatever else it shows.
+ */
+export const PROGRAM_FAULTS = ["lets-everything-through"];
+
+/**
+ * @param {{
+ *   live: ReturnType<typeof import("../connected/claude.js").claudeConnected>,
+ *   fault?: string,
+ * }} env the live path, whose sessions install the hook this runs, and a fault to inject
  */
 export function claudeHookProgram(env) {
+  if (env.fault !== undefined && !PROGRAM_FAULTS.includes(env.fault)) throw new Error(`unknown fault ${env.fault}`);
   const path = {
     id: "claude-native-hook",
     capabilities: claudeNativeHook.capabilities,
@@ -56,7 +73,11 @@ export function claudeHookProgram(env) {
     async decideRaw(world, input, args) {
       const { hook, contextFile, script } = await path.installed(world);
       const argv = args === undefined ? [...script, contextFile] : [...script, ...args];
-      const result = await run(hook.command, argv, input, hook.timeout * 1000, world.workspace);
+      const result =
+        env.fault === "lets-everything-through"
+          ? await run(process.execPath, ["-e", ""], input, hook.timeout * 1000, world.workspace)
+          : await run(hook.command, argv, input, hook.timeout * 1000, world.workspace);
+      (world.programCalls ??= []).push(programRecord(hook, args, input, result));
       return {
         outcome: hookOutcome(result),
         detail: { ...result, installed: true },
@@ -70,6 +91,26 @@ export function claudeHookProgram(env) {
     },
   };
   return path;
+}
+
+/** Program output kept in the receipt; a run that says more is recorded as truncated. */
+export const PROGRAM_OUTPUT_LIMIT = 64 * 1024;
+
+const sha256 = (data) => createHash("sha256").update(data).digest("hex");
+
+/** One run of the installed program, as the receipt records it. */
+export function programRecord(hook, args, input, result) {
+  const keep = (text) =>
+    Buffer.byteLength(text) <= PROGRAM_OUTPUT_LIMIT ? text : { truncated: true, sha256: sha256(text) };
+  return {
+    command: hook.command,
+    args: args === undefined ? "installed" : "replaced",
+    input: { sha256: sha256(input), bytes: Buffer.byteLength(input) },
+    exitCode: result.exitCode,
+    stdout: keep(result.stdout),
+    stderr: keep(result.stderr),
+    outcome: hookOutcome(result),
+  };
 }
 
 /** Run a command hook the way Claude Code does: failure to start or a non-zero exit blocks. */

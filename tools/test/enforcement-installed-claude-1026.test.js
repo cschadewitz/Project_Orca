@@ -12,10 +12,12 @@
  *   of session installed (`installed/claude-hook-program.js`).
  *
  * `guard-receipts.yml` runs this with ORCA_CLAUDE_ADAPTER, ORCA_CLAUDE_OTHER_RUNTIME and
- * ORCA_ENFORCEMENT_RECEIPT_DIR set, and attests the receipt it writes. Without them only the
+ * ORCA_ENFORCEMENT_RECEIPT_DIR set, and attests the receipt it writes. Its end-to-end check
+ * also runs part of it with ORCA_GUARD_RECEIPT_FAULT set, for a receipt that must be refused. Without them only the
  * agreement checks run. A receipt counts only through that attestation (`attestation.js`).
  */
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -30,6 +32,7 @@ import {
   loadAssertions,
   loadCatalogue,
   loadMatrix,
+  qualificationProfile,
   uncoveredRouteProblems,
 } from "../guard-qualification/check-support-matrix.js";
 import { SCENARIOS } from "../guard-qualification/scenarios.js";
@@ -40,6 +43,8 @@ import { claudeHookProgram } from "../guard-qualification/installed/claude-hook-
 
 const ADAPTER = process.env["ORCA_CLAUDE_ADAPTER"];
 const OTHER_RUNTIME = process.env["ORCA_CLAUDE_OTHER_RUNTIME"];
+/** Set only by the end-to-end check, for a real nonqualifying receipt (`PROGRAM_FAULTS`). */
+const FAULT = process.env["ORCA_GUARD_RECEIPT_FAULT"] || undefined;
 const ROUTE = "claude-native-hook";
 const catalogue = loadCatalogue();
 const matrix = loadMatrix();
@@ -118,7 +123,7 @@ describe.skipIf(ADAPTER === undefined || OTHER_RUNTIME === undefined)("installed
     const built = childBundle("claude-pre-tool-hook-1026-installed", { entries: { hook: entry } });
     if (!built?.["hook"]) throw new Error("the hook program could not be built for this run");
     live = claudeConnected({ adapter: ADAPTER, hookScript: built["hook"], model });
-    hookProgram = claudeHookProgram({ live });
+    hookProgram = claudeHookProgram({ live, fault: FAULT });
   });
 
   afterAll(async () => {
@@ -163,7 +168,7 @@ describe.skipIf(ADAPTER === undefined || OTHER_RUNTIME === undefined)("installed
           await SCENARIOS[c.id](world, via === "program" ? hookProgram : live);
           entry.result = "pass";
         } finally {
-          if (via === "live") entry.calls = world.callRecords ?? [];
+          entry.calls = (via === "live" ? world.callRecords : world.programCalls) ?? [];
           await world.dispose();
         }
       },
@@ -171,6 +176,11 @@ describe.skipIf(ADAPTER === undefined || OTHER_RUNTIME === undefined)("installed
       300_000,
     );
   }
+
+  it("binds the receipt to what ran: the adapter, the runtime image and the hook program", async () => {
+    receipt.inputs = await inputsOf(hookProgram);
+    receipt.installedSettings = hookProgram.settings();
+  });
 
   it("the receipt holds: every case, every uncovered route, every live call's evidence", () => {
     receipt.checks.uncoveredRoutesRefused =
@@ -183,9 +193,39 @@ describe.skipIf(ADAPTER === undefined || OTHER_RUNTIME === undefined)("installed
     expect(
       installedCaseProblems({ ...receipt, route: ROUTE }, casesFor(route, catalogue), loadAssertions(), route),
     ).toEqual([]);
+    expect(receipt.inputs.profile).toBe(qualificationProfile(matrix, catalogue, loadAssertions(), row, route));
     expect(model.log.errors, "the model stand-in answered every request").toEqual([]);
   });
 });
+
+const sha256 = (data) => createHash("sha256").update(data).digest("hex");
+
+/**
+ * What this run installed and ran: the adapter as its lockfile pins it, the Claude Code image
+ * beside it (the one the session factory admitted, so the pair's pinned digest), ORCA's hook
+ * program as the session installed it, and the qualification profile it ran against.
+ */
+async function inputsOf(hookProgram) {
+  const root = join(ADAPTER, "..", "..", "..", "..", "..");
+  const name = "@agentclientprotocol/claude-agent-acp";
+  const lock = JSON.parse(await readFile(join(root, "package-lock.json"), "utf8"));
+  const adapter = lock.packages[`node_modules/${name}`];
+  const host = `${process.platform}-${process.arch}`;
+  const pair = CLAUDE_HOOK_VERIFIED_PAIRS.find((p) => p.adapter === adapter.version);
+  const image = sha256(
+    await readFile(join(root, "node_modules", "@anthropic-ai", `claude-agent-sdk-${host}`, "claude")),
+  );
+  expect(image, "the Claude Code beside the adapter is the pinned image").toBe(pair?.images[host]);
+  const hook = hookProgram.settings().hooks.PreToolUse[0].hooks[0];
+  const program = hook.args.slice(0, -1);
+  expect(program.length, "the hook runs one program file").toBe(1);
+  return {
+    adapter: { name, version: adapter.version, integrity: adapter.integrity },
+    runtime: { version: pair.runtime, sha256: image },
+    hookProgram: { sha256: sha256(await readFile(program[0])) },
+    profile: qualificationProfile(matrix, catalogue, loadAssertions(), row, route),
+  };
+}
 
 async function writeReceipt(receipt) {
   const dir = process.env["ORCA_ENFORCEMENT_RECEIPT_DIR"];
@@ -202,6 +242,7 @@ async function writeReceipt(receipt) {
       {
         format: "orca-enforcement-receipt/1",
         kind: "installed",
+        ...(FAULT ? { fault: FAULT } : {}),
         agent: "claude",
         agentVersion: pair?.runtime ?? null,
         adapterVersion,
@@ -209,6 +250,8 @@ async function writeReceipt(receipt) {
         route: ROUTE,
         build,
         node: process.version,
+        inputs: receipt.inputs,
+        installedSettings: receipt.installedSettings,
         checks: receipt.checks,
         uncoveredRoutes: receipt.uncoveredRoutes,
         cases: receipt.cases,

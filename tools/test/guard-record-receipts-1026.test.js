@@ -14,7 +14,14 @@ const receipt = {
   adapterVersion: "0.109.1",
   host: "linux-x64",
   build,
+  inputs: {
+    adapter: { version: "0.109.1", integrity: "sha512-abc" },
+    runtime: { sha256: "a".repeat(64) },
+    hookProgram: { sha256: "b".repeat(64) },
+    profile: "c".repeat(64),
+  },
 };
+const artifacts = { adapterIntegrity: "sha512-abc", runtimeSha256: "a".repeat(64), hookProgramSha256: "b".repeat(64) };
 const matrix = {
   agents: [
     { id: "claude", tier: "none", pin: null, receipts: [] },
@@ -29,7 +36,7 @@ describe("recording receipts", () => {
     expect(next.agents[0]).toEqual({
       id: "claude",
       tier: "none",
-      pin: { agentVersion: "2.1.330", adapterVersion: "0.109.1", host: "linux-x64", build },
+      pin: { agentVersion: "2.1.330", adapterVersion: "0.109.1", host: "linux-x64", build, artifacts },
       receipts: [file],
     });
     expect(next.agents[1]).toEqual(matrix.agents[1]);
@@ -49,6 +56,9 @@ describe("recording receipts", () => {
     );
     expect(() => recordReceipts(matrix, [{ file, receipt: { ...receipt, host: undefined } }])).toThrow(
       "names no complete pin",
+    );
+    expect(() => recordReceipts(matrix, [{ file, receipt: { ...receipt, inputs: undefined } }])).toThrow(
+      "names no artifact digests",
     );
   });
 });

@@ -20,6 +20,7 @@ import {
   loadCatalogue,
   loadMatrix,
   loadAssertions,
+  qualificationProfile,
   qualifyingCases,
 } from "../guard-qualification/check-support-matrix.js";
 import { PATHS } from "../guard-qualification/paths.js";
@@ -64,7 +65,26 @@ describe("the catalogue, the scenarios and the matrix agree", () => {
 
 describe("the matrix checker refuses claims beyond the evidence", () => {
   const build = "0123456789abcdef0123456789abcdef01234567";
-  const pin = { agentVersion: "2.1.330", adapterVersion: "0.109.1", host: "linux-x64", build };
+  const artifacts = {
+    adapterIntegrity: "sha512-abc",
+    runtimeSha256: "a".repeat(64),
+    hookProgramSha256: "b".repeat(64),
+  };
+  const pin = { agentVersion: "2.1.330", adapterVersion: "0.109.1", host: "linux-x64", build, artifacts };
+  /** Replaced in each check by the profile the checker recomputes for the receipt's route. */
+  const CURRENT_PROFILE = "current profile";
+  const installedSettings = {
+    hooks: {
+      PreToolUse: [
+        {
+          matcher: "*",
+          hooks: [
+            { type: "command", command: "/usr/bin/node", args: ["/h.js", "/c.json"], timeout: 10, onFailure: "block" },
+          ],
+        },
+      ],
+    },
+  };
   const claude = (extra = {}) => ({
     ...structuredClone(matrix.agents.find((a) => a.id === "claude")),
     // The structure tests claim the ask route; the hook route's rules are tested with hookAgent.
@@ -112,7 +132,14 @@ describe("the matrix checker refuses claims beyond the evidence", () => {
     route: "acp-ask",
     build,
     checks: { connects: "pass", uncoveredRoutesRefused: "pass" },
-    cases: acpCases.map((id) => ({ id, result: "pass", via: "program" })),
+    cases: acpCases.map((id) => ({ id, result: "pass", via: "program", calls: [] })),
+    inputs: {
+      adapter: { version: "0.109.1", integrity: artifacts.adapterIntegrity },
+      runtime: { sha256: artifacts.runtimeSha256 },
+      hookProgram: { sha256: artifacts.hookProgramSha256 },
+      profile: CURRENT_PROFILE,
+    },
+    installedSettings,
     ...extra,
   });
   /**
@@ -128,6 +155,12 @@ describe("the matrix checker refuses claims beyond the evidence", () => {
           casesFor(connected, catalogue).map((id) => [id, [{ tool: "Write", expected: ["deny"] }]]),
         ),
       },
+      // Every program case is held by its receipt's installed settings alone, as F03 is.
+      programs: Object.fromEntries(
+        paths
+          .filter((p) => p.installed?.program)
+          .map((p) => [p.id, Object.fromEntries(Object.keys(p.installed.program).map((id) => [id, []]))]),
+      ),
     };
   };
   /**
@@ -147,23 +180,45 @@ describe("the matrix checker refuses claims beyond the evidence", () => {
       { ...matrix, agents: [{ ...agent, receipts: Object.keys(files) }], paths },
       catalogue,
       (p) => p in files,
-      (p) => files[p],
+      (p) => current(files[p], agent, paths, assertions),
       assertions,
       verify,
       promotable,
     );
+  /** The receipt as a run against the requirements under test would have written it. */
+  const current = (r, agent, paths, assertions) => {
+    if (r?.inputs?.profile !== CURRENT_PROFILE) return r;
+    const route = paths.find((p) => p.id === r.route);
+    if (!route) return r;
+    const profile = qualificationProfile({ ...matrix, paths }, catalogue, assertions, agent, route);
+    return { ...r, inputs: { ...r.inputs, profile } };
+  };
   const structural = (problems) => problems;
   const needs = (tier, kind = tier === "C" ? "connected" : "installed", route = "acp-ask") =>
     `agent claude: tier ${tier} on ${route} needs a passing ${kind} receipt for claude 2.1.330 on linux-x64`;
 
-  it("promotes nothing yet, whatever the receipts show", () => {
-    expect(PROMOTABLE_TIERS).toEqual([]);
-    for (const tier of ["A", "B", "C"]) {
-      const kind = tier === "C" ? "connected" : "installed";
+  it("promotes to A and B on attested receipts, and not yet to C", () => {
+    expect(PROMOTABLE_TIERS).toEqual(["A", "B"]);
+    for (const tier of ["A", "B"])
       expect(
-        check(claude({ tier }), { "r.json": receipt({ kind }) }, testPaths, undefined, attested, PROMOTABLE_TIERS)[0],
-      ).toBe(`agent claude: ${PROMOTION_DISABLED}`);
-    }
+        check(claude({ tier }), { "r.json": receipt() }, testPaths, undefined, attested, PROMOTABLE_TIERS),
+      ).toEqual([]);
+    expect(
+      check(
+        claude({ tier: "C" }),
+        { "r.json": receipt({ kind: "connected" }) },
+        testPaths,
+        undefined,
+        attested,
+        PROMOTABLE_TIERS,
+      )[0],
+    ).toBe(`agent claude: ${PROMOTION_DISABLED}`);
+  });
+
+  it("refuses a receipt from a run with an injected fault, whatever else it shows", () => {
+    expect(check(claude({ tier: "A" }), { "r.json": receipt({ fault: "lets-everything-through" }) })).toEqual([
+      `${needs("A")} (r.json: a run with an injected fault (lets-everything-through))`,
+    ]);
   });
 
   it("counts a receipt only when its attestation verifies", () => {
@@ -175,7 +230,7 @@ describe("the matrix checker refuses claims beyond the evidence", () => {
       { ...matrix, agents: [{ ...claude({ tier: "A" }), receipts: ["r.json"] }], paths: testPaths },
       catalogue,
       (p) => p === "r.json",
-      () => receipt(),
+      () => current(receipt(), claude(), testPaths, inventoryFor(testPaths)),
       inventoryFor(testPaths),
       undefined,
       ["A"],
@@ -206,7 +261,11 @@ describe("the matrix checker refuses claims beyond the evidence", () => {
       [{ agentVersion: "2.1.329" }, "agentVersion 2.1.329"],
       [{ adapterVersion: "0.109.0" }, "adapterVersion 0.109.0"],
       [{ host: "darwin-arm64" }, "host darwin-arm64"],
-      [{ route: "claude-native-hook" }, "route claude-native-hook"],
+      // A run on another route also ran against that route's requirements.
+      [
+        { route: "claude-native-hook" },
+        "route claude-native-hook; r.json: ran against other requirements than the matrix states now (profile differs)",
+      ],
       [{ build: "f".repeat(40) }, `build ${"f".repeat(40)}, expected ${build}`],
       [{ kind: "synthetic" }, "kind synthetic, needs installed"],
     ])

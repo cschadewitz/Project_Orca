@@ -6,7 +6,10 @@
 # `publish` job then signs every receipt with GitHub's artifact attestation (Sigstore, through
 # this job's OIDC identity), commits each receipt with its bundle under
 # tools/guard-qualification/receipts/, pins each agent's row to the receipt's versions, host and
-# build (record-receipts.js), and opens or updates one pull request.
+# build (record-receipts.js), and opens or updates one pull request. Before it proposes anything
+# it checks the chain end to end (e2e-check.js): with the row at B, the checker must accept this
+# run's receipt and refuse a real receipt from a run with a broken hook program injected and a
+# byte-tampered copy, attestations verified for real.
 #
 # This workflow is the one signer check-support-matrix.js accepts (attestation.js): a receipt
 # counts only when it was signed here, on a GitHub-hosted runner, from main or a release line,
@@ -111,6 +114,33 @@ jobs:
           ' "$RUNNER_TEMP/installed.json"
           test -f "$RUNNER_TEMP/receipts/claude-claude-native-hook.json"
 
+      # The end-to-end check's nonqualifying receipt: a real run of part of the same test with a
+      # broken hook program injected, in which a case fails. Never proposed; publish checks that
+      # the checker refuses it.
+      - name: Run part of it with a broken hook program
+        shell: bash
+        env:
+          ORCA_ENFORCEMENT_RECEIPT_DIR: ${{ runner.temp }}/fault
+          ORCA_GUARD_RECEIPT_FAULT: lets-everything-through
+        run: |
+          set -euo pipefail
+          # The injected fault fails F01 and the final check; the receipt is what matters here.
+          pnpm exec vitest run tools/test/enforcement-installed-claude-1026.test.js \
+            -t "connects|F01|binds the receipt" || true
+          node -e '
+            const r = require(process.argv[1]);
+            if (r.fault !== "lets-everything-through" || r.cases.find((c) => c.id === "F01")?.result !== "fail")
+              throw new Error("expected a receipt with F01 failed under the injected fault");
+          ' "$RUNNER_TEMP/fault/claude-claude-native-hook.json"
+          mv "$RUNNER_TEMP/fault/claude-claude-native-hook.json" "$RUNNER_TEMP/fault/fault-claude-native-hook.json"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: guard-fault-claude
+          path: ${{ runner.temp }}/fault/
+          if-no-files-found: error
+          retention-days: 30
+
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: guard-receipt-claude
@@ -155,6 +185,10 @@ jobs:
           pattern: guard-receipt-*
           path: ${{ runner.temp }}/receipts
           merge-multiple: true
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: guard-fault-claude
+          path: ${{ runner.temp }}/fault
 
       - name: Place the receipts
         id: place
@@ -162,19 +196,43 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p tools/guard-qualification/receipts
-          for f in "$RUNNER_TEMP"/receipts/*.json; do
+          for f in "$RUNNER_TEMP"/receipts/*.json "$RUNNER_TEMP"/fault/*.json; do
             # Every receipt must name this run's commit; anything else is not this run's.
             build=$(node -e 'console.log(require(process.argv[1]).build)' "$f")
             test "$build" = "$GITHUB_SHA"
-            cp "$f" tools/guard-qualification/receipts/
           done
+          cp "$RUNNER_TEMP"/receipts/*.json tools/guard-qualification/receipts/
           ls tools/guard-qualification/receipts/*.json
 
       - name: Attest the receipts
         id: attest
         uses: actions/attest-build-provenance@v2
         with:
-          subject-path: ${{ github.workspace }}/tools/guard-qualification/receipts/*.json
+          # The fault receipt is signed too, so the end-to-end check refuses it for what it shows.
+          subject-path: |
+            ${{ github.workspace }}/tools/guard-qualification/receipts/*.json
+            ${{ runner.temp }}/fault/*.json
+
+      - name: Pinned GitHub CLI
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: tools/guard-qualification/ensure-gh.sh
+
+      - name: End-to-end check of the receipt chain
+        shell: bash
+        env:
+          BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # With the Claude row at B and pinned to this run's receipt, the checker must accept it,
+          # refuse the fault run's receipt and refuse a byte-tampered copy, attestations verified.
+          q=tools/guard-qualification/receipts/claude-claude-native-hook.json
+          f="$RUNNER_TEMP/fault/fault-claude-native-hook.json"
+          cp "$BUNDLE" "$q.sigstore.json"
+          cp "$BUNDLE" "$f.sigstore.json"
+          node tools/guard-qualification/e2e-check.js "$q" "$f"
 
       - name: Record them in the support matrix
         shell: bash
