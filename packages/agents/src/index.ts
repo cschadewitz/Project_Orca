@@ -20,6 +20,7 @@ export * from "./hook-telemetry.js";
 export * from "./native-tool-hook-session.js";
 export * from "./codex-exec-gate.js";
 export * from "./codex-exec-gate-policy.js";
+export * from "./codex-exec-isolation.js";
 export * from "./providers/index.js";
 export * from "./agent-profiles/index.js";
 export * from "./judged-lane.js";

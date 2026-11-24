@@ -5,7 +5,7 @@
  */
 import { createHash } from "node:crypto";
 import { existsSync, readlinkSync } from "node:fs";
-import { chmod, mkdir, mkdtemp, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, link, mkdir, mkdtemp, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -32,6 +32,7 @@ import {
   type CodexExecGateBinder,
   type CodexExecGateBudget,
   type CodexExecGateDirectories,
+  type CodexExecGateHeldDirectory,
   type CodexExecGateCall,
   type CodexExecGateDecision,
   type CodexExecGateRecord,
@@ -174,7 +175,7 @@ const errorOf = (answer: Record<string, unknown>): string =>
  * A binder over an imagined file system. A path is its own file unless `links` names where it
  * really leads; an empty answer is a path that cannot be resolved or held.
  */
-function fakeBinder(links: Record<string, string> = {}) {
+function fakeBinder(links: Record<string, string> = {}, names: Record<string, number | undefined> = {}) {
   const held: string[] = [];
   const released: string[] = [];
   const real = (path: string): string | undefined => {
@@ -184,6 +185,7 @@ function fakeBinder(links: Record<string, string> = {}) {
   const binder: CodexExecGateBinder = {
     target: real,
     entry: real,
+    links: (path) => (path in names ? names[path] : 1),
     directory(path) {
       const to = real(path);
       if (to === undefined) return undefined;
@@ -899,6 +901,30 @@ describe("what one request needs", () => {
       expect(kinds("fs/getMetadata", { path })).toEqual([["protected", "read", "/work/a.txt"]]);
     });
 
+    it("is refused for a file with more than one name, or whose names cannot be counted", () => {
+      const refused = (names: number | undefined, method: string, params: Record<string, unknown>) =>
+        reason(planned(method, params, state(), fakeBinder({}, { "/work/a.txt": names })));
+      expect(refused(2, "fs/writeFile", { path, dataBase64: "" })).toMatch(/more than one name/);
+      expect(refused(2, "fs/readFile", { path })).toMatch(/more than one name/);
+      expect(refused(2, "fs/remove", { path })).toMatch(/more than one name/);
+      expect(refused(2, "fs/getMetadata", { path })).toMatch(/more than one name/);
+      expect(refused(undefined, "fs/readFile", { path })).toMatch(/how many names/);
+      // One name, or nothing there yet, is a file a rule can have been written for.
+      for (const names of [0, 1])
+        expect(decided("fs/writeFile", { path, dataBase64: "" }, fakeBinder({}, { "/work/a.txt": names })).action).toBe(
+          "decide",
+        );
+    });
+
+    it("counts the names of the file the path leads to, not of the link in the request", () => {
+      const through = { path: uri("/work/link.txt"), dataBase64: "" };
+      const links = { "/work/link.txt": "/elsewhere/real.txt" };
+      expect(
+        reason(planned("fs/writeFile", through, state(), fakeBinder(links, { "/elsewhere/real.txt": 2 }))),
+      ).toMatch(/more than one name/);
+      expect(decided("fs/writeFile", through, fakeBinder(links, { "/work/link.txt": 2 })).action).toBe("decide");
+    });
+
     it("is passed on with the path ORCA decided and the executor told to follow no link", () => {
       const sandbox = {
         permissions: { type: "managed", file_system: { type: "unrestricted" }, network: "enabled" },
@@ -1549,6 +1575,110 @@ describe("requests through the gate", () => {
     expect(gate!.connections()).toEqual({ open: 0, stopping: 0 });
   });
 
+  describe("with an executor that cannot reach ORCA's descriptors", () => {
+    /** A backend that takes a hold of its own on the directory ORCA holds, as an isolated executor's does. */
+    class HoldingBackend extends FakeBackend {
+      taken: string[] = [];
+      dropped: string[] = [];
+      refuses = false;
+      order: string[] = [];
+      hold = (held: CodexExecGateHeldDirectory): Promise<CodexExecGateHeldDirectory | undefined> => {
+        this.order.push("hold");
+        if (this.refuses) return Promise.resolve(undefined);
+        held.release();
+        const n = this.taken.push(held.real);
+        return Promise.resolve({
+          real: held.real,
+          reach: `/proc/1/fd/${n}`,
+          endsWithExecutor: true,
+          release: () => void this.dropped.push(held.real),
+        });
+      };
+    }
+    const holding = async (decide: Decide = allowAll, refuses = false) => {
+      const binder = fakeBinder();
+      const made = new HoldingBackend();
+      made.refuses = refuses;
+      const { client } = await connected(
+        (call, signal) => {
+          made.order.push("decide");
+          return decide(call, signal);
+        },
+        { binder, backend: () => made },
+      );
+      return { client, backend: made, binder };
+    };
+
+    it("has the backend hold the directory before deciding, and starts the command in the backend's hold", async () => {
+      const { client, backend, binder } = await holding();
+      const answer = await client.call("process/start", start("p1", ["/bin/sh", "-c", "ls"]));
+      expect(answer["result"]).toBeDefined();
+      expect(backend.order).toEqual(["hold", "decide"]);
+      // Decided as the directory ORCA held; sent as the name of the backend's hold on it.
+      expect(calls.at(-1)).toMatchObject({ cwd: "/work" });
+      const sent = backend.received.find((m) => m["method"] === "process/start")!["params"] as { cwd: string };
+      expect(sent.cwd).toBe(uri("/proc/1/fd/1"));
+      // ORCA's own descriptor is the backend's to release once it has shown both are one directory.
+      expect(binder.released).toEqual(["/work"]);
+      expect(backend.dropped).toEqual([]);
+      expect(directories).toMatchObject({ held: 1, kept: 0 });
+      backend.emit({ method: "process/exited", params: { processId: "p1", seq: 1, exitCode: 0 } });
+      await client.raw(70, `{"id":70,"method":"bogus"}`);
+      expect(backend.dropped).toEqual(["/work"]);
+      expect(directories).toMatchObject({ held: 0, kept: 0 });
+    });
+
+    it("refuses the start, undecided, when the backend cannot hold the directory", async () => {
+      const { client, backend, binder } = await holding(allowAll, true);
+      const answer = await client.call("process/start", start("p1", ["/bin/sh", "-c", "ls"]));
+      expect(errorOf(answer)).toMatch(/could not hold the directory where the executor/);
+      expect(backend.order).toEqual(["hold"]);
+      expect(backend.methods()).not.toContain("process/start");
+      expect(binder.released).toEqual(["/work"]);
+      expect(directories).toMatchObject({ held: 0, kept: 0 });
+    });
+
+    it("lets go of the backend's hold when the start is refused by the decision", async () => {
+      const { client, backend } = await holding(refuseAll);
+      const answer = await client.call("process/start", start("p1", ["/bin/sh", "-c", "ls"]));
+      expect(errorOf(answer)).toMatch(/the test says no/);
+      expect(backend.methods()).not.toContain("process/start");
+      expect(backend.dropped).toEqual(["/work"]);
+      expect(directories).toMatchObject({ held: 0, kept: 0 });
+    });
+
+    it("keeps nothing of a hold that ends with the executor, whatever was seen of the executor's end", async () => {
+      for (const proven of [false, true]) {
+        const { client, backend } = await holding();
+        await client.call("process/start", start("p1", ["/bin/sh", "-c", "sleep 9"]));
+        expect(directories).toMatchObject({ held: 1, kept: 0 });
+        backend.die(proven ? "exit 0" : "signal SIGKILL", proven);
+        await soon();
+        expect(backend.dropped).toEqual(["/work"]);
+        expect(directories).toMatchObject({ held: 0, kept: 0 });
+        expect(records.some((r) => r.outcome === "kept")).toBe(false);
+        // What the backend saw of everything the executor started is recorded either way.
+        expect(records.filter((r) => r.method === "executor").map((r) => [r.outcome, r.basis])).toEqual([
+          ["closed", proven ? "tree-ended" : "tree-unseen"],
+        ]);
+        client.ws.terminate();
+        await gate!.close();
+        records = [];
+        backends = [];
+      }
+    });
+  });
+
+  it("records nothing about the executor's processes for a backend that says nothing of them", async () => {
+    const { client, backend } = await connected();
+    await client.call("process/start", start("p1", ["/bin/sh", "-c", "ls"]));
+    backend.emit({ method: "process/exited", params: { processId: "p1", seq: 1, exitCode: 0 } });
+    await client.raw(70, `{"id":70,"method":"bogus"}`);
+    backend.die("exit 1");
+    await soon();
+    expect(records.filter((r) => r.method === "executor")).toEqual([]);
+  });
+
   it("refuses a start when the gates already hold as many directories as they may", async () => {
     const binder = fakeBinder();
     const { client } = await connected(allowAll, { binder, directories: codexExecGateDirectories(1) });
@@ -2056,6 +2186,19 @@ describe.skipIf(process.platform !== "linux")("this machine's binder", () => {
     expect(binder.entry(join(root, "to-dir", "file.txt"))).toBe(join(root, "dir", "file.txt"));
     expect(binder.entry(join(root, "to-file"))).toBe(join(root, "to-file"));
     expect(binder.entry("/")).toBeUndefined();
+  });
+
+  it("counts a file's names, its last name not followed", async () => {
+    const binder = codexExecGateBinder();
+    expect(binder.links(join(root, "dir", "file.txt"))).toBe(1);
+    await link(join(root, "dir", "file.txt"), join(root, "second-name"));
+    expect(binder.links(join(root, "dir", "file.txt"))).toBe(2);
+    expect(binder.links(join(root, "second-name"))).toBe(2);
+    // The link itself has one name; a directory counts as one; nothing there is none.
+    expect(binder.links(join(root, "to-file"))).toBe(1);
+    expect(binder.links(join(root, "dir"))).toBe(1);
+    expect(binder.links(join(root, "nowhere"))).toBe(0);
+    expect(binder.links(join(root, "dir", "file.txt", "under-a-file"))).toBeUndefined();
   });
 
   it("holds a directory by descriptor: the same directory under any name, until released", async () => {
