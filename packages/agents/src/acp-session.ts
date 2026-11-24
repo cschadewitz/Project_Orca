@@ -124,6 +124,11 @@ export interface OpenSessionOptions {
         ext: (method: string, params: Record<string, unknown>) => Promise<unknown>,
         /** The agent process's id, so the hook can tell its runtime's processes from others. */
         agentPid: number | undefined,
+        /**
+         * Aborts when the session ends before it is open (the agent exits, its connection
+         * closes, or startup fails), so admission work stops with it.
+         */
+        signal?: AbortSignal,
       ) => Promise<Record<string, unknown> | undefined>)
     | undefined;
   /**
@@ -1262,6 +1267,7 @@ async function openPlanned(
       init.agentInfo ? { name: init.agentInfo.name, version: init.agentInfo.version } : undefined,
       (method, params) => withTimeout(conn.agent.request<unknown>(method, params), handshakeTimeout, method),
       proc.pid,
+      sessionLive.signal,
     );
     if (meta) newSession._meta = meta;
     let loaded = false;

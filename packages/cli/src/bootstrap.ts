@@ -313,6 +313,8 @@ export function makeSessionFactory(
     codexProcess?: ((agentPid: number | undefined) => Promise<{ pid: number } | { error: string }>) | undefined;
     codexEnvironment?: ((pid: number) => Promise<NodeJS.ProcessEnv | { error: string }>) | undefined;
     codexShell?: (() => { program: string; args: string[] } | { error: string }) | undefined;
+    /** The single deadline for a Codex session's admission checks (`CODEX_ADMISSION_DEADLINE_MS`). */
+    codexAdmissionDeadlineMs?: number | undefined;
   } = {
     runtime: process.execPath,
     script: claudePreToolHookScript(),
@@ -365,6 +367,7 @@ export function makeSessionFactory(
       codexProcess: hook.codexProcess,
       codexEnvironment: hook.codexEnvironment,
       codexShell: hook.codexShell,
+      codexAdmissionDeadlineMs: hook.codexAdmissionDeadlineMs,
       agentEnv: { ...process.env, ...literalEnv(options.agent.env), ...(options.env ?? {}) },
       toolCallTelemetry: options.agent.diagnostics?.toolCalls,
       // In the desktop app ORCA's runtime is the Electron binary, which runs a script as Node

@@ -70,6 +70,10 @@ async function setup(
     environment?: (pid: number) => Promise<NodeJS.ProcessEnv | { error: string }>;
     /** The shell ORCA runs its startup probe in, as Codex would run the hook. */
     shell?: () => { program: string; args: string[] } | { error: string };
+    /** The session's cancellation, as the ACP session hands it to `sessionMeta`. */
+    signal?: AbortSignal;
+    /** The admission's single deadline. */
+    deadlineMs?: number;
   } = {},
 ) {
   const ext =
@@ -90,7 +94,7 @@ async function setup(
     async (options) => {
       opened++;
       seen.options = options;
-      seen.meta = await options.sessionMeta?.(agentInfo, ext, AGENT_PID);
+      seen.meta = await options.sessionMeta?.(agentInfo, ext, AGENT_PID, codexOpts.signal);
       // Claude Code runs the session-start attestation before `session/new` returns.
       const attest = (
         seen.meta as {
@@ -130,6 +134,7 @@ async function setup(
         (async (pid) =>
           "pid" in codex && pid === codex.pid ? { ...process.env } : { error: "not the Codex process" }),
       codexShell: codexOpts.shell ?? (() => ({ program: "/bin/sh", args: ["-c"] })),
+      codexAdmissionDeadlineMs: codexOpts.deadlineMs,
     },
   );
   const warnings: { msg: string; fields?: Record<string, unknown> }[] = [];
@@ -391,6 +396,9 @@ describe("installing the hook in Codex (#705)", () => {
       codex?: { pid: number; image: { sha256: string } | { error: string } } | { error: string };
       environment?: (pid: number) => Promise<NodeJS.ProcessEnv | { error: string }>;
       shell?: () => { program: string; args: string[] } | { error: string };
+      ext?: (method: string) => Promise<unknown>;
+      signal?: AbortSignal;
+      deadlineMs?: number;
     } = {},
   ) => {
     const seen: { options?: OpenSessionOptions } = {};
@@ -402,7 +410,10 @@ describe("installing the hook in Codex (#705)", () => {
       // Codex has no session-start hook: nothing reports a runtime process in.
       null,
       {
+        ...(opts.signal ? { signal: opts.signal } : {}),
+        ...(opts.deadlineMs ? { deadlineMs: opts.deadlineMs } : {}),
         ext: (method, params) => {
+          if (opts.ext) return opts.ext(method);
           if (t.seen.options) seen.options = t.seen.options;
           return listing(
             seen,
@@ -498,6 +509,30 @@ describe("installing the hook in Codex (#705)", () => {
       await session.close();
     },
   );
+
+  it("stops its startup checks when the session ends while they run", async () => {
+    const cancel = new AbortController();
+    const t = await codexSetup({}, { ext: () => new Promise(() => undefined), signal: cancel.signal });
+    setTimeout(() => cancel.abort("agent process exited"), 100);
+    const started = Date.now();
+    await expect(t.open()).rejects.toMatchObject({
+      code: "NOT_SUPPORTED",
+      message: expect.stringMatching(/session ended before ORCA's startup checks of the hook finished/),
+    });
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(await t.left()).toEqual([]);
+  });
+
+  it("stops its startup checks at one deadline for all of them", async () => {
+    const t = await codexSetup({}, { ext: () => new Promise(() => undefined), deadlineMs: 200 });
+    const started = Date.now();
+    await expect(t.open()).rejects.toMatchObject({
+      code: "NOT_SUPPORTED",
+      message: expect.stringMatching(/startup checks of the hook did not finish within their deadline/),
+    });
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(await t.left()).toEqual([]);
+  });
 
   it("refuses when ORCA does not know which shell Codex would run the hook in", async () => {
     const t = await codexSetup({}, { shell: () => ({ error: "this account's login shell is /usr/bin/fish" }) });

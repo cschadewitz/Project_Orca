@@ -234,11 +234,11 @@ describe("the fail-closed line around ORCA's program (#1026)", () => {
   // Codex runs the hook in the account's login shell: bash, zsh or sh (`codexHookShell`).
   const SHELLS = ["/bin/sh", "/bin/bash", "/bin/dash", "/bin/zsh"].filter((p) => existsSync(p));
   /** Run the installed command line as Codex does, with a stand-in for ORCA's program. */
-  const runLine = (programBody: string | undefined, shell = SH.program) =>
-    new Promise<{ exitCode: number | null; stdout: string; stderr: string }>(async (done) => {
-      const script = join(root, "program.sh");
-      if (programBody !== undefined) await writeFile(script, programBody, "utf8");
-      const runtime = programBody === undefined ? join(root, "no-such-runtime") : "/bin/sh";
+  const runLine = async (programBody: string | undefined, shell = SH.program) => {
+    const script = join(root, "program.sh");
+    if (programBody !== undefined) await writeFile(script, programBody, "utf8");
+    const runtime = programBody === undefined ? join(root, "no-such-runtime") : "/bin/sh";
+    return new Promise<{ exitCode: number | null; stdout: string; stderr: string }>((done) => {
       const child = spawn(shell, ["-c", codexPreToolHookCommand(runtime, script, contextFile)], { cwd: workspace });
       let stdout = "";
       let stderr = "";
@@ -247,6 +247,7 @@ describe("the fail-closed line around ORCA's program (#1026)", () => {
       child.on("close", (exitCode) => done({ exitCode, stdout, stderr }));
       child.stdin.end("{}");
     });
+  };
   const failed = { exitCode: 2, stdout: "", stderr: `${CODEX_HOOK_FAILED_REASON}\n` };
   const receipt = `orca-hook-receipt: ${"0123456789abcdef".repeat(4)}`;
 
@@ -316,6 +317,39 @@ describe("the fail-closed line around ORCA's program (#1026)", () => {
       ok: true,
     });
   });
+
+  it.skipIf(process.platform !== "linux")(
+    "stops at once when its signal aborts, with everything the running check started",
+    async () => {
+      // A runtime that never ends: the check is mid-run when the signal aborts.
+      const marker = join(root, "check.pid");
+      const runtime = join(root, "hangs.sh");
+      await writeFile(runtime, `#!/bin/sh\necho $$ > '${marker}'\nexec sleep 30\n`, { mode: 0o755 });
+      const cancel = new AbortController();
+      setTimeout(() => cancel.abort("session closed"), 300);
+      const started = Date.now();
+      const got = await checkCodexFailClosedLine({ runtime, cwd: workspace, shell: SH, signal: cancel.signal });
+      expect(got).toEqual({ ok: false, check: "crash", detail: "the session was cancelled" });
+      expect(Date.now() - started).toBeLessThan(5_000);
+      const pid = Number(await readFile(marker, "utf8"));
+      await new Promise((r) => setTimeout(r, 100));
+      const state = await readFile(`/proc/${pid}/stat`, "utf8").then(
+        (t) => t.slice(t.lastIndexOf(")") + 2, t.lastIndexOf(")") + 3),
+        () => "gone",
+      );
+      expect(["gone", "Z"]).toContain(state);
+      // At its deadline the same way, and with an aborted signal nothing starts at all.
+      expect(
+        await checkCodexFailClosedLine({ runtime, cwd: workspace, shell: SH, signal: AbortSignal.timeout(200) }),
+      ).toEqual({ ok: false, check: "crash", detail: "the admission deadline passed" });
+      await rm(marker, { force: true });
+      expect(
+        await checkCodexFailClosedLine({ runtime, cwd: workspace, shell: SH, signal: AbortSignal.abort("gone") }),
+      ).toEqual({ ok: false, check: "crash", detail: "the session was cancelled" });
+      expect(existsSync(marker)).toBe(false);
+    },
+    30_000,
+  );
 
   it.skipIf(process.platform === "win32")("refuses an install where it does not block", async () => {
     // A shell that runs nothing: every check exits 0, which the line must never do on a failure.
@@ -518,6 +552,37 @@ describe("installing it in Codex", () => {
         expect(missing.diagnostics.outcome).toBe("spawn-error");
       },
     );
+
+    it.skipIf(process.platform !== "linux")("stops when the session's signal aborts, and says so", async () => {
+      const cancel = new AbortController();
+      setTimeout(() => cancel.abort("session closed"), 200);
+      const started = Date.now();
+      const r = await probeCodexHook({
+        command: "sleep 30",
+        cwd: workspace,
+        contextFile,
+        probeKey: PROBE_KEY,
+        shell: SH,
+        env: process.env,
+        signal: cancel.signal,
+      });
+      expect(r.blocked).toBe(false);
+      expect(r.diagnostics.outcome).toBe("cancelled");
+      expect(r.detail).toBe("the session was cancelled");
+      expect(Date.now() - started).toBeLessThan(5_000);
+      // The admission's deadline, given as the signal, reads as a timeout.
+      const late = await probeCodexHook({
+        command: "sleep 30",
+        cwd: workspace,
+        contextFile,
+        probeKey: PROBE_KEY,
+        shell: SH,
+        env: process.env,
+        signal: AbortSignal.timeout(200),
+      });
+      expect(late.diagnostics.outcome).toBe("timeout");
+      expect(late.detail).toBe("the admission deadline passed");
+    });
 
     it.skipIf(process.platform === "win32")("does not accept a receipt from an earlier probe", async () => {
       // A receipt for a nonce of the test's choosing, replayed to a probe that picked its own.

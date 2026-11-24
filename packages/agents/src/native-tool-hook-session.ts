@@ -55,7 +55,7 @@
  * removes the context file and the runtime record when the session ends.
  */
 import { spawn } from "node:child_process";
-import { createReadStream, existsSync } from "node:fs";
+import { createReadStream, existsSync, readdirSync, readFileSync } from "node:fs";
 import { mkdir, readdir, readFile, readlink, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { userInfo } from "node:os";
@@ -310,9 +310,11 @@ export const CODEX_HOOK_FAILED_REASON =
 export const CODEX_HOOK_OUTPUT_LIMIT = 4096;
 
 /**
- * The fail-closed line around one program, given as shell words (#1026). It reads at most
- * `CODEX_HOOK_OUTPUT_LIMIT` bytes of the program's stdout and stderr together, followed by its
- * exit status, and accepts only two verdicts, each in a strict form:
+ * The fail-closed line around one program, given as shell words (#1026). It keeps the
+ * program's completion apart from its output: the exit status is written to a file of its own
+ * only once the program has ended, and the program's stdout and stderr together go through
+ * `head` to another, at most one byte past `CODEX_HOOK_OUTPUT_LIMIT`. A missing status or
+ * output past the limit is never a verdict. It accepts only two, each in a strict form:
  *
  * - allow: exit 0 and no output at all;
  * - block: exit 2 and exactly one line of printable text beginning `Denied by ORCA: ` or
@@ -331,15 +333,19 @@ export function codexFailClosedLine(programWords: string): string {
     // A newline, without one in the command line itself.
     "nl=$(printf '\\nx')",
     "nl=${nl%x}",
-    // The status follows the output on a line of its own; both go through head, so the shell
-    // never holds more than the limit. The shell's own notice of a killed program ("Killed")
-    // is not part of the answer either.
-    `{ out=$( { timeout -s KILL ${CODEX_PRE_TOOL_PROGRAM_SECONDS} ${programWords} 2>&1; printf '\\n%s' "$?"; } | head -c ${CODEX_HOOK_OUTPUT_LIMIT}); } 2>/dev/null`,
-    `s=\${out##*"$nl"}`,
-    `out=\${out%"$nl"*}`,
-    `if [ "$s" = 0 ] && [ -z "$out" ]; then exit 0; fi`,
+    // The program's exit status and its output go to two files: the status only once the
+    // program has ended, the output through head, cut one byte past the limit so a cut is seen.
+    `d=$(mktemp -d 2>/dev/null) || ${fail}`,
+    `trap 'rm -rf "$d"' EXIT`,
+    // The shell's own notice of a killed program ("Killed") is not part of the answer either.
+    `{ { timeout -s KILL ${CODEX_PRE_TOOL_PROGRAM_SECONDS} ${programWords} 2>&1; printf '%s\\n' "$?" >"$d/s"; } | head -c ${CODEX_HOOK_OUTPUT_LIMIT + 1} >"$d/o"; } 2>/dev/null`,
+    // No status: the program did not run to its end. Output past the limit: no verdict.
+    `s=; read -r s <"$d/s" 2>/dev/null`,
+    `n=$(wc -c <"$d/o" 2>/dev/null)`,
+    `[ "$n" -le ${CODEX_HOOK_OUTPUT_LIMIT} ] 2>/dev/null || ${fail}`,
+    `if [ "$s" = 0 ] && [ "$n" = 0 ]; then exit 0; fi`,
     `[ "$s" = 2 ] || ${fail}`,
-    `out=\${out%"$nl"}`,
+    `out=$(head -c ${CODEX_HOOK_OUTPUT_LIMIT} "$d/o")`,
     `r=\${out%%"$nl"*}`,
     `rest=\${out#"$r"}`,
     `rest=\${rest#"$nl"}`,
@@ -363,6 +369,110 @@ export function codexPreToolHookCommand(runtime: string, script: string, context
 }
 
 /**
+ * Kill every process in session `sid` (Linux). The hook shell is started as its own session
+ * leader; `timeout` moves the program into a process group of its own, so killing the shell's
+ * group alone would leave the program running. Twice, for anything started while the first
+ * pass ran.
+ */
+function killSession(sid: number): void {
+  if (process.platform !== "linux") return;
+  for (let pass = 0; pass < 2; pass++) {
+    let pids: string[];
+    try {
+      pids = readdirSync("/proc").filter((d) => /^\d+$/.test(d));
+    } catch {
+      return;
+    }
+    for (const pid of pids) {
+      try {
+        const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+        const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+        if (Number(fields[3]) === sid) process.kill(Number(pid), "SIGKILL");
+      } catch {
+        // Gone, or not ours to read.
+      }
+    }
+  }
+}
+
+/** How one run of a command in the hook shell ended (`runInHookShell`). */
+type HookShellRun =
+  | { ended: "exit"; code: number | null; signal: NodeJS.Signals | null; stderr: string }
+  | { ended: "overflow" | "aborted"; stderr: string; reason?: unknown }
+  | { ended: "spawn-error"; code: string; stderr: string };
+
+/**
+ * Run one command line in the hook shell, as Codex runs the hook, in its own process group,
+ * reading at most `stderrLimit` bytes of stderr. It ends when the shell has exited and its
+ * streams have closed (`exit`), when stderr passes the limit (`overflow`), or when `signal`
+ * aborts (`aborted`, with the signal's reason). On overflow and abort it settles at once,
+ * kills the whole process group and every process in the shell's session (`killSession`, as
+ * `timeout` puts the program in a group of its own) and destroys its streams, so nothing the
+ * command started keeps running or keeps the caller waiting. Completion (`exit`, with its code) is never taken from the output.
+ */
+function runInHookShell(opts: {
+  shell: { program: string; args: string[] };
+  command: string;
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+  stdin: string | undefined;
+  stderrLimit: number;
+  signal: AbortSignal;
+}): Promise<HookShellRun> {
+  return new Promise((resolve) => {
+    let stderr = "";
+    if (opts.signal.aborted) {
+      resolve({ ended: "aborted", stderr, reason: opts.signal.reason });
+      return;
+    }
+    let settled = false;
+    const child = spawn(opts.shell.program, [...opts.shell.args, opts.command], {
+      cwd: opts.cwd,
+      env: opts.env,
+      stdio: [opts.stdin === undefined ? "ignore" : "pipe", "ignore", "pipe"],
+      // Its own session and process group, so everything the command starts can be found.
+      detached: true,
+    });
+    const stop = () => {
+      try {
+        if (child.pid !== undefined) process.kill(-child.pid, "SIGKILL");
+      } catch {
+        // Already gone.
+      }
+      if (child.pid !== undefined) killSession(child.pid);
+      child.kill("SIGKILL");
+      child.stdin?.destroy();
+      child.stderr?.destroy();
+    };
+    const settle = (run: HookShellRun) => {
+      if (settled) return;
+      settled = true;
+      opts.signal.removeEventListener("abort", onAbort);
+      stop();
+      resolve(run);
+    };
+    const onAbort = () => settle({ ended: "aborted", stderr, reason: opts.signal.reason });
+    opts.signal.addEventListener("abort", onAbort, { once: true });
+    child.stderr?.on("data", (d: Buffer) => {
+      stderr += d.toString();
+      if (Buffer.byteLength(stderr, "utf8") > opts.stderrLimit) settle({ ended: "overflow", stderr });
+    });
+    child.stderr?.on("error", () => undefined);
+    child.on("error", (e: NodeJS.ErrnoException) => settle({ ended: "spawn-error", code: errnoCode(e.code), stderr }));
+    child.on("close", (code, signal) => settle({ ended: "exit", code, signal, stderr }));
+    child.stdin?.on("error", () => undefined);
+    child.stdin?.end(opts.stdin);
+  });
+}
+
+/** One deadline for the whole of a Codex session's admission checks, in milliseconds. */
+export const CODEX_ADMISSION_DEADLINE_MS = 45_000;
+
+/** Why an admission check stopped early: its deadline, or the session's own cancellation. */
+const abortedBy = (reason: unknown, deadline: AbortSignal | undefined): "timeout" | "cancelled" =>
+  reason instanceof DOMException && reason.name === "TimeoutError" && deadline !== undefined ? "timeout" : "cancelled";
+
+/**
  * Programs that fail in the ways the line must block, for `checkCodexFailClosedLine`: each a
  * Node one-liner run by the same runtime as ORCA's hook.
  */
@@ -378,55 +488,52 @@ const FAIL_CLOSED_CHECKS: readonly { name: string; code: string }[] = [
  * Check at admission that the fail-closed line blocks on this install (#1026): run it, as
  * Codex would (`codexHookShell`, in the session's directory), around programs that crash,
  * exit 2 quietly, answer allow with output, answer a block in another form and overflow the
- * limit, and require exit 2 with exactly `CODEX_HOOK_FAILED_REASON` each time. A shell, a
- * `timeout` or a `head` that does not behave as the line needs fails here, and the session is
- * refused, rather than letting a later failure of ORCA's program through. The startup probe
- * (`probeCodexHook`) checks the other half: that ORCA's own block passes through the line.
+ * limit, and require each run to end with exit 2 and exactly `CODEX_HOOK_FAILED_REASON` on
+ * stderr. A shell, `mktemp`, `timeout`, `head` or `wc` that does not behave as the line needs
+ * fails here, and the session is refused, rather than letting a later failure of ORCA's
+ * program through. The startup probe (`probeCodexHook`) checks the other half: that ORCA's
+ * own block passes through the line.
+ *
+ * The checks run one at a time under `signal`, the admission's single deadline joined with
+ * the session's cancellation: when it aborts, the running check is stopped with its process
+ * group and nothing further starts.
  */
 export async function checkCodexFailClosedLine(opts: {
   runtime: string;
   cwd: string;
   shell: { program: string; args: string[] };
   env?: NodeJS.ProcessEnv | undefined;
-  timeoutMs?: number | undefined;
+  signal?: AbortSignal | undefined;
 }): Promise<{ ok: true } | { ok: false; check: string; detail: string }> {
   const expected = `${CODEX_HOOK_FAILED_REASON}\n`;
+  const signal = opts.signal ?? AbortSignal.timeout(CODEX_ADMISSION_DEADLINE_MS);
   for (const check of FAIL_CLOSED_CHECKS) {
-    const line = codexFailClosedLine([opts.runtime, "-e", check.code].map(shellWord).join(" "));
-    const got = await new Promise<{ code: number | null; stderr: string; error?: string }>((resolve) => {
-      const child = spawn(opts.shell.program, [...opts.shell.args, line], {
-        cwd: opts.cwd,
-        env: opts.env ?? process.env,
-        stdio: ["ignore", "ignore", "pipe"],
-        detached: true,
-      });
-      let stderr = "";
-      const timer = setTimeout(() => {
-        try {
-          if (child.pid !== undefined) process.kill(-child.pid, "SIGKILL");
-        } catch {
-          // Already gone.
-        }
-        resolve({ code: null, stderr, error: "timeout" });
-      }, opts.timeoutMs ?? 10_000);
-      child.stderr.on("data", (d: Buffer) => {
-        if (stderr.length <= expected.length) stderr += d.toString();
-      });
-      child.on("error", (e: NodeJS.ErrnoException) => {
-        clearTimeout(timer);
-        resolve({ code: null, stderr, error: errnoCode(e.code) });
-      });
-      child.on("close", (code) => {
-        clearTimeout(timer);
-        resolve({ code, stderr });
-      });
+    const run = await runInHookShell({
+      shell: opts.shell,
+      command: codexFailClosedLine([opts.runtime, "-e", check.code].map(shellWord).join(" ")),
+      cwd: opts.cwd,
+      env: opts.env ?? process.env,
+      stdin: undefined,
+      stderrLimit: Buffer.byteLength(expected),
+      signal,
     });
-    if (got.code !== 2 || got.stderr !== expected)
-      return {
-        ok: false,
-        check: check.name,
-        detail: got.error ?? (got.code !== 2 ? `exit ${got.code}` : "another reason than the line's own"),
-      };
+    const detail = ((): string | undefined => {
+      switch (run.ended) {
+        case "aborted":
+          return abortedBy(run.reason, signal) === "timeout"
+            ? "the admission deadline passed"
+            : "the session was cancelled";
+        case "spawn-error":
+          return `the shell could not be started (${run.code})`;
+        case "overflow":
+          return "more on stderr than the line's reason";
+        case "exit":
+          if (run.signal !== null) return `killed by ${run.signal}`;
+          if (run.code !== 2) return `exit ${run.code}`;
+          return run.stderr === expected ? undefined : "another reason than the line's own";
+      }
+    })();
+    if (detail !== undefined) return { ok: false, check: check.name, detail };
   }
   return { ok: true };
 }
@@ -523,7 +630,7 @@ const PROBE_STDERR_LIMIT = 16 * 1024;
 
 export interface CodexProbeDiagnostics {
   /** How the probe ended; only `blocked` lets the session open. */
-  outcome: "blocked" | "timeout" | "overflow" | "spawn-error" | "signal" | "exit" | "no-receipt";
+  outcome: "blocked" | "timeout" | "cancelled" | "overflow" | "spawn-error" | "signal" | "exit" | "no-receipt";
   /** The shell the command ran in. */
   shell: string;
   exitCode?: number | null;
@@ -561,7 +668,7 @@ const RECEIPT_LINE = /^orca-hook-receipt:/;
  * refusal at once, kills the command's whole process group and closes its streams, so a
  * descendant still holding a descriptor cannot keep the session's startup waiting.
  */
-export function probeCodexHook(opts: {
+export async function probeCodexHook(opts: {
   command: string;
   cwd: string;
   contextFile: string;
@@ -570,7 +677,10 @@ export function probeCodexHook(opts: {
   /** The shell to run it in, as Codex would (`codexHookShell`). */
   shell: { program: string; args: string[] };
   env?: NodeJS.ProcessEnv | undefined;
+  /** Its own deadline; by default Codex's hook timeout, when no `signal` is given. */
   timeoutMs?: number | undefined;
+  /** Stops the probe (the admission's deadline joined with the session's cancellation). */
+  signal?: AbortSignal | undefined;
 }): Promise<{ blocked: boolean; detail: string; diagnostics: CodexProbeDiagnostics }> {
   const env = opts.env ?? process.env;
   const shell = opts.shell.program;
@@ -596,71 +706,61 @@ export function probeCodexHook(opts: {
     return matched ? "matched" : lines.some((line) => RECEIPT_LINE.test(line)) ? "mismatched" : "absent";
   };
   const started = Date.now();
-  return new Promise((resolve) => {
-    let settled = false;
-    let stderr = "";
-    const child = spawn(shell, [...opts.shell.args, opts.command], {
-      cwd: opts.cwd,
-      env,
-      stdio: ["pipe", "ignore", "pipe"],
-      // Its own process group, so everything the command starts can be stopped with it.
-      detached: true,
-    });
-    const stop = () => {
-      try {
-        if (child.pid !== undefined) process.kill(-child.pid, "SIGKILL");
-      } catch {
-        // Already gone.
-      }
-      child.kill("SIGKILL");
-      child.stdin.destroy();
-      child.stderr.destroy();
-    };
-    const settle = (
-      outcome: CodexProbeDiagnostics["outcome"],
-      detail: string,
-      extra: Pick<CodexProbeDiagnostics, "exitCode" | "signal"> = {},
-    ) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      stop();
-      resolve({
-        blocked: outcome === "blocked",
-        detail,
-        diagnostics: {
-          outcome,
-          shell,
-          ...extra,
-          stderrBytes: Buffer.byteLength(stderr, "utf8"),
-          receipt: receipt(stderr),
-          elapsedMs: Date.now() - started,
-        },
-      });
-    };
-    const timeoutMs = opts.timeoutMs ?? CODEX_PRE_TOOL_TIMEOUT_SECONDS * 1000;
-    const timer = setTimeout(() => settle("timeout", `the hook did not answer within ${timeoutMs} ms`), timeoutMs);
-    child.stderr.on("data", (d: Buffer) => {
-      stderr += d.toString();
-      if (Buffer.byteLength(stderr, "utf8") > PROBE_STDERR_LIMIT)
-        settle("overflow", "the hook wrote more than the probe reads");
-    });
-    child.stderr.on("error", () => undefined);
-    // What the command wrote is never quoted: a login shell's profile writes there too, and a
-    // refusal is shown and stored. The detail is a fixed phrase per outcome plus bounded numbers.
-    child.on("error", (e: NodeJS.ErrnoException) =>
-      settle("spawn-error", `the shell could not be started (${errnoCode(e.code)})`),
-    );
-    child.on("close", (code, signal) => {
-      if (signal) settle("signal", `killed by ${signal}`, { signal });
-      else if (code !== 2) settle("exit", `exit ${code}`, { exitCode: code });
-      else if (receipt(stderr) !== "matched")
-        settle("no-receipt", "exit 2 without ORCA's hook's receipt for this call", { exitCode: code });
-      else settle("blocked", "blocked, with the hook's receipt", { exitCode: code });
-    });
-    child.stdin.on("error", () => undefined);
-    child.stdin.end(frame);
+  // Its own deadline unless the caller gives one; the caller's signal stops it either way.
+  const deadline =
+    opts.signal === undefined || opts.timeoutMs !== undefined
+      ? AbortSignal.timeout(opts.timeoutMs ?? CODEX_PRE_TOOL_TIMEOUT_SECONDS * 1000)
+      : undefined;
+  const signal = AbortSignal.any([...(deadline ? [deadline] : []), ...(opts.signal ? [opts.signal] : [])]);
+  const run = await runInHookShell({
+    shell: opts.shell,
+    command: opts.command,
+    cwd: opts.cwd,
+    env,
+    stdin: frame,
+    stderrLimit: PROBE_STDERR_LIMIT,
+    signal,
   });
+  const result = (
+    outcome: CodexProbeDiagnostics["outcome"],
+    detail: string,
+    extra: Pick<CodexProbeDiagnostics, "exitCode" | "signal"> = {},
+  ) => ({
+    blocked: outcome === "blocked",
+    detail,
+    diagnostics: {
+      outcome,
+      shell,
+      ...extra,
+      stderrBytes: Buffer.byteLength(run.stderr, "utf8"),
+      receipt: receipt(run.stderr),
+      elapsedMs: Date.now() - started,
+    },
+  });
+  // What the command wrote is never quoted: a login shell's profile writes there too, and a
+  // refusal is shown and stored. The detail is a fixed phrase per outcome plus bounded numbers.
+  // Only a command that ran to its end can block; its output alone never decides.
+  switch (run.ended) {
+    case "aborted":
+      return deadline?.aborted
+        ? result(
+            "timeout",
+            `the hook did not answer within ${opts.timeoutMs ?? CODEX_PRE_TOOL_TIMEOUT_SECONDS * 1000} ms`,
+          )
+        : abortedBy(run.reason, opts.signal) === "timeout"
+          ? result("timeout", "the admission deadline passed")
+          : result("cancelled", "the session was cancelled");
+    case "overflow":
+      return result("overflow", "the hook wrote more than the probe reads");
+    case "spawn-error":
+      return result("spawn-error", `the shell could not be started (${run.code})`);
+    case "exit":
+      if (run.signal) return result("signal", `killed by ${run.signal}`, { signal: run.signal });
+      if (run.code !== 2) return result("exit", `exit ${run.code}`, { exitCode: run.code });
+      if (receipt(run.stderr) !== "matched")
+        return result("no-receipt", "exit 2 without ORCA's hook's receipt for this call", { exitCode: run.code });
+      return result("blocked", "blocked, with the hook's receipt", { exitCode: run.code });
+  }
 }
 
 /* ------------------------------------ both ------------------------------------ */
@@ -693,6 +793,8 @@ export interface NativeToolHookSessionOptions {
   codexProcess?: ((agentPid: number | undefined) => Promise<{ pid: number } | { error: string }>) | undefined;
   /** The shell Codex runs hooks in; `codexHookShell` unless a test says otherwise. */
   codexShell?: (() => { program: string; args: string[] } | { error: string }) | undefined;
+  /** The single deadline for a Codex session's admission checks; `CODEX_ADMISSION_DEADLINE_MS` by default. */
+  codexAdmissionDeadlineMs?: number | undefined;
   /** The environment Codex runs hooks in; `codexHookEnvironment` unless a test says otherwise. */
   codexEnvironment?: ((pid: number) => Promise<NodeJS.ProcessEnv | { error: string }>) | undefined;
   /**
@@ -784,6 +886,8 @@ export interface NativeToolHookSession {
     agentInfo: { name: string; version: string } | undefined,
     ext: (method: string, params: Record<string, unknown>) => Promise<unknown>,
     agentPid: number | undefined,
+    /** The session's cancellation; a Codex admission stops its checks when it aborts. */
+    signal?: AbortSignal,
   ) => Promise<Record<string, unknown> | undefined>;
   /** Which agent took the hook, and whether its runtime has been attested. */
   status: () => NativeToolHookStatus;
@@ -929,7 +1033,7 @@ export function nativeToolHookSession(opts: NativeToolHookSessionOptions): Nativ
       codexEnv = codexHookConfig(opts.agentEnv["CODEX_CONFIG"], codexCommand);
       return { env: { ...(opts.runtimeEnv ?? {}), ...(codexEnv === undefined ? {} : { CODEX_CONFIG: codexEnv }) } };
     },
-    sessionMeta: async (agentInfo, ext, agentPid) => {
+    sessionMeta: async (agentInfo, ext, agentPid, cancelled) => {
       if (file === undefined || opts.script === undefined || codexCommand === undefined || probeKey === undefined)
         throw refuse("the hook was not prepared before the agent started");
       const key = probeKey;
@@ -966,10 +1070,36 @@ export function nativeToolHookSession(opts: NativeToolHookSessionOptions): Nativ
           throw refuse(
             "the agent's own CODEX_CONFIG already sets hooks, or is not a JSON object, so ORCA cannot add its own",
           );
+        // One deadline for every check below, joined with the session's own cancellation:
+        // when either fires, the step running is stopped and nothing further starts.
+        const deadline = AbortSignal.timeout(opts.codexAdmissionDeadlineMs ?? CODEX_ADMISSION_DEADLINE_MS);
+        const admission = cancelled ? AbortSignal.any([deadline, cancelled]) : deadline;
+        const stopped = async <T>(step: Promise<T>): Promise<T> => {
+          let onAbort = () => undefined as void;
+          const aborted = new Promise<never>((_, reject) => {
+            onAbort = () =>
+              reject(
+                refuse(
+                  deadline.aborted
+                    ? "ORCA's startup checks of the hook did not finish within their deadline"
+                    : "the session ended before ORCA's startup checks of the hook finished",
+                  { admission: deadline.aborted ? "timeout" : "cancelled" },
+                ),
+              );
+            if (admission.aborted) onAbort();
+            else admission.addEventListener("abort", onAbort, { once: true });
+          });
+          try {
+            return await Promise.race([step, aborted]);
+          } finally {
+            admission.removeEventListener("abort", onAbort);
+          }
+        };
         let listed: unknown;
         try {
-          listed = await ext("_codex/hooks/list", { cwd: opts.workspaceCwd });
+          listed = await stopped(ext("_codex/hooks/list", { cwd: opts.workspaceCwd }));
         } catch (error) {
+          if (admission.aborted) throw error;
           throw refuse(
             `the adapter could not list its hooks (${error instanceof Error ? error.message : String(error)})`,
           );
@@ -977,30 +1107,35 @@ export function nativeToolHookSession(opts: NativeToolHookSessionOptions): Nativ
         const problem = codexHookListProblem(listed, codexCommand);
         if (problem !== undefined) throw refuse(problem);
         // The adapter has started Codex by now (it answered from it); attest that process.
-        const found = await (opts.codexProcess ?? codexRuntimeProcess)(agentPid);
+        const found = await stopped((opts.codexProcess ?? codexRuntimeProcess)(agentPid));
         if ("error" in found) throw refuse(`ORCA could not tell which Codex the adapter runs (${found.error})`);
-        await attest(CODEX_HOOK_VERIFIED_PAIRS, agentInfo.version, found.pid, "Codex");
+        await stopped(attest(CODEX_HOOK_VERIFIED_PAIRS, agentInfo.version, found.pid, "Codex"));
         // The probe runs in the environment Codex itself will give the hook, not in a copy of
         // what ORCA meant to give the agent.
-        const env = await (opts.codexEnvironment ?? codexHookEnvironment)(found.pid);
+        const env = await stopped((opts.codexEnvironment ?? codexHookEnvironment)(found.pid));
         if ("error" in env) throw refuse(`ORCA could not run its startup check as Codex runs the hook: ${env.error}`);
         const shell = (opts.codexShell ?? codexHookShell)();
         if ("error" in shell)
           throw refuse(`ORCA could not run its startup check as Codex runs the hook: ${shell.error}`);
-        const line = await checkCodexFailClosedLine({ runtime: opts.runtime, cwd: opts.workspaceCwd, shell, env });
+        const line = await stopped(
+          checkCodexFailClosedLine({ runtime: opts.runtime, cwd: opts.workspaceCwd, shell, env, signal: admission }),
+        );
         if (!line.ok)
           throw refuse(
             `the fail-closed line around the hook does not block on this install (${line.check}: ${line.detail})`,
             { failClosedCheck: line.check },
           );
-        const probe = await probeCodexHook({
-          command: codexCommand,
-          cwd: opts.workspaceCwd,
-          contextFile: file,
-          probeKey: key,
-          shell,
-          env,
-        });
+        const probe = await stopped(
+          probeCodexHook({
+            command: codexCommand,
+            cwd: opts.workspaceCwd,
+            contextFile: file,
+            probeKey: key,
+            shell,
+            env,
+            signal: admission,
+          }),
+        );
         if (!probe.blocked)
           throw refuse(`the hook did not block a call it must block when run as Codex runs it (${probe.detail})`, {
             probe: probe.diagnostics,
