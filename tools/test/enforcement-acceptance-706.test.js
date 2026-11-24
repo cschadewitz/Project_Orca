@@ -74,9 +74,35 @@ describe("the matrix checker refuses claims beyond the evidence", () => {
     matrix.paths.find((p) => p.id === "acp-ask"),
     catalogue,
   );
+  /**
+   * The structure tests run every installed case on the program, so each route path gets an
+   * `installed` entry listing all its cases; the live/program rules are tested on their own below.
+   */
+  const withInstalled = (paths) =>
+    paths.map((p) =>
+      p.connected
+        ? p
+        : {
+            ...p,
+            installed: {
+              program: Object.fromEntries(
+                casesFor(p, catalogue).map((id) => [id, "a fixture: every case on the program"]),
+              ),
+            },
+          },
+    );
+  const testPaths = withInstalled(matrix.paths);
+  const shownRefused = matrix.agents
+    .find((a) => a.id === "claude")
+    .unsupportedRoutes.map((route) => ({
+      route,
+      result: "refused",
+      how: "shown refused on the installed agent by a probe",
+    }));
   const receipt = (extra = {}) => ({
     format: "orca-enforcement-receipt/1",
     kind: "installed",
+    uncoveredRoutes: shownRefused,
     agent: "claude",
     agentVersion: "2.1.330",
     adapterVersion: "0.109.1",
@@ -84,7 +110,7 @@ describe("the matrix checker refuses claims beyond the evidence", () => {
     route: "acp-ask",
     build,
     checks: { connects: "pass", uncoveredRoutesRefused: "pass" },
-    cases: acpCases.map((id) => ({ id, result: "pass" })),
+    cases: acpCases.map((id) => ({ id, result: "pass", via: "program" })),
     ...extra,
   });
   /**
@@ -104,7 +130,7 @@ describe("the matrix checker refuses claims beyond the evidence", () => {
   };
   /** The structural checks, with every receipt's attestation taken as verified. */
   const attested = () => [];
-  const check = (agent, files = {}, paths = matrix.paths, assertions = inventoryFor(paths), verify = attested) =>
+  const check = (agent, files = {}, paths = testPaths, assertions = inventoryFor(paths), verify = attested) =>
     checkSupportMatrix(
       { ...matrix, agents: [{ ...agent, receipts: Object.keys(files) }], paths },
       catalogue,
@@ -128,7 +154,7 @@ describe("the matrix checker refuses claims beyond the evidence", () => {
     expect(check(claude({ tier: "B" }), { "r.json": receipt() })).toEqual([]);
     // The same receipt, with nothing verifying it (the function's default), is not evidence.
     const unverified = checkSupportMatrix(
-      { ...matrix, agents: [{ ...claude({ tier: "A" }), receipts: ["r.json"] }] },
+      { ...matrix, agents: [{ ...claude({ tier: "A" }), receipts: ["r.json"] }], paths: testPaths },
       catalogue,
       (p) => p === "r.json",
       () => receipt(),
@@ -138,7 +164,7 @@ describe("the matrix checker refuses claims beyond the evidence", () => {
     // A verifier's refusal is reported against the receipt, and the tier is not met.
     const forged = () => ["attestation does not verify: no matching attestations found"];
     expect(
-      check(claude({ tier: "B" }), { "r.json": receipt() }, matrix.paths, inventoryFor(matrix.paths), forged),
+      check(claude({ tier: "B" }), { "r.json": receipt() }, testPaths, inventoryFor(testPaths), forged),
     ).toEqual([
       `${needs("A")} (r.json: attestation does not verify: no matching attestations found)`,
       `${needs("B")} (r.json: attestation does not verify: no matching attestations found)`,
@@ -196,7 +222,7 @@ describe("the matrix checker refuses claims beyond the evidence", () => {
   );
   // The tier C rules on their own: a connected path that observes every lifecycle and bypass
   // case. The real matrix does not (B01 is unobserved on claude-connected), tested below.
-  const idealPaths = structuredClone(matrix.paths);
+  const idealPaths = structuredClone(testPaths);
   delete idealPaths.find((p) => p.id === "claude-connected").unobserved.B01;
   const connectedCases = qualifyingCases(
     idealPaths.find((p) => p.id === "claude-connected"),
@@ -230,7 +256,11 @@ describe("the matrix checker refuses claims beyond the evidence", () => {
             calls: evidence.map((call) => ({ ...call, toolUseId: `toolu_case${i}` })),
           })),
         })
-      : receipt({ kind, route: "claude-native-hook", cases: hookCases.map((id) => ({ id, result: "pass" })) });
+      : receipt({
+          kind,
+          route: "claude-native-hook",
+          cases: hookCases.map((id) => ({ id, result: "pass", via: "program" })),
+        });
   const hookAgent = (extra = {}) => claude({ tier: "C", routes: ["claude-native-hook"], ...extra });
 
   it("tier C needs the installed receipts below it as well as the connected one", () => {
@@ -396,7 +426,7 @@ describe("the matrix checker refuses claims beyond the evidence", () => {
   });
 
   it("tier C when its connected path cannot observe ORCA's decision for a bypass case", () => {
-    const paths = structuredClone(matrix.paths);
+    const paths = structuredClone(testPaths);
     paths.find((p) => p.id === "claude-connected").unobserved.B01 = "Pretend the agent refuses these calls first.";
     expect(
       structural(checkC(hookAgent(), { "i.json": onHook("installed"), "c.json": onHook("connected") }, paths)),

@@ -44,7 +44,15 @@ const MUST_COVER_FOR_C = ["lifecycle", "bypass"];
  * adapter version, host, route or build, a duplicate, failed or missing case, or a missing
  * connectivity check (every tier needs tier A's). Structural only. Empty when it holds.
  */
-export function receiptProblems(receipt, agent, route, kind, neededCases, assertions = loadAssertions()) {
+export function receiptProblems(
+  receipt,
+  agent,
+  route,
+  kind,
+  neededCases,
+  assertions = loadAssertions(),
+  routePath = undefined,
+) {
   const problems = [];
   if (receipt?.format !== "orca-enforcement-receipt/1") return ["not an orca-enforcement-receipt/1"];
   if (receipt.kind !== kind) problems.push(`kind ${receipt.kind}, needs ${kind}`);
@@ -66,6 +74,11 @@ export function receiptProblems(receipt, agent, route, kind, neededCases, assert
   // receipt's claim. A connected receipt proves one route end to end and does not make it.
   if (kind === "installed" && receipt.checks?.uncoveredRoutesRefused !== "pass")
     problems.push("needs checks.uncoveredRoutesRefused passing");
+  // Checked only on what claims to be installed evidence; any other kind is refused above.
+  if (kind === "installed" && receipt.kind === "installed") {
+    problems.push(...uncoveredRouteProblems(receipt, agent));
+    problems.push(...installedCaseProblems(receipt, neededCases, assertions, routePath));
+  }
   if (kind === "connected") {
     // The connected run's own narrow check (a session on an unpinned runtime is refused), kept
     // apart from the route coverage above, which it does not show.
@@ -163,6 +176,62 @@ export function connectedEvidenceProblems(
       else if (!want.expected.includes(call.outcome))
         problems.push(`${at}: outcome ${call.outcome} is not one its assertion accepts (${want.expected.join("|")})`);
     }
+  }
+  return problems;
+}
+
+/**
+ * An installed receipt's route coverage, entry by entry: every route the row lists as
+ * unsupported must be shown refused or asked about on the installed agent, saying how. A route
+ * that cannot be refused is not an unsupported route but a residual risk, and is listed there.
+ */
+export function uncoveredRouteProblems(receipt, agent) {
+  const problems = [];
+  const shown = new Map((receipt.uncoveredRoutes ?? []).map((r) => [r.route, r]));
+  for (const route of agent.unsupportedRoutes ?? []) {
+    const r = shown.get(route);
+    if (!r) problems.push(`uncovered route not shown refused: ${route}`);
+    else if (!["refused", "asked"].includes(r.result) || typeof r.how !== "string" || r.how.trim().length < 20)
+      problems.push(`uncovered route needs result refused or asked, and how it was shown: ${route}`);
+  }
+  return problems;
+}
+
+/**
+ * How each case of an installed receipt ran on the installed agent, from the route's `installed`
+ * entry in the matrix:
+ *
+ * - `live`: through the real agent, driven by the runner of the connected path `installed.live`
+ *   names, with every call's evidence checked exactly as a connected receipt's is, against that
+ *   path's committed assertion inventory (`connectedEvidenceProblems`);
+ * - `program`: through ORCA's installed program as the agent would run it (the hook script,
+ *   the context file and settings the session factory wrote), only for the cases
+ *   `installed.program` lists, each with the reason a live agent cannot make that call.
+ *
+ * A route with no `installed` entry has no installed runner, so no installed receipt holds it
+ * beyond tier A.
+ */
+export function installedCaseProblems(receipt, neededCases, assertions, routePath) {
+  if (neededCases.length === 0) return [];
+  const spec = routePath?.installed;
+  if (!spec) return [`route ${receipt.route} has no installed runner in the matrix`];
+  const problems = [];
+  const program = spec.program ?? {};
+  const live = [];
+  for (const c of (receipt.cases ?? []).filter((x) => neededCases.includes(x.id))) {
+    if (c.via === "program") {
+      if (!(c.id in program)) problems.push(`case ${c.id}: run on the program, but a live agent can make it`);
+    } else if (c.via === "live") live.push(c.id);
+    else problems.push(`case ${c.id}: needs via live or program`);
+  }
+  if (live.length) {
+    if (!spec.live) problems.push(`route ${receipt.route}: no live runner for cases ${live.join(",")}`);
+    else
+      problems.push(
+        ...connectedEvidenceProblems({ ...receipt, route: spec.live }, live, assertions).map(
+          (p) => `${p} (live, on ${spec.live})`,
+        ),
+      );
   }
   return problems;
 }
@@ -321,7 +390,8 @@ export function checkSupportMatrix(
         const good = receipts.filter(
           ({ receipt, trust }) =>
             trust.length === 0 &&
-            receiptProblems(receipt, agent, need.route, need.kind, need.cases, assertions).length === 0,
+            receiptProblems(receipt, agent, need.route, need.kind, need.cases, assertions, paths.get(need.route))
+              .length === 0,
         );
         if (good.length > 0) {
           met.add(need.route);
@@ -329,9 +399,10 @@ export function checkSupportMatrix(
         }
         if (need.tier === 3) continue;
         const why = receipts.flatMap(({ file, receipt, trust }) =>
-          [...receiptProblems(receipt, agent, need.route, need.kind, need.cases, assertions), ...trust].map(
-            (p) => `${file}: ${p}`,
-          ),
+          [
+            ...receiptProblems(receipt, agent, need.route, need.kind, need.cases, assertions, paths.get(need.route)),
+            ...trust,
+          ].map((p) => `${file}: ${p}`),
         );
         problems.push(
           `${at}: tier ${TIERS[need.tier]} on ${route} needs a passing ${need.kind} receipt for ${agent.id} ${pin.agentVersion} on ${pin.host}` +
