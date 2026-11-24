@@ -6,7 +6,7 @@
 import { describe, expect, it } from "vitest";
 import { AgentRegistry, LocalHost, type AgentSession } from "@orca/agents";
 import { AgentSpecSchema, FakeClock, OrcaError, parseWorkflow, TemplateRegistry, WorkflowRegistry } from "@orca/core";
-import { LocalWorkspaceProvider, Orchestrator, type SessionFactory } from "@orca/engine";
+import { LocalWorkspaceProvider, Orchestrator, sessionCancelledBeforeOpen, type SessionFactory } from "@orca/engine";
 import { memoryStores } from "@orca/store";
 
 const HANDSHAKE_MS = 250;
@@ -141,5 +141,25 @@ describe("handshake health per agent", () => {
     expect(make({ failures: 0 }).agents.listHealth()).toEqual([
       { agentId: "fake", state: "unknown", consecutiveFailures: 0 },
     ]);
+  });
+});
+
+describe("a run cancelled before its agent was opened (#701)", () => {
+  it("is not a failed handshake, while any other factory error still is", async () => {
+    const quiet = make({ failures: 0 });
+    quiet.orchestrator.sessionFactory = async () => {
+      throw sessionCancelledBeforeOpen("cancelled while the judge was prepared");
+    };
+    const state = await quiet.orchestrator.startAndRun({ workflowId: "health" });
+    expect(state.run.status).not.toBe("completed");
+    expect(quiet.agents.health.get("fake")).toMatchObject({ state: "unknown", consecutiveFailures: 0 });
+
+    // The same code without the marker is a real failed open, and counts.
+    const loud = make({ failures: 0 });
+    loud.orchestrator.sessionFactory = async () => {
+      throw new OrcaError("CANCELLED", "cancelled mid-handshake");
+    };
+    await loud.orchestrator.startAndRun({ workflowId: "health" });
+    expect(loud.agents.health.get("fake")).toMatchObject({ state: "down", consecutiveFailures: 1 });
   });
 });

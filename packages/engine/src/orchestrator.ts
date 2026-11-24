@@ -164,6 +164,18 @@ export interface SessionOrigin {
 }
 export type SessionFactory = (options: OpenSessionOptions & { origin?: SessionOrigin }) => Promise<AgentSession>;
 
+const cancelledBeforeOpen = new WeakSet<object>();
+/**
+ * The error a session factory throws when the run was cancelled before it opened the agent at
+ * all (#701: during judge preparation). It is no handshake, so it is not counted against the
+ * agent's health; every other error from the factory still is.
+ */
+export function sessionCancelledBeforeOpen(message: string): OrcaError {
+  const error = new OrcaError("CANCELLED", message);
+  cancelledBeforeOpen.add(error);
+  return error;
+}
+
 export interface OrchestratorOptions {
   /** Trusted current authority for bounded first attachment of admitted roots. */
   admissionExecution?: AdmissionExecutionRuntime;
@@ -3314,7 +3326,9 @@ export class Orchestrator {
         },
       });
     } catch (e) {
-      if (!deniedAtDelivery) handshake.failed(e);
+      // Neither a refusal at delivery nor a run cancelled before the agent was opened is a
+      // failed handshake.
+      if (!deniedAtDelivery && !(e instanceof Error && cancelledBeforeOpen.has(e))) handshake.failed(e);
       // A failed open whose process was spawned carries that process's exit; its bounded
       // cleanup may have given up before observing it, so the slot waits for the exit too.
       // An exit that cannot be observed at all (the handle's promise rejects) is not evidence

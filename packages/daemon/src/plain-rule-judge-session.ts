@@ -12,8 +12,7 @@
  * - Floors kept: without a judge the session opens with exactly the options it was asked for,
  *   and a session that already carries a judge is never given another.
  */
-import { OrcaError } from "@orca/core";
-import type { SessionFactory } from "@orca/engine";
+import { sessionCancelledBeforeOpen, type SessionFactory } from "@orca/engine";
 import type {
   PlainRuleJudgeForSession,
   PlainRuleJudgeSource,
@@ -35,7 +34,8 @@ export function judgedSessionFactory(
     if (runId === undefined) return open(options);
     const run = origin?.signal ?? new AbortController().signal;
     // A cancelled run opens nothing, on every path below.
-    const cancelled = () => new OrcaError("CANCELLED", "the run was cancelled while its session was being prepared");
+    // Not a failed open: the agent was never started, so its health is not marked down.
+    const cancelled = () => sessionCancelledBeforeOpen("the run was cancelled while its session was being prepared");
     if (run.aborted) throw cancelled();
     // Never substitute: a session that already carries a judge keeps it.
     if (options.judgePermission !== undefined || options.judgeKinds !== undefined) return open(options);
