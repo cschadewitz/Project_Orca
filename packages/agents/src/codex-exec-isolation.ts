@@ -112,9 +112,10 @@
  * writable directory has to be that very directory in the namespace (the same file system
  * and place in it, and the same directory by ORCA's own look from outside). What a command
  * is given never opens what ORCA protects: a writable directory that is, or is inside, a
- * directory the masks keep read-only is refused before anything is started, and so are one
- * inside another and one with a protected directory inside it (a command could move a
- * directory above the protected one aside). And the namespace takes no mount from outside after it is made:
+ * directory the masks keep read-only is refused before anything is started, and so is one
+ * inside another. A protected directory inside a writable one is refused too, whether a
+ * command was given the writable one or it is an agent's area in the masks (a command could
+ * move a directory above the protected one aside). And the namespace takes no mount from outside after it is made:
  * bubblewrap leaves its mounts following the host's, so on a host that shares its mounts a
  * disk mounted there later would appear inside, writable. A closed executor is therefore
  * started through the system's `unshare`, in a mount namespace whose mounts are private
@@ -630,13 +631,18 @@ function maskArguments(masks: CodexExecMasks, writable: readonly string[] = []):
       throw new CodexExecIsolationError(`a writable directory is inside a directory that is kept read-only: ${path}`);
     if (writable.some((other) => inside(path, other)))
       throw new CodexExecIsolationError(`a writable directory is inside another: ${path}`);
-    // Nor is what ORCA protects left inside what a command is given. A mask there would hold
-    // at its own path, but a command could move a directory above it aside and put another
-    // in its place for whoever reads that path outside the namespace.
+    steps.push({ path, args: ["--bind", real(path, "writable"), path] });
+  }
+  // Nor is what ORCA protects left inside a writable directory, whichever list made it
+  // writable: what a command was given, or an agent's area. A mask there would hold at its
+  // own path, but a command could move a directory above it aside and put another in its
+  // place for whoever reads that path outside the namespace. That an agent's area is inside a
+  // read-only directory is what it is for; it does not make a protected directory inside the
+  // area safe.
+  for (const path of [...writable, ...masks.writable]) {
     const within = [...masks.readOnly, ...masks.hidden].find((root) => inside(root, path));
     if (within !== undefined)
       throw new CodexExecIsolationError(`a directory ORCA protects is inside a writable directory: ${within}`);
-    steps.push({ path, args: ["--bind", real(path, "writable"), path] });
   }
   for (const path of [...masks.readOnly, ...masks.writable])
     if (masks.hidden.some((root) => inside(path, root)))

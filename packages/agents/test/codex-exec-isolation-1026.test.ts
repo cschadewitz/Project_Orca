@@ -520,6 +520,36 @@ describe.skipIf(process.platform !== "linux")("what is refused before anything i
     refused({ ...none, writable: [join(root, "dir")] });
     refused({ hidden: [join(root, "dir")], readOnly: [join(root, "dir", "inner")], writable: [] });
   });
+
+  it("refuses an agent's area that has a protected directory inside it, though the area is inside a read-only one", async () => {
+    // An area is writable inside a directory ORCA keeps read-only: that is what it is for. It
+    // is no leave for a protected directory inside the area, which a command could move aside
+    // with a directory above it.
+    const kept = join(root, "kept");
+    const area = join(kept, "area");
+    await mkdir(join(area, "deep", "inner"), { recursive: true });
+    const refusal = (masks: CodexExecIsolatedSpawn["masks"], more: Partial<CodexExecIsolatedSpawn> = {}) => {
+      try {
+        spawnIsolatedCodexExecServer(spec(masks, more));
+      } catch (error) {
+        return error instanceof CodexExecIsolationError ? error.message : `another error: ${String(error)}`;
+      }
+      return "not refused";
+    };
+    const inside = (path: string) => `a directory ORCA protects is inside a writable directory: ${path}`;
+    for (const within of [join(area, "deep"), join(area, "deep", "inner")]) {
+      expect(refusal({ hidden: [], readOnly: [kept, within], writable: [area] })).toBe(inside(within));
+      expect(refusal({ hidden: [within], readOnly: [kept], writable: [area] })).toBe(inside(within));
+    }
+    // The same with a closed executor, whose own writable directory is elsewhere.
+    await mkdir(join(root, "given"));
+    expect(
+      refusal(
+        { hidden: [join(area, "deep")], readOnly: [kept], writable: [area] },
+        { closed: { writable: [join(root, "given")] } },
+      ),
+    ).toBe(inside(join(area, "deep")));
+  });
 });
 
 describe.skipIf(process.platform !== "linux")("what the kernel shows of a process", () => {
@@ -1741,13 +1771,8 @@ describe.skipIf(!USABLE && !REQUIRED)("an executor in namespaces ORCA makes", ()
   it("closed, is refused before anything is started when what is asked for is not closed", async () => {
     expect(() => isolate({ closed: { writable: [work] }, network: "host" })).toThrow(/has no network/);
     expect(() => isolate({ closed: { writable: [join(work, "not-there")] } })).toThrow(/not a directory's own path/);
-    // The whole file system is not a directory to give: with nothing protected in it, and with.
-    expect(() => isolate({ closed: { writable: ["/"] }, masks: { hidden: [], readOnly: [], writable: [] } })).toThrow(
-      /not a directory's own path/,
-    );
-    expect(() => isolate({ closed: { writable: ["/"] } })).toThrow(
-      /a directory ORCA protects is inside a writable directory/,
-    );
+    // The whole file system is not a directory to give.
+    expect(() => isolate({ closed: { writable: ["/"] } })).toThrow(/not a directory's own path/);
     expect(() => isolate({ closed: { writable: [join(config, "auth")] } })).toThrow(/a writable directory is hidden/);
     // What a command is given never opens what ORCA keeps read-only: not the directory, and
     // nothing inside it. The agent's area there is writable by the masks and no other way.
