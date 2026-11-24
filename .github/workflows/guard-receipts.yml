@@ -61,8 +61,6 @@ concurrency:
 env:
   CLAUDE_ADAPTER_VERSION: 0.109.1
   OTHER_CLAUDE_SDK_VERSION: 0.3.329
-  # As in claude-hook-acceptance.yml: remove once npm serves @anthropic-ai/sdk 1.13.0.
-  ANTHROPIC_SDK_OVERRIDE: 1.12.0
 
 jobs:
   claude:
@@ -90,7 +88,6 @@ jobs:
           mkdir -p "$d"
           cd "$d"
           npm init -y >/dev/null
-          npm pkg set "overrides.@anthropic-ai/sdk=${ANTHROPIC_SDK_OVERRIDE}"
           npm install --no-audit --no-fund --ignore-scripts "@agentclientprotocol/claude-agent-acp@${CLAUDE_ADAPTER_VERSION}"
           entry="$d/node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js"
           test -f "$entry"
