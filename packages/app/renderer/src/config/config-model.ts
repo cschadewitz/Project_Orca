@@ -579,13 +579,17 @@ export function lineOfPath(text: string, path: string): number | undefined {
 }
 
 /**
- * Whether plain-language rules change permission decisions in this build (#701). They do not
- * yet: the daemon's judge is wired but switched off until a separately reviewed activation, so
- * a saved rule is kept and shown but every call it would cover still goes to a person. The
- * activation changes this with the daemon's own switch, and both panels say which it is.
+ * Whether plain-language rules can change permission decisions in this build (#701). They can,
+ * once the judge is set up (the Config surface's checklist): until then a saved rule is kept and
+ * shown but every call it would cover still goes to a person. It follows the daemon's own switch;
+ * the setup checklist reads the daemon's answer (`judge.status`) where it has one.
  */
-export const PLAIN_RULES_ACTIVE = false;
+export const PLAIN_RULES_ACTIVE = true;
 
-/** Said wherever plain-language rules are listed while they are inactive. */
+/** Said wherever plain-language rules are listed: they decide nothing until the judge is set up. */
+export const PLAIN_RULES_SETUP_NOTE =
+  "Until the judge is set up (Config, Plain-language rule judge), every call these would cover goes to a person.";
+
+/** Said where a daemon reports its judge switched off in its build. */
 export const PLAIN_RULES_INACTIVE_NOTE =
   "Not active in this version of ORCA. Rules saved here are kept, but they do not change any permission decision yet: every call they would cover still goes to a person.";

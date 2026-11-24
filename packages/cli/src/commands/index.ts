@@ -1113,8 +1113,8 @@ async function serveDaemon(ctx: CommandContext, installedPluginRelease?: Install
   const workspaceId = await workspaceIdentity(storeDir);
   // The plain-rule review judge (#701): prepared per session from the judge config, the run
   // owner's key and disclosure grants and the qualified budget, from each run's pinned judge
-  // settings while they match the active generation's. Token mode only; it passes
-  // sessions through untouched while PLAIN_RULE_JUDGE_ACTIVE is false.
+  // settings while they match the active generation's. Token mode only: loopback keeps no
+  // grants, so a loopback session never gets a judge.
   if (authDir)
     app.orchestrator.sessionFactory = withPlainRuleJudge(
       app.orchestrator.sessionFactory,

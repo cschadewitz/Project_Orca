@@ -278,12 +278,13 @@ describe("the policy panel's plain-language rules", () => {
     expect(disk.text).toBe(malformed);
   });
 
-  it("says the rules are not active in this build", async () => {
+  it("says the rules decide nothing until the judge is set up, and is not marked inactive", async () => {
     sidecar(WITH_JUDGED);
     renderPanel();
     const section = await region("Plain-language rules");
-    expect(section.textContent).toContain("Not active in this version of ORCA");
-    expect(section.textContent).toContain("do not change any permission decision yet");
+    expect(section.textContent).toContain("Until the judge is set up (Config, Plain-language rule judge)");
+    expect(section.textContent).not.toContain("Not active in this version of ORCA");
+    expect(within(section).queryByText("inactive")).toBeNull();
   });
 
   it("removes one into the draft, and Save writes the file back at the version the rest needs", async () => {
@@ -358,8 +359,9 @@ describe("the Config surface's list", () => {
     expect(items).toHaveLength(2);
     expect(items[1]!.textContent).toContain("Reading the docs.");
     expect(items[1]!.textContent).toContain("expires");
-    // Inactive in this build, said on the list itself (#701 review).
-    expect(list.textContent).toContain("Not active in this version of ORCA");
+    // Active in this build; the list says what it takes before a rule decides anything (#701).
+    expect(list.textContent).toContain("Until the judge is set up");
+    expect(list.textContent).not.toContain("Not active in this version of ORCA");
     // The typed rules' numbering is untouched by them.
     expect(agentPolicies(CONFIG_GET.effective)[0]!.judged).toEqual([]);
   });

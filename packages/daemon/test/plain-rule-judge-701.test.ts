@@ -123,11 +123,13 @@ describe("#701 daemon plain-rule judge wiring", () => {
     expect(await source.prepare(session, signal)).toMatchObject({ status: "unavailable" });
   });
 
-  it("is inactive: the session factory is passed through untouched and nothing is prepared", async () => {
-    expect(PLAIN_RULE_JUDGE_ACTIVE).toBe(false);
+  it("is active: every session the factory opens is offered to the judge source first", async () => {
+    expect(PLAIN_RULE_JUDGE_ACTIVE).toBe(true);
     let prepared = 0;
-    const open: SessionFactory = async () => {
-      throw new Error("not opened in this test");
+    const opened: OpenSessionOptions[] = [];
+    const open: SessionFactory = async (options) => {
+      opened.push(options);
+      return { id: "s" } as never;
     };
     const wrapped = withPlainRuleJudge(open, {
       prepare: async () => {
@@ -135,8 +137,17 @@ describe("#701 daemon plain-rule judge wiring", () => {
         return { status: "unavailable", reason: "not-configured" };
       },
     });
-    expect(wrapped).toBe(open);
-    expect(prepared).toBe(0);
+    expect(wrapped).not.toBe(open);
+    const options = {
+      agent: { id: "a" },
+      host: local,
+      secrets,
+      origin: { runId: "r" },
+    } as unknown as OpenSessionOptions;
+    await wrapped(options);
+    expect(prepared).toBe(1);
+    // No judge: the very options asked for, nothing added or replaced.
+    expect(opened).toEqual([options]);
   });
 
   it("prepares only the experimental kinds the config turns on, each needing its own grant", async () => {

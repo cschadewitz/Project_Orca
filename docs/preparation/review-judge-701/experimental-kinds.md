@@ -1,6 +1,6 @@
 # Experimental judge kinds: edits, MCP calls, commands (#701)
 
-Status: **inactive**. Built behind `PLAIN_RULE_JUDGE_ACTIVE = false`, like the rest of the judge.
+Status: **experimental**, each kind off by default. Active with the rest of the judge (`PLAIN_RULE_JUDGE_ACTIVE`).
 Design agreed on [#701](https://github.com/cschadewitz/Project_Orca/issues/701) (Cal's answer to the
 per-kind switch, and the mapping posted back).
 

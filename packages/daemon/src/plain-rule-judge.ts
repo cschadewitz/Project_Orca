@@ -24,9 +24,11 @@
  * nothing the judge would only have added is replaced by an allow. A session already carrying a
  * judge (`judgePermission` or `judgeKinds`) is passed through untouched; this never substitutes one.
  *
- * Inactive. `PLAIN_RULE_JUDGE_ACTIVE` is `false`, and `withPlainRuleJudge` passes sessions
- * through untouched while it is. Turning it on is its own reviewed change; nothing here, and no
- * setting, can.
+ * Active as of the reviewed activation (#701). A session still gets a judge only when every piece
+ * above is in place: the config names one, the key is usable, the run's owner holds the disclosure
+ * grant and the budget is durable. Anything missing opens the session without one, and every call a
+ * plain-language rule would cover goes to the person as before. `PLAIN_RULE_JUDGE_ACTIVE` is the
+ * build's switch: no parameter or setting can turn it on or off.
  */
 import { isDeepStrictEqual } from "node:util";
 import type { OrcaConfig } from "@orca/core";
@@ -48,8 +50,8 @@ import { bindSecretUse, secretUseAuthority, type SecretUseAuthorityOptions } fro
 import type { QualifiedJudgeBudget } from "./judge-budget.js";
 import { judgedSessionFactory } from "./plain-rule-judge-session.js";
 
-/** Whether sessions are given a plain-rule judge at all. Changed only by the reviewed activation change. */
-export const PLAIN_RULE_JUDGE_ACTIVE = false as const;
+/** Whether sessions are given a plain-rule judge at all. Changed only by a reviewed change to this line. */
+export const PLAIN_RULE_JUDGE_ACTIVE = true as const;
 export { PLAIN_RULE_JUDGE_PREPARE_MS } from "./plain-rule-judge-session.js";
 
 /** Why a session got no judge: a fixed code, never a value or a provider's words. */
@@ -231,9 +233,8 @@ export type PlainRuleJudgeUnavailableListener = (info: {
 }) => void;
 
 /**
- * The session factory with the plain-rule judge bound to each session that can have one. While
- * `PLAIN_RULE_JUDGE_ACTIVE` is false it returns `open` unchanged in behaviour: nothing is prepared,
- * read or sent. `onUnavailable` hears why a session got no judge (for the log), never a value.
+ * The session factory with the plain-rule judge bound to each session that can have one. Were
+ * `PLAIN_RULE_JUDGE_ACTIVE` false it would return `open` unchanged: nothing prepared, read or sent. `onUnavailable` hears why a session got no judge (for the log), never a value.
  */
 export function withPlainRuleJudge(
   open: SessionFactory,

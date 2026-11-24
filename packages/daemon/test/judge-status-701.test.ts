@@ -32,7 +32,7 @@ describe("#701 judge.status model", () => {
   it("reports no judge, an invalid one, and a configured one without its key", () => {
     const budget = ready;
     expect(judgeStatus({ config: {}, auth: { mode: "loopback" }, budget, key: "present" })).toMatchObject({
-      active: false,
+      active: true,
       config: { state: "none" },
       auth: "loopback",
       grants: [],

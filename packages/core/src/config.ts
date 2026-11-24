@@ -121,8 +121,8 @@ export const OrcaConfigSchema = z
     secrets: SecretsConfigSchema.optional(),
     /**
      * Review judges (#701). `plainRules.judge` configures the hosted judge for plain-language
-     * permission rules; it is validated where it is used (`@orca/agents`), and nothing here turns
-     * a judge on.
+     * permission rules; it is validated where it is used (`@orca/agents`). A session gets a judge
+     * only once the owner's grant and the daily budget are in place too (docs/plain-language-rules.md).
      */
     review: z
       .object({
