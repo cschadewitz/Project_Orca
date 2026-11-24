@@ -18,6 +18,16 @@ export type JudgeStatusParams = z.infer<typeof JudgeStatusParamsSchema>;
 export const JUDGE_KINDS = ["reads", "edits", "mcpCalls", "commands"] as const;
 export type JudgeKind = (typeof JUDGE_KINDS)[number];
 
+export const JUDGE_KEY_STATES = [
+  "present",
+  "missing",
+  "not-found",
+  "destination-mismatch",
+  "unusable",
+  "withheld",
+] as const;
+export type JudgeKeyState = (typeof JUDGE_KEY_STATES)[number];
+
 export const JudgeConfigStatusSchema = z.discriminatedUnion("state", [
   /** No `review.plainRules.judge` in the active configuration. */
   z.object({ state: z.literal("none") }).strict(),
@@ -33,11 +43,16 @@ export const JudgeConfigStatusSchema = z.discriminatedUnion("state", [
       /** The secret reference that holds the judge's key. */
       credential: z.string().min(1),
       /**
-       * Whether that key is there now, read on the daemon's own machine and never shown:
-       * `present`, `missing` (unset, empty or unreadable), `not-found` (no such reference) or
-       * `not-local` (bound to another host; the judge reads its key on the daemon's machine).
+       * The judge's key, checked on the daemon's own machine from metadata, never read or shown:
+       * - `present`: usable by the judge and set now;
+       * - `missing`: usable, but unset or empty;
+       * - `not-found`: no such reference;
+       * - `destination-mismatch`: the reference is not pinned to this judge's destination;
+       * - `unusable`: the judge cannot use it (a file, another host, or a source another pinned
+       *   reference shares);
+       * - `withheld`: the caller may not see this reference (`secrets.read` and a grant naming it).
        */
-      key: z.enum(["present", "missing", "not-found", "not-local"]),
+      key: z.enum(JUDGE_KEY_STATES),
     })
     .strict(),
 ]);

@@ -1,40 +1,59 @@
 /**
  * The judge setup checklist (#701) on the Config surface: what is in place for plain-language
- * rules to be judged, and the owner command for each step that is not. Read-only; offered only
- * when the daemon lists `judge.status`, and read again when the connection changes.
+ * rules to be judged, and what is still to do. Read-only; offered only when the daemon lists
+ * `judge.status`. Bound to the daemon and authority it was read from: a change clears it and
+ * reads again, and a reply for an earlier one is dropped.
  */
 import { useEffect, useState, type JSX } from "react";
 import { JUDGE_STATUS_METHOD, type JudgeStatusResult } from "@orca/protocol";
 import { useMethodPresent } from "../chrome/use-connection.js";
 import { Chip, Text, textClass } from "../ui/index.js";
 import { PLAIN_RULES_ACTIVE, PLAIN_RULES_INACTIVE_NOTE } from "./config-model.js";
+import { currentEditorTarget, sameEditorTarget } from "./configuration-adapter.js";
 import { judgeSetupSteps, type JudgeStepState } from "./judge-setup-model.js";
+
+/** The same daemon and authority, or no daemon connection to tell apart at all. */
+const sameTarget = (a: ReturnType<typeof currentEditorTarget>, b: ReturnType<typeof currentEditorTarget>) =>
+  (a === undefined && b === undefined) || sameEditorTarget(a, b);
 
 const MARK: Record<JudgeStepState, string> = { done: "Done", todo: "To do", blocked: "Not possible here" };
 
 export function JudgeSetup(): JSX.Element | null {
   const offered = useMethodPresent(JUDGE_STATUS_METHOD);
-  const [status, setStatus] = useState<JudgeStatusResult | undefined>();
-  const [failed, setFailed] = useState(false);
+  /* What was read, and for which daemon and authority. A reply for any other is dropped, and
+     a change of daemon clears what was shown before the next read answers (#701 review). */
+  const [shown, setShown] = useState<{ status?: JudgeStatusResult; failed: boolean }>({ failed: false });
   useEffect(() => {
     const read = window.orca.config.judgeStatus;
     if (!offered || !read) return;
     let current = true;
-    const load = () =>
+    let asked = 0;
+    let observed = currentEditorTarget(window.orca);
+    const load = () => {
+      const ask = ++asked;
+      const target = currentEditorTarget(window.orca);
       void read().then((result) => {
-        if (!current) return;
-        if (result.ok) {
-          setStatus(result.result);
-          setFailed(false);
-        } else setFailed(true);
+        if (!current || ask !== asked) return;
+        if (!sameTarget(target, currentEditorTarget(window.orca))) return;
+        setShown(result.ok ? { status: result.result, failed: false } : { failed: true });
       });
+    };
+    setShown({ failed: false });
     load();
-    const unsubscribe = window.orca.daemonConnection?.subscribe(load);
+    const unsubscribe = window.orca.daemonConnection?.subscribe(() => {
+      const target = currentEditorTarget(window.orca);
+      if (sameTarget(target, observed)) return;
+      observed = target;
+      setShown({ failed: false });
+      load();
+    });
     return () => {
       current = false;
       unsubscribe?.();
     };
   }, [offered]);
+  const status = shown.status;
+  const failed = shown.failed;
   if (!offered || !window.orca.config.judgeStatus) return null;
   return (
     <section className="orca-config__section" aria-label="Plain-language rule judge">

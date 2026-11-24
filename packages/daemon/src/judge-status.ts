@@ -9,11 +9,14 @@
  * the judge would ask for that kind, as configured now. It does not look at a credential's
  * workflow scope: a run whose workflow a grant does not cover still gets no judge.
  */
-import { constants } from "node:fs";
-import { access, stat } from "node:fs/promises";
-import { plainRuleDisclosureQuery, type PlainRuleActionClass } from "@orca/agents/review-judge";
-import type { OrcaConfig } from "@orca/core";
-import type { JudgeBudgetStatus, JudgeGrantStatus, JudgeKind, JudgeStatusResult } from "@orca/protocol";
+import {
+  judgeSecretRef,
+  plainRuleDisclosureQuery,
+  secretJudgeCredentials,
+  type PlainRuleActionClass,
+} from "@orca/agents/review-judge";
+import type { HostSpec, OrcaConfig } from "@orca/core";
+import type { JudgeBudgetStatus, JudgeGrantStatus, JudgeKeyState, JudgeKind, JudgeStatusResult } from "@orca/protocol";
 import { disclosureGrantEntry, type Principal } from "./auth/principal.js";
 import type { JudgeBudgetInspection } from "./judge-budget.js";
 import { PLAIN_RULE_JUDGE_ACTIVE } from "./plain-rule-judge.js";
@@ -33,8 +36,11 @@ const KINDS: readonly {
 export interface JudgeStatusInputs {
   /** The active generation's configuration. */
   readonly config: Pick<OrcaConfig, "review"> | undefined;
-  /** Whether the configured key is there now (`judgeKeyStatus`); only read when a judge is configured. */
-  readonly key: JudgeKeyStatus;
+  /**
+   * Whether the configured key could be used and is there now (`judgeKeyStatus`), or `withheld`
+   * when the caller may not see that secret reference (`secrets.read` and its grant).
+   */
+  readonly key: JudgeKeyState;
   /** `token`: the caller's current credentials (`currentForPrincipal`); loopback keeps none. */
   readonly auth:
     | { readonly mode: "token"; readonly principal: string; readonly principals: readonly Principal[] }
@@ -87,30 +93,40 @@ function budgetStatus(inspection: JudgeBudgetInspection): JudgeBudgetStatus {
   return { state: "refused" };
 }
 
-export type JudgeKeyStatus = "present" | "missing" | "not-found" | "not-local";
+export type JudgeKeyStatus = JudgeKeyState;
 
 /**
- * Whether the judge's key is there now, on the daemon's own machine, without reading or keeping
- * it: an environment variable is checked for being set and non-empty, a file for being a
- * readable, non-empty regular file. A reference bound to a host that is not local is not probed.
+ * Whether the judge's key could be used, and whether it is there now, without reading or keeping
+ * it and without contacting the provider. Usability is the runtime's own metadata check
+ * (`secretJudgeCredentials(...).describe`, as preparation runs it): the reference exists, is
+ * pinned to this judge's destination, is an environment variable read on a local host, and
+ * shares its source with no other pinned reference. Only a usable reference is then checked for
+ * presence (set and non-empty). Never called for a caller who may not see the reference.
  */
 export async function judgeKeyStatus(
   config: Pick<OrcaConfig, "review" | "secrets" | "hosts"> | undefined,
   env: NodeJS.ProcessEnv = process.env,
-): Promise<JudgeKeyStatus> {
-  const credential = (config?.review?.plainRules?.judge as { credential?: unknown } | undefined)?.credential;
-  const ref = typeof credential === "string" ? config?.secrets?.[credential] : undefined;
-  if (ref === undefined) return "not-found";
-  if (config?.hosts.find((host) => host.id === ref.host)?.type !== "local") return "not-local";
-  if (ref.provider === "env") {
-    const value = env[ref.name];
-    return value !== undefined && value !== "" ? "present" : "missing";
-  }
-  try {
-    await access(ref.path, constants.R_OK);
-    const info = await stat(ref.path);
-    return info.isFile() && info.size > 0 ? "present" : "missing";
-  } catch {
-    return "missing";
-  }
+): Promise<JudgeKeyState> {
+  const judge = config?.review?.plainRules?.judge;
+  const credential = (judge as { credential?: unknown } | undefined)?.credential;
+  const query = plainRuleDisclosureQuery(judge);
+  if (typeof credential !== "string" || query === undefined) return "not-found";
+  const secrets = config?.secrets ?? {};
+  const def = Object.hasOwn(secrets, credential) ? secrets[credential] : undefined;
+  if (def === undefined) return "not-found";
+  // The judge reads its key on a local host; a reference bound elsewhere is unusable, not probed.
+  const spec = config?.hosts.find((h) => h.id === def.host) ?? { id: def.host, type: "ssh" as const, host: "" };
+  const refuse = () => Promise.reject(new Error("judge.status never authorizes a use"));
+  const binding = await secretJudgeCredentials({
+    secrets: () => secrets,
+    host: { id: def.host, spec: spec as HostSpec },
+    authorize: refuse,
+    authorizedNow: () => false,
+    agentId: "judge-status",
+  }).describe(judgeSecretRef(credential), new AbortController().signal);
+  if (binding === null) return "not-found";
+  if (binding.destination !== query.destination) return "destination-mismatch";
+  if (binding.available !== true || def.provider !== "env") return "unusable";
+  const value = env[def.name];
+  return value !== undefined && value !== "" ? "present" : "missing";
 }

@@ -684,28 +684,41 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
   }
   if (opts.judgeStatusSource) {
     const source = opts.judgeStatusSource;
-    ctx.judgeStatus = async (invocation) => {
+    // Who may see the judge's key reference: the same boundary as `secrets.check`.
+    const secretsModel = opts.secretsSource ? new SecretsReadModel(opts.secretsSource) : undefined;
+    /** The caller as it is now: a revoked or narrowed credential stops answering. */
+    const current = (invocation: MethodContext): Principal => {
       const bound = principalOf(invocation);
       if (!bound) throw authRequired();
-      let principals: readonly Principal[] | undefined;
-      let principal: string | undefined;
-      if (auth.mode === "token") {
-        // The caller as it is now: a revoked or narrowed credential stops answering.
-        const credentialId = bound.principal.credentialId;
-        if (!credentialId) throw authRequired();
-        const latest = auth.credentials.current(credentialId);
-        if (!latest.ok) throw authInvalid();
-        if (latest.principal.id !== bound.principal.id || !holds(latest.principal, "config.read"))
-          throw authForbidden();
-        principal = latest.principal.id;
-        principals = auth.credentials.currentForPrincipal(principal);
-      }
+      if (auth.mode !== "token") return bound.principal;
+      const credentialId = bound.principal.credentialId;
+      if (!credentialId) throw authRequired();
+      const latest = auth.credentials.current(credentialId);
+      if (!latest.ok) throw authInvalid();
+      if (latest.principal.id !== bound.principal.id || !holds(latest.principal, "config.read")) throw authForbidden();
+      return latest.principal;
+    };
+    ctx.judgeStatus = async (invocation) => {
+      const before = current(invocation);
       const config = source.config();
+      const credential = (config?.review?.plainRules?.judge as { credential?: unknown } | undefined)?.credential;
+      // The key is probed only for a caller who may see that reference; otherwise it is withheld unprobed.
+      const mayProbe =
+        typeof credential === "string" && secretsModel !== undefined && secretsModel.sees(before, credential);
+      const budget = await source.budget();
+      const key = mayProbe ? await judgeKeyStatus(config) : "withheld";
+      // Again after the awaits, before anything is answered: the caller, its permission, its
+      // secret visibility and its grants as they are now.
+      const after = current(invocation);
+      const visible = mayProbe && secretsModel !== undefined && secretsModel.sees(after, credential);
       return judgeStatus({
         config,
-        key: await judgeKeyStatus(config),
-        auth: principal && principals ? { mode: "token", principal, principals } : { mode: "loopback" },
-        budget: await source.budget(),
+        key: visible ? key : "withheld",
+        auth:
+          auth.mode === "token"
+            ? { mode: "token", principal: after.id, principals: auth.credentials.currentForPrincipal(after.id) }
+            : { mode: "loopback" },
+        budget,
       });
     };
   }

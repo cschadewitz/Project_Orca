@@ -1,12 +1,13 @@
 /**
  * The judge setup checklist (#701): `judge.status` turned into the steps an owner takes before
- * plain-language rules can be judged, each done, to do, or not possible here, with the exact
- * command for an owner step. The app takes none of these steps itself: the key is the owner's,
- * a disclosure grant is issued only by an owner, and the budget is created only on purpose.
+ * plain-language rules can be judged, each done, to do, or not possible here. The budget steps
+ * name their fixed command; the grant step is guidance only, since today's route issues a whole
+ * credential and an owner should choose it. The app takes none of these steps itself: the key is
+ * the owner's, a disclosure grant is issued only by an owner, and the budget is created on purpose.
  *
  * A plain module with a plain test, like `config-model.ts`.
  */
-import type { JudgeKind, JudgeStatusResult } from "@orca/protocol";
+import type { JudgeKeyState, JudgeKind, JudgeStatusResult } from "@orca/protocol";
 
 export type JudgeStepState = "done" | "todo" | "blocked";
 
@@ -16,7 +17,7 @@ export interface JudgeStep {
   readonly state: JudgeStepState;
   /** One sentence on what is true now, or what to do. */
   readonly detail: string;
-  /** The command an owner runs for this step, when there is one. */
+  /** The fixed command for this step, when there is one (the budget's). */
   readonly command?: string;
 }
 
@@ -40,9 +41,6 @@ const BUDGET_UNSUPPORTED: Record<string, string> = {
   anchor: "The per-user folder that holds the budget's anchor cannot be created or trusted.",
   "not-separate": "The budget's anchor folder and the store overlap, so a restore could roll the budget back.",
 };
-
-/** Shell-quote one argument only when it needs it. */
-const arg = (value: string) => (/^[A-Za-z0-9_.@:/-]+$/.test(value) ? value : `'${value.replace(/'/g, `'\\''`)}'`);
 
 export function judgeSetupSteps(status: JudgeStatusResult): readonly JudgeStep[] {
   const steps: JudgeStep[] = [];
@@ -70,30 +68,7 @@ export function judgeSetupSteps(status: JudgeStatusResult): readonly JudgeStep[]
       state: "done",
       detail: `${config.provider} at ${config.destination}`,
     });
-    steps.push(
-      config.key === "present"
-        ? { id: "key", title: "Key", state: "done", detail: `The key in ${config.credential} is set on this machine.` }
-        : config.key === "missing"
-          ? {
-              id: "key",
-              title: "Key",
-              state: "todo",
-              detail: `The key in ${config.credential} is not set on this machine: set the variable or file that reference names, then restart ORCA if it reads the environment.`,
-            }
-          : config.key === "not-found"
-            ? {
-                id: "key",
-                title: "Key",
-                state: "todo",
-                detail: `There is no secret reference named ${config.credential}. Add it under secrets in orca.config.yaml.`,
-              }
-            : {
-                id: "key",
-                title: "Key",
-                state: "blocked",
-                detail: `${config.credential} is bound to another host. The judge reads its key on the machine ORCA runs on.`,
-              },
-    );
+    steps.push(keyStep(config.credential, config.key));
   }
 
   if (status.auth === "loopback")
@@ -107,11 +82,9 @@ export function judgeSetupSteps(status: JudgeStatusResult): readonly JudgeStep[]
   else if (config.state === "configured") {
     const enabled = status.grants.filter((g) => g.enabled);
     const missing = enabled.filter((g) => !g.granted);
-    const principal = status.principal ?? "<you>";
     const flags = missing
       .filter((g): g is typeof g & { kind: Exclude<JudgeKind, "reads"> } => g.kind !== "reads")
-      .map((g) => ` --judge-disclosure-kind ${KIND_FLAGS[g.kind]}`)
-      .join("");
+      .map((g) => KIND_FLAGS[g.kind]);
     steps.push(
       missing.length === 0
         ? {
@@ -124,8 +97,13 @@ export function judgeSetupSteps(status: JudgeStatusResult): readonly JudgeStep[]
             id: "grant",
             title: "Disclosure grant",
             state: "todo",
-            detail: `Allow the judge to see ${missing.map((g) => KIND_WORDS[g.kind]).join(", ")} from your runs. An owner issues the grant; it names this judge's destination and provider only.`,
-            command: `orca auth issue ${arg(principal)} --preset owner --judge-disclosure${flags}`,
+            /* Guidance, not a command to copy: the only route today issues a whole credential, and
+               an owner should choose its preset and scope rather than take one from here. */
+            detail:
+              `Your runs may not yet show the judge ${missing.map((g) => KIND_WORDS[g.kind]).join(", ")}. ` +
+              `An owner grants that when issuing you a credential, with --judge-disclosure` +
+              (flags.length > 0 ? ` and --judge-disclosure-kind for ${flags.join(", ")}` : "") +
+              `; see orca auth issue --help. The grant names this judge's destination and provider only.`,
           },
     );
   }
@@ -165,4 +143,31 @@ export function judgeSetupSteps(status: JudgeStatusResult): readonly JudgeStep[]
             },
   );
   return steps;
+}
+
+function keyStep(credential: string, key: JudgeKeyState): JudgeStep {
+  const step = (state: JudgeStepState, detail: string): JudgeStep => ({ id: "key", title: "Key", state, detail });
+  switch (key) {
+    case "present":
+      return step("done", `The key in ${credential} is set on this machine, and the judge can use it.`);
+    case "missing":
+      return step(
+        "todo",
+        `The judge can use ${credential}, but its variable is unset or empty on this machine. Set it, then restart ORCA.`,
+      );
+    case "not-found":
+      return step(
+        "todo",
+        `There is no secret reference named ${credential}. Add it under secrets in orca.config.yaml.`,
+      );
+    case "destination-mismatch":
+      return step("todo", `${credential} is not pinned to this judge's destination. Give it the judge's destination.`);
+    case "unusable":
+      return step(
+        "todo",
+        `The judge cannot use ${credential}: its key must be an environment variable on this machine, pinned to the judge's destination, and not shared with another reference.`,
+      );
+    case "withheld":
+      return step("blocked", `You may not see ${credential}, so whether its key is set is not shown to you.`);
+  }
 }
