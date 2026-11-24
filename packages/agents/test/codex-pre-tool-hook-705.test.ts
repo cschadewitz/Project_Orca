@@ -256,6 +256,13 @@ describe("the fail-closed line around ORCA's program (#1026)", () => {
       `passes on ORCA's allow and ORCA's block, and nothing else (${shell})`,
       async () => {
         expect(await runLine("cat >/dev/null; exit 0", shell)).toEqual({ exitCode: 0, stdout: "", stderr: "" });
+        // Only the verdict's capture is capped: the program may write other files (a telemetry
+        // spool) past the limit.
+        const spool = join(root, "spool");
+        expect(
+          await runLine(`cat >/dev/null; head -c ${4 * CODEX_HOOK_OUTPUT_LIMIT} /dev/zero >'${spool}'; exit 0`, shell),
+        ).toEqual({ exitCode: 0, stdout: "", stderr: "" });
+        expect((await readFile(spool)).length).toBe(4 * CODEX_HOOK_OUTPUT_LIMIT);
         expect(await runLine("cat >/dev/null; echo 'Denied by ORCA: its policy.' >&2; exit 2", shell)).toEqual({
           exitCode: 2,
           stdout: "",

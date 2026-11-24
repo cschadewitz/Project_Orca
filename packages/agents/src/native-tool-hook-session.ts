@@ -312,10 +312,12 @@ export const CODEX_HOOK_OUTPUT_LIMIT = 4096;
 /**
  * The fail-closed line around one program, given as shell words (#1026). It keeps the
  * program's completion apart from its output: the program (under `timeout`, in a process
- * group of its own) writes its stdout and stderr to a file whose size the shell limits, and
- * the line takes its exit status from `wait` once it has ended. Output past
- * `CODEX_HOOK_OUTPUT_LIMIT` is never a verdict. Sent TERM, INT or HUP, the line kills the
- * program's group and blocks. It accepts only two verdicts, each in a strict form:
+ * group of its own) writes its stdout and stderr into a pipe, from which `head` (under its
+ * own `timeout`) keeps one byte past `CODEX_HOOK_OUTPUT_LIMIT`. The line takes the exit status
+ * from `wait` once the program has ended, and the output only once the reader has seen its
+ * end. Only that capture is capped, not other files the program writes. Output past the
+ * limit, or not read to its end, is never a verdict. Sent TERM, INT or HUP, the line kills
+ * both groups and blocks. It accepts only two verdicts, each in a strict form:
  *
  * - allow: exit 0 and no output at all;
  * - block: exit 2 and exactly one line of printable text beginning `Denied by ORCA: ` or
@@ -335,17 +337,26 @@ export function codexFailClosedLine(programWords: string): string {
     "nl=$(printf '\\nx')",
     "nl=${nl%x}",
     `d=$(mktemp -d 2>/dev/null) || ${fail}`,
-    // `timeout` runs the program in a process group of its own; asked to stop, the line takes
-    // that group with it before it blocks.
-    `t=`,
+    // `timeout` runs the program, and the reader of its output, each in a process group of its
+    // own; asked to stop, the line takes both groups with it before it blocks.
+    "t=",
+    "w=",
     `trap 'rm -rf "$d"' EXIT`,
-    `trap ${shellWord(`[ -n "$t" ] && { kill -KILL -"$t" 2>/dev/null; kill -KILL "$t" 2>/dev/null; }; ${fail}`)} TERM INT HUP`,
-    // The program writes to a file, not a pipe, so nothing it leaves behind can hold the line
-    // open; a write past the file-size limit (16 blocks of 512 bytes) ends the program.
-    `exec 3<&0`,
-    `( ulimit -f 16; exec timeout -s KILL ${CODEX_PRE_TOOL_PROGRAM_SECONDS} ${programWords} <&3 >"$d/o" 2>&1 ) 2>/dev/null & t=$!`,
+    `trap ${shellWord(`${["t", "w"].map((v) => `[ -n "$${v}" ] && { kill -KILL -"$${v}"; kill -KILL "$${v}"; } 2>/dev/null`).join("; ")}; ${fail}`)} TERM INT HUP`,
+    `mkfifo "$d/p" 2>/dev/null || ${fail}`,
+    // The line holds the pipe open both ways until the program has ended, so neither end's
+    // open waits on the other.
+    `exec 3<&0 4<>"$d/p"`,
+    // Only the program's stdout and stderr are capped, one byte past the limit so a cut is
+    // seen; other files it writes (a telemetry spool) are not.
+    `timeout -s KILL ${CODEX_PRE_TOOL_PROGRAM_SECONDS + 2} head -c ${CODEX_HOOK_OUTPUT_LIMIT + 1} <"$d/p" >"$d/o" 2>/dev/null 3<&- 4>&- & w=$!`,
+    `( exec timeout -s KILL ${CODEX_PRE_TOOL_PROGRAM_SECONDS} ${programWords} <&3 >"$d/p" 2>&1 3<&- 4>&- ) 2>/dev/null & t=$!`,
     // Its exit status, apart from its output, and only once it has ended.
     `{ wait "$t"; s=$?; } 2>/dev/null; t=`,
+    // Then its output, complete only once the reader has seen the end of it.
+    "exec 4>&-",
+    `{ wait "$w"; ws=$?; } 2>/dev/null; w=`,
+    `[ "$ws" = 0 ] || ${fail}`,
     `n=$(wc -c <"$d/o" 2>/dev/null)`,
     `[ "$n" -le ${CODEX_HOOK_OUTPUT_LIMIT} ] 2>/dev/null || ${fail}`,
     `if [ "$s" = 0 ] && [ "$n" = 0 ]; then exit 0; fi`,
