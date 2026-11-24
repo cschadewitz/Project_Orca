@@ -51,6 +51,21 @@
  * connection with it. So does the deadline for all of it: when it passes, ORCA closes its
  * channel and signals bubblewrap then, and waits for nothing bubblewrap might still do or say.
  *
+ * **The deadline is kept by ORCA's thread, and is no bound in seconds on the teardown.** A
+ * timer ends a setup that is waiting. A setup that is not waiting is that thread at work,
+ * which its own timer cannot interrupt, so the setup also reads a clock that does not run
+ * back: right before it has the executor started, and right before it says the isolation is
+ * shown and sends what was waiting. A setup found late there starts no executor after that
+ * and gives no proof, however late it is found. The reads that leave `/proc` for a file
+ * system, which may be slow or never answer, are made off ORCA's thread. What ORCA reads
+ * from `/proc` itself (a process's status, namespaces, mount table and descriptors) it
+ * reads on its thread. While the kernel is answering one of those, and while anything else
+ * keeps that thread, neither the timer nor a `stop` is acted on: the teardown comes when the
+ * thread is free again. Nothing in ORCA watches from outside that thread, because all it
+ * could do is signal a pid. What does not depend on ORCA's thread is the kernel's part: the
+ * namespace ends when ORCA or its bubblewrap dies. The masks' paths are read on ORCA's
+ * thread too, before bubblewrap is started, when there is nothing yet to end.
+ *
  * Limits, said plainly. A command ORCA allowed runs as the user and can ask a service outside
  * the namespace to act for it (a user service manager, a container daemon's socket, a login
  * to the same machine): what that service starts is not in the namespace and does not see
@@ -75,6 +90,7 @@ import {
   realpathSync,
   statSync,
 } from "node:fs";
+import { readdir, stat } from "node:fs/promises";
 import type { Socket } from "node:net";
 import { isAbsolute, sep } from "node:path";
 import type { Readable } from "node:stream";
@@ -201,6 +217,8 @@ export interface CodexExecIsolatedSpawn extends CodexExecServerSpawn {
   bubblewrap?: string | undefined;
   /** How long the namespace has to be made, shown and given its executor. */
   setupWaitMs?: number | undefined;
+  /** The clock that time is read from, in milliseconds, never running back. For tests. */
+  clock?: (() => number) | undefined;
 }
 
 /** What ORCA saw of an isolated executor before it was sent anything. */
@@ -380,6 +398,27 @@ export function codexExecProcessSeen(directory: string): "there" | "ended" | "un
   if (state === "Z") return threads === "1" ? "ended" : "unseen";
   // `X` is a process on its way out of the table: not running, and not yet said to be gone.
   return state === "X" ? "unseen" : "there";
+}
+
+/**
+ * What each descriptor of a process is, as its `/proc` directory names it.
+ *
+ * A descriptor that was closed after it was listed is left out, on the kernel's word that
+ * there is none (`ENOENT`). One that is there and that ORCA cannot look at, or a failure ORCA
+ * cannot tell from that, is an error and never a pass: what ORCA did not see, it cannot say
+ * is not the holder's channel.
+ */
+export function codexExecDescriptorsOf(directory: string): Map<string, string> {
+  const targets = new Map<string, string>();
+  for (const fd of readdirSync(`${directory}/fd`)) {
+    try {
+      targets.set(fd, readlinkSync(`${directory}/fd/${fd}`));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw new CodexExecIsolationError(`ORCA could not see what descriptor ${fd} of a process is`);
+    }
+  }
+  return targets;
 }
 
 const field = (status: string, name: string): string[] =>
@@ -628,24 +667,31 @@ export function spawnIsolatedCodexExecServer(spec: CodexExecIsolatedSpawn): Code
     if (shown) core.fail(why);
     else refuse(why);
   }
+  const waitMs = spec.setupWaitMs ?? SETUP_WAIT_MS;
+  const clock = spec.clock ?? ((): number => performance.now());
+  /** The time by which the isolation has to be shown, on a clock that does not run back. */
+  const cutoff = clock() + waitMs;
+  const late = (): string =>
+    making
+      ? "the executor's namespace could not be made: it was not made in time"
+      : "the executor's isolation was not shown in time";
+  // The timer ends a setup that is waiting. A setup that is not waiting is ORCA's own thread at
+  // work, which no timer of that thread interrupts: it reads the clock itself, in `over`.
+  const deadline = setTimeout(() => refuse(late()), waitMs);
+  deadline.unref();
   /**
    * Why the setup can go no further, once it cannot: ORCA refused or stopped it, its channel
-   * to the holder closed, or bubblewrap exited. The setup asks this after everything it
-   * waited for, before it has the executor started and before it says the isolation is shown.
+   * to the holder closed, bubblewrap exited, or the time for it is up. The setup asks this
+   * after everything it waited for, right before it has the executor started, and right
+   * before it says the isolation is shown and sends what was waiting.
    */
   const over = (): string | undefined =>
-    refused ?? (closed ? "ORCA's channel to the holder closed before the isolation was shown" : undefined);
-  const waitMs = spec.setupWaitMs ?? SETUP_WAIT_MS;
-  const deadline = setTimeout(
-    () =>
-      refuse(
-        making
-          ? "the executor's namespace could not be made: it was not made in time"
-          : "the executor's isolation was not shown in time",
-      ),
-    waitMs,
-  );
-  deadline.unref();
+    refused ??
+    (closed
+      ? "ORCA's channel to the holder closed before the isolation was shown"
+      : clock() >= cutoff
+        ? late()
+        : undefined);
 
   const prove = async (): Promise<CodexExecIsolationProof> => {
     const wrong = (what: string): never => {
@@ -748,9 +794,15 @@ export function spawnIsolatedCodexExecServer(spec: CodexExecIsolatedSpawn): Code
     for (const path of masks.hidden) {
       const mount = top(path);
       if (mount?.type !== "tmpfs" || !mount.options.includes("ro")) wrong(`a hidden directory is not masked: ${path}`);
-      if (readdirSync(`${at}/root${path}`).length > 0) wrong(`a hidden directory is not empty: ${path}`);
-      const through = statSync(`${at}/root${path}`, { bigint: true });
-      const real = statSync(path, { bigint: true });
+      // These leave `/proc` for the file systems the path crosses, which can be slow to answer
+      // or never answer. They are made off ORCA's thread, so the deadline is not kept waiting.
+      const [listed, through, real] = await Promise.all([
+        readdir(`${at}/root${path}`),
+        stat(`${at}/root${path}`, { bigint: true }),
+        stat(path, { bigint: true }),
+      ]);
+      stillThere(holder);
+      if (listed.length > 0) wrong(`a hidden directory is not empty: ${path}`);
       if (through.dev === real.dev && through.ino === real.ino)
         wrong(`a hidden directory is the directory itself: ${path}`);
     }
@@ -767,6 +819,8 @@ export function spawnIsolatedCodexExecServer(spec: CodexExecIsolatedSpawn): Code
       wrong(`a mask does not hold inside the namespace (${String((probe["wrong"] as unknown[])[0])})`);
 
     // Only now is there an executor. It is the holder's child, in the holder's namespaces.
+    // Asked here, with nothing between the question and the request: is the setup over, or late?
+    stillThere(holder);
     const begun = await ask(
       {
         op: "start",
@@ -800,17 +854,11 @@ export function spawnIsolatedCodexExecServer(spec: CodexExecIsolatedSpawn): Code
       const its = namespacesOf(theirs!.directory);
       for (const kind of ["pid", "mnt", "user"] as const)
         if (its[kind] !== namespaces[kind]) wrong(`the executor is not in the holder's ${kind} namespace`);
-      // The holder's channel is a socket, which no path opens. The executor was not handed it either.
+      // The holder's channel is a socket, which no path opens. The executor was not handed it
+      // either: ORCA has to have seen what each of its descriptors is to say so.
       const channel = readlinkSync(`${at}/fd/3`);
-      for (const fd of readdirSync(`${theirs!.directory}/fd`)) {
-        let target: string;
-        try {
-          target = readlinkSync(`${theirs!.directory}/fd/${fd}`);
-        } catch {
-          continue;
-        }
+      for (const target of codexExecDescriptorsOf(theirs!.directory).values())
         if (target === channel) wrong("the executor holds the holder's channel");
-      }
     } finally {
       closeSync(theirs!.fd);
     }
@@ -833,7 +881,8 @@ export function spawnIsolatedCodexExecServer(spec: CodexExecIsolatedSpawn): Code
     let proof: CodexExecIsolationProof;
     try {
       proof = await prove();
-      // Asked once more, here where the isolation would be said to be shown.
+      // Asked once more, here where the isolation would be said to be shown. Nothing is waited
+      // for between this and what follows it: the proof, and the sending of what was waiting.
       const why = over();
       if (why !== undefined) throw new CodexExecIsolationError(why);
     } catch (error) {

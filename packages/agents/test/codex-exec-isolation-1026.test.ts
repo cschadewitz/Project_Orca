@@ -18,6 +18,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   CodexExecIsolationError,
   codexExecGateBinder,
+  codexExecDescriptorsOf,
   codexExecMasks,
   codexExecProcessSeen,
   parseMountInfo,
@@ -190,6 +191,25 @@ describe.skipIf(process.platform !== "linux")("what the kernel shows of a proces
     expect(codexExecProcessSeen(await listed(stat("X", "1")))).toBe("unseen");
     // A name can hold anything, a closing bracket and a state among it.
     expect(codexExecProcessSeen(await listed(stat("S", "3", "a) Z 1 (b")))).toBe("there");
+  });
+});
+
+describe.skipIf(process.platform !== "linux")("what a process's descriptors are", () => {
+  it("names each one, and fails for one it cannot look at", async () => {
+    // This process's own, read as the kernel lists them.
+    const mine = codexExecDescriptorsOf("/proc/self");
+    expect(mine.get("0")).toBeDefined();
+    expect([...mine.keys()].every((fd) => /^\d+$/.test(fd))).toBe(true);
+    // A listing with an entry that cannot be read as a descriptor: an error, not one left out.
+    const listing = join(root, "listing");
+    await mkdir(join(listing, "fd"), { recursive: true });
+    await symlink("socket:[4242]", join(listing, "fd", "0"));
+    expect(codexExecDescriptorsOf(listing)).toEqual(new Map([["0", "socket:[4242]"]]));
+    await writeFile(join(listing, "fd", "5"), "");
+    expect(() => codexExecDescriptorsOf(listing)).toThrow(CodexExecIsolationError);
+    expect(() => codexExecDescriptorsOf(listing)).toThrow(/could not see what descriptor 5/);
+    // No listing at all is no pass either.
+    expect(() => codexExecDescriptorsOf(join(root, "missing"))).toThrow();
   });
 });
 
@@ -418,17 +438,20 @@ describe.skipIf(!USABLE && !REQUIRED)("an executor in namespaces ORCA makes", ()
     expect(ended.nothingLeft).toBe(true);
   });
 
-  it("starts no executor, and gives no proof, once it is stopped while the isolation is being shown", async () => {
-    // A stand-in for the holder that notes what it is asked and is slow to try the masks. It is
-    // the first process of a real namespace, so ORCA's own checks pass, and the setup is
-    // waiting for its answer when the stop comes. It would say yes to everything.
-    const asked = join(root, "asked");
+  const asked = () => join(root, "asked");
+  /**
+   * A stand-in for the holder that notes what it is asked, and takes its time: so long to
+   * try the masks, so long to start the executor. It is the first process of a real
+   * namespace, so ORCA's own checks pass, and it says yes to everything.
+   */
+  async function slowHolder(wait: { probeMs: number; startMs: number }): Promise<string> {
     const slow = join(root, "slow-holder.js");
     await writeFile(
       slow,
       [
         'const fs = require("node:fs");',
         'const net = require("node:net");',
+        'const { spawn } = require("node:child_process");',
         "const control = new net.Socket({ fd: 3, readable: true, writable: true });",
         'const say = (m) => control.write(JSON.stringify(m) + "\\n");',
         'let text = "";',
@@ -440,9 +463,13 @@ describe.skipIf(!USABLE && !REQUIRED)("an executor in namespaces ORCA makes", ()
         "    if (end < 0) break;",
         "    const m = JSON.parse(text.slice(0, end));",
         "    text = text.slice(end + 1);",
-        `    fs.appendFileSync(${JSON.stringify(asked)}, m.op + "\\n");`,
-        '    if (m.op === "probe") setTimeout(() => say({ id: m.id, wrong: [] }), 400);',
-        '    if (m.op === "start") say({ id: m.id, started: 2 });',
+        `    fs.appendFileSync(${JSON.stringify(asked())}, m.op + "\\n");`,
+        `    if (m.op === "probe") setTimeout(() => say({ id: m.id, wrong: [] }), ${wait.probeMs});`,
+        '    if (m.op === "start")',
+        "      setTimeout(() => {",
+        '        const child = spawn(m.program, m.args, { cwd: m.cwd, env: m.env, stdio: "inherit" });',
+        "        say({ id: m.id, started: child.pid });",
+        `      }, ${wait.startMs});`,
         "  }",
         "});",
         'control.on("close", () => process.exit(70));',
@@ -459,10 +486,16 @@ describe.skipIf(!USABLE && !REQUIRED)("an executor in namespaces ORCA makes", ()
     const runtime = join(root, "slow-runtime");
     await writeFile(runtime, `#!/bin/sh\nexec ${process.execPath} ${slow}\n`);
     await chmod(runtime, 0o755);
-    const { backend, exit } = isolate({ runtime });
+    return runtime;
+  }
+  const askedSoFar = () => existsSync(asked()) && readFileSync(asked(), "utf8");
+
+  it("starts no executor, and gives no proof, once it is stopped while the isolation is being shown", async () => {
+    // The setup is waiting for the holder's answer about the masks when the stop comes.
+    const { backend, exit } = isolate({ runtime: await slowHolder({ probeMs: 400, startMs: 0 }) });
     let flushed = 0;
     backend.send("echo never", () => (flushed += 1));
-    await expect.poll(() => existsSync(asked) && readFileSync(asked, "utf8")).toBe("probe\n");
+    await expect.poll(askedSoFar).toBe("probe\n");
 
     await backend.stop();
     await expect(backend.isolated).rejects.toThrow(/stopped it before its isolation was shown/);
@@ -470,9 +503,51 @@ describe.skipIf(!USABLE && !REQUIRED)("an executor in namespaces ORCA makes", ()
     // Longer than the holder took to answer: it was asked for nothing after the stop, and no
     // executor was started.
     await new Promise((resolve) => setTimeout(resolve, 700));
-    expect(readFileSync(asked, "utf8")).toBe("probe\n");
+    expect(askedSoFar()).toBe("probe\n");
     expect(existsSync(started())).toBe(false);
     expect(flushed).toBe(1);
+    expect(() => backend.send("echo late", () => undefined)).toThrow(/gone/);
+  });
+
+  it("starts no executor once the time for the setup is up, though no timer has said so", async () => {
+    // The deadline's timer is a minute away and never runs here. The clock ORCA reads is put
+    // past the deadline while the setup waits for the holder, as it would be had ORCA's thread
+    // been kept from its timers for that long.
+    let ahead = 0;
+    const { backend, exit } = isolate({
+      runtime: await slowHolder({ probeMs: 400, startMs: 0 }),
+      setupWaitMs: 60_000,
+      clock: () => performance.now() + ahead,
+    });
+    await expect.poll(askedSoFar).toBe("probe\n");
+    ahead = 120_000;
+    await expect(backend.isolated).rejects.toThrow(/isolation was not shown in time/);
+    expect((await exit).detail).toMatch(/isolation was not shown in time/);
+    // The holder said the masks hold, and was still not asked to start the executor.
+    expect(askedSoFar()).toBe("probe\n");
+    expect(existsSync(started())).toBe(false);
+  });
+
+  it("gives no proof, and sends nothing, once the time is up after the executor was started", async () => {
+    let ahead = 0;
+    const { backend, exit } = isolate({
+      runtime: await slowHolder({ probeMs: 0, startMs: 400 }),
+      setupWaitMs: 60_000,
+      clock: () => performance.now() + ahead,
+    });
+    let heard = 0;
+    backend.onMessage(() => (heard += 1));
+    let flushed = 0;
+    backend.send("echo never", () => (flushed += 1));
+    // Asked in time. The time runs out while the holder is starting the executor.
+    await expect.poll(askedSoFar).toBe("probe\nstart\n");
+    ahead = 120_000;
+    await expect(backend.isolated).rejects.toThrow(/isolation was not shown in time/);
+    await exit;
+    // The executor was started, and was sent nothing: what was waiting was dropped, not sent.
+    expect(await readFile(started(), "utf8")).toBe("exec-server --listen stdio\n");
+    expect(flushed).toBe(1);
+    expect(heard).toBe(0);
     expect(() => backend.send("echo late", () => undefined)).toThrow(/gone/);
   });
 
