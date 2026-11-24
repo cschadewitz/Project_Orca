@@ -165,9 +165,7 @@ describe("the matrix checker refuses claims beyond the evidence", () => {
     expect(unverified).toEqual([`${needs("A")} (r.json: ${UNVERIFIED})`]);
     // A verifier's refusal is reported against the receipt, and the tier is not met.
     const forged = () => ["attestation does not verify: no matching attestations found"];
-    expect(
-      check(claude({ tier: "B" }), { "r.json": receipt() }, testPaths, inventoryFor(testPaths), forged),
-    ).toEqual([
+    expect(check(claude({ tier: "B" }), { "r.json": receipt() }, testPaths, inventoryFor(testPaths), forged)).toEqual([
       `${needs("A")} (r.json: attestation does not verify: no matching attestations found)`,
       `${needs("B")} (r.json: attestation does not verify: no matching attestations found)`,
     ]);
