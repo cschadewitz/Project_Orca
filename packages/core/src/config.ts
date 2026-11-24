@@ -130,6 +130,14 @@ export const OrcaConfigSchema = z
           .object({
             judge: z.unknown().optional(),
             /**
+             * The owner's opt-in to automatic decisions (#701 activation review): only `true` lets a judge be
+             * prepared for a session at all. Absent or `false` (every config written before activation), nothing is
+             * sent to the judge and every call a plain-language rule would cover goes to a person, whatever else is
+             * set up. Pinned per run like the rest of `plainRules`; a change through the daemon needs
+             * `permissions.grant`. Set it back to `false` (or remove it) to turn the judge off for new runs.
+             */
+            enabled: z.boolean().optional(),
+            /**
              * Experimental, each off by default (#701, Cal 2026-11-23): kinds of call beyond reads and
              * searches a judge may be asked about. Each also needs its own owner disclosure grant
              * (`orca auth issue --judge-disclosure --judge-disclosure-kind ...`).

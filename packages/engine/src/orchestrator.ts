@@ -3312,6 +3312,19 @@ export class Orchestrator {
                       ...(record.rule.index !== undefined ? { index: record.rule.index } : {}),
                       ...(record.rule.file !== undefined ? { file: record.rule.file } : {}),
                       ...(record.rule.capped ? { capped: true } : {}),
+                      // A judged read (#701): field by field, never the rule's revision.
+                      ...(record.rule.judge
+                        ? {
+                            judge: {
+                              verdict: record.rule.judge.verdict,
+                              ...(record.rule.judge.ruleId ? { ruleId: record.rule.judge.ruleId } : {}),
+                              ...(record.rule.judge.reasonCode ? { reasonCode: record.rule.judge.reasonCode } : {}),
+                              ...(record.rule.judge.judgeConfigRef
+                                ? { judgeConfigRef: record.rule.judge.judgeConfigRef }
+                                : {}),
+                            },
+                          }
+                        : {}),
                     },
                   }
                 : {}),

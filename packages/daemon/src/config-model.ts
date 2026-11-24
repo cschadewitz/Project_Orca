@@ -727,11 +727,22 @@ function judgedRulesKey(document: ConfigDocument, text: string | undefined): str
       agent.id,
       (agent.permissions?.rules ?? []).filter(isJudgedPermissionRule),
     ]);
+    // The judge's own settings too (#701 activation review): its opt-in (`enabled`), provider, key and kinds
+    // decide whether these rules decide anything, so changing them takes the same authority.
+    const settings = parsed.data.review?.plainRules;
+    if (settings !== undefined)
+      return JSON.stringify({
+        settings,
+        rules: entries.filter(([, rules]) => rules.length > 0).map(([id, rules]) => ({ id, rules })),
+      });
   }
   return JSON.stringify(entries.filter(([, rules]) => rules.length > 0).map(([id, rules]) => ({ id, rules })));
 }
 
-/** Whether writing `next` over `current` changes the judged rules ORCA reads: an add, edit, removal or move. */
+/**
+ * Whether writing `next` over `current` changes the judged rules ORCA reads (an add, edit, removal or move) or, in the
+ * config, the judge's settings under `review.plainRules` (#701).
+ */
 function changesJudgedRules(document: ConfigDocument, current: ConfigDocumentView, next: string): boolean {
   return judgedRulesKey(document, current.exists ? current.text : undefined) !== judgedRulesKey(document, next);
 }

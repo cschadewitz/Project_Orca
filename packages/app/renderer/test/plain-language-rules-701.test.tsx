@@ -282,7 +282,10 @@ describe("the policy panel's plain-language rules", () => {
     sidecar(WITH_JUDGED);
     renderPanel();
     const section = await region("Plain-language rules");
-    expect(section.textContent).toContain("Until the judge is set up (Config, Plain-language rule judge)");
+    expect(section.textContent).toContain(
+      "Until the judge is set up and turned on (Config, Plain-language rule judge)",
+    );
+    expect(section.textContent).toContain("searches and reads the agent makes itself included");
     expect(section.textContent).not.toContain("Not active in this version of ORCA");
     expect(within(section).queryByText("inactive")).toBeNull();
   });

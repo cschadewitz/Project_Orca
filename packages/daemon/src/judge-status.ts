@@ -53,6 +53,7 @@ export function judgeStatus(inputs: JudgeStatusInputs): JudgeStatusResult {
   const judge = plainRules?.judge;
   const base = {
     active: PLAIN_RULE_JUDGE_ACTIVE as boolean,
+    enabled: plainRules?.enabled === true,
     auth: inputs.auth.mode,
     ...(inputs.auth.mode === "token" ? { principal: inputs.auth.principal } : {}),
     budget: budgetStatus(inputs.budget),

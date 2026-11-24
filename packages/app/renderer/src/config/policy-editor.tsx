@@ -398,9 +398,10 @@ export function PolicyEditor({ agentId, feed, onOpen, onClose, live, now }: Poli
                 )}
               </div>
               <Text style="caption" className="orca-policy__none">
-                A rule in a sentence, for reads and searches. When the rules above answer ask, a judge on your own key
-                decides whether the call fits the sentence. A yes allows that one call once; anything else goes to you.
-                A judge is used only in a session given one. {PLAIN_RULES_SETUP_NOTE}
+                A rule in a sentence, for reads. When the rules above answer ask on a file ORCA reads for the agent, a
+                judge on your own key decides whether the read fits the sentence. A yes allows that one read once;
+                anything else goes to you, searches and reads the agent makes itself included. A judge is used only in a
+                session given one. {PLAIN_RULES_SETUP_NOTE}
               </Text>
               {judged.length === 0 ? (
                 <Text style="caption" className="orca-policy__none">

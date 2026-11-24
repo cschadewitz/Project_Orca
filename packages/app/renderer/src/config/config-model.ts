@@ -588,7 +588,7 @@ export const PLAIN_RULES_ACTIVE = true;
 
 /** Said wherever plain-language rules are listed: they decide nothing until the judge is set up. */
 export const PLAIN_RULES_SETUP_NOTE =
-  "Until the judge is set up (Config, Plain-language rule judge), every call these would cover goes to a person.";
+  "Until the judge is set up and turned on (Config, Plain-language rule judge), every call these would cover goes to a person.";
 
 /** Said where a daemon reports its judge switched off in its build. */
 export const PLAIN_RULES_INACTIVE_NOTE =

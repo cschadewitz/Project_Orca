@@ -52,6 +52,12 @@ export interface JudgedLaneOptions {
   /** The policy as it is now, read again after the verdict and before answering. */
   reload: () => Promise<PermissionPolicy>;
   /**
+   * Whether reads and searches may be allowed through this lane (default `true`). `false` for an agent's own
+   * permission ask, whose operation the agent carries out itself (#701 activation review): ORCA cannot show it reads
+   * the file the judge was shown, so the person is asked. Command advice still runs; it allows nothing.
+   */
+  reads?: boolean;
+  /**
    * Whether the session's tool calls run on the daemon's own machine. Only then are the targets
    * the check resolves the ones the agent reads; anything else keeps the lane closed.
    */
@@ -80,6 +86,7 @@ export function judgedLane(options: JudgedLaneOptions): JudgedLane {
     // already the most a judged rule could give.
     if (typed.basis === "protected" || typed.decision === "allow") return typed;
     if (!options.localHost) {
+      if (options.reads === false) return typed;
       const remote = gate(policy, request, ctx, options.io, false);
       return remote.state === "closed" && remote.verdict ? { ...typed, judged: { verdict: remote.verdict } } : typed;
     }
@@ -87,6 +94,7 @@ export function judgedLane(options: JudgedLaneOptions): JudgedLane {
       const advice = await adviseCommand(options.command, policy, request, ctx, signal, options.redact);
       if (advice) return { ...typed, judged: advice };
     }
+    if (options.reads === false) return typed;
     const first = gate(policy, request, ctx, options.io);
     if (first.state === "closed") return first.verdict ? { ...typed, judged: { verdict: first.verdict } } : typed;
     let outcome: PlainRuleJudgeOutcome;

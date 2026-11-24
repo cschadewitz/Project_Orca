@@ -34,6 +34,7 @@ import { isDeepStrictEqual } from "node:util";
 import type { OrcaConfig } from "@orca/core";
 import {
   preparePlainRuleJudge,
+  type HttpsRequestFn,
   secretJudgeCredentials,
   type JudgePermission,
   type PlainRuleConnectionRefusal,
@@ -57,6 +58,8 @@ export { PLAIN_RULE_JUDGE_PREPARE_MS } from "./plain-rule-judge-session.js";
 /** Why a session got no judge: a fixed code, never a value or a provider's words. */
 export type PlainRuleJudgeUnavailable =
   | "not-configured"
+  /** A judge is configured, but `review.plainRules.enabled` is not `true`: the owner has not opted in. */
+  | "not-enabled"
   | "not-local"
   | "budget-unavailable"
   | "budget-not-durable"
@@ -101,6 +104,8 @@ export interface PlainRuleJudgeSourceOptions {
   readonly ownership: OwnershipStore;
   readonly credentials: Pick<CredentialStore, "currentForPrincipal">;
   readonly audit?: AuditSink | undefined;
+  /** Tests only: the HTTPS request function the judge's sender uses (a deterministic provider stand-in). */
+  readonly request?: HttpsRequestFn | undefined;
 }
 
 export interface PlainRuleJudgeSource {
@@ -151,6 +156,8 @@ export function plainRuleJudgeSource(opts: PlainRuleJudgeSourceOptions): PlainRu
       const plainRules = session.pinned.review?.plainRules;
       const judgeConfig = plainRules?.judge;
       if (judgeConfig === undefined) return unavailable("not-configured");
+      // The owner's explicit opt-in: without it nothing is prepared, read or sent.
+      if (plainRules?.enabled !== true) return unavailable("not-enabled");
       // The run's own settings, and only while the active generation still has the same ones.
       if (!isDeepStrictEqual(plainRules, opts.config()?.review?.plainRules)) return unavailable("config-changed");
       // The judge's key is read, and its request sent, from the daemon's own machine.
@@ -176,7 +183,7 @@ export function plainRuleJudgeSource(opts: PlainRuleJudgeSourceOptions): PlainRu
       });
       const prepared = await preparePlainRuleJudge(
         judgeConfig,
-        { credentials, disclosure, budget: qualified.budget },
+        { credentials, disclosure, budget: qualified.budget, ...(opts.request ? { request: opts.request } : {}) },
         signal,
       );
       if (prepared.status !== "prepared") return prepared;
@@ -189,7 +196,7 @@ export function plainRuleJudgeSource(opts: PlainRuleJudgeSourceOptions): PlainRu
         if (switches[name] !== true) continue;
         const one = await preparePlainRuleJudge(
           judgeConfig,
-          { credentials, disclosure, budget: qualified.budget },
+          { credentials, disclosure, budget: qualified.budget, ...(opts.request ? { request: opts.request } : {}) },
           signal,
           actionClass,
         );

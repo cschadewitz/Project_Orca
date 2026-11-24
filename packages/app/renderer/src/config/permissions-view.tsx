@@ -156,8 +156,9 @@ function JudgedRules({ rows, live }: { rows: readonly JudgedRow[]; live: boolean
         <Text style="label-strong">Plain-language rules</Text>
       </div>
       <Text style="caption" className="orca-config__none">
-        A judge is asked about these only when the rules above answer ask, only for reads and searches, and only in a
-        session given a judge. A yes allows that one call once; anything else goes to a person. {PLAIN_RULES_SETUP_NOTE}
+        A judge is asked about these only when the rules above answer ask, only for a file ORCA reads for the agent, and
+        only in a session given a judge. A yes allows that one read once; anything else, searches and reads the agent
+        makes itself included, goes to a person. {PLAIN_RULES_SETUP_NOTE}
       </Text>
       <ol className="orca-config__rules">
         {rows.map((row) => (

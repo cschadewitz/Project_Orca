@@ -44,6 +44,7 @@ it("shows the judge's setup on the connected Config route, only from a daemon th
       ok: true,
       result: {
         active: false,
+        enabled: false,
         config: { state: "none" },
         auth: "token",
         principal: "casey",

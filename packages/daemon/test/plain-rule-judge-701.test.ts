@@ -60,7 +60,7 @@ async function setup(
           ],
         }),
   });
-  const config = over.config ?? (() => ({ review: { plainRules: { judge } } }));
+  const config = over.config ?? (() => ({ review: { plainRules: { enabled: true, judge } } }));
   const source = plainRuleJudgeSource({
     config,
     budget: async () => durable,
@@ -101,6 +101,22 @@ describe("#701 daemon plain-rule judge wiring", () => {
         ({ ...durable, budget: { ...(durable as { budget: object }).budget, durable: false } }) as QualifiedJudgeBudget,
     }));
     expect(await source.prepare(session, signal)).toMatchObject({ reason: "budget-not-durable" });
+  });
+
+  it("gives no judge, and reads nothing, until the owner opts in with enabled: true (#701 activation review)", async () => {
+    let budgetReads = 0;
+    for (const enabled of [undefined, false]) {
+      const config = () => ({ review: { plainRules: { judge, ...(enabled === undefined ? {} : { enabled }) } } });
+      const { source, session } = await setup({
+        config,
+        budget: async () => {
+          budgetReads++;
+          return durable;
+        },
+      });
+      expect(await source.prepare(session, signal)).toEqual({ status: "unavailable", reason: "not-enabled" });
+    }
+    expect(budgetReads).toBe(0);
   });
 
   it("gives no judge without the owner's disclosure grant or a durable run owner", async () => {
@@ -157,7 +173,7 @@ describe("#701 daemon plain-rule judge wiring", () => {
     expect(prepared).toMatchObject({ status: "prepared", kindsUnavailable: [] });
     expect(prepared.status === "prepared" && Object.keys(prepared.kinds)).toEqual([]);
 
-    const config = () => ({ review: { plainRules: { judge, experimental: { kinds } } } });
+    const config = () => ({ review: { plainRules: { enabled: true, judge, experimental: { kinds } } } });
     ({ source, session } = await setup({ config, kindGrants: ["edit", "mcp", "command"] }));
     prepared = await source.prepare(session, signal);
     expect(prepared.status === "prepared" && Object.keys(prepared.kinds).sort()).toEqual(["edit", "mcp"]);
@@ -186,9 +202,9 @@ describe("#701 daemon plain-rule judge wiring", () => {
     // The active generation has another judge, or another switch: neither set is used.
     const other = { ...judge, credential: "other-key" };
     expect(
-      await source.prepare({ ...session, pinned: { review: { plainRules: { judge: other } } } }, signal),
+      await source.prepare({ ...session, pinned: { review: { plainRules: { enabled: true, judge: other } } } }, signal),
     ).toMatchObject({ reason: "config-changed" });
-    const kinds = { review: { plainRules: { judge, experimental: { kinds: { mcpCalls: true } } } } };
+    const kinds = { review: { plainRules: { enabled: true, judge, experimental: { kinds: { mcpCalls: true } } } } };
     expect(await source.prepare({ ...session, pinned: kinds }, signal)).toMatchObject({ reason: "config-changed" });
     // Not configured anywhere: nothing to say.
     ({ source, session } = await setup({ config: () => ({}) }));
