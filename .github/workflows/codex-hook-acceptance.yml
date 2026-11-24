@@ -31,6 +31,7 @@ on:
       - packages/agents/src/permissions.ts
       - packages/cli/src/bootstrap.ts
       - packages/cli/test/codex-hook-acceptance-705.test.ts
+      - packages/cli/test/codex-model-stand-in.ts
       - .github/workflows/codex-hook-acceptance.yml
   schedule:
     - cron: "37 6 * * 1"
