@@ -35,7 +35,11 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
-      # The checker has no dependencies; gh is on every hosted runner.
+      - name: GitHub CLI 2.102.0 or later (GHSA-wjmr-j3rp-mh2g)
+        run: tools/guard-qualification/ensure-gh.sh
+        env:
+          GH_TOKEN: ${{ github.token }}
+
       - name: Check the support matrix and verify every receipt's attestation
         run: node tools/guard-qualification/check-support-matrix.js
         env:

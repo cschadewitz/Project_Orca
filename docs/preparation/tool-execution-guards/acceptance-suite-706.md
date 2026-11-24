@@ -134,22 +134,27 @@ an artifact. It is evidence for review: promotion stays disabled, so no tier cha
 The same tiers the #705 and #709-#711 streams report in, defined once in
 `support-matrix.json` and checked by `check-support-matrix.js`.
 
-**Promotion needs an attested receipt.** A receipt file says what it says; it counts only when
-it is bound to the run that produced it ([attestation.js](../../../tools/guard-qualification/attestation.js), #1026).
-`guard-receipts.yml` signs each receipt it produces with GitHub's artifact attestation
-(Sigstore, through the job's OIDC identity), and the Sigstore bundle is committed beside the
-receipt as `<receipt>.sigstore.json`. The checker accepts a receipt for tier A or B only when
-`gh attestation verify` passes for that exact file, signed by that workflow, in this
-repository, on a GitHub-hosted runner, from `main` or a release line, at the commit the
-receipt names as its `build`. A receipt written by hand, produced elsewhere or edited after
-signing does not verify. Tier C stays refused (`PROMOTION_DISABLED_C`) until #1026's
-independent observer binds each assertion to its call, its effect and ORCA's authority.
+**Promotion is disabled; receipts are bound to the run that produced them.** A receipt file
+says what it says; it counts only when it is bound to that run
+([attestation.js](../../../tools/guard-qualification/attestation.js), #1026).
+`guard-receipts.yml` will sign each receipt it produces with GitHub's artifact attestation
+(Sigstore, through the job's OIDC identity), and the bundle is committed beside the receipt as
+`<receipt>.sigstore.json`. The checker accepts a receipt only when `gh attestation verify`
+(GitHub CLI 2.102.0 or later, which matches `--signer-workflow` exactly, GHSA-wjmr-j3rp-mh2g)
+passes for that exact file in this repository on a GitHub-hosted runner, and it then checks the
+certificate itself: signed by that workflow file at the ref it ran from (`main` or a release
+line), with the signer workflow at the receipt's own `build` commit, so the signer is the
+revision reviewed with the code it certified. No tier is promoted on this yet
+(`PROMOTABLE_TIERS` is empty): promotion to A or B waits for the reviewed receipt producer and
+an end-to-end check that a real qualifying receipt is accepted and a real nonqualifying one is
+refused. C also waits for #1026's independent observer.
 
 `guard-matrix.yml` verifies the attestations on every change to the matrix or its receipts.
 A tier is certified for one build: the release gate (`check-support-matrix.js --release`, in
-`release-publish.yml`) also refuses a promoted row whose build differs from the commit being
-released in any enforcement path (`CERTIFIED_PATHS`: `packages/`, `tools/guard-qualification/`
-and the lockfile, less Markdown, `package.json` files, receipts and the matrix itself).
+`release-publish.yml`) refuses a promoted row whose build differs from the commit being
+released in anything but documentation, changelog fragments, the receipts, a `package.json`'s
+`version`, and a matrix row's `tier`, `pin` and `receipts`. Workflows, build and packaging
+configuration, and the routes, cases and requirements in the matrix all count.
 
 What a receipt must show: the row pins agent version, adapter
 version, host and the exact 40-hex ORCA build. For **each route**, a committed
