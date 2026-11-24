@@ -37,12 +37,17 @@
  * - a process a command left running is gone when the executor ends, also when ORCA's
  *   bubblewrap is killed, and the gate records what ORCA saw of that;
  * - a command a rule allowed cannot read or change what ORCA masks, under the directory's own
- *   name, through a link, after renaming its parent, or from a user namespace of its own.
+ *   name, through a link, after renaming its parent, or from a user namespace of its own;
+ * - the executor has no network in any of these runs, which is how it is started unless
+ *   the host's is asked for: the pinned executor runs commands all the same, and a command
+ *   reaches neither a program listening on the loopback address outside the namespace nor
+ *   one whose socket is in a directory ORCA hid.
  *
  * Nothing here wires the gate into ORCA's sessions or claims a support tier.
  */
 import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
+import { createServer, type Server } from "node:net";
 import { readlinkSync } from "node:fs";
 import { link, mkdir, mkdtemp, readFile, realpath, rename, rm, rmdir, symlink, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
@@ -131,6 +136,8 @@ describe.skipIf(ADAPTER === undefined).each([
   let executors: number[] = [];
   /** Every message the gate passed to an executor, as the executor received it. */
   let passed: string[] = [];
+  /** Directories a run has hidden from the executor beyond ORCA's masks. */
+  let hidden: string[] = [];
 
   beforeEach(async () => {
     root = await realpath(await mkdtemp(join(tmpdir(), "orca-1026-acceptance-")));
@@ -149,6 +156,7 @@ describe.skipIf(ADAPTER === undefined).each([
     records = [];
     executors = [];
     passed = [];
+    hidden = [];
     asks.length = 0;
     onTestFailed(() =>
       console.error(
@@ -220,8 +228,12 @@ describe.skipIf(ADAPTER === undefined).each([
   const startExecutor = ({ budget }: CodexExecGateConnection) => {
     const spec = { program: RUNTIME, env: { ...process.env, ...agentEnv({}) }, cwd: workspace, budget };
     // The masks are the directories of ORCA's that exist when the executor is started.
+    const masks = codexExecMasks(protectedPaths);
     const backend = isolated
-      ? spawnIsolatedCodexExecServer({ ...spec, masks: codexExecMasks(protectedPaths) })
+      ? spawnIsolatedCodexExecServer({
+          ...spec,
+          masks: { ...masks, hidden: [...masks.hidden, ...hidden] },
+        })
       : spawnCodexExecServer(spec);
     if (backend.pid !== undefined) executors.push(backend.pid);
     const send = backend.send.bind(backend);
@@ -857,6 +869,47 @@ describe.skipIf(ADAPTER === undefined).each([
       // The agent's own area inside the store is still its to write.
       expect(await readFile(join(store, "work", "out.txt"), "utf8")).toBe("deliverable\n");
     }, 240_000);
+
+    it("runs commands with no network of the host's, out of reach of a program outside on the loopback address or behind a hidden directory", async () => {
+      // Two programs outside the namespace, as a service acting for the user would be.
+      const runtime = join(root, "runtime");
+      await mkdir(runtime, { mode: 0o700 });
+      const servers: Server[] = [];
+      const listening = (where: Parameters<Server["listen"]>[0]): Promise<Server> =>
+        new Promise((resolve) => {
+          const server = createServer((socket) => socket.end());
+          servers.push(server);
+          server.listen(where, () => resolve(server));
+        });
+      await listening({ path: join(runtime, "bus") });
+      const port = ((await listening({ host: "127.0.0.1", port: 0 })).address() as { port: number }).port;
+      await writeFile(
+        join(root, "reach.js"),
+        [
+          'const net = require("node:net");',
+          "const [kind, target] = process.argv.slice(2);",
+          'const socket = net.connect(kind === "tcp" ? { host: "127.0.0.1", port: Number(target) } : { path: target });',
+          'socket.on("connect", () => { console.log(kind + "-reached"); process.exit(0); });',
+          'socket.on("error", (error) => { console.log(kind + "-" + error.code); process.exit(0); });',
+          "",
+        ].join("\n"),
+      );
+      const reach = (kind: string, target: string | number) =>
+        shell(`${process.execPath} ${join(root, "reach.js")} ${kind} ${target}`);
+      try {
+        hidden = [runtime];
+        const s = await gated({ default: "allow", rules: [] });
+        await s.prompt(script(reach("tcp", port), reach("path", join(runtime, "bus")), shell("echo ran > ran.txt")));
+        // The pinned executor needs no network of its own to run a command.
+        expect(await exists("ran.txt")).toBe("ran\n");
+        // Each try ran and said what it met. Neither met the program outside.
+        expect(told(/tcp-E[A-Z]+/)).toBe(true);
+        expect(told(/path-ENOENT/)).toBe(true);
+        expect(model.outputs.join("\n")).not.toMatch(/-reached/);
+      } finally {
+        await Promise.all(servers.map((server) => new Promise((resolve) => server.close(resolve))));
+      }
+    }, 180_000);
   }
 
   it("refuses a file request for a file that has a second name", async () => {

@@ -375,7 +375,9 @@ export interface CodexExecBackend {
    * `nothingLeft` is true only when the backend can prove that no process the executor
    * started, and no descendant of one, still exists (an executor run as the first process of
    * its own pid namespace, say, where the kernel ends the rest with it). Without that proof
-   * the gate keeps every directory the executor had not finished with.
+   * the gate keeps every directory the executor had not finished with. It speaks of
+   * descendants only: a program elsewhere that a command asked to act for it is not one, and
+   * no backend can say what such a program started.
    */
   onExit(listener: (detail: string, nothingLeft?: boolean) => void): void;
   /**
@@ -1669,8 +1671,8 @@ export async function openCodexExecGate(options: CodexExecGateOptions): Promise<
             outcome: "closed",
             basis: nothingLeft ? "tree-ended" : "tree-unseen",
             reason: nothingLeft
-              ? `the executor ended (${detail}), and nothing it started is left`
-              : `the executor ended (${detail}), and ORCA did not see everything it started end`,
+              ? `the executor ended (${detail}), and none of its descendants is left`
+              : `the executor ended (${detail}), and ORCA did not see all of its descendants end`,
           });
         end(`the executor behind the gate ended (${detail})`);
         settle();
