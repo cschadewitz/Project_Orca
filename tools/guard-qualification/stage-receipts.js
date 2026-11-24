@@ -8,9 +8,10 @@
  * `stage` copies each receipt into an empty directory and writes `manifest.json` beside them:
  * this run's build, and each receipt's file name, SHA-256, agent, route and kind. A receipt is
  * staged only when it is an installed receipt of this build (`GITHUB_SHA`), for an agent and a
- * route the matrix lists, named `<agent>-<route>.json` (or `fault-<route>.json` for the
- * end-to-end check's fault run, which must name its fault). The signing job attests exactly the
- * files the manifest lists.
+ * route the matrix lists, named `<agent>-<route>.json`. The verifier test receipt the
+ * end-to-end check makes (`e2e-check.js`) is staged apart, in its own directory and attestation,
+ * named `test-<route>.json` with `scope: "verifier-test"`; nothing else may carry a scope. The
+ * signing job attests exactly the files the manifest lists.
  *
  * `verify` checks a staged directory: the manifest lists exactly the receipts present, each
  * file's digest is the manifest's, and each one's attestation (`<receipt>.sigstore.json`)
@@ -24,6 +25,8 @@ import { attestationProblems } from "./attestation.js";
 import { loadMatrix } from "./check-support-matrix.js";
 
 export const MANIFEST = "manifest.json";
+/** The scope of the end-to-end check's verifier test receipt, which never counts as evidence. */
+export const TEST_SCOPE = "verifier-test";
 const sha256 = (data) => createHash("sha256").update(data).digest("hex");
 
 /** Why `receipt`, from a file named `name`, is not one this run may sign. Empty when it is. */
@@ -35,8 +38,10 @@ export function stageProblems(name, receipt, build, matrix = loadMatrix()) {
   if (!matrix.agents.some((a) => a.id === receipt.agent)) problems.push(`${name}: no row for agent ${receipt.agent}`);
   if (!matrix.paths.some((p) => p.id === receipt.route && !p.connected))
     problems.push(`${name}: ${receipt.route} is not a route in the matrix`);
+  if (receipt.scope !== undefined && receipt.scope !== TEST_SCOPE)
+    problems.push(`${name}: unknown scope ${receipt.scope}`);
   const expected =
-    receipt.fault === undefined ? `${receipt.agent}-${receipt.route}.json` : `fault-${receipt.route}.json`;
+    receipt.scope === undefined ? `${receipt.agent}-${receipt.route}.json` : `test-${receipt.route}.json`;
   if (name !== expected) problems.push(`${name}: must be named ${expected}`);
   return problems;
 }
@@ -59,7 +64,7 @@ export function stage(out, files, build, matrix = loadMatrix()) {
       agent: receipt.agent,
       route: receipt.route,
       kind: receipt.kind,
-      ...(receipt.fault === undefined ? {} : { fault: receipt.fault }),
+      ...(receipt.scope === undefined ? {} : { scope: receipt.scope }),
     });
   }
   if (entries.length === 0) problems.push("no receipts to stage");

@@ -146,18 +146,22 @@ certificate itself: signed by that workflow file at the ref it ran from (`main` 
 line), with the signer workflow at the receipt's own `build` commit, so the signer is the
 revision reviewed with the code it certified. Every listed receipt is verified, at any tier.
 
-The workflow keeps signing apart from writing. Its `sign` job (attestation rights, read-only
-contents, no release credential) stages only this run's validated receipts in an empty
-directory with a manifest of their names and digests (`stage-receipts.js`), attests exactly
-those, verifies each attestation, and checks the chain end to end (`e2e-check.js`): with the
-Claude row at B and pinned to the run's own receipt, the checker, verifying attestations for
-real, must accept that receipt, refuse a real receipt from a second run with a hook that allows
-everything installed in its place (a case the rules deny is allowed; the receipt names its
-fault and is refused for that too), and refuse a copy of the qualifying receipt with one byte
-changed. Its `propose` job (write rights, no attestation) checks what it received against the
-manifest and the attestations again, pins the rows, and opens a pull request from a new branch.
+The workflow keeps signing apart from writing, and neither runs on its own yet: pushes, the
+schedule and pull requests only produce receipts. A dispatch on `main` or a release line with
+`sign` runs the `sign` job (attestation rights, read-only contents, no release credential). It
+stages only this run's validated receipts in an empty directory with a manifest of their names
+and digests (`stage-receipts.js`), attests exactly those, verifies each attestation, and checks
+the chain end to end (`e2e-check.js`): with the Claude row at B and pinned to the run's own
+receipt, the checker, verifying attestations for real, must accept that receipt, refuse a
+benign verifier test receipt, and refuse a copy of the qualifying receipt with one byte
+changed. The test receipt is derived from the real one (scoped `verifier-test`, which the
+checker always refuses, with one asserted case marked failed), staged and attested apart, and
+never proposed; no agent or guard is weakened to make it. With `propose` as well, the `propose`
+job (write rights, no attestation) checks what it received against the manifest and the
+attestations again, pins the rows, and opens a pull request from a branch named for the run.
 No tier is promotable yet (`PROMOTABLE_TIERS` is empty): A and B open in a reviewed change after
-that has run on `main`; C waits for #1026's independent observer.
+a signed run has been verified on a reviewed `main` commit; C waits for #1026's independent
+observer.
 
 `guard-matrix.yml` verifies the attestations on every change to the matrix or its receipts.
 A tier is certified for one build: the release gate (`check-support-matrix.js --release`)

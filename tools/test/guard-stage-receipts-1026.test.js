@@ -37,7 +37,7 @@ describe("staging receipts to sign", () => {
     expect(manifest.receipts[0].sha256).toMatch(/^[0-9a-f]{64}$/);
   });
 
-  it("refuses another build, kind, agent, route or name, and a fault receipt under a real name", () => {
+  it("refuses another build, kind, agent, route or name, and a test receipt under a real name", () => {
     expect(stageProblems("claude-claude-native-hook.json", receipt, build)).toEqual([]);
     expect(stageProblems("claude-claude-native-hook.json", { ...receipt, build: "f".repeat(40) }, build)).toEqual([
       `claude-claude-native-hook.json: build ${"f".repeat(40)}, not this run's ${build}`,
@@ -54,9 +54,13 @@ describe("staging receipts to sign", () => {
     expect(stageProblems("old.json", receipt, build)).toEqual([
       "old.json: must be named claude-claude-native-hook.json",
     ]);
-    expect(
-      stageProblems("claude-claude-native-hook.json", { ...receipt, fault: "hook-allows-everything" }, build),
-    ).toEqual(["claude-claude-native-hook.json: must be named fault-claude-native-hook.json"]);
+    expect(stageProblems("claude-claude-native-hook.json", { ...receipt, scope: "verifier-test" }, build)).toEqual([
+      "claude-claude-native-hook.json: must be named test-claude-native-hook.json",
+    ]);
+    expect(stageProblems("test-claude-native-hook.json", { ...receipt, scope: "verifier-test" }, build)).toEqual([]);
+    expect(stageProblems("test-claude-native-hook.json", { ...receipt, scope: "trusted" }, build)).toEqual([
+      "test-claude-native-hook.json: unknown scope trusted",
+    ]);
     expect(stageProblems("x.json", { format: "other" }, build)).toEqual(["x.json: not an orca-enforcement-receipt/1"]);
   });
 

@@ -2,16 +2,19 @@
  * The end-to-end check of the receipt chain (#1026), run by guard-receipts.yml after it signs
  * this run's receipts and before it proposes them:
  *
- *   node tools/guard-qualification/e2e-check.js <qualifying.json> <failing.json>
+ *   node tools/guard-qualification/e2e-check.js make-test <qualifying.json> <test.json>
+ *   node tools/guard-qualification/e2e-check.js <qualifying.json> <test.json>
  *
- * Both receipts come from real installed runs of this commit, each with its Sigstore bundle
- * beside it (`<receipt>.sigstore.json`): the qualifying one from the full run, the failing one
- * from a run with a broken hook installed (`ORCA_GUARD_RECEIPT_FAULT`, in the installed test), in
- * which a case the rules deny was allowed. With the agent's row promoted to B and pinned to the receipt as
- * record-receipts.js pins it, the checker, verifying attestations for real, must:
+ * The qualifying receipt is the real one from this run's installed test. `make-test` derives
+ * from it a benign, clearly nonqualifying receipt for the verifier alone: scoped
+ * `verifier-test` (which the checker always refuses) and with one asserted case marked failed.
+ * No agent or guard is weakened to make it. Each is signed in its own attestation, the test one
+ * staged apart (`stage-receipts.js`), with its Sigstore bundle beside it. With the agent's row
+ * promoted to B and pinned to the receipt as record-receipts.js pins it, the checker, verifying
+ * attestations for real, must:
  *
  * - accept the qualifying receipt;
- * - refuse the failing receipt, for its failed case;
+ * - refuse the test receipt, for its failed case and its scope;
  * - refuse a copy of the qualifying receipt with one byte changed, for its attestation.
  *
  * Exit 0 when all three hold; otherwise one line per finding, exit 1.
@@ -20,8 +23,27 @@ import { copyFileSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { attestationProblems, bundlePathFor } from "./attestation.js";
-import { checkSupportMatrix, loadAssertions, loadCatalogue, loadMatrix } from "./check-support-matrix.js";
+import {
+  assertedCases,
+  checkSupportMatrix,
+  loadAssertions,
+  loadCatalogue,
+  loadMatrix,
+} from "./check-support-matrix.js";
 import { recordReceipts } from "./record-receipts.js";
+import { TEST_SCOPE } from "./stage-receipts.js";
+
+/** The verifier test receipt: the real one, scoped as a test, with its first asserted case failed. */
+export function verifierTestReceipt(receipt, matrix = loadMatrix(), catalogue = loadCatalogue()) {
+  const route = matrix.paths.find((p) => p.id === receipt.route);
+  const first = route && assertedCases(route, catalogue)[0];
+  if (!first || !receipt.cases?.some((c) => c.id === first)) throw new Error("the receipt runs no asserted case");
+  return {
+    ...receipt,
+    scope: TEST_SCOPE,
+    cases: receipt.cases.map((c) => (c.id === first ? { ...c, result: "fail" } : c)),
+  };
+}
 
 /**
  * The checker's findings for `agentId` at `tier` with only `file` (under `root`) as its receipt.
@@ -65,8 +87,9 @@ export function endToEnd(qualifying, failing, verifyFor = (root) => (f, r) => at
   const accepted = checkAt(root, "qualifying.json", "B", verify);
   for (const p of accepted) findings.push(`the qualifying receipt was refused: ${p}`);
   const failed = checkAt(root, "failing.json", "B", verify);
-  if (!failed.some((p) => p.includes("a case did not pass")))
-    findings.push(`the failing receipt was not refused for its failed case: ${failed.join("; ") || "accepted"}`);
+  for (const why of ["a case did not pass", `a ${TEST_SCOPE} receipt, never evidence`])
+    if (!failed.some((p) => p.includes(why)))
+      findings.push(`the test receipt was not refused for "${why}": ${failed.join("; ") || "accepted"}`);
   const tampered = checkAt(root, "tampered.json", "B", verify);
   if (!tampered.some((p) => p.includes("attestation does not verify")))
     findings.push(`the tampered receipt was not refused for its attestation: ${tampered.join("; ") || "accepted"}`);
@@ -74,13 +97,19 @@ export function endToEnd(qualifying, failing, verifyFor = (root) => (f, r) => at
 }
 
 if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href) {
-  const [qualifying, failing] = process.argv.slice(2);
-  if (!qualifying || !failing) {
-    console.error("usage: e2e-check.js <qualifying.json> <failing.json>");
+  const args = process.argv.slice(2);
+  if (args[0] === "make-test" && args.length === 3) {
+    const receipt = JSON.parse(readFileSync(args[1], "utf8"));
+    writeFileSync(args[2], `${JSON.stringify(verifierTestReceipt(receipt), null, 2)}\n`);
+    process.exit(0);
+  }
+  const [qualifying, failing] = args;
+  if (!qualifying || !failing || args.length !== 2) {
+    console.error("usage: e2e-check.js make-test <qualifying.json> <test.json> | <qualifying.json> <test.json>");
     process.exit(2);
   }
   const findings = endToEnd(qualifying, failing);
   for (const f of findings) console.error(f);
-  if (findings.length === 0) console.log("accepted the qualifying receipt; refused the failing and the tampered ones");
+  if (findings.length === 0) console.log("accepted the qualifying receipt; refused the test and the tampered ones");
   process.exit(findings.length === 0 ? 0 : 1);
 }

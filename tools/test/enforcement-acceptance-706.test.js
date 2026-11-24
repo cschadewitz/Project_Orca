@@ -213,9 +213,9 @@ describe("the matrix checker refuses claims beyond the evidence", () => {
     }
   });
 
-  it("refuses a receipt from a run with an injected fault, whatever else it shows", () => {
-    expect(check(claude({ tier: "A" }), { "r.json": receipt({ fault: "hook-allows-everything" }) })).toEqual([
-      `${needs("A")} (r.json: a run with an injected fault (hook-allows-everything))`,
+  it("refuses a verifier test receipt, whatever else it shows", () => {
+    expect(check(claude({ tier: "A" }), { "r.json": receipt({ scope: "verifier-test" }) })).toEqual([
+      `${needs("A")} (r.json: a verifier-test receipt, never evidence)`,
     ]);
   });
 

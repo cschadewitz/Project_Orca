@@ -60,7 +60,8 @@ export function receiptProblems(
   const problems = [];
   if (receipt?.format !== "orca-enforcement-receipt/1") return ["not an orca-enforcement-receipt/1"];
   if (receipt.kind !== kind) problems.push(`kind ${receipt.kind}, needs ${kind}`);
-  if (receipt.fault !== undefined) problems.push(`a run with an injected fault (${receipt.fault})`);
+  // A receipt made to test the verifier (`e2e-check.js`) is never evidence, whatever it shows.
+  if (receipt.scope !== undefined) problems.push(`a ${receipt.scope} receipt, never evidence`);
   if (receipt.agent !== agent.id) problems.push(`agent ${receipt.agent}`);
   if (receipt.agentVersion !== agent.pin?.agentVersion) problems.push(`agentVersion ${receipt.agentVersion}`);
   if (receipt.adapterVersion !== agent.pin?.adapterVersion) problems.push(`adapterVersion ${receipt.adapterVersion}`);
