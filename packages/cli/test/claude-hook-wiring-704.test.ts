@@ -263,7 +263,10 @@ describe("installing the hook", () => {
     await t.open();
     expect(await readdir(t.hookDir)).toHaveLength(2);
     t.resolveClosed();
-    await new Promise((r) => setTimeout(r, 20));
+    // The cleanup runs after `closed` settles; on a loaded runner that can take longer than a
+    // fixed pause, so wait for it, up to a bound.
+    for (let i = 0; i < 100 && (await readdir(t.hookDir)).length > 0; i++)
+      await new Promise((r) => setTimeout(r, 20));
     expect(await readdir(t.hookDir)).toEqual([]);
   });
 
