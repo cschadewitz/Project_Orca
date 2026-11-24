@@ -88,8 +88,8 @@ async function turn(opts: {
   secret?: boolean;
   /** While the judge decides, put a different file (a new identity) at `docs/a.md`. */
   swapWhileJudging?: boolean;
-  /** After the decision, before the I/O (while it is recorded): change the file the judge allowed. */
-  beforeIo?: (dir: string) => Promise<void>;
+  /** After the decision, before the I/O (while it is recorded): change the file, or the policy, the judge relied on. */
+  beforeIo?: (dir: string, sidecar: string) => Promise<void>;
 }) {
   const dir = await temp("orca-judged-read-");
   await mkdir(join(dir, "docs"));
@@ -98,6 +98,8 @@ async function turn(opts: {
   const secretFile = join(await temp("orca-judged-read-secret-"), "token");
   await writeFile(secretFile, DUMMY_SECRET);
   const log = join(await temp("orca-judged-read-log-"), "results.json");
+  // The permission sidecar the session reads its policy from, as well as the agent's own rules.
+  const sidecar = join(await temp("orca-judged-read-config-"), "permissions.json");
   const path = (p: string) => join(dir, p);
   const agent = AgentSpecSchema.parse({
     id: "reader",
@@ -119,6 +121,7 @@ async function turn(opts: {
     agent,
     cwd: dir,
     protectedPaths: { readOnly: [], noAccess: [] },
+    permissionFiles: [sidecar],
     ...(opts.secret
       ? {
           secrets: { dummy: { host: "local", provider: "file" as const, path: secretFile } },
@@ -140,7 +143,7 @@ async function turn(opts: {
     ...(opts.beforeIo
       ? {
           recordFsOperation: async () => {
-            await opts.beforeIo!(dir);
+            await opts.beforeIo!(dir, sidecar);
             return async () => undefined;
           },
         }
@@ -247,6 +250,27 @@ describe("a plain-language rule allows a read ORCA performs itself (#701)", () =
     });
     expect(moved.outcomes[0]).toHaveProperty("error");
     expect(JSON.stringify(moved.outcomes)).not.toContain("other");
+  });
+
+  it("does not read a judged file once a typed restriction that covers it appears before the I/O", async () => {
+    const judge = fakeJudge();
+    const out = await turn({
+      judge,
+      reads: ["docs/a.md"],
+      // A person's ask rule for the docs, written after the judge allowed the read and before it is carried out.
+      beforeIo: (_dir, sidecar) =>
+        writeFile(
+          sidecar,
+          JSON.stringify({ version: 1, agents: { reader: { rules: [{ match: { kind: "read" }, decision: "ask" }] } } }),
+        ),
+    });
+    expect(judge).toHaveBeenCalledTimes(1);
+    expect(out.decisions).toEqual(["fs:judged"]);
+    expect(out.outcomes[0]).toHaveProperty("error");
+    expect(JSON.stringify(out.outcomes)).not.toContain("hello");
+    // Without the new rule the same read is allowed and carried out: the restriction is what stopped it.
+    const control = await turn({ judge: fakeJudge(), reads: ["docs/a.md"], beforeIo: async () => undefined });
+    expect(control.outcomes).toEqual([{ result: { content: "hello\n" } }]);
   });
 
   it("asks without a judge, as before", async () => {

@@ -44,8 +44,7 @@ import {
   stricterExplanation,
   type FsAccess,
 } from "./owned-fs-gate.js";
-import { judgedEditAdvice, judgedLane, judgedMcpLane } from "./judged-lane.js";
-import { verifyPlainRuleTargets } from "./verified-targets.js";
+import { judgedAllowStillHolds, judgedEditAdvice, judgedLane, judgedMcpLane } from "./judged-lane.js";
 import {
   bindOwnedFs,
   newFileMode,
@@ -593,18 +592,23 @@ async function openPlanned(
     // on the descriptor (`readBound`): so the file judged and the file read are one (#701 activation review). With
     // no binding to an existing file (a remote host), no read is judged.
     if (access === "read" && judgedRead && binding?.exists === true && (resolved === undefined || resolved === path)) {
-      // ORCA's own words for its own read, with the workspace-relative path: the judge never sees the absolute one.
-      const toolCall = { ...fsToolCall(path, access), title: `Read ${relative(opts.cwd, path)}` };
-      const lane = await judgedRead(
-        policy,
-        { sessionId: acpSessionId, toolCall, options: [] },
-        evalScope,
-        turn.abort.signal,
-        [binding.identity],
-      );
+      // One canonical request for every policy check of this read, at decision and at I/O: the one the file gate's
+      // own typed check uses (`explainFsCall`). The label the provider sees is the lane's own, made separately from
+      // the verified workspace-relative path, so the judge never sees the absolute one.
+      const canonical: acp.RequestPermissionRequest = {
+        sessionId: acpSessionId,
+        toolCall: fsToolCall(path, access),
+        options: [],
+      };
+      const lane = await judgedRead(policy, canonical, evalScope, turn.abort.signal, [binding.identity]);
       if (!live()) return refuse("turn-ended", "the turn ended while the file request was judged", rule);
-      if (lane.decision === "allow" && lane.basis === "judged" && lane.judged?.ruleId) {
-        const by = lane.judged;
+      if (
+        lane.decision === "allow" &&
+        lane.basis === "judged" &&
+        lane.judged?.ruleId !== undefined &&
+        lane.judged.ruleRevision !== undefined
+      ) {
+        const by = { ruleId: lane.judged.ruleId, ruleRevision: lane.judged.ruleRevision };
         const judgedRule = permissionRuleRecord(lane);
         record("judged", judgedRule);
         return {
@@ -612,29 +616,12 @@ async function openPlanned(
           turnId: turn.id,
           decision: "judged",
           rule: judgedRule,
-          // At the I/O: an allow since needs no judge; otherwise only the default's ask (no deny or ask rule has
-          // appeared) with the allowing rule still there at the same revision, and the file still eligible by every
-          // rule the judge relied on (inside the workspace, outside every protected path, one regular file with a
-          // single link), as the very file bound. The read then checks identity and the single link again on the
-          // descriptor before any content is read (#701 activation review). Anything unproven: not read.
-          stillAllowed: (now) => {
-            const e = explain(now);
-            if (e.decision === "allow") return true;
-            if (e.decision !== "ask" || e.basis !== "default") return false;
-            if (!(now.judged ?? []).some((r) => r.ruleId === by.ruleId && r.ruleRevision === by.ruleRevision))
-              return false;
-            const eligible = verifyPlainRuleTargets({
-              kind: "read",
-              locations: [path],
-              workspaceCwd: evalScope.workspaceCwd,
-              protectedPaths: evalScope.protectedPaths,
-            });
-            return (
-              eligible.targetsVerified &&
-              eligible.identities.length === 1 &&
-              eligible.identities[0] === binding.identity
-            );
-          },
+          // At the I/O, on the same canonical request and against the policy as it is then: the lane's whole check
+          // again (no typed deny, ask or protected path anywhere in the policy, the allowing rule still there at the
+          // same revision, and the file eligible by every rule the judge relied on, as the very file bound). The read
+          // then checks identity and the single link on the descriptor before any content is read (#701 activation
+          // review). Anything unproven: not read.
+          stillAllowed: (now) => judgedAllowStillHolds(now, canonical, evalScope, by, [binding.identity]),
         };
       }
       // Why the judge did not allow it goes with the ask (#701).

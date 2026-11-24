@@ -203,6 +203,33 @@ export function judgedLane(options: JudgedLaneOptions): JudgedLane {
   };
 }
 
+/**
+ * Whether a judged allow still holds for `request` under `policy` (#701 activation review): the same check the lane
+ * made before asking the judge, on the same canonical request, against the policy as it is now. A typed allow
+ * stands; otherwise no typed deny, ask or protected path may hold for the call anywhere in the policy, the allowing
+ * rule must still be there at the same revision and still match, and the targets must verify again as the very
+ * files allowed (`identities`), with every eligibility rule the judge relied on. The caller runs it in the step that
+ * starts the I/O.
+ */
+export function judgedAllowStillHolds(
+  policy: PermissionPolicy,
+  request: acp.RequestPermissionRequest,
+  ctx: PermissionEvalContext | undefined,
+  rule: { readonly ruleId: string; readonly ruleRevision: string },
+  identities: readonly string[],
+  io?: PlainRuleTargetIo,
+): boolean {
+  const typed = explainPermission(policy, request, ctx);
+  if (typed.basis === "protected" || typed.decision === "deny") return false;
+  if (typed.decision === "allow") return true;
+  const again = gate(policy, request, ctx, io);
+  return (
+    again.state === "open" &&
+    again.candidates.some((r) => r.ruleId === rule.ruleId && r.ruleRevision === rule.ruleRevision) &&
+    sameList(again.identities, identities)
+  );
+}
+
 type Gate =
   | { state: "closed"; verdict?: string }
   | {
