@@ -20,7 +20,6 @@ import {
   loadCatalogue,
   loadMatrix,
   loadAssertions,
-  loadAssertions,
   qualificationProfile,
   qualifyingCases,
 } from "../guard-qualification/check-support-matrix.js";
