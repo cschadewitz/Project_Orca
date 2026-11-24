@@ -83,7 +83,7 @@ import {
   type Workspace,
   type SecretRef,
 } from "@orca/core";
-import { reduceRun } from "@orca/core";
+import { reduceRun, type OrcaConfig } from "@orca/core";
 import {
   DEFAULT_LEASE_TTL_MS,
   executionEvents,
@@ -154,6 +154,13 @@ export interface SessionOrigin {
   runId: string;
   generationId?: string;
   remotes?: readonly RemoteDaemonSpec[];
+  /**
+   * The `review` settings of the generation the run is bound to (#701), present exactly when
+   * `generationId` is. A session's plain-rule judge is prepared from these, never from boot config.
+   */
+  review?: OrcaConfig["review"];
+  /** Aborts when the run is cancelled, so work done to open the session stops with it. */
+  signal?: AbortSignal;
 }
 export type SessionFactory = (options: OpenSessionOptions & { origin?: SessionOrigin }) => Promise<AgentSession>;
 
@@ -2477,8 +2484,14 @@ export class Orchestrator {
   private sessionOrigin(rc: RunContext): SessionOrigin {
     const generation = this.contextGenerations.get(rc);
     return generation
-      ? { runId: rc.id, generationId: generation.snapshot.id, remotes: generation.snapshot.config.remotes }
-      : { runId: rc.id };
+      ? {
+          runId: rc.id,
+          generationId: generation.snapshot.id,
+          remotes: generation.snapshot.config.remotes,
+          review: generation.snapshot.config.review,
+          signal: rc.abort.signal,
+        }
+      : { runId: rc.id, signal: rc.abort.signal };
   }
 
   private interruptedChild(rc: RunContext, step: StepRun, branch: string | undefined): string | undefined {
