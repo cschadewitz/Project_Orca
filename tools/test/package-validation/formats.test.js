@@ -91,7 +91,7 @@ describe("tar.gz", () => {
   );
 });
 
-// The tar/PAX contract (docs/preparation/windows-linux-release-artifacts/README.md):
+// The tar/PAX contract (docs/archive/preparation/windows-linux-release-artifacts/README.md):
 // each supported form is read, everything outside it is refused with a named code.
 describe("tar.gz contract", () => {
   const read = (blocks, options) => readTarGz(tarGz(blocks, options));

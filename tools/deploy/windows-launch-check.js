@@ -68,8 +68,11 @@ async function main(executable) {
   const workspace = join(root, "workspace");
   mkdirSync(workspace, { recursive: true });
   const env = { ...process.env, ORCA_WORKSPACE: workspace };
-  for (const name of ["ELECTRON_RUN_AS_NODE", "ORCA_UPDATE_URL", "ORCA_UPDATE_TOKEN_FILE", "ORCA_UPDATE_PRERELEASE"])
-    delete env[name];
+  // The app adopts a variable set under the name from before the rename (core's adoptLegacyEnv),
+  // so the update settings are cleared under both names.
+  for (const setting of ["UPDATE_URL", "UPDATE_TOKEN_FILE", "UPDATE_PRERELEASE"])
+    for (const prefix of ["ORCA_", "ORRERY_"]) delete env[prefix + setting]; // rename-keep: both prefixes
+  delete env.ELECTRON_RUN_AS_NODE;
   const child = spawn(executable, [`--user-data-dir=${join(root, "profile")}`, `--remote-debugging-port=${PORT}`], {
     env,
     stdio: ["ignore", "pipe", "pipe"],

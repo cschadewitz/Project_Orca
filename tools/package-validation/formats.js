@@ -84,7 +84,7 @@ function octal(block, start, length) {
 /**
  * The tar/PAX subset this reader accepts. Anything outside it is refused with a named code,
  * never ignored. The contract and its support matrix are in
- * docs/preparation/windows-linux-release-artifacts/README.md ("Tar/PAX contract").
+ * docs/archive/preparation/windows-linux-release-artifacts/README.md ("Tar/PAX contract").
  */
 // Per-member PAX keys that are honored. Every other key (`size`, `GNU.sparse.*`, `mtime`,
 // `hdrcharset`, vendor keys...) is refused rather than silently dropped.

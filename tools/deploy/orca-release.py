@@ -214,9 +214,24 @@ def typed_operation(action):
     return decorate
 
 
+def environment_value(name, env=None):
+    """`name` from the environment, or the same variable under the other prefix of the rename:
+    what core's adoptLegacyEnv does for the CLI and the app, so a server whose operator set the
+    variable before the rename keeps working through 0.9. The name as written wins."""
+    env = os.environ if env is None else env
+    if name in env:
+        return env[name]
+    for prefix in ENV_PREFIXES:
+        if name.startswith(prefix):
+            for other in ENV_PREFIXES:
+                if other + name[len(prefix):] in env:
+                    return env[other + name[len(prefix):]]
+    return None
+
+
 def rpc(url, method, params, token_file=None, use_environment=True):
-    explicit = os.environ.get("ORCA_DAEMON_TOKEN") if use_environment else None
-    token_file = (os.environ.get("ORCA_DAEMON_TOKEN_FILE") if use_environment else None) or token_file
+    explicit = environment_value("ORCA_DAEMON_TOKEN") if use_environment else None
+    token_file = (environment_value("ORCA_DAEMON_TOKEN_FILE") if use_environment else None) or token_file
     opener = urllib.request.build_opener(NoRedirect())
     for attempt in range(2):
         token = explicit

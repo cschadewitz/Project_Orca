@@ -13,7 +13,7 @@
  * installed evidence. The prior binary only ever writes its own fresh store and, after the
  * restore, that same restored store; the candidate's records are judged by the prior
  * release's schemas in-process (schema-read.js) instead of by running the prior binary on
- * them. See docs/preparation/store-compatibility-rehearsal/README.md.
+ * them. See docs/archive/preparation/store-compatibility-rehearsal/README.md.
  */
 import { execFileSync, spawn } from "node:child_process";
 import { readFileSync } from "node:fs";

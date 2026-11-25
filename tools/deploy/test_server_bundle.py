@@ -401,6 +401,13 @@ class ServerBundleTests(unittest.TestCase):
         self.assertEqual(env, {"ORCA_RELEASE": "r", "ORRERY_RELEASE": "r", "ORRERY_ADMISSION_FILE": "a",
                                "ORCA_ADMISSION_FILE": "a", "HOME": "h"})
 
+    def test_bridge_reads_a_variable_set_under_either_prefix(self):
+        for name in ("ORCA_DAEMON_TOKEN", "ORRERY_DAEMON_TOKEN"):
+            other = "ORRERY_DAEMON_TOKEN" if name == "ORCA_DAEMON_TOKEN" else "ORCA_DAEMON_TOKEN"
+            self.assertEqual(release.environment_value(name, {other: "legacy"}), "legacy")
+            self.assertEqual(release.environment_value(name, {name: "new", other: "legacy"}), "new")
+            self.assertIsNone(release.environment_value(name, {"HOME": "h"}))
+
     def test_bridge_reads_either_hello_version_field(self):
         meta = {"version": "0.8.0", "compatibility": {"protocol": 3, "capabilities": []}}
         for field in ("orcaVersion", "orreryVersion"):

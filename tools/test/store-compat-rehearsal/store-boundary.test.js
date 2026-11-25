@@ -1,5 +1,5 @@
 /**
- * Store-side rows of docs/preparation/store-compatibility-rehearsal, against this checkout only.
+ * Store-side rows of docs/archive/preparation/store-compatibility-rehearsal, against this checkout only.
  *
  * The stores here are hand-written in the shape v0.6.0 wrote - no `executionPayloadRef`, no
  * `journal`, no private-execution, workspace identity or auth - and are synthetic. They are
