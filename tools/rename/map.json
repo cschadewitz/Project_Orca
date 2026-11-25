@@ -1,0 +1,105 @@
+{
+  "$comment": "The ORCA -> Orrery naming map. codemod.mjs and audit.mjs read only this file; change a name here, never in a script. Rules run in order, so the specific ones come first. See tools/rename/README.md.",
+  "version": 1,
+  "lineMarker": "rename-keep",
+  "blockStart": "rename-keep-start",
+  "blockEnd": "rename-keep-end",
+  "exclude": [
+    "tools/rename/**",
+    "tools/test/rename-*.test.js",
+    ".git-blame-ignore-revs",
+    "CHANGELOG.md",
+    "pnpm-lock.yaml",
+    "Current_State/**",
+    "docs/archive/**",
+    "docs/preparation/**",
+    "docs/reviews/**",
+    "docs/implementation/**",
+    "docs/research/**",
+    "docs/session-logs/**",
+    "docs/v0.5.2-*",
+    "examples/m10-plugin/candidate/**",
+    "packages/app/test/fixtures/store-v*/**"
+  ],
+  "binaryExtensions": [
+    ".png",
+    ".ico",
+    ".icns",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".webp",
+    ".woff",
+    ".woff2",
+    ".ttf",
+    ".otf",
+    ".node",
+    ".zip",
+    ".gz",
+    ".tgz",
+    ".pdf",
+    ".sqlite",
+    ".db"
+  ],
+  "keep": [
+    {
+      "pattern": "dev\\.orca\\.desktop",
+      "reason": "Windows NSIS upgrade GUID and AppUserModelID; changing it makes every install a second app"
+    },
+    {
+      "pattern": "orca-desktop-feed",
+      "reason": "R2 bucket and Worker name; renaming means a new bucket and token reissue"
+    },
+    { "pattern": "orca-infra-ci", "reason": "Entra app; federated credential is keyed on repo ids" },
+    {
+      "pattern": "secrets\\.ORCA_[A-Z0-9_]+",
+      "reason": "Actions secret names stay until the next key rotation (values cannot be read back)"
+    },
+    { "pattern": "ORCADP01", "reason": "Persisted DPAPI wrapper header on Windows diagnostics" },
+    {
+      "pattern": "(?<![A-Za-z])orca1(?![0-9])",
+      "reason": "Daemon credential prefix orca1.<id>.<secret>; issued tokens live on remote machines"
+    },
+    {
+      "pattern": "[A-Za-z0-9+/]{20,}Orca[A-Za-z0-9+/=]*",
+      "reason": "Base64 fixture keys that merely contain the letters"
+    }
+  ],
+  "rules": [
+    { "from": "Project_Orca_Infra", "to": "Orrery-Infra" },
+    { "from": "project_orca_infra", "to": "orrery-infra" },
+    { "from": "project-orca-infra", "to": "orrery-infra" },
+    { "from": "Project_Orca", "to": "Orrery" },
+    { "from": "project_orca", "to": "orrery" },
+    { "from": "Project ORCA", "to": "Orrery" },
+    { "from": "Project Orca", "to": "Orrery" },
+    { "from": "ORCA - Orchestration Runtime for Coding Agents", "to": "Orrery - orchestration for coding agents" },
+    { "from": "@orca/", "to": "@orrery/" },
+    { "from": "X-Orca-", "to": "X-Orrery-" },
+    {
+      "from": "(?:(?<![A-Za-z])|(?<=-D)|(?<=\\\\[nrtb]))ORCA(?=[0-9]*_)",
+      "to": "ORRERY",
+      "regex": true,
+      "note": "env vars and constants: ORCA_X, ORCA506_X, -DORCA_X"
+    },
+    { "from": "(?<=_)ORCA(?![A-Za-z])", "to": "ORRERY", "regex": true, "note": "FAKE_ORCA, X_ORCA_HOME" },
+    {
+      "from": "(?<![A-Za-z])ORCA(?![A-Za-z])",
+      "to": "Orrery",
+      "regex": true,
+      "note": "the product name in prose and UI"
+    },
+    {
+      "from": "(?<![A-Z])Orca(?![a-z])",
+      "to": "Orrery",
+      "regex": true,
+      "note": "Orca, OrcaError, isOrcaError; not IOrcaKey"
+    },
+    {
+      "from": "(?:(?<![A-Za-z])|(?<=\\\\[nrtb]))orca(?![a-z])",
+      "to": "orrery",
+      "regex": true,
+      "note": "orca, orca-x, .orca, orcaVersion, @orca, \\norca; not EditorCanvas"
+    }
+  ]
+}
