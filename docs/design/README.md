@@ -287,8 +287,9 @@ packages/app/build/
   (16–256) and `.icns` (16–1024) from the SVG when the SVG changes, and commit both together.
   Each size is rendered straight from the SVG (resvg, `@resvg/resvg-js`), never scaled down from
   a bigger bitmap, then packed into the `.ico` and `.icns` with Pillow.
-- At 16px the inner ring runs into the centre and the inner planet is lost;
-  what stays is a dot inside a ring with the teal planet at its lower left.
+- At 16px a ring is under a pixel wide and renders grey, the inner ring runs into the centre
+  and the inner planet is lost: what stays is a dark dot in a grey ring with the teal planet
+  at its lower left. A heavier small-size drawing would be a design change to this mark.
 - No wordmark is drawn: where the name sits beside the mark it is set in IBM Plex Sans
   SemiBold, as `Orrery`, at the mark's optical height.
 
