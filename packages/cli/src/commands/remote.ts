@@ -29,7 +29,6 @@ import {
   dropDiscovery,
   enrollDiscovered,
   keyFingerprints,
-  managedLauncher,
   readSetup,
   setupCommand,
   setupProgram,
@@ -208,7 +207,7 @@ function finish(ctx: CommandContext, destination: string, outcome: SetupOutcome 
     case "ready":
       if (!ctx.flags.json)
         ctx.out(
-          `${destination} is a managed ORCA server (v${outcome.version}). To connect and sign in, add an SSH profile for it in the desktop app with server command ${managedLauncher(outcome.root)}, or use Add a machine there.`,
+          `${destination} is a managed ORCA server (v${outcome.version}). To connect and sign in, add an SSH profile for it in the desktop app with server command ${outcome.command}, or use Add a machine there.`,
         );
       return 0;
     case "refused":

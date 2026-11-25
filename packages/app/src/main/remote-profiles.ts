@@ -35,6 +35,7 @@ import {
   type SecretCipher,
   type SshTunnelOptions,
   type TunnelState,
+  withLegacyServerCommand,
 } from "@orca/protocol/remote-access";
 import { OperatorDiscoverySchema } from "@orca/protocol";
 import { CredentialTransportUnavailable, type DaemonTokenSource } from "../client/auth.js";
@@ -49,7 +50,6 @@ import {
   dropDiscovery,
   enrollDiscovered,
   keyFingerprints,
-  managedLauncher,
   readSetup,
   setupCommand,
   setupProgram,
@@ -847,11 +847,12 @@ export class RemoteProfiles {
       throw new ConnectionRefusal(
         "The profile's pinned host keys changed while its server was set up. Set it up again.",
       );
-    // Repointed only at the launcher derived here from the confirmed directory, on the same
+    // Repointed only at a launcher derived here from the confirmed directory (confirmedResult
+    // checked it: today's, or the one a server set up before the rename keeps), on the same
     // server and port (so the verified pins stay). The managed launcher passes the server's
     // config itself, so the profile names none.
     const latest = this.get(id)!;
-    const launcher = managedLauncher(pending.root);
+    const launcher = setup.command;
     if (latest.serverCommand !== launcher || latest.serverConfig !== undefined) {
       const { serverConfig: _config, ...rest } = latest;
       this.save({ ...rest, serverCommand: launcher });
@@ -1129,13 +1130,14 @@ export class RemoteProfiles {
     const profile = this.get(id);
     if (!profile) throw new ConnectionRefusal("That profile no longer exists.");
     const revision = this.revision(id);
-    const run = async (command: string[]): Promise<RemoteResult> => {
+    // A server set up before the rename has its CLI only under the old name.
+    const run = withLegacyServerCommand(async (command: string[]): Promise<RemoteResult> => {
       const result = await shared.tunnel.exec(command);
       // Nothing that started before an edit, removal or pin reset may write after it.
       if (this.revision(id) !== revision)
         throw new ConnectionRefusal("The profile changed while connecting. Connect again.");
       return result;
-    };
+    });
     const ask = (token: string, principal?: string) =>
       (this.deps.verify ?? helloVerdict)(() => shared.tunnel.connect(), url, token, principal);
 

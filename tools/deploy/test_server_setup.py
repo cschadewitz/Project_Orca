@@ -367,6 +367,64 @@ class ServerSetupTests(unittest.TestCase):
                 self.assertIn("process " + pid, lines[-1]["detail"])
         # rename-keep-end
 
+    # A server set up before the rename (0.8) keeps its own names; today's layout is a stand-in
+    # here, so these hold whether or not the names have been renamed yet.
+    RENAMED = setup_module.Layout("renamed-server", ".renamed-setup.json", "renamed-server-setup", "renamed.service",
+                                  "renamed-release.py", "renamed", "renamed-acp", "renamed.config.yaml",
+                                  "renamed-acp.config.yaml")
+
+    def layouts(self, current, *read):
+        for name, value in (("LAYOUT", current), ("LAYOUTS", (current, *read))):
+            patcher = patch.object(setup_module, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def set_up_before_the_rename(self):
+        legacy = setup_module.LEGACY_LAYOUT
+        with patch.object(setup_module, "LAYOUT", legacy), patch.object(setup_module, "LAYOUTS", (legacy,)):
+            self.assertEqual(self.run_setup()[0], 0)
+        return self.home / ".local" / "share" / legacy.directory, legacy
+
+    def test_a_server_set_up_before_the_rename_is_recognised_and_repaired_in_place(self):
+        root, legacy = self.set_up_before_the_rename()
+        before = self.snapshot()
+        self.layouts(self.RENAMED, setup_module.LEGACY_LAYOUT)
+        code, lines = self.run_setup(inspect=True)
+        self.assertEqual(code, 0, lines)
+        self.assertEqual((lines[-1]["root"], lines[-1]["current"]), (str(root), "0.8.0"))
+        self.assertEqual(self.snapshot(), before)
+        # A repair keeps every name the server runs under: nothing is renamed, nothing added.
+        self.set_systemd(active=False)
+        code, lines = self.run_setup(expect_root=str(root), expect_current="0.8.0")
+        self.assertEqual(code, 0, lines)
+        self.assertEqual(self.results(lines)["start"], "repaired")
+        self.assertEqual(lines[-1]["command"], str(root / legacy.cli))
+        self.assertFalse((self.home / ".local" / "share" / self.RENAMED.directory).exists())
+        units = sorted(p.name for p in (self.home / ".config" / "systemd" / "user").iterdir())
+        self.assertEqual(units, [legacy.service])
+        self.assertEqual(sorted(p.name for p in root.iterdir() if "renamed" in p.name), [])
+        self.assertEqual(json.loads((root / "deployment.json").read_text())["service"], legacy.service)
+
+    def test_a_new_server_gets_todays_names_and_refuses_beside_another_install(self):
+        self.layouts(self.RENAMED, setup_module.LEGACY_LAYOUT)
+        root = self.home / ".local" / "share" / self.RENAMED.directory
+        code, lines = self.run_setup()
+        self.assertEqual(code, 0, lines)
+        self.assertEqual((lines[-1]["root"], lines[-1]["command"]), (str(root), str(root / "renamed")))
+        self.assertTrue((root / ".renamed-setup.json").is_file())
+        for name in ("renamed-release.py", "renamed-acp", "renamed.config.yaml", "renamed-acp.config.yaml"):
+            self.assertTrue((root / name).is_file(), name)
+        self.assertIn("renamed-server-setup", (self.home / ".config" / "systemd" / "user" / "renamed.service").read_text())
+        # A unit under the old name that this setup did not write is another installation.
+        self.setUp()
+        self.layouts(self.RENAMED, setup_module.LEGACY_LAYOUT)
+        units = self.home / ".config" / "systemd" / "user"
+        units.mkdir(parents=True)
+        (units / setup_module.LEGACY_LAYOUT.service).write_text("[Service]\n")
+        code, lines = self.run_setup()
+        self.assertEqual((code, lines[-1]["step"], lines[-1]["result"]), (2, "inventory", "refused"))
+        self.assertIn(f"systemd user unit {setup_module.LEGACY_LAYOUT.service}", lines[-1]["detail"])
+
     def test_a_rerun_keeps_the_operators_deployment_settings(self):
         self.assertEqual(self.run_setup()[0], 0)
         manifest = json.loads((self.root / "deployment.json").read_text())

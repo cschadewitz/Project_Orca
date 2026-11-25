@@ -41,7 +41,9 @@ import {
   commandArgs,
   RemoteCommandRefused,
   runRemote,
+  withLegacyServerCommand,
   type RemoteCommandExit,
+  type RemoteResult,
   type SecretCipher,
   type TunnelState,
 } from "@orca/protocol/remote-access";
@@ -1245,4 +1247,38 @@ describe.skipIf(!live)("SshTunnel against a real sshd", () => {
         .join("\n"),
     ).toBe(true);
   }, 60_000);
+});
+
+describe("the server CLI across the Orrery rename", () => {
+  const names = { current: "new-cli", legacy: "old-cli" };
+  const fake = (has: string[]) => {
+    const calls: string[][] = [];
+    const run = async (command: string[]): Promise<RemoteResult> => {
+      calls.push(command);
+      return has.includes(command[0]!)
+        ? { code: 0, stdout: "ok", serverLines: [] }
+        : { code: 127, stdout: "", serverLines: [`sh: ${command[0]}: not found`] };
+    };
+    return { calls, run: withLegacyServerCommand(run, names) };
+  };
+
+  it("runs the default CLI, and on a server that has only the old name, that one", async () => {
+    const both = fake(["new-cli", "old-cli"]);
+    expect((await both.run(["new-cli", "auth", "list"])).code).toBe(0);
+    expect(both.calls).toEqual([["new-cli", "auth", "list"]]);
+    const old = fake(["old-cli"]);
+    expect((await old.run(["new-cli", "auth", "list"])).code).toBe(0);
+    expect(old.calls).toEqual([
+      ["new-cli", "auth", "list"],
+      ["old-cli", "auth", "list"],
+    ]);
+  });
+
+  it("never retries a command the profile names, or one that ran", async () => {
+    const none = fake([]);
+    expect((await none.run(["/srv/x/cli", "auth", "list"])).code).toBe(127);
+    expect(none.calls).toHaveLength(1);
+    const failing = withLegacyServerCommand(async () => ({ code: 1, stdout: "", serverLines: ["error"] }), names);
+    expect((await failing(["new-cli", "auth", "issue"])).code).toBe(1);
+  });
 });

@@ -7,6 +7,9 @@ import { ConnectionProfileSchema } from "../src/remote-access.js";
 import {
   confirmationCode,
   confirmedResult,
+  LEGACY_LAUNCHER,
+  LEGACY_SETUP_LINE,
+  managedLauncher,
   readSetup,
   inspectCommand,
   keyFingerprints,
@@ -156,5 +159,24 @@ describe("server setup confirmation (#881)", () => {
       { command: `${root}/../orca` },
     ])
       expect(confirmedResult({ ...ready, ...changed }, expected).kind).toBe("mismatch");
+  });
+
+  it("accepts the launcher a server set up before the rename keeps, derived from the same directory", () => {
+    const root = "/home/dev/.local/share/orca-server";
+    const expected = { version: "0.9.0", port: 6722, account: "dev", root };
+    const ready = { kind: "ready" as const, steps: [], version: "0.9.0", port: 6722, account: "dev", root };
+    for (const command of [managedLauncher(root), `${root}/${LEGACY_LAUNCHER}`])
+      expect(confirmedResult({ ...ready, command }, expected).kind).toBe("ready");
+    expect(confirmedResult({ ...ready, command: `/elsewhere/${LEGACY_LAUNCHER}` }, expected).kind).toBe("mismatch");
+  });
+
+  it("reads the lines of a setup from before the rename", () => {
+    const done = { done: true, root: "/srv/s", command: "/srv/s/x", account: "dev", version: "0.8.0", port: 6722 };
+    const outcome = readSetup({
+      code: 0,
+      stdout: `${LEGACY_SETUP_LINE}${JSON.stringify({ step: "start", result: "ok" })}\n${LEGACY_SETUP_LINE}${JSON.stringify(done)}\n`,
+      serverLines: [],
+    });
+    expect(outcome).toMatchObject({ kind: "ready", command: "/srv/s/x", steps: [{ step: "start", result: "ok" }] });
   });
 });

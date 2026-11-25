@@ -256,6 +256,32 @@ export interface RemoteResult {
   serverLines: string[];
 }
 
+/** The CLI a profile without a server command runs on the server. */
+export const DEFAULT_SERVER_COMMAND = "orca";
+/** The CLI's name on a server set up before the rename to Orrery (0.8). Tried until 0.10. */
+export const LEGACY_SERVER_COMMAND = "orca"; // rename-keep: the CLI's name on a 0.8 server
+
+/** The shell found no such command: 127 (sh), 9009 or "is not recognized as" (cmd). */
+export function commandNotFound(result: RemoteResult): boolean {
+  return result.code === 127 || result.code === 9009 || /is not recognized as/i.test(result.serverLines.join("\n"));
+}
+
+/**
+ * `run`, which runs a server CLI command, but a command for the default CLI that the server
+ * does not have is run once more under the name from before the rename: a server set up
+ * before it has only that one. Nothing ran the first time, so nothing runs twice.
+ */
+export function withLegacyServerCommand(
+  run: (command: string[]) => Promise<RemoteResult>,
+  names: { current: string; legacy: string } = { current: DEFAULT_SERVER_COMMAND, legacy: LEGACY_SERVER_COMMAND },
+): (command: string[]) => Promise<RemoteResult> {
+  return async (command) => {
+    const result = await run(command);
+    if (command[0] !== names.current || names.current === names.legacy) return result;
+    return commandNotFound(result) ? run([names.legacy, ...command.slice(1)]) : result;
+  };
+}
+
 /**
  * Where a pin file stands. `none`: never enrolled, so the next connect may pin whatever the
  * server presents (accept-new). `pinned`: a readable key is on file. `broken`: the pin was

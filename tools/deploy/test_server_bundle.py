@@ -299,6 +299,18 @@ class ServerBundleTests(unittest.TestCase):
         self.assertEqual(meta["node"], sys.executable)
         self.assertEqual(meta["entry"], str(path / "packages/cli/dist/main.js"))
 
+    def test_a_release_staged_before_the_rename_is_read_by_its_own_record(self):
+        path = self.deployment.root / "releases" / "v0.7.0"
+        path.mkdir()
+        with patch.object(release, "LEGACY_RELEASE_RECORD", ".legacy-release.json"):
+            release.write_json(path / ".legacy-release.json", {"version": "0.7.0", "node": sys.executable,
+                                                                "compatibility": {}})
+            self.assertEqual(release.metadata(path)["version"], "0.7.0")
+            # Today's record, where there is one, is the one read.
+            release.write_json(path / release.RELEASE_RECORD, {"version": "0.7.1", "node": sys.executable,
+                                                               "compatibility": {}})
+            self.assertEqual(release.metadata(path)["version"], "0.7.1")
+
     # The Orrery rename bridge (v0.8.1): a release after the rename is signed by the renamed
     # repository and named after the new product. Either is accepted, each exactly.
     # rename-keep-start: these tests pin both names on purpose

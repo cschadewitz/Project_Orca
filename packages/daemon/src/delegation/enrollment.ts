@@ -56,6 +56,8 @@ import {
   SshTunnel,
   TunnelRefusal,
   type ConnectionProfile,
+  DEFAULT_SERVER_COMMAND,
+  withLegacyServerCommand,
 } from "@orca/protocol/remote-access";
 import { DELEGATION_METHODS } from "./daemon-session.js";
 import { DelegationReceipts } from "./receipts.js";
@@ -840,7 +842,7 @@ async function settlePending(
   const list = async () => {
     if (listed !== undefined) return listed;
     try {
-      const result = await tunnel.exec(cliOf(options.remote, "auth", "list", "--json"), 60_000);
+      const result = await execCli(tunnel, cliOf(options.remote, "auth", "list", "--json"));
       listed = result.code === 0 ? RemoteCredentialsSchema.parse(JSON.parse(result.stdout)) : null;
     } catch {
       listed = null;
@@ -926,8 +928,16 @@ const IssuedSchema = z.object({
 });
 
 function cliOf(remote: RemoteDaemonSpec, ...args: string[]): string[] {
-  return [remote.serverCommand ?? "orca", ...args, ...(remote.serverConfig ? ["--config", remote.serverConfig] : [])];
+  return [
+    remote.serverCommand ?? DEFAULT_SERVER_COMMAND,
+    ...args,
+    ...(remote.serverConfig ? ["--config", remote.serverConfig] : []),
+  ];
 }
+
+/** Run the remote's CLI; one set up before the rename has it only under the old name. */
+const execCli = (tunnel: SshTunnel, command: string[]) =>
+  withLegacyServerCommand((argv) => tunnel.exec(argv, 60_000))(command);
 
 /**
  * Have the remote's ORCA CLI issue this daemon a client credential for exactly `workflows`,
@@ -961,7 +971,7 @@ async function issueOver(
   );
   let result;
   try {
-    result = await tunnel.exec(command, 60_000);
+    result = await execCli(tunnel, command);
   } catch (error) {
     throw fail(error instanceof TunnelRefusal ? `ssh ${error.code}` : "its command could not be run");
   }
@@ -984,6 +994,6 @@ async function issueOver(
 
 async function revokeOver(tunnel: SshTunnel, remote: RemoteDaemonSpec, credentialId: string): Promise<void> {
   // After `--`, an id starting with `-` is never read as an option.
-  const result = await tunnel.exec([...cliOf(remote, "auth", "revoke", "--json"), "--", credentialId], 60_000);
+  const result = await execCli(tunnel, [...cliOf(remote, "auth", "revoke", "--json"), "--", credentialId]);
   if (result.code !== 0) throw new Error("revoke failed");
 }
