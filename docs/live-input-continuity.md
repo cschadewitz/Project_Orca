@@ -7,7 +7,7 @@ callbacks and process/session restoration retain the distinct limits described h
 see the [capability ledger](ROADMAP.md) for remaining actual-client/native acceptance.
 
 The combined runtime wires owner-local live permissions through engine, daemon and app.
-[237-live-input-integration.patch](patches/237-live-input-integration.patch) is retained
+[237-live-input-integration.patch](archive/patches/237-live-input-integration.patch) is retained
 as a historical handoff against preparation baseline
 `7abc2342aa672ee9d2f10d565ca4f8eb546184df`, reconciled with the other feature heads.
 Do not apply it to the integrated tree. Historical feature checks below are not final

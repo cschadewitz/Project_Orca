@@ -3,7 +3,7 @@
 **Current reading, 7 October 2026:** protected revision, app controls and production
 operator composition are implemented on main. Reserved patches/checkpoint wiring
 below preserve the original handoff; do not reapply them. Current protocol is **2.0**,
-store epoch **`operator-journals-v4`**. See [operator integration](runtime-operator-integration.md)
+store epoch **`operator-journals-v4`**. See [operator integration](archive/runtime-operator-integration.md)
 and the [capability ledger](ROADMAP.md) for dated validation and current limits.
 
 **Adapter evidence, 9 October 2026:** merged #549's
@@ -24,7 +24,7 @@ contracts, service, journal projection, delivery accounting, authenticated autho
 client helper and correction card. It does **not** advertise a production revision
 capability on the feature branch. The coordinated runtime integration supplies the
 reserved wiring and the production #331 retry facility. See the
-[frozen contract](runtime-operator-parallel-contract.md).
+[frozen contract](archive/runtime-operator-parallel-contract.md).
 
 ## User behavior
 
@@ -201,7 +201,7 @@ for an unclaimed record.
 
 ## Reserved integration patch and remaining combined work
 
-[356-operator-integration.patch](patches/356-operator-integration.patch) is an exact
+[356-operator-integration.patch](archive/patches/356-operator-integration.patch) is an exact
 patch against the pinned start, intentionally **unapplied** on this branch. It provides
 barrel exports, workflow declarations/validation, `REVISION_STALE`, an atomic revision
 event/reducer, protected public projection, input invalidation, protocol projections,

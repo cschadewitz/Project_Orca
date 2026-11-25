@@ -1,87 +1,93 @@
 # Documentation index
 
-Start here to understand ORCA without installing it or supplying credentials.
-Current source is described in the [capability ledger](ROADMAP.md); the
-[25 October 2026 integration checkpoint](archive/reviews/2026-10-25-integration-checkpoint.md)
-pins current evidence and remaining acceptance; the [7 October audit](archive/reviews/2026-10-07-living-docs.md)
-preserves the earlier inventory. Documentation and source
-access invite developer insight; they do not require code changes or host access.
+This page lists every living document and who it is for. Reading them needs no install and no
+credentials. For what works today, read the [capability ledger](ROADMAP.md). For history, see
+the [archive](archive/README.md).
 
-## Orientation and contributing
+## Start here
 
-| Document | Read it when you want to… |
+| Document | Read it to… |
 | --- | --- |
-| [Architecture](ARCHITECTURE.md) | understand engine, persistence, ACP/MCP directions, daemon and desktop boundaries |
-| [Current capabilities and roadmap](ROADMAP.md) | distinguish implemented foundations from M10 operator, M21 configuration/launch and M22 native beta acceptance |
-| [Development](DEVELOPMENT.md) | set up source tools, understand command effects and choose scoped checks |
-| [Contributing](../CONTRIBUTING.md) / [agent guidance](../AGENTS.md) | review repository conventions and plan outcomes without duplicating shipped work |
-| [Data model](DATA-MODEL.md) | understand domain entities, events and expression/template context; feature docs below extend the overview |
-| [Planning](PLANNING.md) | understand cross-request dependencies, risk/decision matrices, scheduling and the five Plan modes |
-| [Workflow authoring](WORKFLOWS.md) / [typed inputs](workflow-inputs.md) | define nodes, completion, templates and validated launch inputs |
-| [Extensibility](EXTENSIBILITY.md) / [builtin validation](builtin-node-validation.md) | implement plugin seams and understand bootstrap/restoration constraints |
-| [Design](design/README.md) / [binding UI rules](design/RULES.md) / [workflow editor](design/70-workflow-editing.md) | inspect the design system and implemented editor; #180–#183 remain open acceptance owners |
-| [ADRs](adr/) | read settled architectural decisions with their historical context |
+| [Project README](../README.md) | learn what ORCA does and run the demo |
+| [Architecture](ARCHITECTURE.md) | understand the engine, storage, ACP and MCP directions, daemon and app |
+| [Capabilities and roadmap](ROADMAP.md) | see what is implemented, what is limited and which issue owns each gap |
+| [Development](DEVELOPMENT.md) | set up tools, build, test and pick the right checks |
+| [Contributing](../CONTRIBUTING.md) | plan issues and open pull requests |
+| [Agent guidance](../AGENTS.md) | follow the rules every agent working here must follow |
 
-## Runtime, clients and safe operation
+## Using ORCA
 
-| Document | Read it when you want to… |
+| Document | Read it to… |
 | --- | --- |
-| [Protocol reference](../packages/protocol/README.md) | inspect protocol 2.0, discovery, version history and current wire boundaries |
-| [Daemon security](daemon-security.md) / [connections](daemon-connection.md) | understand token/grant/resource checks and app target/draft isolation |
-| [Configuration generations](configuration-generations.md) | distinguish saving from activation and restore exact admitted choices |
-| [Request submission](request-submission.md) / [retry receipts](admission-retry.md) | separate Request/direct launch, acceptance, execution attachment and lost-response retry |
-| [Live input](live-input-continuity.md) / [human revisions](revision-input.md) | understand owner-local callbacks, durable gates and protected correction delivery |
-| [Protected execution storage](protected-execution-storage.md) / [replay errors](protected-replay-error-contract.md) | inspect privacy, complete backup/key boundaries and fail-closed error behavior |
-| [File locks and shared volumes](storage/file-locks.md) | see why a store must live on one host's local disk, and when a lock may be removed by hand |
-| [Recovering interrupted work](recovery.md) | preview resume, new run and checkpoint attempts with uncertain-effect review before anything runs |
-| [Hook tool-call telemetry](hook-telemetry.md) | turn on per-agent tool-call records from native pre-tool hooks, and export, delete or expire them |
-| [Owned root worktrees](root-worktree-isolation.md) | understand opt-in local Linux isolation and retained-evidence recovery limits |
-| [Running across machines](MULTI-MACHINE.md) | choose between local only, SSH-hosted agents, the app watching several daemons and delegating steps to remote daemons |
-| [Integrations](INTEGRATIONS.md) | separate inbound MCP, ACP/Kepler, downstream servers, SSH and JEV; T3 Code transport is groundwork |
-| [Agent support](agent-support.md) | see which agent products, versions and platforms ORCA supports, how far each was tested, and what stays outside |
-| [MCP operator](mcp-operator.md) / [production acceptance](mcp-operator-production-acceptance.md) | inspect supported tools and reference-client evidence versus actual-Cal acceptance |
-| [Operator integration](runtime-operator-integration.md) | read the current source evidence map and dated integration/native checkpoints |
-| [Private MCP preparation](preparation/private-mcp-access/handoff.md) | review deployment/bridge contracts; use dated owner evidence before treating old recipes as current instructions |
-| [Host resources](host-resources.md) / [access-policy proposal](host-resource-access-policy.md) | understand bounded advisory measurement and unmounted production telemetry/grant limits |
-| [Independent maintenance MCP](maintenance-mcp.md) | inspect the read-only refusal-only preparation; it does not activate host controls |
-| [Installing on Linux](INSTALL-LINUX.md) | install the desktop app on Ubuntu 24.04+ with its sandbox on, and see why the `.deb` is the supported Linux path |
-| [Updating](UPDATING.md) / [releasing](RELEASING.md) / [held Mac composition](archive/implementation/mac-native-provider-composition.md) | inspect Windows/Debian mechanisms, implemented but inactive Mac update/recovery and remaining signed/installed acceptance; operator recipes need their own scope |
-| [CI shadow selection](ci-shadow-selection.md) | understand advisory selection, full-check authority and uncompleted rollout/release parity |
-| [CI runner selection](ci-runners.md) | understand how `check` picks self-hosted (Tyler) or GitHub-hosted runners, how to force hosted, and what the self-hosted runners can reach |
-| [Performance evidence](performance/persistence-baseline/README.md), [credential admin](performance/mcp-credential-admin/README.md), [retry worker](performance/admission-retry-worker/README.md) | inspect exact synthetic workload pins and measurement limits |
+| [Workflow authoring](WORKFLOWS.md) | define nodes, completion, templates and permissions |
+| [Typed workflow inputs](workflow-inputs.md) | declare and validate launch inputs |
+| [Planning](PLANNING.md) | use cross-request dependencies, risks, decisions and scheduling |
+| [Data model](DATA-MODEL.md) | understand entities, events and the expression and template context |
+| [Extensibility](EXTENSIBILITY.md) | write a plugin |
+| [Built-in node validation](builtin-node-validation.md) | understand how built-in nodes are checked at bootstrap and restore |
+| [Integrations](INTEGRATIONS.md) | connect ACP clients, Kepler, MCP servers, SSH hosts and JEV |
+| [Agent support](agent-support.md) | see which agents, versions and platforms are supported and how far each is tested |
+| [Agent hook coverage](agent-hook-coverage.md) | see which agents expose native tool hooks |
+| [Hook telemetry](hook-telemetry.md) | turn on, export and delete per-agent tool-call records |
+| [Cline](agents/cline.md), [Copilot CLI](agents/copilot-cli.md) | set up these agents |
+| [Running across machines](MULTI-MACHINE.md) | run agents over SSH, watch several daemons, delegate steps to remote daemons |
+| [Real-agent test](REAL-AGENT-TEST.md) | run a workflow against real agents |
 
-## Preparation and research
+## Daemon, clients and safety
 
-These include implemented source handoffs, contracts, fixtures and research; a completed
-preparation issue is not installed/native/product acceptance. Current evidence is linked in the
-[roadmap](ROADMAP.md#current-priorities-and-acceptance); their merge does not establish
-product or platform acceptance.
-
-| Document | Purpose and boundary |
+| Document | Read it to… |
 | --- | --- |
-| [Native Mac delivery](archive/preparation/native-mac-delivery/current-state.md) / [native testing](archive/preparation/native-mac-testing/implementation-handoff.md) | dated source audits, signing prerequisites and candidate/physical acceptance handoffs |
-| [Mac readiness ledger](archive/preparation/native-mac-beta-readiness/readiness.md) / [acceptance runbook](archive/preparation/native-mac-beta-readiness/acceptance-runbook.md) | current owner handoffs for implemented setup, delivery, recovery and disabled diagnostics versus signed/physical #602–#604/#390 gates |
-| [First-job sample](../examples/beta-first-job/README.md) / [offline acceptance](preparation/beta-first-job/acceptance.md) | harmless scripted fixture and refusal checks; no paid provider or physical beta proof |
-| [Cal first-job experience](archive/preparation/cal-first-job-experience/README.md) / [mounted guided launch](../packages/app/renderer/src/guided-launch/README.md) | experience specification and implemented Request/direct route; supported #333/#334 acceptance is closed, physical Mac proof remains separate |
-| [Configuration/launch packet](archive/preparation/configuration-launch-implementation/README.md) / [Windows acceptance](archive/implementation/m21-windows-acceptance.md) | earlier contract plus integrated Config/launch/template evidence through #607; source-built Windows results do not establish signed Mac acceptance |
-| [Beta feedback](archive/preparation/beta-feedback/README.md) | tester/report/triage preparation; physical walkthrough remains separate |
-| [Manual diagnostics contract](preparation/manual-diagnostics-contract/README.md) | original typed privacy/export fixtures; later #469 decisions and disabled #470 work are mapped in the roadmap |
-| [Diagnostics decisions](archive/preparation/manual-diagnostics-implementation/README.md) / [C15 run 5](archive/preparation/crash-recovery/windows-c15-readiness-run5.md) | implemented Save/export and producers stay production-disabled; narrow hosted Windows synthetic memory pass, with native/physical/renderer acceptance separate |
-| [Beta update/recovery](archive/preparation/beta-update-support/README.md) / [integrated held app](archive/implementation/app-held-nonmac-verification.md) | approved-update contract and implemented drain/recovery composition; activation held, signed N-to-N+1 proof unpassed |
-| [Owner service evidence](preparation/private-mcp-access/agent01-owner-staging/README.md) | historical cutover/worker/post-SSH observations; command recipes are preserved audit records |
-| [Trusted prepared roots](preparation/trusted-prepared-roots/README.md) | offline copier/asset contract and fixtures, not an activated controller |
-| [ACP command conformance](preparation/acp-command-conformance/README.md) / [versioned proposal](archive/implementation/594-command-evidence-v1.md) / [dispatch prototype](preparation/acp-command-conformance/dispatch-seam/README.md) | merged offline #676/#678 preparation; exact-command support remains unavailable pending maintained upstream pair, installed correspondence and actual-Cal proof |
-| [Tool-call safety](archive/research/tool-call-safety/README.md) | proposed implicit policy/approval layer and assurance limits |
-| [Apple Watch research](archive/preparation/apple-watch-approvals/README.md) / [iOS research](archive/preparation/ios-companion/README.md) | proposed mobile scope/security/framework tradeoffs |
-| [SwiftUI read-only pilot](archive/preparation/swiftui-readonly-pilot/README.md) | portable synthetic contracts and device/spike prerequisites |
+| [Protocol reference](../packages/protocol/README.md) | read the wire contract and its version history |
+| [Daemon security](daemon-security.md) | understand tokens, grants and the permission matrix |
+| [Daemon connections](daemon-connection.md) | understand how the app picks a daemon and keeps targets apart |
+| [Configuration generations](configuration-generations.md) | save, activate and restore configuration |
+| [Request submission](request-submission.md) | understand Request and direct launch, and what each step promises |
+| [Admission retry](admission-retry.md) | retry a launch safely after a lost response |
+| [Live input continuity](live-input-continuity.md) | understand when a live permission ask survives |
+| [Revision input](revision-input.md) | send a person's correction into a running step |
+| [Secret use authority](secret-use-authority.md) | understand how agents are allowed to use secrets |
+| [Protected execution storage](protected-execution-storage.md) | understand how protected run data is stored and backed up |
+| [Protected replay errors](protected-replay-error-contract.md) | understand how protected replay fails closed |
+| [Recovering interrupted work](recovery.md) | preview and choose resume, new run or checkpoint |
+| [Owned root worktrees](root-worktree-isolation.md) | use opt-in local Linux isolation |
+| [Host resources](host-resources.md), [access policy proposal](host-resource-access-policy.md) | understand host measurement and its limits |
+| [MCP operator](mcp-operator.md) | let an assistant operate ORCA over MCP |
+| [MCP operator production contract](mcp-operator-production-contract.md), [acceptance](mcp-operator-production-acceptance.md) | check what the production MCP setup must prove |
+| [Maintenance MCP](maintenance-mcp.md) | understand the read-only maintenance contract |
+| [Maintenance observer runbook](maintenance-observer-runbook.md) | operate the maintenance observer |
 
-## Historical evidence
+## Storage
 
-The [frozen Current_State review](archive/Current_State/README.md) describes its
-2026-09-29 implementation baseline; the [1 October addendum](archive/Current_State/addenda/2026-10-01-main-reconciliation.md)
-records its later reconciliation. Its 186 baseline checksums and evidence remain intact.
-[Real-agent setup/runs](REAL-AGENT-TEST.md) and [session logs](archive/session-logs/README.md)
-record September observations, not current host/provider status. The v0.5.2 checklists,
-`runtime-*-parallel-contract.md`, dated integration checkpoints and `patches/` preserve
-handoffs. Use their pins and the current feature references above; do not reapply settled
-patches, reopen product choices or substitute historical CI for a newer candidate.
+| Document | Read it to… |
+| --- | --- |
+| [File locks and shared volumes](storage/file-locks.md) | see why a store must live on one host's local disk |
+| [SQLite metadata](storage/sqlite-metadata.md) | understand the SQLite metadata store |
+| [Store contracts](contracts/store-contracts-v1.md) | read the store's versioned contracts |
+| [Plugin restoration](contracts/plugin-restoration-v1.md), [installed plugin release](contracts/installed-plugin-release-v1.md) | read the plugin contracts |
+
+## Install, update and release
+
+| Document | Read it to… |
+| --- | --- |
+| [Installing on Linux](INSTALL-LINUX.md) | install the desktop app on Ubuntu 24.04 or later |
+| [Updating](UPDATING.md) | understand how installs update, and operate the update feed |
+| [Releasing](RELEASING.md) | cut, sign and publish a release |
+| [Windows signing runbook](windows-signing-runbook.md) | sign the Windows installer |
+| [CI runners](ci-runners.md) | see how CI picks self-hosted or hosted runners |
+| [CI shadow selection](ci-shadow-selection.md) | understand advisory test selection |
+| [Performance evidence](performance/persistence-baseline/README.md) | read the synthetic performance baselines |
+
+## Design and decisions
+
+| Document | Read it to… |
+| --- | --- |
+| [UI rules](design/RULES.md) | follow the binding UI rules |
+| [Design system](design/README.md) | understand the brand, tokens and surface specs |
+| [Plain-language rules](plain-language-rules.md) | write in the house voice |
+| [ADRs](adr/) | read settled architecture decisions |
+
+## Preparation packets still in use
+
+These packets in [preparation/](preparation/) are read by tests, CI or the build, so they stay
+here. They record design work, not product acceptance. All other preparation is in the
+[archive](archive/README.md).

@@ -16,6 +16,8 @@ codemod skips this folder, so the record says what it said when it was written.
 | `research/` | Research notes. |
 | `session-logs/` | Logs of agent working sessions. |
 | `v0.5.2-*.md` | The v0.5.2 checklists and implementation plan. |
+| `runtime-*-parallel-contract.md`, `runtime-*-integration.md` | Dated contracts and integration records for the foundation, next and operator runtime waves. |
+| `patches/` | Integration patches from those waves. They are already applied; do not reapply them. |
 
 ## Links in these files
 

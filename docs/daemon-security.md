@@ -543,7 +543,7 @@ the desktop daemon client supplies its credential and `orca mcp` requires an exp
 operator methods are conditionally mounted with their production sources and
 audited through the same daemon boundary. The former #328 branch handoff and
 `patches/328-control-integration.patch` are historical; do not apply them to
-current main. The [current evidence map](runtime-operator-integration.md#current-main-evidence-map)
+current main. The [current evidence map](archive/runtime-operator-integration.md#current-main-evidence-map)
 links the implementation and executable checks.
 
 The CLI accepts named presets with workflow/run-scope options; it does not accept

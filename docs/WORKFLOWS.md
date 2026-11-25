@@ -47,7 +47,7 @@ and revision to `runs.start` (or CLI `--workflow-version` and
 its workspace. Persisted runs resume their pinned definition and authoritative inputs.
 
 Sensitive values live in protected execution storage rather than public run/event views.
-See [typed declarations](workflow-inputs.md) and [runtime integration](runtime-foundation-integration.md)
+See [typed declarations](workflow-inputs.md) and [runtime integration](archive/runtime-foundation-integration.md)
 for examples, client parsing, storage/backup boundaries and migration details.
 
 ## Node types
