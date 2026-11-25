@@ -12,9 +12,9 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 
 /** The prefix of every environment variable ORCA reads. */
-export const ENV_PREFIX = "ORCA_";
+export const ENV_PREFIX: string = "ORCA_";
 /** The prefix before the rename. Read until 0.10, never written. */
-export const LEGACY_ENV_PREFIX = "ORCA_"; // rename-keep: the pre-rename env prefix, read for one release
+export const LEGACY_ENV_PREFIX: string = "ORCA_"; // rename-keep: the pre-rename env prefix, read for one release
 
 const stderrWarn = (message: string): void => void process.stderr.write(`${message}\n`);
 const warned = new Set<string>();
