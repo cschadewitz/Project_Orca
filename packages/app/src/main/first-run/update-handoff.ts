@@ -20,9 +20,8 @@
  * `to` can never carry under it. Every later reservation follows another claim, so the record
  * grants nothing to it.
  */
-import { join } from "node:path";
 import { z } from "zod";
-import { fenceDirectory } from "@orca/protocol/first-run-fence";
+import { fenceDirectory, firstRunLayout } from "@orca/protocol/first-run-fence";
 import { publishUpdateHandoff, type UpdateHandoff } from "@orca/protocol/update-handoff";
 import { hash, inspectFirstRunOwnership, refuse } from "./ownership.js";
 
@@ -64,7 +63,7 @@ export function handOffStoreForUpdate(
     hash(latest.texts["claim.json"]) !== stopped.claimHash
   )
     return refuse();
-  const storeDir = join(path, ".orca");
+  const storeDir = firstRunLayout(path).store;
   const issued: UpdateHandoff = {
     version: 1,
     kind: "orca-update-handoff",

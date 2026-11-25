@@ -115,7 +115,8 @@ describe("the crumb menu, over the Menu primitive", () => {
     // Focus moves into the menu on open, onto the first item.
     expect(document.activeElement).toBe(items()[0]);
     expect(items().map((item) => item.textContent)).toEqual([
-      "Copy linkorca://",
+      // The label, then its machine hint (the URL scheme) with no space between in textContent.
+      "Copy link" + "orca://",
       "Copy id⬡work item wi-sso",
       "Runs that attempted thisrun",
       "Dependenciesitem",

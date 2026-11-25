@@ -17,6 +17,7 @@
     "typecheck:renderer": "tsc -p renderer/tsconfig.json"
   },
   "dependencies": {
+    "@orca/core": "workspace:*",
     "@orca/design": "workspace:*",
     "@orca/protocol": "workspace:*",
     "electron-updater": "^6.8.11",

@@ -154,7 +154,8 @@ export function GuidedLaunch({
   const receipt = state.result === undefined ? undefined : launchReceipt(state.result);
   const editableFields = Object.fromEntries(
     Object.entries(workflow?.inputSchema?.fields ?? {}).filter(
-      ([name]) => draft.mode !== "request" || !["request", "__orcaAdmissionId"].includes(name),
+      // The correlation variable keeps its name: stored runs record it (core's SUBMISSION_CORRELATION_VAR).
+      ([name]) => draft.mode !== "request" || !["request", "__orcaAdmissionId"].includes(name), // rename-keep: SUBMISSION_CORRELATION_VAR
     ),
   );
   const undeclared = Object.keys(draft.vars).filter((name) => !Object.hasOwn(editableFields, name));

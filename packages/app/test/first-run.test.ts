@@ -1,5 +1,6 @@
 /** Real temporary directory/Git setup tests with synthetic native connection candidates. No daemon or provider runs. */
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { chmod, mkdtemp, mkdir, readFile, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,7 +8,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { PROTOCOL_VERSION, type HelloResult } from "@orca/protocol";
 import type { DaemonClient } from "../src/client/daemon-client.js";
 import { FIRST_RUN_SAMPLE, FIRST_RUN_SAMPLE_FILES } from "../src/first-run-sample.js";
-import { FirstRunSetup, type FirstRunDeps } from "../src/main/first-run/setup.js";
+import {
+  FIRST_RUN_CONFIG,
+  FIRST_RUN_STORE_DIR,
+  FirstRunSetup,
+  LEGACY_FIRST_RUN_CONFIG,
+  type FirstRunDeps,
+} from "../src/main/first-run/setup.js";
 import { ownedDirectory } from "../src/main/first-run/directories.js";
 import { syntheticFirstRunWriter } from "./fixtures/synthetic-first-run-writer.js";
 import { FirstRunOwnershipRefusal } from "../src/main/first-run/ownership.js";
@@ -111,6 +118,41 @@ async function rig() {
 }
 
 describe.skipIf(typeof process.getuid !== "function")("dedicated first-run project selection", () => {
+  it("reopens a workspace set up before the rename, under its old config and store names, and sets up new ones under the new names", async () => {
+    const f = await rig();
+    await f.prepare();
+    // New setups write only the new config name, naming only the new store directory.
+    const names = await readdir(f.workspace);
+    expect(names).toContain(FIRST_RUN_CONFIG);
+    if (LEGACY_FIRST_RUN_CONFIG !== FIRST_RUN_CONFIG) expect(names).not.toContain(LEGACY_FIRST_RUN_CONFIG);
+    const written = JSON.parse(await readFile(join(f.workspace, FIRST_RUN_CONFIG), "utf8")) as { storeDir: string };
+    expect(written.storeDir).toBe(FIRST_RUN_STORE_DIR);
+    // Turn it into what a pre-rename app left: the old config name, naming the old store
+    // directory, and a receipt keyed by the old name with that file's digest.
+    // A pre-rename app also left its ownership journal under the old name, which is how the
+    // protocol's firstRunLayout tells the workspace's names apart.
+    const legacyStore = ".orca"; // rename-keep: the store directory a pre-rename workspace has
+    await mkdir(join(f.workspace, ".orca-first-run-ownership"), { mode: 0o700 }); // rename-keep: its journal
+    const legacyText = JSON.stringify({ ...written, storeDir: legacyStore }, null, 2) + "\n";
+    await rm(join(f.workspace, FIRST_RUN_CONFIG));
+    await writeFile(join(f.workspace, LEGACY_FIRST_RUN_CONFIG), legacyText, { mode: 0o600 });
+    await mkdir(join(f.workspace, legacyStore), { mode: 0o700 });
+    const receipt = JSON.parse(await readFile(f.deps.receiptPath, "utf8")) as { files: Record<string, string> };
+    const { [FIRST_RUN_CONFIG]: _current, ...sample } = receipt.files;
+    const digest = createHash("sha256").update(legacyText).digest("hex");
+    receipt.files = { ...sample, [LEGACY_FIRST_RUN_CONFIG]: digest };
+    await writeFile(f.deps.receiptPath, JSON.stringify(receipt) + "\n", { mode: 0o600 });
+    f.handshake.mockResolvedValue({ ...f.hello, storeDir: join(f.workspace, legacyStore) });
+
+    expect(await f.setup.status()).toMatchObject({ state: "prepared", workspace: f.workspace });
+    await f.setup.connect(f.assertCurrent);
+    expect(f.activate).toHaveBeenCalledOnce();
+    // Nothing was renamed or rewritten in the workspace.
+    expect(await readFile(join(f.workspace, LEGACY_FIRST_RUN_CONFIG), "utf8")).toBe(legacyText);
+    // A changed legacy config is still refused, as the new one would be.
+    await writeFile(join(f.workspace, LEGACY_FIRST_RUN_CONFIG), legacyText + "\n");
+    expect(await f.setup.status()).toMatchObject({ state: "selection-required" });
+  });
   it("binds update recovery to the exact saved workspace before consulting current or creating a candidate", async () => {
     const f = await rig();
     await f.prepare();
@@ -170,12 +212,12 @@ describe.skipIf(typeof process.getuid !== "function")("dedicated first-run proje
     const f = await rig();
     const enroll = vi.fn(async (path: string) => {
       expect(await readdir(path)).toEqual([]);
-      await writeFile(join(path, ".orca-update-window.json"), "fixture enrollment anchor\n", { mode: 0o600 });
+      await writeFile(join(path, ".orca-update-window.json"), "fixture enrollment anchor\n", { mode: 0o600 }); // rename-keep: mirrors protocol's update-window guard, which keeps its pre-rename name
     });
     f.deps.enroll = enroll;
     await f.prepare();
     expect(enroll).toHaveBeenCalledOnce();
-    expect(await readFile(join(f.workspace, ".orca-update-window.json"), "utf8")).toBe("fixture enrollment anchor\n");
+    expect(await readFile(join(f.workspace, ".orca-update-window.json"), "utf8")).toBe("fixture enrollment anchor\n"); // rename-keep: mirrors protocol's update-window guard, which keeps its pre-rename name
     expect(await readdir(f.workspace)).toContain("orca.config.yaml");
     expect(f.prepareConnection).not.toHaveBeenCalled();
   });

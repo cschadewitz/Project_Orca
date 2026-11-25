@@ -10,9 +10,11 @@
 #    by one single-redirect rule in the zone's dynamic redirect ruleset, over proxied placeholder
 #    records for the two names (192.0.2.1 / 100::, the documented "originless" addresses).
 # 4. feed.orrery-control.com: only checked. Orrery-Infra's Terraform owns the feed Worker's custom
-#    domain (FEED_DOMAIN_HOSTNAME), so this never attaches or detaches it. A domain not attached
-#    yet is a TODO (dispatch Infrastructure); a variable naming another host, or the host on
-#    another Worker, fails.
+#    domains: the original host (FEED_DOMAIN_HOSTNAME) and any added beside it
+#    (FEED_ADDITIONAL_DOMAINS, a JSON list of {zone_id, hostname}), so this never attaches or
+#    detaches one. Not listed there yet, or listed but not attached yet, is a TODO with the step
+#    to take (its README, "Feed hostnames"); the host on another Worker, or listed under another
+#    zone, fails.
 #
 # Every step reads first and changes only what is missing; each change is logged for rollback.sh.
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -95,16 +97,30 @@ else
 fi
 
 step "$FEED_HOST -> Worker $FEED_WORKER (owned by $NEW_INFRA's Terraform; checked only)"
+# infra_variable NAME: the production environment's value, else the repository's, else nothing.
+infra_variable() {
+  local value
+  value=$(ghq "repos/$OWNER/$NEW_INFRA/environments/production/variables/$1" | jq -r '.value // empty' 2>/dev/null) || value=""
+  [[ -n "$value" ]] || value=$(ghq "repos/$OWNER/$NEW_INFRA/actions/variables/$1" | jq -r '.value // empty' 2>/dev/null) || value=""
+  printf '%s' "$value"
+}
+original=$(infra_variable FEED_DOMAIN_HOSTNAME)
+additional=$(infra_variable FEED_ADDITIONAL_DOMAINS)
+listed_zone=$(jq -r --arg h "$FEED_HOST" 'if type == "array" then (map(select(.hostname == $h)) | .[0].zone_id // empty) else empty end' \
+  <<<"${additional:-[]}" 2>/dev/null) || listed_zone=""
 domains=$(cf GET "/accounts/$ACCOUNT/workers/domains?hostname=$FEED_HOST" | jq -c '.result // []')
-owner=$(ghq "repos/$OWNER/$NEW_INFRA/environments/production/variables/FEED_DOMAIN_HOSTNAME" | jq -r '.value // empty' 2>/dev/null) || owner=""
-if [[ "$owner" != "$FEED_HOST" ]]; then
-  bad "$NEW_INFRA's FEED_DOMAIN_HOSTNAME is '${owner}', not $FEED_HOST: set it there and dispatch Infrastructure"
+if [[ "$original" != "$FEED_HOST" && -z "$listed_zone" ]]; then
+  todo "$FEED_HOST is not in $NEW_INFRA's FEED_ADDITIONAL_DOMAINS yet. Give its CI token Workers Routes Edit on $SITE_ZONE, then:"
+  say "        \$ gh variable set FEED_ADDITIONAL_DOMAINS --repo $OWNER/$NEW_INFRA --body '[{\"zone_id\":\"$SITE_ZONE_ID\",\"hostname\":\"$FEED_HOST\"}]'"
+  say "        (keep any hostnames already listed there), then dispatch Infrastructure: the plan shows one create"
+elif [[ -n "$listed_zone" && "$listed_zone" != "$SITE_ZONE_ID" ]]; then
+  bad "$NEW_INFRA's FEED_ADDITIONAL_DOMAINS lists $FEED_HOST under zone $listed_zone, not $SITE_ZONE ($SITE_ZONE_ID)"
 elif jq -e --arg w "$FEED_WORKER" 'any(.service == $w)' >/dev/null <<<"$domains"; then
   ok "attached to $FEED_WORKER"
 elif [[ "$(jq length <<<"$domains")" -gt 0 ]]; then
   bad "$FEED_HOST is attached to $(jq -r '.[0].service' <<<"$domains"), not $FEED_WORKER; left as it is"
 else
-  todo "$FEED_HOST is not attached yet: dispatch Infrastructure on $NEW_INFRA (Terraform attaches it; verify.sh checks it)"
+  todo "$FEED_HOST is listed for $NEW_INFRA's Terraform but not attached yet: dispatch Infrastructure (verify.sh checks it)"
 fi
 
 ((DRY_RUN)) && say $'\n(dry run: nothing was changed)'

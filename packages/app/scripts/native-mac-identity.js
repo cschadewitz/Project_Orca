@@ -1,7 +1,7 @@
 /**
  * Delivery-v1 build identity and fixture producer. The native adapter observes actual
  * pre-signing resources separately. No signing, credentials or publishing.
- * See docs/preparation/native-mac-delivery/signing-foundation.md for the input seam.
+ * See docs/archive/preparation/native-mac-delivery/signing-foundation.md for the input seam.
  */
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";

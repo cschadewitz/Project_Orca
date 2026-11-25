@@ -20,6 +20,12 @@ import {
 import type { Crumb } from "../src/ui/index.js";
 
 describe("resolveRoute", () => {
+  it("resolves a link written before the rename the same as the current one", () => {
+    const legacy = "orca://run/7f3a2c/step/build.2"; // rename-keep: a link written before the rename
+    expect(resolveRoute(legacy)).toEqual(resolveRoute(stepUrl("7f3a2c", "build", 2)));
+    expect(resolveRoute(legacy)).toBeDefined();
+  });
+
   it("resolves the table the information architecture lists", () => {
     expect(resolveRoute("orca://run/7f3a2c")).toEqual({ kind: "run", surface: "runs", runId: "7f3a2c" });
     expect(resolveRoute("orca://run/7f3a2c/step/build.2")).toEqual({
