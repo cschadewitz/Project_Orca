@@ -195,6 +195,8 @@ class FakeSsh extends EventEmitter {
   received = "";
   /** Output that keeps flowing after exit: `close` never comes. */
   holdOutput = false;
+  /** What the real spawn would have given ssh as its standard input. */
+  stdinMode: "pipe" | "ignore" | undefined;
   constructor() {
     super();
     this.stdin.on("data", (chunk: Buffer) => (this.received += chunk.toString()));
@@ -230,8 +232,9 @@ function fakeTunnel(script: (ssh: FakeSsh, n: number, args: readonly string[]) =
     backoff: { initialMs: 5, maxMs: 20 },
     readyTimeoutMs: 1_000,
     onState: (state) => states.push(state),
-    spawn: (_command, args) => {
+    spawn: (_command, args, stdin) => {
       const ssh = new FakeSsh();
+      ssh.stdinMode = stdin;
       spawned.push(ssh);
       setImmediate(() => script(ssh, spawned.length, args));
       return ssh as unknown as ChildProcess;
@@ -576,6 +579,8 @@ describe("SshTunnel with a fake ssh", () => {
     );
     await expect(tunnel.open()).rejects.toMatchObject({ code: "host-key-changed" });
     expect(spawned[0]!.killed).toBe(true);
+    // The jump host's ssh only forwards: it reads nothing. The server hop carries a stream.
+    expect(spawned.map((ssh) => ssh.stdinMode)).toEqual(["ignore", "pipe"]);
   });
 
   it("is single-use once closed", async () => {
@@ -684,6 +689,9 @@ describe("commands on the server (#875)", () => {
     );
     await expect(tunnel.exec(["orca", "auth", "list"], 1_000)).resolves.toMatchObject({ code: 0 });
     expect(spawned.slice(1).map((ssh) => ssh.received)).toEqual(["print('setup')\n", ""]);
+    // Every one of them on a real pipe that ORCA closes, never on "nothing": on Windows that
+    // is an input that never ends, so `python3 -` waited for its program forever.
+    expect(spawned.map((ssh) => ssh.stdinMode)).toEqual(["pipe", "pipe", "pipe"]);
     await tunnel.close();
   });
 
@@ -1111,6 +1119,16 @@ describe.skipIf(!live)("SshTunnel against a real sshd", () => {
     forgetPin(pins);
     expect(await (await fetch(await open(remote, pins).open())).text()).toBe("orca");
   }, 60_000);
+
+  it("hands a command its whole standard input through the real ssh (#881)", async () => {
+    // Server setup sends its program to `python3 -` this way: well over 100 KB. ssh must get
+    // a pipe that ends, not "nothing", which never ends on Windows (the program never arrived).
+    const tunnel = open(await daemon(), join(dir(), "live.known_hosts"));
+    await tunnel.open();
+    const program = `// ${"x".repeat(200_000)}\nprocess.stdout.write("whole program ran");\n`;
+    const result = await tunnel.exec(["node", "-"], 60_000, program);
+    expect(result).toMatchObject({ code: 0, stdout: "whole program ran" });
+  }, 90_000);
 
   it("refuses failed auth, a missing ssh, and a forward that cannot bind", async () => {
     const remote = await daemon();

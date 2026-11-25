@@ -94,7 +94,9 @@ the worker's gates, cancels the worker's run when the step is cancelled, reattac
 dropped connection, and brings the step's artifacts back. The full contract is in
 [workflow authoring](WORKFLOWS.md#delegating-steps-to-another-daemon).
 
-Worker (`build-box`), set up as in setup 3 or by hand, with its daemon on loopback port 6722:
+Worker (`build-box`), set up as in setup 3 or by hand, with its daemon on loopback port 6722.
+A server set up in one step starts with no agents and no workflows, so add them to its
+`orca.config.yaml` (under `~/.local/share/orca-server`) first:
 
 ```yaml
 # build-box: orca.config.yaml
