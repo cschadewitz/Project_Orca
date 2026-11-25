@@ -187,10 +187,14 @@ export function classify(name, version) {
   fail("artifact_unrecognized", name);
 }
 
-/** The version esbuild substitutes into the CLI (`packages/app/scripts/build-daemon.js`). */
+/**
+ * The version esbuild substitutes into the CLI (`packages/app/scripts/build-daemon.js`), as
+ * `packages/cli/src/version.ts` reads it. Anchored on the function so an unrelated
+ * `return true ? "…"` elsewhere in the bundle is never taken for the stamp.
+ */
 export function daemonVersion(bytes) {
   const text = bytes.toString("utf8");
-  const stamps = [...text.matchAll(/\bvar ORCA_VERSION = true \? "([^"\\]+)" :/g)];
+  const stamps = [...text.matchAll(/\bfunction readOrcaVersion\(\) \{\s*return true \? "([^"\\]+)" :/g)];
   if (stamps.length !== 1) fail("daemon_version_unstamped", `${stamps.length} version stamps`);
   return stamps[0][1];
 }
@@ -379,10 +383,15 @@ function inspectTree(entries, { platform, arch }, source, version, scratch) {
   }
   const daemonEntries = [...byName.keys()].filter((name) => name.startsWith(`${prefix}resources/daemon/`));
   const daemon = file("resources/daemon/orca-daemon.mjs");
-  if (!daemon || daemonEntries.length !== 1) fail("bundled_daemon_layout", daemonEntries.join(", ") || "absent");
+  // Exactly the daemon and the pre-tool hook it installs (#704), both built by build-daemon.js.
+  const hook = file("resources/daemon/claude-pre-tool-hook.mjs");
+  if (!daemon || !hook || daemonEntries.length !== 2)
+    fail("bundled_daemon_layout", daemonEntries.join(", ") || "absent");
+  if (!hook.body.length) fail("bundled_hook_empty");
   const stamped = daemonVersion(daemon.body);
   if (stamped !== version) fail("bundled_daemon_version_mismatch", stamped);
   checks.push("bundled-daemon:resources/daemon/orca-daemon.mjs", "bundled-daemon-version");
+  checks.push("bundled-hook:resources/daemon/claude-pre-tool-hook.mjs");
   const nativeEntries = [...byName.keys()].filter((name) => name.startsWith(`${prefix}resources/native/`));
   let nativeManifest;
   if (platform === "linux") {
@@ -426,6 +435,7 @@ function inspectTree(entries, { platform, arch }, source, version, scratch) {
       root: prefix || "(archive root)",
       entries: byName.size,
       daemonSha256: sha256(daemon.body),
+      hookSha256: sha256(hook.body),
       ...asar.observations,
       nativeDiagnostics: nativeManifest && { sourceSha256: nativeManifest.sourceSha256, stage: nativeManifest.stage },
       appUpdateConfig:
@@ -559,6 +569,12 @@ function crossCheck(results, version) {
     const members = daemons.filter((r) => group.includes(r.kind));
     const digests = new Set(members.map((r) => r.observations.daemonSha256));
     if (members.length > 1) record(`daemon-identical:${group.join("+")}`, digests.size === 1, [...digests].join(" "));
+  }
+  // The hook has no standalone artifact, so only each runner's own archives can be compared.
+  for (const kind of ["linux-archive", "windows-archive"]) {
+    const members = daemons.filter((r) => r.kind === kind);
+    const digests = new Set(members.map((r) => r.observations.hookSha256));
+    if (members.length > 1) record(`hook-identical:${kind}`, digests.size === 1, [...digests].join(" "));
   }
   return {
     checks,

@@ -167,7 +167,10 @@ export function makeElf(machine) {
 }
 
 export const daemon = (version) =>
-  text(`// synthetic daemon\nvar ORCA_VERSION = true ? "${version}" : fallback();\nexport {};\n`);
+  text(
+    `// synthetic daemon\nfunction readOrcaVersion() {\n  return true ? "${version}" : fallback();\n}\nexport {};\n`,
+  );
+export const hook = text("// synthetic pre-tool hook\nexport {};\n");
 
 const TAR_MAGIC = { posix: "ustar\x0000", gnu: "ustar  \x00", v7: "\0\0\0\0\0\0\0\0" };
 
@@ -366,7 +369,7 @@ export function windowsNative(source, arch, { addonArch = arch } = {}) {
 export function linuxArchive(
   version,
   arch,
-  { asar = appAsar(version), daemonBody = daemon(version), extra = [], globalPax } = {},
+  { asar = appAsar(version), daemonBody = daemon(version), hookBody = hook, extra = [], globalPax } = {},
 ) {
   const top = `ORCA-${version}`;
   const runtime = ["resources.pak", "icudtl.dat", "v8_context_snapshot.bin", "libffmpeg.so", "locales/en-US.pak"];
@@ -378,6 +381,7 @@ export function linuxArchive(
       ...runtime.map((name) => ({ name: `${top}/${name}`, body: `placeholder ${name}` })),
       { name: `${top}/resources/app.asar`, body: asar },
       { name: `${top}/resources/daemon/orca-daemon.mjs`, body: daemonBody },
+      ...(hookBody === null ? [] : [{ name: `${top}/resources/daemon/claude-pre-tool-hook.mjs`, body: hookBody }]),
       ...extra,
     ],
     { globalPax },
@@ -389,7 +393,7 @@ export function windowsArchive(
   version,
   arch,
   source,
-  { asar = appAsar(version), daemonBody = daemon(version), native, extra = [] } = {},
+  { asar = appAsar(version), daemonBody = daemon(version), hookBody = hook, native, extra = [] } = {},
 ) {
   const runtime = ["resources.pak", "icudtl.dat", "v8_context_snapshot.bin", "ffmpeg.dll", "locales/en-US.pak"];
   const addons = native ?? windowsNative(source, arch);
@@ -399,6 +403,7 @@ export function windowsArchive(
     { name: "resources/app.asar", body: asar },
     { name: "resources/app-update.yml", body: "provider: generic\nurl: https://updates.invalid/\nchannel: latest\n" },
     { name: "resources/daemon/orca-daemon.mjs", body: daemonBody },
+    ...(hookBody === null ? [] : [{ name: "resources/daemon/claude-pre-tool-hook.mjs", body: hookBody }]),
     ...Object.entries(addons).map(([name, body]) => ({
       name: `resources/native/diagnostics/win32-${arch}/${name}`,
       body,

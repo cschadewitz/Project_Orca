@@ -230,7 +230,7 @@ describe("content refusals", () => {
   it("refuses an understated EOCD count hiding a trailing traversal entry", () => {
     const bytes = windowsArchive(VERSION, "x64", source, { extra: [{ name: "../unseen", body: "x" }] });
     const count = bytes.readUInt16LE(bytes.length - 22 + 10);
-    expect(count).toBe(14);
+    expect(count).toBe(15);
     bytes.writeUInt16LE(count - 1, bytes.length - 22 + 8);
     bytes.writeUInt16LE(count - 1, bytes.length - 22 + 10);
     expect(refusal(run({ [windows]: bytes }), windows)).toMatch(/zip_directory_invalid/);
@@ -342,7 +342,7 @@ describe("content refusals", () => {
 
     it("reports tar members and ASAR entries separately", () => {
       const { observations } = run({ [linux]: linuxArchive(VERSION, "x64") }).artifacts[0];
-      expect(observations.entries).toBe(10); // the tar members linuxArchive writes
+      expect(observations.entries).toBe(11); // the tar members linuxArchive writes
       expect(observations.asarEntries).toBeGreaterThan(observations.entries);
     });
 
@@ -658,6 +658,10 @@ describe("content refusals", () => {
       }),
     );
     expect(refusal(second, windows)).toMatch(/bundled_daemon_layout/);
+    const noHook = run(fullSet({ [windows]: windowsArchive(VERSION, "x64", source, { hookBody: null }) }));
+    expect(refusal(noHook, windows)).toMatch(/bundled_daemon_layout/);
+    const emptyHook = run(fullSet({ [windows]: windowsArchive(VERSION, "x64", source, { hookBody: "" }) }));
+    expect(refusal(emptyHook, windows)).toMatch(/bundled_hook_empty/);
     const arm = `ORCA-${VERSION}-win-arm64.zip`;
     const wrong = run(fullSet({ [arm]: windowsArchive(VERSION, "x64", source) }));
     expect(refusal(wrong, arm)).toMatch(/executable_arch_mismatch/);
@@ -735,6 +739,16 @@ describe("content refusals", () => {
     );
     expect(report.crossChecks.failures[0]).toMatch(/^daemon-identical:linux-archive\+daemon/);
   });
+
+  it("refuses a pre-tool hook that differs between one runner's archives", () => {
+    const report = run(
+      fullSet({
+        [`ORCA-${VERSION}-win-arm64.zip`]: windowsArchive(VERSION, "arm64", source, { hookBody: "// other build" }),
+      }),
+    );
+    expect(report.status).toBe("refused");
+    expect(report.crossChecks.failures.join()).toMatch(/hook-identical:windows-archive/);
+  });
 });
 
 describe("daemon version stamp", () => {
@@ -742,6 +756,7 @@ describe("daemon version stamp", () => {
     expect(daemonVersion(daemon("1.2.3"))).toBe("1.2.3");
     expect(() => daemonVersion(Buffer.from("no stamp"))).toThrow(/daemon_version_unstamped/);
     expect(() => daemonVersion(Buffer.concat([daemon("1.2.3"), daemon("1.2.4")]))).toThrow(/2 version stamps/);
+    expect(() => daemonVersion(Buffer.from('return true ? "1.2.3" : x'))).toThrow(/daemon_version_unstamped/);
   });
 });
 
