@@ -85,22 +85,36 @@ replaces the hook, which runs before them.
 
 ### The IPC caveat
 
-Once an opted-in Codex session is admitted, ORCA logs a warning naming the host's
-communication endpoints that Codex's processes, running as this user, can reach:
+Once an opted-in Codex session is admitted, ORCA logs a warning naming **potential** host
+communication endpoints. They are **observed from the ORCA daemon at startup**, and **sandbox
+reachability is not tested**: every read and permission check runs in the daemon, not inside
+Codex's command sandbox, so a listener found here says nothing about whether Codex's sandbox or
+network policy lets a command reach it. It looks in exactly these places:
 
-- unix sockets listening in ORCA's network namespace that this user may connect to, and every
-  abstract one;
-- TCP listeners on any address;
-- named pipes this user may write, under the per-user runtime directory, `/tmp`, `/var/tmp`,
-  `/dev/shm` and the home directory, three levels down.
+- unix sockets listening in the daemon's network namespace (`/proc/net/unix`): path ones the
+  daemon's user may open for writing, and every abstract one;
+- TCP listeners in that namespace (`/proc/net/tcp`, `/proc/net/tcp6`), on any address;
+- named pipes the daemon's user may write, under `$XDG_RUNTIME_DIR`, `/tmp`, `/var/tmp`,
+  `/dev/shm` and `$HOME`, three levels down and 20,000 entries at most.
 
-A command can talk to any of them without a further tool call, so the hook does not see it.
-When none is found, the warning says "None detected at startup; isolation has not been
-verified.". Whatever could not be read, or was cut short, is named as incomplete.
+It does not look for named pipes anywhere else, UDP, or connections the agent inherited. When
+nothing is found where it looked, the warning says "None detected at startup; isolation has not
+been verified." An empty result does not rule out an endpoint outside that scope.
 
-**This is a diagnostic, not a control or a proof.** It is read once, at startup. It can miss a
-connection the agent inherited, an endpoint made later, and a named pipe anywhere else. It
-changes nothing about what the agent may do.
+Anything in that scope it could not finish is named as incomplete:
+
+- a table it could not read;
+- a directory at any depth it could not list;
+- the entry cap;
+- its 5-second deadline;
+- the session ending first;
+- a failure of the inventory itself.
+
+It runs after the session's cleanup is in place, off the session's start: nothing waits on it.
+It reads one directory entry at a time, and it is skipped when there is no logger to say it to.
+
+**This is a diagnostic, not a control or a proof.** It changes nothing about what the agent may
+do.
 
 ## Gemini CLI (`@google/gemini-cli` 0.70.0)
 

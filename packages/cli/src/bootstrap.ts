@@ -321,8 +321,10 @@ export function makeSessionFactory(
     codexShell?: (() => { program: string; args: string[] } | { error: string }) | undefined;
     /** The single deadline for a Codex session's admission checks (`CODEX_ADMISSION_DEADLINE_MS`). */
     codexAdmissionDeadlineMs?: number | undefined;
-    /** The host's communication endpoints, for the Codex IPC caveat; `hostIpcInventory` unless given. */
-    ipcInventory?: ((env: Readonly<Record<string, string | undefined>>) => HostIpcInventory) | undefined;
+    /** Potential host communication endpoints, for the Codex IPC caveat; `hostIpcInventory` unless given. */
+    ipcInventory?:
+      | ((env: Readonly<Record<string, string | undefined>>, signal: AbortSignal) => Promise<HostIpcInventory>)
+      | undefined;
   } = {
     runtime: process.execPath,
     script: claudePreToolHookScript(),
@@ -462,16 +464,6 @@ export function makeSessionFactory(
     admit();
     // Said on every hooked session: the hook is an experimental, unqualified layer (#704 review).
     options.logger?.warn(NATIVE_TOOL_HOOK_EXPERIMENTAL, { agent: options.agent.id });
-    // The Codex IPC caveat (#1026): what of the host's communication endpoints Codex's processes
-    // can reach, read once now. A warning only: it neither grants nor takes anything away.
-    if (installed.status() === "codex") {
-      const inventory = (hook.ipcInventory ?? hostIpcInventory)(agentEnv);
-      options.logger?.warn(hostIpcCaveat(inventory), {
-        agent: options.agent.id,
-        ipcEndpoints: inventory.endpoints.length,
-        ipcIncomplete: inventory.incomplete.length,
-      });
-    }
     void session.closed.then(installed.cleanup, installed.cleanup);
     const close = session.close.bind(session);
     session.close = async (...args: Parameters<AgentSession["close"]>) => {
@@ -481,6 +473,32 @@ export function makeSessionFactory(
         await installed.cleanup();
       }
     };
+    // The Codex IPC caveat (#1026): potential host communication endpoints, observed from the
+    // daemon once the session's cleanup is in place. Off the open's path: nothing waits on it, it
+    // stops at its own deadline or when the session ends, and a failure is an incomplete result.
+    // Only where the warning has somewhere to go; it grants and takes away nothing.
+    const logger = options.logger;
+    if (installed.status() === "codex" && logger !== undefined) {
+      const ended = new AbortController();
+      void session.closed.then(
+        () => ended.abort(),
+        () => ended.abort(),
+      );
+      void (hook.ipcInventory ?? ((env, signal) => hostIpcInventory(env, { signal })))(agentEnv, ended.signal)
+        .catch((error: unknown): HostIpcInventory => ({
+          endpoints: [],
+          pipesSearched: [],
+          incomplete: [`the inventory failed (${error instanceof Error ? error.message : String(error)})`],
+        }))
+        .then((inventory) =>
+          logger.warn(hostIpcCaveat(inventory), {
+            agent: options.agent.id,
+            ipcEndpoints: inventory.endpoints.length,
+            ipcIncomplete: inventory.incomplete.length,
+          }),
+        )
+        .catch(() => undefined);
+    }
     // The engine drains it while the session runs (#1000); `cleanup` reads it a last time.
     const telemetry = installed.telemetry();
     if (telemetry !== undefined) Object.defineProperty(session, "hookTelemetry", { value: telemetry });
