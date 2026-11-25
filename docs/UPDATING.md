@@ -42,6 +42,12 @@ From 0.9.0 the product is **Orrery**. The rename keeps your data and settings. F
    (`dev.orca.desktop`), so shortcuts and the update path continue. The Linux package is now
    `orrery-desktop` and replaces `orca-desktop` on upgrade.
 
+4. **The Windows feed token.** The app reads `%LOCALAPPDATA%\Orrery\feed-token.txt` and, for one
+   release, still reads `%LOCALAPPDATA%\ORCA\feed-token.txt`.
+
+**Saved remote-daemon credentials on macOS and Linux** may need to be entered again after the
+update, because the keychain entry is named after the app.
+
 **What you change by hand:** config file names (optional until 0.10.0), environment variable
 names, anything that runs the `orca` command, and bookmarks to the old documentation site.
 <!-- rename-keep-end -->
@@ -130,13 +136,15 @@ The feed is a private Cloudflare R2 bucket behind a small Worker
 ([`tools/deploy/feed-worker`](../tools/deploy/feed-worker/worker.js)), separate from GitHub.
 
 Each tester gets their own random **read-only feed token**, stored in an ACL-protected text file
-readable only by their account, Administrators and SYSTEM. Never use a GitHub token. Set the
-environment ORCA inherits:
+readable only by their account, Administrators and SYSTEM. Never use a GitHub token.
 
-```powershell
-[Environment]::SetEnvironmentVariable('ORCA_UPDATE_URL', 'https://updates.example.net/', 'User')
-[Environment]::SetEnvironmentVariable('ORCA_UPDATE_TOKEN_FILE', 'C:\Users\YOU\AppData\Local\ORCA\feed-token.txt', 'User')
-```
+- **Token file.** Put it at `%LOCALAPPDATA%\ORCA\feed-token.txt`, where the app looks by default.
+  Set `ORCA_UPDATE_TOKEN_FILE` only to use another path.
+- **Feed URL.** Set it in the environment ORCA inherits:
+
+  ```powershell
+  [Environment]::SetEnvironmentVariable('ORCA_UPDATE_URL', 'https://updates.example.net/', 'User')
+  ```
 
 - Restart ORCA after changing environment variables. A rotated token file is used at the next
   check.
