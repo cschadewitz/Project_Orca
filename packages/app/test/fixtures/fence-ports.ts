@@ -21,7 +21,7 @@ export function fencePorts(identity: FenceIdentity): number[] {
   const start =
     20000 +
     (Number.parseInt(
-      fenceHash(JSON.stringify(["orca-update-window-v1", fenceBoot().kernelDomain, identity])).slice(0, 8),
+      fenceHash(JSON.stringify(["orca-update-window-v1", fenceBoot().kernelDomain, identity])).slice(0, 8), // rename-keep: mirrors protocol's update-window guard, which keeps its pre-rename name
       16,
     ) %
       5000) *

@@ -31,6 +31,29 @@ import {
   type SubscribeParams,
 } from "@orca/protocol";
 
+/** The socket subprotocol, and the prefix of the one that carries a bearer token beside it. */
+const SOCKET_PROTOCOL = "orca.v1";
+const SOCKET_BEARER_PREFIX = "orca.bearer.";
+/** Their names before the rename, which a daemon from before it requires. Offered until v0.10.0. */
+const LEGACY_SOCKET_PROTOCOL = "orca.v1"; // rename-keep: pre-rename subprotocol a pre-rename daemon selects
+const LEGACY_SOCKET_BEARER_PREFIX = "orca.bearer."; // rename-keep: pre-rename bearer subprotocol a pre-rename daemon reads
+
+/**
+ * What a socket upgrade offers for `token`: the current names, then the pre-rename ones, so a
+ * daemon on either side of the rename selects its own and reads the one token. The daemon
+ * never echoes a bearer protocol back.
+ */
+export function socketProtocols(token: string): string[] {
+  return [
+    ...new Set([
+      SOCKET_PROTOCOL,
+      `${SOCKET_BEARER_PREFIX}${token}`,
+      LEGACY_SOCKET_PROTOCOL,
+      `${LEGACY_SOCKET_BEARER_PREFIX}${token}`,
+    ]),
+  ];
+}
+
 import type { DaemonIdentity } from "../daemon-connection.js";
 import {
   assertCredentialDestination,
@@ -236,7 +259,7 @@ export class DaemonSubscription {
           if (this.epoch === epoch) this.onClose(code);
         },
       },
-      token ? ["orca.v1", `orca.bearer.${token}`] : undefined,
+      token ? socketProtocols(token) : undefined,
     );
   }
 

@@ -31,7 +31,7 @@ import {
   type Workspace,
 } from "./flows.js";
 
-const SAMPLE = "orca-beta-local-check";
+const SAMPLE = "orca-beta-local-check"; // rename-keep: the first-run sample's id, kept so existing workspaces still match
 const ENABLED = { ORCA_SQLITE_SWITCH: "1" };
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 

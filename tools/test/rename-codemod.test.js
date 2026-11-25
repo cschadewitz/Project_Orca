@@ -84,6 +84,9 @@ describe("paths", () => {
     expect(isExcluded(map, "CHANGELOG.md")).toBe(true);
     expect(isExcluded(map, "docs/preparation/a/b.md")).toBe(true);
     expect(isExcluded(map, "docs/WORKFLOWS.md")).toBe(false);
+    // The #420 coding fixture: the kept first-run sample pins these bytes by digest.
+    expect(isExcluded(map, "examples/beta-first-job/template/shipping.js")).toBe(true);
+    expect(isExcluded(map, "examples/beta-first-job/README.md")).toBe(false);
   });
 });
 

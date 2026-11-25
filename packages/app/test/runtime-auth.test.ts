@@ -109,6 +109,11 @@ describe("local daemon credentials", () => {
   });
 });
 
+/** The subprotocols a socket upgrade offers: the current names, then the pre-rename ones. */
+const currentProtocols = (token: string) => ["orca.v1", `orca.bearer.${token}`];
+const legacyProtocols = (token: string) => ["orca.v1", `orca.bearer.${token}`]; // rename-keep: pre-rename subprotocols
+const offered = (token: string) => [...new Set([...currentProtocols(token), ...legacyProtocols(token)])];
+
 describe("authentication reconnect", () => {
   it("offers bearer subprotocols, reloads once for 4401 and ignores the old socket", async () => {
     const handlers: SocketHandlers[] = [];
@@ -130,11 +135,11 @@ describe("authentication reconnect", () => {
       },
     });
     await Promise.resolve();
-    expect(protocols[0]).toEqual(["orca.v1", "orca.bearer.old-token"]);
+    expect(protocols[0]).toEqual(offered("old-token"));
     handlers[0]!.onClose(4401);
     expect(stream.state).toBe("auth-failed");
     await Promise.resolve();
-    expect(protocols[1]).toEqual(["orca.v1", "orca.bearer.new-token"]);
+    expect(protocols[1]).toEqual(offered("new-token"));
     handlers[0]!.onClose();
     handlers[1]!.onClose(4401);
     expect(refresh).toHaveBeenCalledTimes(1);
