@@ -534,7 +534,8 @@ it("takes the release's identity only from the hosted check, never from the self
   expect(file.jobs.publish.needs).toEqual(["check", "verify", "desktop", "app-verification"]);
   // The builds take the same hosted identity.
   for (const call of ["desktop", "app-verification"]) {
-    expect(file.jobs[call].needs, call).toBe("check");
+    // Inputs come from `check`; they start only once `verify` has passed.
+    expect(file.jobs[call].needs, call).toEqual(["check", "verify"]);
     expect(file.jobs[call].with.ref, call).toBe("${{ needs.check.outputs.sha }}");
   }
   expect(file.jobs.desktop.with.version).toBe("${{ needs.check.outputs.version }}");

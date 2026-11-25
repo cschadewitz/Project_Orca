@@ -330,7 +330,8 @@ jobs:
 
   desktop:
     name: desktop artifacts
-    needs: check
+    # After verification passes, as before it moved: a failed candidate is never packaged.
+    needs: [check, verify]
     uses: ./.github/workflows/desktop.yml
     with:
       ref: ${{ needs.check.outputs.sha }}
@@ -342,7 +343,8 @@ jobs:
 
   app-verification:
     name: desktop smoke and type proof
-    needs: check
+    # After verification passes, as before it moved: a failed candidate is never packaged.
+    needs: [check, verify]
     uses: ./.github/workflows/app-smoke.yml
     with:
       ref: ${{ needs.check.outputs.sha }}
