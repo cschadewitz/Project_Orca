@@ -130,5 +130,7 @@ identity and authorization (the exact commit, its lane and review, and the versi
 from the GitHub-hosted `check` job, and every job that writes or dispatches takes them from
 there; `verify` only passes or fails the commit `check` pinned. Its runner picker gets the
 health endpoint only for a real release dispatched from the default branch or a merged release
-pull request, so a rehearsal (`dry_run`), whose ref may be any branch, stays GitHub-hosted. `tyler` is the only self-hosted
+pull request, so a rehearsal (`dry_run`), whose ref may be any branch, stays GitHub-hosted. A rehearsal also restores and saves no Actions caches (pnpm store, Electron downloads) in
+`verify`, `desktop.yml` or `app-smoke.yml` (their `caches` input), because it runs its ref's
+install scripts in the default branch's cache scope, where trusted runs would restore them. `tyler` is the only self-hosted
 label; a new workflow that targets it takes on the same assumptions.

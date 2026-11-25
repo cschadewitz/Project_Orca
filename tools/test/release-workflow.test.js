@@ -545,3 +545,29 @@ it("takes the release's identity only from the hosted check, never from the self
   }
   expect(file.jobs.desktop.with.version).toBe("${{ needs.check.outputs.version }}");
 });
+
+it("restores and saves no Actions cache while rehearsing an arbitrary ref, in any job it reaches", () => {
+  // A rehearsal runs its ref's install scripts in the default branch's cache scope, where a
+  // saved cache would later be restored by trusted runs. Real releases keep their caches.
+  const file = workflow("release-publish.yml");
+  expect(file.jobs.verify.steps.find((s) => s.uses?.startsWith("actions/setup-node@")).with.cache).toMatch(
+    /^\$\{\{ !inputs\.dry_run && /,
+  );
+  const callees = { desktop: "desktop.yml", "app-verification": "app-smoke.yml" };
+  for (const [call, name] of Object.entries(callees)) {
+    expect(file.jobs[call].with.caches, call).toBe("${{ inputs.dry_run != true }}");
+    const callee = workflow(name);
+    expect(callee.on.workflow_call.inputs.caches, name).toMatchObject({ type: "boolean", default: true });
+    let setups = 0;
+    for (const [job, { steps = [] }] of Object.entries(callee.jobs))
+      for (const step of steps) {
+        if (step.uses?.startsWith("actions/setup-node@") && step.with?.cache !== undefined) {
+          setups++;
+          expect(step.with.cache, `${name} ${job}`).toBe("${{ inputs.caches != false && 'pnpm' || '' }}");
+        }
+        if (/^actions\/cache(\/(restore|save))?@/.test(step.uses ?? ""))
+          expect(step.if, `${name} ${job} ${step.name}`).toBe("${{ inputs.caches != false }}");
+      }
+    expect(setups, name).toBeGreaterThan(0);
+  }
+});

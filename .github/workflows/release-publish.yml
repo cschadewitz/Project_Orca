@@ -339,8 +339,10 @@ jobs:
     with:
       ref: ${{ needs.check.outputs.sha }}
       version: ${{ needs.check.outputs.version }}
-      # A rehearsal's ref may be any branch: hosted runners only, and no health endpoint.
+      # A rehearsal's ref may be any branch: hosted runners only, no health endpoint, and no
+      # caches in the default branch's scope.
       hosted_only: ${{ inputs.dry_run == true }}
+      caches: ${{ inputs.dry_run != true }}
     secrets:
       CI_RUNNER_HEALTH_URL: ${{ !inputs.dry_run && secrets.CI_RUNNER_HEALTH_URL || '' }}
 
@@ -354,6 +356,8 @@ jobs:
       # A rehearsal's ref may be any branch: never route it to the self-hosted runners, and
       # do not hand it the health endpoint.
       hosted_only: ${{ inputs.dry_run == true }}
+      # Nor does it restore or save caches in the default branch's scope.
+      caches: ${{ inputs.dry_run != true }}
       # A real release requires the upgrade launch check. A rehearsal of a ref from before
       # the check existed reports it as not applicable instead.
       upgrade_launch_required: ${{ !inputs.dry_run }}

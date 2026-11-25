@@ -32,6 +32,14 @@ on:
         type: boolean
         required: false
         default: false
+      caches:
+        description: >-
+          Restore and save the pnpm and Electron download caches. A release rehearsal builds an
+          arbitrary ref in the default branch's cache scope, so it passes false: that ref's
+          install scripts must not write a cache a trusted run later restores.
+        type: boolean
+        required: false
+        default: true
     secrets:
       CI_RUNNER_HEALTH_URL:
         description: The runner health endpoint; without it, Linux jobs use GitHub-hosted runners.
@@ -114,12 +122,14 @@ jobs:
           # One version: this is about producing an artifact, not about Node support.
           # `mise.toml` pins 24, so that is what a developer reproduces locally.
           node-version: 24
-          cache: pnpm
+          # Off for a caller that builds an untrusted ref (see the `caches` input).
+          cache: ${{ inputs.caches != false && 'pnpm' || '' }}
 
       # setup-node caches pnpm's store, not the Electron archives or electron-builder's
       # platform tools. Keep these platform-specific; the package step consumes both x64
       # and arm64 downloads on the same runner.
       - name: Restore Electron downloads
+        if: ${{ inputs.caches != false }}
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ matrix.cache_path }}
