@@ -429,9 +429,16 @@ export function holdsFirstRunOwnership(path: string): boolean {
   return ownsAs(path, OWNERSHIP) || ownsAs(path, LEGACY_OWNERSHIP);
 }
 
-/** Where the first-run workspace at `root` keeps its journal, anchor, store and config. */
+/**
+ * Where the first-run workspace at `root` keeps its journal, anchor, store and config. It is one
+ * from before the rename when it has no ownership under the current name and either has it under
+ * the old one, or has not been started yet (no ownership at all) and holds only the old config.
+ */
 export function firstRunLayout(root: string): { journal: string; anchor: string; store: string; config: string } {
-  const legacy = !ownsAs(root, OWNERSHIP) && ownsAs(root, LEGACY_OWNERSHIP);
+  const legacy =
+    !ownsAs(root, OWNERSHIP) &&
+    (ownsAs(root, LEGACY_OWNERSHIP) ||
+      (!exists(join(root, FIRST_RUN_CONFIG)) && exists(join(root, LEGACY_FIRST_RUN_CONFIG))));
   const journal = join(root, legacy ? LEGACY_OWNERSHIP : OWNERSHIP);
   return {
     journal,
