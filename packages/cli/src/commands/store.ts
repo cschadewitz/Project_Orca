@@ -57,7 +57,7 @@ export async function storeCommand(ctx: CommandContext): Promise<number> {
       const marker = await readStoreFormat(storeDir);
       ctx.out(`store            ${storeDir}`);
       ctx.out(`recorded format  ${marker ? `${marker.epoch} (written by ORCA ${marker.writtenBy})` : "none"}`);
-      ctx.out(`this version     ${STORE_FORMAT_EPOCH} (ORCA ${readOrcaVersion()})`);
+      ctx.out(`this ORCA        ${STORE_FORMAT_EPOCH} (ORCA ${readOrcaVersion()})`);
       ctx.out(`metadata         ${recordedStoreBackend(storeDir) === "sqlite" ? "SQLite (metadata.sqlite)" : "files"}`);
       const converted = await convertedSourceChanged(storeDir);
       if (converted)
