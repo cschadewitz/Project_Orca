@@ -19,6 +19,7 @@
     "docs/session-logs/**",
     "docs/v0.5.2-*",
     "examples/m10-plugin/candidate/**",
+    "examples/beta-first-job/template/**",
     "packages/app/test/fixtures/store-v*/**"
   ],
   "binaryExtensions": [

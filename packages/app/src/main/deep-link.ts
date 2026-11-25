@@ -22,8 +22,16 @@
 
 /** The scheme this app registers. `orca://run/…`, one object per URL. */
 export const ORCA_SCHEME = "orca";
+/**
+ * The scheme before the rename. Links already written down (notes, tickets, the docs'
+ * "Renaming from ORCA" section) keep opening as an alias until v0.10.0. Never written.
+ */
+export const LEGACY_SCHEME = "orca"; // rename-keep: pre-rename URL scheme, read as an alias
+/** Every scheme this app opens, the current one first. */
+export const SCHEMES: readonly string[] = [...new Set([ORCA_SCHEME, LEGACY_SCHEME])];
 
-const PREFIX = `${ORCA_SCHEME}://`;
+const PREFIXES = SCHEMES.map((scheme) => `${scheme}://`);
+const isOurs = (url: string) => PREFIXES.some((prefix) => url.toLowerCase().startsWith(prefix));
 
 /**
  * The first `orca://` URL in a command line, or undefined.
@@ -33,7 +41,7 @@ const PREFIX = `${ORCA_SCHEME}://`;
  * relaunch can put the URL anywhere after them. Case-insensitive because a scheme is.
  */
 export function urlFromArgv(argv: readonly string[]): string | undefined {
-  return argv.find((arg) => arg.toLowerCase().startsWith(PREFIX));
+  return argv.find(isOurs);
 }
 
 /**
@@ -61,7 +69,7 @@ export class DeepLinkQueue {
 
   /** A URL from the OS. Ignored unless it is this app's scheme — anything else is not ours. */
   offer(url: string | undefined): void {
-    if (!url || !url.toLowerCase().startsWith(PREFIX)) return;
+    if (!url || !isOurs(url)) return;
     if (this.listeners.size === 0) {
       this.waiting = url;
       return;

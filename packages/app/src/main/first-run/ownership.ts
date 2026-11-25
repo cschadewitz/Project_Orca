@@ -20,7 +20,13 @@ import {
 import { createHash, randomUUID } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
 import { z } from "zod";
-import { WriterSchema, FenceBootSchema, fenceBoot } from "@orca/protocol/first-run-fence";
+import {
+  WriterSchema,
+  FenceBootSchema,
+  fenceBoot,
+  firstRunLayout,
+  holdsFirstRunOwnership,
+} from "@orca/protocol/first-run-fence";
 import type { HelloResult } from "@orca/protocol";
 import type { BundledDaemon } from "../daemon-process.js";
 import { ConnectionRefusal } from "../connection-target.js";
@@ -222,7 +228,7 @@ export function assertNoFirstRunOwnership(path: string): void {
   // Legacy config discovery walks upward; a nested cwd or symlink must not evade the fence.
   let current = resolve(path);
   for (let depth = 0; depth < 256; depth++) {
-    if (!absent(join(current, OWNERSHIP_DIRECTORY)) || !absent(join(current, OWNERSHIP_ANCHOR))) refuse();
+    if (holdsFirstRunOwnership(current)) refuse();
     if (!absent(current)) {
       const canonical = realpathSync(current);
       if (canonical !== current) {
@@ -275,11 +281,11 @@ export function inspectFirstRunOwnership(path: string, allowUnsettled = false, a
   try {
     if (resolve(path) !== path) return refuse();
     const workspace = directory(path);
-    const root = directory(join(path, OWNERSHIP_DIRECTORY), workspace);
-    const anchorText = read(join(path, OWNERSHIP_ANCHOR), workspace);
+    const root = directory(firstRunLayout(path).journal, workspace);
+    const anchorText = read(firstRunLayout(path).anchor, workspace);
     const anchor = anchorSchema.parse(JSON.parse(anchorText));
     if (!sameDirectory(anchor.workspace, workspace) || !sameDirectory(anchor.journal, root)) return refuse();
-    const configHash = hash(read(join(path, "orca.config.yaml"), workspace, 1024 * 1024));
+    const configHash = hash(read(firstRunLayout(path).config, workspace, 1024 * 1024));
     const names = readdirSync(root.path).sort();
     // Bounds this read. Compaction keeps a journal far below it; one that reached the former limit of 256 attempts
     // still reads, so its next reservation can fold it.
@@ -377,7 +383,7 @@ export function inspectFirstRunOwnership(path: string, allowUnsettled = false, a
             JSON.stringify({ bootId: writer.bootId, hostHash: writer.hostHash, kernelDomain: writer.kernelDomain }) ||
           writer.reservationId !== claim.reservationId ||
           !sameDirectory(writer.workspace, workspace) ||
-          writer.store.path !== join(path, ".orca") ||
+          writer.store.path !== firstRunLayout(path).store ||
           writer.store.dev !== workspace.dev ||
           (child && child.processId !== writer.processId))
       )
@@ -536,12 +542,12 @@ export function reserveFirstRunOwnership(path: string): FirstRunOwnership {
   try {
     if (resolve(path) !== path) return refuse();
     const workspace = directory(path);
-    let configHash = hash(read(join(path, "orca.config.yaml"), workspace, 1024 * 1024));
-    const rootPath = join(path, OWNERSHIP_DIRECTORY);
-    const anchorPath = join(path, OWNERSHIP_ANCHOR);
+    let configHash = hash(read(firstRunLayout(path).config, workspace, 1024 * 1024));
+    const rootPath = firstRunLayout(path).journal;
+    const anchorPath = firstRunLayout(path).anchor;
     if (absent(rootPath)) {
       // Pre-ledger or lost-ledger runtime state is uncertain. Do not silently migrate/adopt it.
-      if (!absent(anchorPath) || !absent(join(path, ".orca")) || !absent(join(path, "auth"))) return refuse();
+      if (!absent(anchorPath) || !absent(firstRunLayout(path).store) || !absent(join(path, "auth"))) return refuse();
       if (process.platform === "win32") windowsPrivateChild(rootPath);
       else mkdirSync(rootPath, { mode: 0o700 });
       syncDirectory(path);
@@ -584,7 +590,7 @@ export function reserveFirstRunOwnership(path: string): FirstRunOwnership {
       launchHash: hash(launchToken),
       fence: "kernel-lifetime-v1",
       boot: fenceBoot(),
-      store: absent(join(path, ".orca")) ? null : directory(join(path, ".orca"), workspace),
+      store: absent(firstRunLayout(path).store) ? null : directory(firstRunLayout(path).store, workspace),
     });
     try {
       compactSettledHistory(path, reservationId);
@@ -608,7 +614,7 @@ export function reserveFirstRunOwnership(path: string): FirstRunOwnership {
             JSON.stringify({ bootId: writer.bootId, hostHash: writer.hostHash, kernelDomain: writer.kernelDomain }) !==
               JSON.stringify(fenceBoot()) ||
             !sameDirectory(writer.workspace, workspace) ||
-            !sameDirectory(writer.store, directory(join(path, ".orca"), workspace)) ||
+            !sameDirectory(writer.store, directory(firstRunLayout(path).store, workspace)) ||
             (child && writer.processId !== child.pid)
           )
             return refuse();
@@ -621,7 +627,7 @@ export function reserveFirstRunOwnership(path: string): FirstRunOwnership {
           read(anchorPath, workspace) !== anchorText ||
           readdirSync(rootPath).sort().join(",") !== [...names, attemptName].sort().join(",") ||
           readdirSync(attemptPath).sort().join(",") !== [...texts.keys()].sort().join(",") ||
-          (checkConfig && hash(read(join(path, "orca.config.yaml"), workspace, 1024 * 1024)) !== configHash)
+          (checkConfig && hash(read(firstRunLayout(path).config, workspace, 1024 * 1024)) !== configHash)
         )
           return refuse();
         for (const [name, text] of texts) if (read(join(attemptPath, name), attempt) !== text) return refuse();
@@ -645,7 +651,7 @@ export function reserveFirstRunOwnership(path: string): FirstRunOwnership {
           !child ||
           child.exited === true ||
           configHash !== expectedHash ||
-          hash(read(join(path, "orca.config.yaml"), workspace, 1024 * 1024)) !== savedHash
+          hash(read(firstRunLayout(path).config, workspace, 1024 * 1024)) !== savedHash
         )
           return refuse();
         digest.parse(savedHash);
@@ -679,7 +685,7 @@ export function reserveFirstRunOwnership(path: string): FirstRunOwnership {
           child.exited === true ||
           !hello.identity ||
           hello.processId !== child.pid ||
-          hello.storeDir !== join(path, ".orca")
+          hello.storeDir !== firstRunLayout(path).store
         )
           return refuse();
         const value = { reservationId, ...hello.identity };

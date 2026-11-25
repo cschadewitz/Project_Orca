@@ -18,6 +18,8 @@
  * set, which is what `pnpm --filter @orca/app dev` does to point it at the Vite dev
  * server for hot reload (scripts/dev.js).
  */
+// First, before any module that reads the environment: adopt the pre-rename variable names.
+import "./legacy-env.js";
 import { callScopedPermission } from "../client/scoped-permission-client.js";
 import type { ScopedPermissionMethod } from "@orca/protocol";
 import { z } from "zod";
@@ -52,6 +54,7 @@ import { executableMatchesPackage, LinuxPackageRestart, readInstalledDebVersion 
 import { basename, dirname, join } from "node:path";
 import { readFileSync, statSync } from "node:fs";
 import { windowIcon } from "./window-icon.js";
+import { carryLegacyUserData } from "./legacy-user-data.js";
 import { revealWhenReady } from "./window-reveal.js";
 import { fileURLToPath } from "node:url";
 import {
@@ -86,12 +89,23 @@ import { appMenuTemplate } from "./app-menu.js";
 import { hasTitleBarOverlay, titleBarOverlay, windowChrome } from "./window-chrome.js";
 import { createAlerts, type AlertTier } from "./alerts.js";
 import { ConnectionMachine } from "./connection-state.js";
-import { DeepLinkQueue, ORCA_SCHEME, protocolClientArgs, urlFromArgv } from "./deep-link.js";
+import { DeepLinkQueue, SCHEMES, protocolClientArgs, urlFromArgv } from "./deep-link.js";
 import { findBundledDaemon, startBundledDaemon } from "./daemon-process.js";
 import { StoreSwitchRestart, takeStoreSwitchRequest, writeStoreSwitchRequest } from "./store-switch.js";
 import { storeRoot, Workspace } from "./workspace.js";
 import { Fleet, alertScope, labelAlerts, type FleetTarget, type FocusedMachine } from "./fleet.js";
 import { MAX_WATCHED_PROFILES } from "../preferences/schema.js";
+
+// Before anything reads or writes the settings folder: a packaged app's first launch under
+// the new name brings the saved preferences and remote profiles over from the old folder.
+// A failure leaves the new folder as it is and the app starts with defaults.
+if (app.isPackaged) {
+  try {
+    carryLegacyUserData(app.getPath("userData"));
+  } catch (error) {
+    console.error(`settings from the previous app name were not copied: ${(error as Error).message}`);
+  }
+}
 
 // Mount synchronously before producers. Selected workspace/configuration roots are
 // enrolled before their first producer; replacement activation remains held below.
@@ -174,7 +188,7 @@ export async function pauseMacUpdateAppWriters(signal: AbortSignal): Promise<boo
 }
 
 /** The recovery shell's one action, offered only when the update-protection records are lost
- * or unreadable and record no attempt; docs/implementation/mac-closed-window-fixed-path.md. */
+ * or unreadable and record no attempt; docs/archive/implementation/mac-closed-window-fixed-path.md. */
 async function offerUpdateProtectionReset(startup: NonNullable<typeof macReplacement>): Promise<void> {
   const { response } = await dialog.showMessageBox({
     type: "warning",
@@ -1974,12 +1988,13 @@ if (!primary) {
     powerMonitor.on("resume", observeResume);
     powerObservationMounted = true;
     applyTheme(preferences.read().theme);
-    /* Registering the scheme is what makes `orca://` reach this app at all. In development
+    /* Registering the scheme (and, until v0.10.0, its pre-rename alias) is what makes these URLs reach this app at all. In development
        the executable is Electron itself and the app is an argument to it, which is what
        `protocolClientArgs` supplies; a packaged app is its own executable and needs none. */
-    app.setAsDefaultProtocolClient(ORCA_SCHEME, process.execPath, [
-      ...(protocolClientArgs(app.isPackaged, process.argv) ?? []),
-    ]);
+    for (const scheme of SCHEMES)
+      app.setAsDefaultProtocolClient(scheme, process.execPath, [
+        ...(protocolClientArgs(app.isPackaged, process.argv) ?? []),
+      ]);
     /* The app had no menu at all until there was something to put in one. Replacing the
        default menu also replaces the Edit menu, which on macOS is where ⌘C lives — so
        `appMenuTemplate` restates the standard roles rather than dropping them. */

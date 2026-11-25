@@ -98,7 +98,7 @@ export async function provisionMacUpdateNamespace(
   const guards = await Promise.all(
     protectedRoots.map(async (root) => {
       try {
-        await lstat(join(root, ".orca-update-window.json"));
+        await lstat(join(root, ".orca-update-window.json")); // rename-keep: the update-window guard the release being updated from writes (protocol update-window.ts)
         return true;
       } catch (error) {
         if (missing(error)) return false;

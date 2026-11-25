@@ -7,7 +7,7 @@
  * is that they all end at one queue, and that a link is delivered exactly once.
  */
 import { describe, expect, it } from "vitest";
-import { DeepLinkQueue, ORCA_SCHEME, protocolClientArgs, urlFromArgv } from "../src/main/deep-link.js";
+import { DeepLinkQueue, ORCA_SCHEME, SCHEMES, protocolClientArgs, urlFromArgv } from "../src/main/deep-link.js";
 
 describe("urlFromArgv", () => {
   it("finds the URL wherever the platform put it on the command line", () => {
@@ -22,6 +22,15 @@ describe("urlFromArgv", () => {
   it("finds nothing in an ordinary launch", () => {
     expect(urlFromArgv(["/usr/bin/orca", "--enable-logging"])).toBeUndefined();
     expect(urlFromArgv([])).toBeUndefined();
+  });
+
+  it("opens a link written before the rename as an alias, and registers the current scheme first", () => {
+    const legacy = "orca://run/run_1"; // rename-keep: a link written before the rename
+    expect(urlFromArgv(["app", legacy])).toBe(legacy);
+    const queue = new DeepLinkQueue();
+    queue.offer(legacy);
+    expect(queue.take()).toBe(legacy);
+    expect(SCHEMES[0]).toBe(ORCA_SCHEME);
   });
 
   it("is not fooled by another app's scheme", () => {

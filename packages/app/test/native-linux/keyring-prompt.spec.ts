@@ -33,7 +33,7 @@ import {
 } from "./flows.js";
 
 const KEYRING_TITLE = "Keyring locked, not set up, or prompt cancelled";
-const SAMPLE = "orca-beta-local-check";
+const SAMPLE = "orca-beta-local-check"; // rename-keep: the first-run sample's id, kept so existing workspaces still match
 
 test.describe.configure({ mode: "serial" });
 
