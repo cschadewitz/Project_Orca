@@ -60,9 +60,10 @@ export function adoptEnvPrefix(
 }
 
 /**
- * Adopt the environment variables from before the rename (`ORCA_*` into `ORRERY_*`). Every entry
- * point calls it first, before anything reads the environment: the CLI (and so `serve`), the
- * desktop app's main process, and scripts that read the product's variables. Idempotent.
+ * Adopt the environment variables from before the rename (rename-keep: `ORCA_*` into `ORRERY_*`).
+ * Every entry point calls it first, before anything reads the environment: the CLI (and so
+ * `serve`), the desktop app's main process, and scripts that read the product's variables.
+ * Idempotent.
  */
 export function adoptLegacyEnv(
   env: NodeJS.ProcessEnv = process.env,
