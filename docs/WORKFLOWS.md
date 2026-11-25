@@ -1,7 +1,11 @@
 # Authoring workflows
 
-Workflows are YAML (or JSON) files matching `WorkflowDefinitionSchema`. Validate with
-`orca validate` (errors block, warnings inform) and draw with `orca graph <id>`.
+This page is for people who write ORCA workflows and configure the agents that run them. It is
+the reference for node types, routing, gates, permissions, completion, session caps, delegation
+to another daemon, MCP servers, skills, secrets and templates.
+
+Workflows are YAML or JSON files matching `WorkflowDefinitionSchema`. Check them with
+`orca validate` (errors block, warnings inform) and draw one with `orca graph <id>`.
 
 ```yaml
 id: ai-sdlc            # kebab-case, unique
@@ -36,116 +40,107 @@ edges:
 
 ## Typed launch inputs
 
-`inputs: {name: description}` remains documentation. Optional `inputSchema` declares
-`fields` with typed constraints, defaults and sensitivity, plus explicit unknown-field
-policy. Defaults are resolved before workflow `vars`, then launch vars; there is no
-implicit engine coercion. Workflows without a schema retain legacy input behavior.
+- `inputs: {name: description}` is documentation only.
+- `inputSchema` declares typed `fields` with constraints, defaults, sensitivity and an explicit
+  policy for unknown fields. Schema defaults apply first, then workflow `vars`, then launch
+  vars. There is no implicit coercion. Workflows without a schema behave as before.
+- Call `workflows.validateInputs` before launching and pass its version and revision to
+  `runs.start` (CLI: `--workflow-version`, `--expected-workflow-revision`). Admission validates
+  before it creates a run or a workspace. A resumed run uses its pinned definition and inputs.
+- Sensitive values go to protected execution storage, not public run or event views.
 
-Use authorized `workflows.validateInputs` before launching, and pass its returned version
-and revision to `runs.start` (or CLI `--workflow-version` and
-`--expected-workflow-revision`). Admission validates before creating a run or provisioning
-its workspace. Persisted runs resume their pinned definition and authoritative inputs.
-
-Sensitive values live in protected execution storage rather than public run/event views.
-See [typed declarations](workflow-inputs.md) and [runtime integration](archive/runtime-foundation-integration.md)
-for examples, client parsing, storage/backup boundaries and migration details.
+See [typed workflow inputs](workflow-inputs.md).
 
 ## Node types
 
-| type | purpose | key fields |
+| Type | Purpose | Key fields |
 | --- | --- | --- |
-| `start` / `end` | entry and exit; `end.outcome` = `success` (default) \| `failure` \| `cancelled` | `end.message`; `start` takes no fields |
-| `agent` | run an agent turn and collect artifacts | `agent`, `template`/`prompt`, `inputs`, `produces`, `completion`, `vars` |
-| `decision` | choose a branch | `source` (`expression` \| `artifact` \| `agent` \| `human` \| `matrix`), `options` (see below), `defaultOption` (an option id). An `artifact` or `agent` source's `field` reads an exact front-matter key first, then a dotted path into the artifact's data: `answers.conflict.choice` reaches a nested value when no key with that exact name exists |
-| `gate` | human approval; can auto‑approve | `question`, `options` (see below), `autoApproveWhen`, `autoOption` (an option id) |
-| `set` | assign run vars | `vars` |
-| `loop` | repeat a nested graph / workflow as child runs | `mode` (`while` \| `until` \| `forEach`), `condition`/`items`, `itemVar`, `indexVar`, `maxIterations`, `body`, `breakOnFailure` |
-| `parallel` | fan out child runs | `branches{}` or `forEach{items, body, key, dependsOn, workflow, workItemId}`, `concurrency`, `join` (`all` \| `any`), `failFast` (default `true`: stop once the join is decided) |
-| `subworkflow` | run a registered workflow as a child | `workflow`, `vars` |
-| `custom:<kebab-name>` | anything a plugin registers | free‑form |
-| `custom:plan-register` | decomposition artifact → plan (items, dependencies, risks, decisions) | `artifact`, `plan`, `planName` |
-| `custom:decision-matrix` | score a `decision-matrix` artifact, record the decision, expose `choice` | `artifact`, `decision` (template) |
-| `custom:plan-schedule` | compute the schedule → `vars.schedule` + `schedule.md` | `plan`, `artifactPath`, `policy`, `record` |
-| `custom:plan-dispatch` | run the item workflow for ready items, dependency‑ordered across the plan; claims each item so two dispatchers cannot both launch it | `workflow` (default `vars.itemWorkflow`), `concurrency`, `scope` (`request` \| `plan`), `leavesOnly` (default `true`), `onWaiting` (`defer` \| `wait`), `pollMs` (default 5000), `waitTimeoutMs` (default 30 min, `0` = forever), `failFast` (cancels the items still running), `policy` |
-| `custom:plan-await` | (in item workflows) wait for this item's `phase` dependencies | `phase`, `pollMs`, `timeoutMs` |
-| `custom:jev-eval` | (plugin, `docs/INTEGRATIONS.md`) ask JEV Choice/Score/Noul questions over explicit input artifacts → `evaluation` artifact + `result.data.answers` | `inputs`, `context`, `model`, `rubric`, `questions`, `maxStateChars`, `timeoutMs`, `onError`, `repeatable`, `produces` |
+| `start` / `end` | Entry and exit. `end.outcome` is `success` (default), `failure` or `cancelled`. | `end.message`; `start` has none |
+| `agent` | Run an agent turn and collect artifacts | `agent`, `template`/`prompt`, `inputs`, `produces`, `completion`, `vars` |
+| `decision` | Choose a branch | `source` (`expression`, `artifact`, `agent`, `human`, `matrix`), `options`, `defaultOption` |
+| `gate` | Human approval; can auto-approve | `question`, `options`, `autoApproveWhen`, `autoOption` |
+| `set` | Assign run vars | `vars` |
+| `loop` | Repeat a nested graph or workflow as child runs | `mode` (`while`, `until`, `forEach`), `condition`/`items`, `itemVar`, `indexVar`, `maxIterations`, `body`, `breakOnFailure` |
+| `parallel` | Fan out child runs | `branches{}` or `forEach{items, body, key, dependsOn, workflow, workItemId}`, `concurrency`, `join` (`all`, `any`), `failFast` (default `true`) |
+| `subworkflow` | Run a registered workflow as a child | `workflow`, `vars` |
+| `custom:<kebab-name>` | Anything a plugin registers | Free-form |
+| `custom:plan-register` | Decomposition artifact → plan | `artifact`, `plan`, `planName` |
+| `custom:decision-matrix` | Score a `decision-matrix` artifact, record the decision, expose `choice` | `artifact`, `decision` |
+| `custom:plan-schedule` | Compute the schedule → `vars.schedule` and `schedule.md` | `plan`, `artifactPath`, `policy`, `record` |
+| `custom:plan-dispatch` | Run the item workflow for ready items, in dependency order; claims each item | `workflow` (default `vars.itemWorkflow`), `concurrency`, `scope` (`request`, `plan`), `leavesOnly` (default `true`), `onWaiting` (`defer`, `wait`), `pollMs` (default 5000), `waitTimeoutMs` (default 30 min; `0` waits forever), `failFast`, `policy` |
+| `custom:plan-await` | In item workflows: wait for this item's `phase` dependencies | `phase`, `pollMs`, `timeoutMs` |
+| `custom:jev-eval` | Plugin ([INTEGRATIONS](INTEGRATIONS.md)): ask JEV questions over input artifacts → `evaluation` artifact | `inputs`, `context`, `model`, `rubric`, `questions`, `maxStateChars`, `timeoutMs`, `onError`, `repeatable`, `produces` |
 
-The plan nodes are described in `docs/PLANNING.md`. Every node also takes `name`,
-`description` and `meta`; edges take `label`; a workflow takes `description`, `inputs`
-(name → description, informational) and `meta`. Defaults not shown above: `loop.itemVar`
-`item`, `loop.indexVar` `index`, `loop.maxIterations` 10, `parallel.concurrency` 4,
-`completion.maxFollowUps` 1, `completion.maxAttempts` 1. `produces[]` entries carry
-`name`, `mediaType`, `required` and `validate` (`requiredFields`, `fieldValues`,
-`minBodyLength`; a field name reads an exact top-level key first, then a dotted path, so
-`answers.conflict.choice` checks the leaf when no exact key exists); `inputs[]` entries carry
-`kind`/`name`, `fromNode` and `as` (the alias under `inputs.<as>` in the prompt context).
+The plan nodes are described in [PLANNING](PLANNING.md).
 
-A `custom:*` node's fields are the plugin's to check, and a plugin whose executor has a
-`validate(node)` gets to do it here: `orca validate` and bootstrap load the configured
-plugins and report what the executor says under the node's path, so a missing field fails
-the workflow before any agent has spent a turn (`docs/EXTENSIBILITY.md`). A custom node whose
-type no loaded plugin registers is a warning saying its fields were not checked.
+**Common fields.** Every node takes `name`, `description` and `meta`. Edges take `label`. A
+workflow takes `description`, `inputs` (informational) and `meta`.
 
-Wherever a node takes `vars` (`set`, `agent`, `subworkflow`), a string value starting
-with `=` is evaluated as an expression and anything else is a literal, e.g.
+**Defaults not shown above:** `loop.itemVar` `item`, `loop.indexVar` `index`,
+`loop.maxIterations` 10, `parallel.concurrency` 4, `completion.maxFollowUps` 1,
+`completion.maxAttempts` 1.
+
+**`produces[]`** entries take `name`, `mediaType`, `required` and `validate` (`requiredFields`,
+`fieldValues`, `minBodyLength`). **`inputs[]`** entries take `kind`/`name`, `fromNode` and `as`
+(the alias under `inputs.<as>` in the prompt context).
+
+**Field paths.** A `field` in a decision source or a validation rule reads an exact top-level
+front-matter key first, then a dotted path: `answers.conflict.choice` reaches the nested value
+when no key has that exact name.
+
+**Expressions in `vars`.** Wherever a node takes `vars` (`set`, `agent`, `subworkflow`), a string
+starting with `=` is an expression; anything else is a literal:
 `vars: { slug: "=vars.workItem.slug", stage: "build" }`.
+
+**Custom nodes.** A plugin executor with `validate(node)` checks its node's fields during
+`orca validate` and bootstrap, so a missing field fails before any agent turn
+([EXTENSIBILITY](EXTENSIBILITY.md)). A custom type no loaded plugin registers is a warning that
+its fields were not checked.
 
 ### Loop iterations
 
-Each iteration is its own child run, but an iteration can read what the previous ones
-produced: artifact visibility includes earlier siblings — children of the same `loop` step
-that finished before this one was spawned. A review‑then‑fix loop therefore works as a
-`loop` node, with the builder declaring `inputs: [{ kind: review, required: false }]` and
-picking up iteration N‑1's review (unresolved on the first iteration). The same holds for
-the children a plugin's `custom:*` container runs one after another.
+Each iteration is its own child run, but it can read artifacts from earlier finished siblings
+of the same `loop` step. So a review-then-fix loop works: the builder declares
+`inputs: [{ kind: review, required: false }]` and gets iteration N-1's review. The same holds for
+children a plugin's `custom:*` container runs one after another.
 
-Fan‑out branches never see each other: not `parallel` branches, and not the item runs of
-`custom:plan-dispatch`, even when a `concurrency` limit, `dependsOn` or a later wave starts
-one only after another has finished. Nor do siblings bound to different work items, under
-any container. So item B's first build never picks up item A's `review` or `testReport` as
-feedback; in a plan, what an item needs from the items it depends on arrives explicitly, in
-`vars.upstream`.
+Fan-out branches never see each other: not `parallel` branches, not `custom:plan-dispatch` item
+runs (even when one starts only after another finished), and not siblings bound to different
+work items. In a plan, what an item needs from its dependencies arrives in `vars.upstream`.
 
 ### Parallel fan-out
 
-`concurrency` bounds how many branches are in flight; `join` decides the node's outcome
-(`all` — every branch must succeed, `any` — one is enough). With `failFast` (the default)
-the node stops as soon as a branch settles the join: the first branch that does not succeed
-under `join: all`, or the first that does under `join: any`. Branches that have not started
-are skipped and branches still running are cancelled, so a doomed fan-out stops burning
-agent turns. A branch parked at a human gate settles nothing — the parent parks with it as
-usual. Set `failFast: false` to always run every branch to completion.
+- `concurrency` bounds branches in flight. `join: all` needs every branch to succeed; `join: any`
+  needs one.
+- With `failFast` (default), the node stops as soon as the join is decided. Unstarted branches
+  are skipped and running ones cancelled. A branch parked at a gate decides nothing; the parent
+  parks with it. `failFast: false` runs every branch to the end.
 
-A `forEach` fan-out can also be a small DAG. Every field below is an expression evaluated
-per item with `itemVar`/`indexVar` in scope:
+A `forEach` fan-out can be a small DAG. Each field is an expression per item, with
+`itemVar`/`indexVar` in scope:
 
-| field | meaning |
+| Field | Meaning |
 | --- | --- |
-| `key` | stable branch key for the item (default: its index); resume re-attaches by it |
-| `dependsOn` | keys that must **succeed** first (a string or a list) |
-| `workflow` | workflow id to run for this item instead of `body`, when non-empty |
-| `workItemId` | the `WorkItem` this branch stands for; its child run is bound to it |
+| `key` | Stable branch key (default: the index). Resume re-attaches by it. |
+| `dependsOn` | Keys that must succeed first (string or list). |
+| `workflow` | Workflow to run for this item instead of `body`, when non-empty. |
+| `workItemId` | The `WorkItem` this branch stands for. Its child run is bound to it. |
 
-An item whose prerequisite failed, was cancelled or was itself skipped never starts: the
-step records a `branch.skipped` event with `reason: dependency` and `join: all` fails. A
-prerequisite parked at a human gate blocks nothing permanently — its dependants simply wait
-for the resume.
+An item whose prerequisite failed, was cancelled or was skipped never starts: the step records
+`branch.skipped` with `reason: dependency`, and `join: all` fails. A prerequisite parked at a gate
+just makes its dependants wait.
 
-A branch with a `workItemId` also **claims** that item before it starts (see
-`ClaimStore`): the claim is an atomic compare-and-set outside the event logs, so two
-fan-outs over the same items — a program run and a dispatcher an operator started
-alongside it — cannot both launch one item into two workspaces. The branch that loses the
-claim is skipped with `reason: claimed` and, under `join: all`, its step fails rather than
-reporting work it never did. A run re-claims its own branches, so resume and retry are
-unaffected. A claim is never released automatically — a finished run keeps its items so
-they are not dispatched twice — so an item held by a run that is gone for good stays
-`claimed` for every later fan-out; `orca claims` lists who holds what (with the owner's
-status), and `orca claims release <workItemId>` frees an item whose owner is finished or
-whose log is gone (`--force` for a run that is merely paused and abandoned). A
-request‑scoped fan‑out over the items `custom:materialize-work-items` puts in
-`vars.leafWorkItems` looks like this (the shipped `workflows/program.yaml` uses
-`custom:plan-dispatch` instead, which re‑schedules from the live plan after each
-completion):
+**Claims.** A branch with a `workItemId` claims the item first, with an atomic compare-and-set
+in the `ClaimStore`. Two fan-outs over the same items cannot both launch one. The loser is
+skipped with `reason: claimed`, and under `join: all` its step fails. A run re-claims its own
+branches, so resume and retry work. Claims are never released automatically.
+
+- `orca claims` lists who holds what, with the owner's status.
+- `orca claims release <workItemId>` frees an item whose owner finished or whose log is gone.
+  Add `--force` for a run that is paused and abandoned.
+
+A request-scoped fan-out over `custom:materialize-work-items`' `vars.leafWorkItems` looks like
+this. The shipped `program.yaml` uses `custom:plan-dispatch` instead.
 
 ```yaml
 dispatch:
@@ -161,34 +156,32 @@ dispatch:
     body: { workflow: ai-sdlc }
 ```
 
-The node's result carries a per-branch `branches` list (`branch`, `workItemId`, `runId`,
-`status`, `outcome`, `ok`) plus `skipped` that a later step can summarise.
-`custom:plan-dispatch` publishes the equivalent as `vars.dispatched` /
-`vars.dispatchOutcome`, which is what `templates/program/summary.md` renders.
+The result has a `branches` list (`branch`, `workItemId`, `runId`, `status`, `outcome`, `ok`)
+and `skipped`. `custom:plan-dispatch` publishes the same as `vars.dispatched` and
+`vars.dispatchOutcome`, which `templates/program/summary.md` renders.
 
 ## Routing rules
 
-- Edges are evaluated in file order; the first `when` that is truthy wins; otherwise the
-  first unconditional edge (validation rejects more than one on the built‑in node types);
-  otherwise the run fails with `WORKFLOW_INVALID`.
-- Decision/gate nodes expose their choice as `choice`; write `when: "choice == 'x'"`, where
-  `x` is the option's **id** and never its label (see Options below).
-- Any node may have conditional edges (e.g. `agent` → branch on
-  `steps.build.result.data.stopReason` or `artifacts.spec.data.risk`).
-- Loops in the *graph* (an edge pointing backwards) are allowed and are how `ai-sdlc`
-  retries `build`; bound them with vars and a `set` node. `loop` *nodes* are for
-  repeating a whole sub‑graph as isolated child runs.
+1. Edges are evaluated in file order. The first truthy `when` wins; otherwise the first
+   unconditional edge; otherwise the run fails with `WORKFLOW_INVALID`. Validation rejects more
+   than one unconditional edge on built-in node types.
+2. Decision and gate nodes expose `choice`. Write `when: "choice == 'x'"`, where `x` is the
+   option's **id**, never its label.
+3. Any node may have conditional edges, for example on `steps.build.result.data.stopReason` or
+   `artifacts.spec.data.risk`.
+4. Back-edges are allowed; `ai-sdlc` retries `build` that way. Bound them with vars and a `set`
+   node. Use a `loop` node to repeat a whole sub-graph as isolated child runs.
 
 ## Options (`decision` and `gate`)
 
-An option is either a bare word or a record. The two forms may be mixed in one list.
+An option is a bare word or a record. You can mix both in one list.
 
 ```yaml
   ship-it:
     type: gate
     question: "Ship {{ workItem.slug }}?"
     options:
-      - approve                        # the short form: id and label are the same word
+      - approve                        # short form: id and label are the same word
       - id: reject
         label: "Send back"
         consequence: "The build runs again from the spec."
@@ -198,40 +191,34 @@ An option is either a bare word or a record. The two forms may be mixed in one l
         destructive: true
 ```
 
-| field | meaning |
+| Field | Meaning |
 | --- | --- |
-| `id` | what the answer *is*. Compared by `defaultOption`, `autoOption` and every `when: "choice == '<id>'"` edge, and what `human.answered` records |
-| `label` | the words a person reads. Reword it freely: no edge and no recorded answer depends on it |
-| `consequence` | one clause on what choosing this does. The desktop app shows it under the label |
-| `destructive` | marks the choice a UI must not make easy to hit by accident — safe choices sort first, then destructive choices; the first nine get number keys. If all choices are destructive, the first still gets `1`, although none is selected by default. The stronger design intent remains a verification item in the [historical review reconciliation](archive/Current_State/addenda/2026-10-01-main-reconciliation.md) |
+| `id` | What the answer is. Used by `defaultOption`, `autoOption`, `when` edges and `human.answered`. |
+| `label` | The words a person reads. Change it freely. |
+| `consequence` | One clause on what the choice does. The app shows it under the label. |
+| `destructive` | Safe choices sort first, then destructive ones. The first nine get number keys. If all are destructive, the first still gets `1`, but none is preselected. |
 
-`approve` on its own means `{ id: approve, label: approve }`, so every workflow written
-before options had fields keeps working unchanged and needs no migration. A `gate` with no
-`options` still defaults to approve / reject.
+`approve` alone means `{ id: approve, label: approve }`, so older workflows need no change. A
+`gate` with no `options` defaults to approve / reject.
 
 ## Human gates
 
-`gate` nodes and `decision` nodes with `source: { kind: human }` go through the configured
-`humanInput` channel (`orca.config.yaml`):
+`gate` nodes and `decision` nodes with `source: { kind: human }` use the `humanInput` channel in
+`orca.config.yaml`:
 
-- `pause` (default): the run is parked — `human.requested`, `step.waiting`, `run.paused` — and
-  the process exits with code 3, printing the request id. Parents park with their children, so a
-  gate inside a work item's `ai-sdlc` run pauses the whole program run. `orca answer <requestId>
-  <option>` (any process with access to the store) appends `human.answered`, resumes the topmost
-  paused run and re‑attaches to the same child runs; the gate is re‑attempted and picks the
-  recorded answer up. `orca answer` with no arguments lists open questions; `orca status <runId>`
-  shows them too. Agent `ask` permissions cannot be parked and are cancelled in this mode.
-- `cli`: prompt on the terminal running ORCA.
-- `auto`: pick the first option (or `option:`) — demos and tests. An agent `ask` permission is
-  *refused* in this mode rather than auto‑allowed, unless `option:` happens to name one of the
-  ids the agent offered: a permission request's options are the agent's own and the first of
-  them is conventionally "allow once", so taking it would undo the policy that asked.
-- Inside an ACP host (`orca acp`) gates are forwarded as `session/request_permission`.
+| Channel | Behaviour |
+| --- | --- |
+| `pause` (default) | The run parks (`human.requested`, `step.waiting`, `run.paused`) and the process exits with code 3, printing the request id. Parents park with their children. `orca answer <requestId> <option>` from any process with store access appends `human.answered`, resumes the topmost run and re-attaches to the same children. `orca answer` alone lists open questions; `orca status <runId>` shows them too. |
+| `cli` | Prompts on the terminal running ORCA. |
+| `auto` | Picks the first option, or `option:`. For demos and tests. |
+| ACP host (`orca acp`) | Gates are forwarded as `session/request_permission`. |
+
+Agent `ask` permissions cannot be parked; see [Unanswerable asks](#unanswerable-asks).
 
 ## Permissions
 
-Every `session/request_permission` an agent raises is decided by that agent's policy in
-`orca.config.yaml` — `default`, plus an ordered list of `rules`, first match wins:
+Each `session/request_permission` is decided by the agent's policy in `orca.config.yaml`: a
+`default` and an ordered list of `rules`. First match wins.
 
 ```yaml
     permissions:
@@ -242,22 +229,22 @@ Every `session/request_permission` an agent raises is decided by that agent's po
         - { match: { kind: read, path: config/keys.env }, decision: deny }
 ```
 
-A `match` may name a tool `kind`, a `titlePattern` (a regular expression over the tool call
-title), an exact `path`, a `pathPrefix`, and a `scope` — `workspace` when every location of
-the call is inside the run's workspace, `outside-workspace` when any of them is not. Paths
-are matched both as written and workspace‑relative, so a rule survives the next git worktree.
-The `decision` is `allow`, `deny` or `ask`.
+A `match` can name:
 
-**An agent that declares no `permissions:`, or declares one without a `default:`, gets a
-conservative policy** (#140): reads,
-searches, edits, deletes and moves *inside the workspace* are allowed, and everything else —
-`execute` anywhere, the network, any path outside the workspace — is `ask`. `execute` is asked
-about wherever it runs because ORCA sees a shell command only as the permission title: the
-agents that matter run commands in their own process rather than through ACP's `terminal`, so
-there is nothing to scope by, and an agent that may run any command may do anything at all.
+- `kind`, the tool kind;
+- `titlePattern`, a regular expression over the tool call title;
+- `path` (exact) or `pathPrefix`. Paths match as written and relative to the workspace, so a
+  rule survives a new git worktree;
+- `scope`: `workspace` when every location is inside the run's workspace, `outside-workspace`
+  when any is not.
 
-This is a property of the agent, not of how the run was launched — the same config behaves
-the same way attended or not. Opt out in one explicit line, which is right for a sandbox:
+`decision` is `allow`, `deny` or `ask`.
+
+**Default policy (#140).** An agent with no `permissions:`, or with no `default:`, may read,
+search, edit, delete and move inside the workspace. Everything else is `ask`: `execute`
+anywhere, the network, any path outside. ORCA sees a shell command only as a title, so it cannot
+scope `execute`. This depends on the agent's config, not on how the run was launched. For a
+sandbox, opt out in one line:
 
 ```yaml
     permissions: { default: allow }
@@ -265,85 +252,68 @@ the same way attended or not. Opt out in one explicit line, which is right for a
 
 ### The three layers
 
-A permission is decided against three rule lists concatenated in this order, first match wins:
+Rules are checked in this order; first match wins:
 
-1. **your `rules:`**, exactly as `orca.config.yaml` spells them out;
-2. **`orca.permissions.json`**, the sidecar "allow always" and "reject always" write to;
-3. **the defaults** — the in‑workspace allows above, plus `think` — *only if you left
-   `default:` out*.
+1. your `rules:` in `orca.config.yaml`;
+2. `orca.permissions.json`, the sidecar that "allow always" and "reject always" write to;
+3. the defaults (the in-workspace allows above, plus `think`), **only if you left `default:`
+   out**.
 
-Then `default:` (`ask` when you left it out) decides anything none of them matched.
+Then `default:` (`ask` if omitted) decides anything unmatched.
 
-So a hand‑written `deny` beats everything, a recorded `reject_always` beats the default allow
-that made the prompt appear, and nothing a machine wrote can undo a rule you wrote (ADR 0009).
-
-**Writing `default:` opts out of the third layer entirely** — `ask` just as much as `allow`.
-`permissions: { default: ask }` with no rules means what it says: ask about everything,
-including reads inside the workspace. That is not the same as leaving `permissions:` off, and
-it is the line to write when you want an agent on a short leash. `default: allow` is the other
-end and is right for a sandbox. Leave `default:` out and you get the table above.
-
-Spelling the default rules out in your own `rules:` is therefore not a way to get them back
-unchanged: it moves them *ahead* of the sidecar, where a recorded `reject_always` can no longer
-reach them. `config.get` labels every effective rule with the layer it came from (`config`,
-`permissions`, `default`), so the Config surface shows which is which.
-
-Two things about the sidecar are not yours to choose. An `allow` there that says nothing about
-what it allows — no `kind`, or a kind and nothing that narrows it, or an `execute` without a
-`titlePattern` — is ignored with a warning: ORCA only ever writes scoped grants, so a wildcard
-in that file is the shape of an agent's work. Write a wildcard in `orca.config.yaml`, where it
-still applies. And a sidecar that cannot be read makes every `allow` decided after it an `ask`
-until it is repaired, because the `deny` it may hold would otherwise be skipped.
+- A hand-written `deny` beats everything. Nothing a machine wrote can undo a rule you wrote
+  (ADR 0009).
+- **Writing `default:` turns off layer 3**, whether it is `ask` or `allow`.
+  `permissions: { default: ask }` with no rules asks about everything, workspace reads included.
+- Copying the defaults into your `rules:` does not restore them unchanged: it moves them ahead of
+  the sidecar, where a recorded `reject_always` cannot reach them.
+- `config.get` labels each effective rule with its layer (`config`, `permissions`, `default`).
+- A sidecar `allow` that does not narrow anything (no `kind`; a kind and nothing else; an
+  `execute` without `titlePattern`) is ignored with a warning. ORCA writes only scoped grants.
+  Put wildcards in `orca.config.yaml`.
+- An unreadable sidecar turns every later `allow` into `ask` until it is fixed, so its `deny`
+  rules are never skipped.
 
 ### ORCA's own files
 
-Ahead of all three layers, and beyond the reach of any of them, an agent may not edit, write,
-move or delete the config file, `orca.permissions.json` or the store (`.orca`, or your
-`storeDir`), and may not even read `auth/` or the store's key directories. `default: allow`
-does not change that. With no `workspace:` set, these files sit in the agent's workspace, and
-an agent that could edit the sidecar could otherwise allow itself anything. The same applies to
-ORCA's `fs/read_text_file` and `fs/write_text_file` handlers. The store's `work/` and
-`program/` stay the policy's, because that is where the deliverables above go when the
-workspace holds the store — so a deliverable you put under `.orca/` belongs in one of them. An
-agent's own built‑in tools do not ask ORCA at all, so in a hardened setup keep the config
-directory out of the workspace (ADR 0009).
+Ahead of all three layers, and beyond any rule, an agent may not:
+
+- edit, write, move or delete the config file, `orca.permissions.json` or the store (`.orca`, or
+  your `storeDir`);
+- read `auth/` or the store's key directories.
+
+`default: allow` does not change this. ORCA's `fs/read_text_file` and `fs/write_text_file`
+handlers enforce it too. The store's `work/` and `program/` stay under the policy, because
+deliverables go there when the workspace holds the store. An agent's built-in tools do not ask
+ORCA, so in a hardened setup keep the config directory outside the workspace (ADR 0009).
 
 ### Calls the agent does not ask about
 
-An agent asks ORCA only when its own permission check has no answer. Once it remembers a
-grant (Claude's "always allow", a rule in its own settings), the same call never reaches ORCA
-again, so a grant you revoke in ORCA, or a rule you add, does not apply to it.
+An agent asks ORCA only when its own check has no answer. Once it remembers a grant (Claude's
+"always allow", a rule in its own settings), that call never reaches ORCA again, so revoking a
+grant in ORCA does not affect it.
 
-For the Claude and Codex ACP adapters on the daemon's own machine, ORCA can narrow that gap
-with a `PreToolUse` hook it installs in the agent's sessions (#704, #705).
+For the Claude and Codex ACP adapters on the daemon's own machine, ORCA can install a
+`PreToolUse` hook in the agent's sessions to close that gap (#704, #705).
 
-> **Experimental, not guard-qualified.** The hook is opt-in per agent: with `nativeToolHook`
-> omitted or `off` it is not installed, `on` is refused, and only `experimental` installs it. No
-> agent has qualified under ORCA's enforcement acceptance suite (#706): the support matrix
-> gives every agent tier `none`. What is known about it comes from acceptance runs against the
-> real agents driven by a scripted stand-in for the model, which show the behaviour below at
-> the pinned versions; they are diagnostic evidence, not a qualification, and say nothing about
-> an agent that tries to get around the hook. ORCA checks the adapter, the runtime and (for
-> Codex) the hook's installation **once, when the session opens**; that check is not evidence
-> that the hook keeps being run for the rest of the session, and ORCA does not check it again.
-> Calls the hook does not see, per agent, are listed in
-> [agent-hook-coverage.md](agent-hook-coverage.md). Treat it as an extra layer, not a sandbox.
+> **Experimental and not guard-qualified.** No agent has passed ORCA's enforcement acceptance
+> suite (#706); the support matrix gives every agent tier `none`. Acceptance runs against the
+> real agents with a scripted model show the behaviour below at the pinned versions. That is
+> diagnostic evidence, not a qualification, and says nothing about an agent that tries to evade
+> the hook. ORCA checks the adapter, the runtime and (for Codex) the hook's installation **once,
+> when the session opens**, and not again. [Agent hook coverage](agent-hook-coverage.md) lists
+> the calls the hook does not see. Treat it as an extra layer, not a sandbox.
 
-> **Codex: read the IPC caveat before you opt in.** When the hook runs, it decides whether
-> Codex may run a command or apply a patch. It does not see what an allowed command then
-> connects to. On the
-> same machine that can include programs listening on unix sockets, local TCP ports or named
-> pipes, such as a desktop session bus, a container engine's socket, an SSH or credential agent,
-> or a local development server. Through them, an allowed command can make something happen
-> that the hook never decided on. ORCA has not verified that Codex's sandbox keeps a command
-> away from them. When a Codex session opens with the hook, ORCA logs the potential endpoints
-> it observes from its own daemon. See [The IPC caveat](agent-hook-coverage.md#the-ipc-caveat)
-> for what that list covers. The list is a diagnostic, not a control or a proof. When it
-> finds nothing, the log says "None detected at startup; isolation has not been verified."
-> Opting in does not loosen Codex's own sandbox or approvals, and nothing here asks you to.
+> **Codex: the IPC caveat.** The hook decides whether Codex may run a command or apply a patch.
+> It does not see what an allowed command then connects to: unix sockets, local TCP ports or
+> named pipes such as a session bus, a container engine, an SSH or credential agent, or a local
+> server. ORCA has not verified that Codex's sandbox keeps commands away from them. When a Codex
+> session opens with the hook, ORCA logs the endpoints it can see from its own daemon. That list
+> is a diagnostic, not a control. When it finds none, the log says "None detected at startup;
+> isolation has not been verified." Opting in does not loosen Codex's sandbox or approvals. See
+> [the IPC caveat](agent-hook-coverage.md#the-ipc-caveat).
 
-It is opt-in, per agent, with the explicit value `experimental`, which is your acknowledgement
-of the above:
+Opt in per agent with `experimental`, which acknowledges the above:
 
 ```yaml
   - id: claude
@@ -351,127 +321,100 @@ of the above:
     nativeToolHook: experimental
 ```
 
-`nativeToolHook: on` is kept for a hook that has qualified, which none has yet, so ORCA
-refuses a session with `on` and says to use `experimental`. A config that set `on` while the
-hook was not available therefore stays inactive until you opt in again.
+| `nativeToolHook` | Result |
+| --- | --- |
+| omitted or `off` | No hook is installed and nothing is refused. |
+| `experimental` | The hook is installed, after the checks below. |
+| `on` | Refused: it is reserved for a qualified hook. Use `experimental`. |
 
-The agent then runs the hook before **every** tool call it hooks, remembered or not, and the
-hook decides the call against the same three layers as above, read fresh each time:
+With the hook, the agent runs it before every hooked tool call, remembered or not. The hook
+decides against the same three layers, read fresh each time:
 
 | ORCA decides | Claude | Codex |
 | --- | --- | --- |
-| `allow` | Nothing is added: Claude's own permission check runs as before, so ORCA never allows more than Claude would | The same: Codex's own approval and sandbox still apply |
-| `ask` | Claude asks even if it remembers a grant, and the ask comes to ORCA like any other | **Blocked.** Codex cannot pause a call for a person from a hook, and letting it run would make the ask an allow. Give the agent `rules:` for what it should run |
-| `deny` | The call does not run | The call does not run |
+| `allow` | Nothing added; Claude's own check still runs. ORCA never allows more than Claude would. | The same; Codex's approval and sandbox still apply. |
+| `ask` | Claude asks even if it remembers a grant, and the ask comes to ORCA. | **Blocked.** A Codex hook cannot pause for a person. Give the agent `rules:` for what it should run. |
+| `deny` | The call does not run. | The call does not run. |
 
-ORCA's own files, and the hook program itself, are refused to the agent's built-in tools as
-well (Codex's patches included), and a hook that cannot decide blocks the call. An allowed
-call whose working directory is outside the workspace is asked about (so, in Codex, blocked).
+- ORCA's own files and the hook program are refused to the agent's built-in tools too, Codex
+  patches included. A hook that cannot decide blocks the call.
+- An allowed call whose working directory is outside the workspace is asked about (in Codex,
+  blocked).
+- Calls the agent's own allow rules used to let through now follow ORCA's rules, so an
+  unattended run may meet new asks (or Codex blocks). Add `rules:` for them.
+- Because Codex blocks asks, the plain-language rule judge does not reach Codex
+  ([plain-language rules](plain-language-rules.md#codex)).
 
-With the hook on, calls the agent used to run by its own allow rules follow ORCA's instead,
-so an unattended run may meet asks (or, in Codex, blocks) it did not before; give the agent
-`rules:` for them. Because a Codex ask is blocked, the hook does not bring the plain-language rule judge
-to Codex: see [plain-language-rules.md](plain-language-rules.md#codex).
+**Where ORCA allows it.** ORCA refuses a hooked session anywhere it has not tested the hook:
 
-`nativeToolHook: experimental` is a promise that the agent's calls are checked, so ORCA opens the
-session only where it has tested the hook and **refuses it everywhere else**, rather than run
-it unguarded:
+1. The adapter must be `@agentclientprotocol/claude-agent-acp` or
+   `@agentclientprotocol/codex-acp` at a verified version, and must say so at startup.
+2. The runtime must be the exact build verified with that adapter. ORCA does not trust the
+   adapter's or runtime's word. It learns only which process to inspect, checks that the process
+   runs under the agent ORCA started, and hashes the image it runs against the pinned digest.
+   Nothing it is told to look at is executed. For Claude, a session-start hook records its parent
+   before `session/new` returns; for Codex, ORCA finds the Codex `app-server` among the agent's
+   processes. Verified pairs today: **adapter 0.109.1 with Claude Code 2.1.330 (linux-x64)** and
+   **codex-acp 2.9.0 with Codex 0.171.0 (linux-x64)**.
+3. The agent runs on the daemon's machine, on Linux x64.
+4. For Codex, ORCA also checks at startup that Codex lists ORCA's hook as trusted and enabled,
+   and runs the hook once as Codex will on a call it must block. It must block with a receipt
+   only ORCA's hook can sign; an exit status is not proof. The probe runs in the account's login
+   shell from the user database with `-c` (not `$SHELL`, not as a login shell), with the
+   environment of the running Codex process, `codex-path` first on `PATH`. A login shell other
+   than bash, zsh or sh is refused. A refused probe reports a fixed reason code with bounded
+   numbers, never the command's output. An agent whose own `CODEX_CONFIG` sets hooks is refused.
 
-- the adapter must be one ORCA has verified, at a verified version, and must say so when it
-  starts: `@agentclientprotocol/claude-agent-acp` or `@agentclientprotocol/codex-acp`;
-- the runtime the session actually runs (Claude Code, or Codex) must be the exact build
-  verified with that adapter. The adapter's word is not enough (an environment variable can
-  point it at another Claude Code or Codex), and so is anything the runtime says about
-  itself: ORCA only ever learns which **process** to look at, and then checks from its own
-  side that the process runs under the agent ORCA started and hashes the image it actually
-  runs, accepting only the digest pinned for the pair. Nothing ORCA is told to look at is
-  executed. The process is named differently per agent: for Claude, a session-start hook
-  records its own parent before `session/new` returns; for Codex, ORCA finds the Codex
-  `app-server` among the agent's own processes. Today the verified pairs are exactly
-  **adapter 0.109.1 with Claude Code 2.1.330 (linux-x64)** and **codex-acp 2.9.0 with Codex
-  0.171.0 (linux-x64)**;
-- the agent must run on the daemon's own machine, on Linux x64;
-- for Codex, ORCA also asks the adapter at startup and refuses unless Codex lists ORCA's hook
-  as trusted and enabled, and runs the hook once the way Codex will on a call it must block,
-  and refuses unless it blocks with a receipt only ORCA's hook can sign for that call: an exit
-  status alone is not proof. "The way Codex will" is exact: the probe runs in the shell Codex
-  runs hooks in (the account's login shell from the user database, with `-c`; not `$SHELL`,
-  and not as a login shell), with the environment ORCA reads off the running Codex process,
-  which is the one Codex gives its hooks, `codex-path` first on `PATH` included. A login shell
-  other than bash, zsh or sh is refused, since ORCA cannot say which shell Codex would use. A
-  refused probe says how it ended as a fixed reason code with bounded numbers (exit status,
-  signal, timeout, how many bytes it wrote, whether a receipt was there), never what the
-  command wrote: a login shell's profile writes there too. An agent whose own `CODEX_CONFIG`
-  already sets hooks is refused.
+Until the checks pass, the session is **held**: started, but ORCA answers none of its file reads
+or writes and forwards none of its asks. A session that fails is refused everything it asked for
+while waiting. Only the daemon's session factory installs the hook. `orca ping` with no daemon
+answering, and `orca-daemon` delegation, refuse an agent with `nativeToolHook: experimental`
+instead of starting it unhooked. Ping it through a running daemon.
 
-Each is what ORCA's acceptance tests run against the real agent, including sessions pointed
-at another Claude Code or Codex, which are refused. Without
-`nativeToolHook: experimental` (or with `off`), no hook is installed and nothing is refused.
+**MCP servers with the hook.** Claude Code would start a session's MCP servers itself, before ORCA
+checked it, and would get their commands and secrets. With the hook on, ORCA runs a Claude
+agent's `mcpServers` itself and serves them over the ACP connection (MCP over ACP):
 
-Until those checks have passed, the session is **held**: it is started, but ORCA answers none
-of its file reads or writes and puts none of its permission asks to anybody, and a session
-that fails a check is refused everything it asked for while it waited. Only the daemon's
-session factory installs the hook; `orca ping` with no daemon answering, and an `orca-daemon`
-agent's delegation, refuse an agent with `nativeToolHook: experimental` instead of starting it unhooked.
-Ping it through a running daemon instead.
+- Claude Code learns each server's name only.
+- A server starts on the first request after the session's checks pass. Each request is checked
+  again when sent.
+- Listing tools needs a live session. A tool call needs the live prompt turn, and ORCA's rules
+  decide `<server>: <tool>` (kind `other`) at that moment. A deny never reaches the server; an ask
+  goes to a person as a one-time allow.
+- Each call is decided again when it reaches the head of the server's queue. A request has 10
+  minutes from arrival for everything it waits on: admission, a person's answer, server start and
+  the policy read. One that times out starts no server.
+- Other MCP requests (resources, prompts) are refused. A request ends with its turn or deadline,
+  and the server is told it was cancelled. A request still queued at that point is never sent.
+- A server that has not answered `initialize` within 30 seconds, is still starting when the
+  session closes, or loses the agent connection, is stopped. A server that answers in a way MCP
+  does not allow fails that request; one whose answer matches no request is restarted.
+- Servers run without the variables ORCA withholds from the agent. Their errors reach the agent
+  as a code and a short, redacted message.
+- A Claude adapter without MCP over ACP is refused when the agent has servers. Codex keeps its
+  servers as configured; its runtime is checked before `session/new` hands them over.
 
-**MCP servers.** Claude Code would start a session's MCP servers itself, before ORCA has
-checked the Claude Code it runs, and would be handed their commands and environment, secrets
-included. With the hook on, ORCA runs a Claude agent's `mcpServers` instead and serves them to
-Claude Code over the ACP connection (MCP over ACP): Claude Code is told each server's name and
-nothing else, a server starts only for the first request after the session's checks pass, and
-its tools go through the hook like any other call. Passing the checks is not a standing
-permission: ORCA checks every request again when it sends it on. Listing a server's tools
-needs only a live session. A tool call needs the session's live prompt turn and ORCA's rules,
-read at that moment, deciding `<server>: <tool>` (kind `other`, the same call the hook decides):
-a deny never reaches the server, and an ask is put to a person as a one-time allow for that
-call. Each call is decided again on the policy as it is when it reaches the head of the line
-to the server, and a request's 10 minutes run from its arrival and bound everything it waits on: the session's
-admission, a person's
-answer (the ask is withdrawn when the request ends), its server's start and the policy read
-before it is sent. One that ran out while it was decided starts no server, and one that ends
-while its policy is being read does not hold up the requests behind it. Any other MCP request (resources, prompts) is refused. A request ends with
-its turn, or at that deadline, and the server is told it was cancelled; only a request ORCA
-has handed to the server can be answered; a server that has not
-answered `initialize` within 30 seconds, or is still starting when the session closes, or
-when the agent's connection is lost, is stopped, even if a write to it is stuck. A request
-still waiting in line for the server when its turn or deadline ends is never sent, and a
-server that answers in a way MCP does not allow fails that request at once; one whose answer
-matches no request is stopped and started again for the next. A server
-runs without the variables ORCA withholds from the agent, and its errors reach the agent as
-a code and a short message with secret values redacted, never anything else it attached. A
-Claude adapter that does not offer MCP over ACP is refused when the agent has servers. Codex keeps its servers as configured: its
-runtime is checked before `session/new` hands them over.
+**The agent's own secrets.** A `{ secret: … }` in the agent's `env` reaches it as an environment
+variable, hook or not. An agent can print its environment if asked; ORCA's logs and errors redact
+the values. Delivery is one strategy (`ENV_SECRET_DELIVERY`), replaceable by a key store or broker.
 
-**The agent's own secrets.** A `{ secret: … }` in the agent's own `env` reaches the agent as an
-environment variable, with or without the hook, since that is how agents read their keys. An
-agent can print its environment if a tool call asks it to; ORCA's logs and errors redact the
-values. How the value is delivered is one strategy in ORCA (`ENV_SECRET_DELIVERY`), so a key
-store or broker can replace it without changing anything else.
+**What the hook does not see** ([details](agent-hook-coverage.md)): it is not an OS boundary and
+sees one call's input, not every file a command touches. In Codex, text typed into a running
+command (`write_stdin`) and hosted web search never reach it, and Codex's hook runner (not ORCA)
+lets a call through if the hook cannot run, which is why ORCA probes it at session open.
 
-What the hook does not see, said plainly (details in
-[agent-hook-coverage.md](agent-hook-coverage.md)): a hook is not an operating-system boundary;
-it sees one call's input, not every file a command goes on to touch. In Codex, text typed
-into a command that is already running (`write_stdin`) is never shown to it, and its
-hosted web search is not a local call at all; Codex's own hook runner, not ORCA, decides that
-a hook it cannot run (a broken shell, a timeout) lets the call through, which is why
-ORCA probes the hook when the session opens.
-
-Other agents (Gemini, pi) take no hook yet (#705): with `nativeToolHook: experimental` they are
-refused; without it, ORCA decides only what they ask about.
-[agent-hook-coverage.md](agent-hook-coverage.md) lists, for each qualified agent and
-version, which calls reach ORCA and which the agent runs on its own. `orca agents` shows an
-advisory, not a guard: the known settings it can see in an agent's command line and
-environment that let calls run without asking ORCA (for Gemini CLI today: YOLO or auto-edit
-in a trusted workspace, allowed-tools and policy flags, a trusted workspace, and the user's
-own Gemini home; for pi, always, because pi never asks). It reads no settings file, so an empty advisory is not proof.
+**Other agents.** Gemini and pi take no hook yet (#705). With `nativeToolHook: experimental` they
+are refused; without it, ORCA decides only what they ask about. `orca agents` shows an advisory
+(not a guard) of settings it sees in an agent's command line and environment that let calls skip
+ORCA: for Gemini CLI, YOLO or auto-edit in a trusted workspace, allowed-tools and policy flags, a
+trusted workspace, the user's own Gemini home; for pi, always, because pi never asks. It reads no
+settings files, so an empty advisory proves nothing.
 
 #### Codex through ORCA's gate (`codexExecGate`, experimental, refused for now)
 
-A second route for Codex, separate from the hook (#1026): Codex would run every command, every
-byte typed into a running command, every patch and every file request through ORCA's gate in
-its executor path, into an executor in namespaces ORCA makes and checks, with nothing to fall
-back to. It is opt-in per agent, never together with `nativeToolHook`:
+A second route for Codex, separate from the hook (#1026): every command, every byte typed into a
+running command, every patch and every file request would go through ORCA's gate into an executor
+in namespaces ORCA creates and checks. Opt in per agent, never with `nativeToolHook`:
 
 ```yaml
   - id: codex
@@ -480,60 +423,45 @@ back to. It is opt-in per agent, never together with `nativeToolHook`:
 ```
 
 **Every session that asks for it is refused today**, before the agent starts, with each reason
-ORCA found, numbered. Nothing falls back to the hook or to running Codex without the gate:
-remove `codexExecGate` to run the agent without it. The reasons, in order:
+numbered. Nothing falls back to the hook or to running without the gate; remove `codexExecGate`
+to run the agent without it. Reasons, in order:
 
-- **Layout.** ORCA's config directory, its store, and the directory of a config file loaded
-  with `--config` (both where it is named and, for a link, where it leads) must be outside every directory the agent may write (the workspace and any
-  additional directory), and none of those may be inside them, compared by resolved path. The
-  default layout, where the config directory is the workspace, is refused: set `workspace:` to a
-  directory outside the config directory. A single file in a directory a command can write
-  cannot be kept from it, so ORCA keeps the whole directory apart.
-- **Host.** Linux x64, the system's own bubblewrap and `unshare`, and no `/etc/codex` (host-wide
-  Codex configuration can override or add to the settings ORCA would give Codex; an
-  administrator-configured host is a separate configuration).
-- **The closed executor.** What it still cannot close: a named pipe a program outside reads,
-  what a command leaves in its writable directories, and that the filter in place is not read
-  back. These are stated, not probed; admission starts nothing. Whether a host lets ORCA make
-  the closed executor at all is checked by a separate probe (`tools/codex-exec-host-probe.mjs`).
-- **Wiring.** ORCA does not start Codex on this route yet.
+1. **Layout.** ORCA's config directory, its store, and the directory of a `--config` file (where
+   named and, for a link, where it leads) must be outside every directory the agent may write,
+   and none of those may be inside them, by resolved path. The default layout (config directory
+   is the workspace) is refused: set `workspace:` outside the config directory.
+2. **Host.** Linux x64, the system's bubblewrap and `unshare`, and no `/etc/codex`.
+3. **The closed executor.** Stated gaps, not probed: a named pipe a program outside reads, what a
+   command leaves in writable directories, and that the filter in place is not read back. A
+   separate probe (`tools/codex-exec-host-probe.mjs`) checks whether a host can create the
+   executor.
+4. **Wiring.** ORCA does not start Codex on this route yet.
 
 The route claims no support tier.
 
-An `ask` is routed to the `humanInput` channel above, or upstream when ORCA runs as an ACP
-agent. **An `ask` nobody can answer is refused, never parked**: a permission cannot outlive
-the agent session that raised it, so `pause` cancels it, `auto` refuses it, and either way
-the agent is told `cancelled` and the *tool call* fails while the run carries on. The
-`agent.permission` event records which it was (`ask:allow`, `ask:deny`, `ask:cancelled`,
-`ask:no-answerer`).
+### Unanswerable asks
+
+An `ask` goes to the `humanInput` channel, or upstream when ORCA runs as an ACP agent. **An ask
+nobody can answer is refused, never parked**: a permission cannot outlive its session. `pause`
+cancels it; `auto` refuses it, unless `option:` names one of the agent's own option ids (the
+agent's first option is usually "allow once", so taking it would defeat the policy). Either way
+the agent is told `cancelled`, the tool call fails, and the run continues. The `agent.permission`
+event records `ask:allow`, `ask:deny`, `ask:cancelled` or `ask:no-answerer`.
 
 ## Completion policies (agent steps)
 
-- `mode: turn-end` (default): wait for the agent's prompt turn to finish, then collect.
-- `mode: artifact-present`: poll the host while the turn runs and cancel the turn as soon
-  as all **required** files exist (useful for chatty agents). Optional deliverables are not
-  watched, so a step whose deliverables are all `required: false` behaves like `turn-end`
-  (`orca validate` warns about that combination). The poll asks for all watched paths in a
-  single host round trip, roughly every 1.5 s, and never starts a check while the previous
-  one is still in flight — a slow host is simply polled less often (up to 30 s apart).
-- `maxFollowUps`: how many "your deliverable is missing/invalid" follow‑ups to send in the
-  same session before failing the attempt.
-- `maxAttempts`: whole‑step retries (fresh session each time). Any node type can set
-  `maxAttempts` directly on the node; for an agent node the node‑level value wins over
-  `completion.maxAttempts`. A step is only retried when its executor reports the failure
-  as retryable, and only when the failed attempt cannot have acted outside ORCA: an agent step
-  that already sent the agent a prompt is not retried automatically (it waits for a
-  [side-effect review](recovery.md#side-effect-review)), so for an agent node `maxAttempts`
-  covers failures before the first prompt, such as the agent failing to start.
-- `timeoutMs`: per‑turn wall clock (defaults to the agent's `turnTimeoutMs`).
-  When it elapses ORCA sends `session/cancel`; an agent that does not end the turn within
-  its `cancelGraceMs` (default 10s) is killed and the step fails with `AGENT_TRANSPORT`.
+| Field | Meaning |
+| --- | --- |
+| `mode: turn-end` (default) | Wait for the prompt turn to end, then collect. |
+| `mode: artifact-present` | Poll while the turn runs and cancel it once all **required** files exist. Optional files are not watched, so all-optional deliverables behave like `turn-end` (`orca validate` warns). One host round trip per poll, about every 1.5 s, never overlapping; a slow host is polled less often, up to 30 s apart. |
+| `maxFollowUps` | "Your deliverable is missing or invalid" follow-ups in the same session before the attempt fails. |
+| `maxAttempts` | Whole-step retries with a fresh session. Any node can set it; on an agent node the node-level value wins over `completion.maxAttempts`. A step is retried only for a retryable failure that cannot have acted outside ORCA. An agent step that already sent a prompt is not retried; it waits for a [side-effect review](recovery.md#side-effect-review). So for agent nodes, `maxAttempts` covers failures before the first prompt. |
+| `timeoutMs` | Per-turn wall clock (default: the agent's `turnTimeoutMs`). ORCA then sends `session/cancel`. An agent that does not end the turn within `cancelGraceMs` (default 10 s) is killed and the step fails with `AGENT_TRANSPORT`. |
 
 ## Agent session caps
 
-Nothing limits how many agent sessions a daemon opens unless you say so: `parallel`
-concurrency and plan dispatch concurrency shape one run or one plan, and two runs can each
-fan out. Three optional caps in `orca.config.yaml` bound the whole daemon (#873):
+Nothing limits how many sessions a daemon opens unless you set a cap. Three optional caps bound
+the whole daemon (#873):
 
 ```yaml
 limits:
@@ -545,63 +473,41 @@ agents:
   - { id: claude, command: claude-code-acp, maxSessions: 2 }        # one provider/account
 ```
 
-- **The default is unlimited.** A cap applies only when it is written; none is derived
-  from the machine's cores or memory. Each must be a positive integer.
-- A step takes one slot from every cap that applies to it when it opens an agent session.
-  The cap bounds live agent processes, so the slot comes back only once the session's
-  process is confirmed gone - after the step, at the end of the run for a `per-run` session
-  (which holds its slot for the whole run), after a failed open (once the process it spawned
-  has exited, even if cleanup gave up waiting), or after the agent's
-  connection drops and ORCA has cleaned the process up. A queued open never starts beside a
-  process that is still shutting down.
-- Runs are still admitted at once. A step that cannot have a slot waits *before* it spawns
-  anything: `step.waiting` with `on: agent-slot` and a detail such as
-  `waiting for an agent slot: 3 of 3 in use on host box-b`. The run shows as blocked, the
-  timeline shows the reason, and `orca plan explain <slug>` lists it for a dispatched item.
-  Cancelling the run takes the step out of the queue; restarting the daemon loses nothing,
-  because a waiting step never opened a session.
-- Waiters for the same cap go in order: steps in a plan by plan priority, other steps by
-  age, and the two sides by age. A step bound for another host or agent is not held up by a
-  full one.
-- Caps are read from the current configuration each time, so applying an edit that raises
-  one lets waiting steps go at once.
-- A `per-run` agent keeps its slot until its run ends, and a run cannot move on while one of
-  its own steps waits. So when a cap is full only of `per-run` sessions of the waiting step's
-  **own** run (two `per-run` agents in one run under a daemon cap of one), no slot can ever
-  come back: that step fails at once with `CONFIG_INVALID`, naming the cap and the agents
-  holding it. Raise the cap or make those agents `per-step`.
-- When the slots in the way are pinned by runs *above* the step, or by other runs whose own
-  children wait on the queue, the wait may never end - but not provably (a `parallel` with
-  `join: any` can finish another way and cancel the waiting branch). Those steps are never
-  failed as impossible: their wait reason adds "it may never be granted", and
-  `limits.agentSlotWaitMs`, when you set it, fails any wait longer than that with
-  `STEP_TIMEOUT`. With no deadline set, a long queue is never cut off. A session already
-  being torn down never counts as stuck.
-- A delegating agent (`type: orca-daemon`) is also held to its **remote daemon's** cap
-  (#884): that daemon's own `limits.maxAgentSessions`, as its `hello` reports it at each
-  delegated session. This daemon never holds more delegated sessions open to one remote than
-  that cap; the rest wait here with a detail such as
-  `waiting for an agent slot: 2 of 2 in use on remote build-box (its limits.maxAgentSessions)`.
-  A remote with no cap is unlimited. Until a remote has answered once since this daemon
-  started, its cap is taken to be 1, so a fan-out never runs ahead of a limit nobody has read
-  yet. The remote enforces its cap itself too, which is what bounds several parents that
-  share it: their steps beyond it wait there.
-- A slot whose agent process exit cannot be confirmed stays held - the process may still be
-  running - and `agents.list` reports it as `teardownUnconfirmed`, with a warning in the log.
-- A cancel always wins: a step cancelled while waiting, or after its slot was granted but
-  before its session opened, spawns nothing and gives the slot back.
-- `hello` reports the daemon-wide cap, sessions open and queue depth; `agents.list` adds the
-  per-agent and per-host caps and use (optional fields; older clients ignore them).
+1. **Unlimited by default.** A cap applies only when written, as a positive integer.
+2. **Slots.** Opening a session takes one slot from every cap that applies. The slot returns only
+   once the agent process is confirmed gone: after the step, at the end of the run for `per-run`
+   sessions, after a failed open once its process exited, or after a dropped connection is
+   cleaned up. A queued open never starts beside a process still shutting down.
+3. **Waiting.** Runs are admitted at once. A step without a slot waits before spawning anything,
+   with `step.waiting`, `on: agent-slot` and a detail such as
+   `waiting for an agent slot: 3 of 3 in use on host box-b`. `orca plan explain <slug>` shows it.
+   Cancelling removes the step from the queue. A daemon restart loses nothing.
+4. **Order.** Plan steps by plan priority, others by age, the two sides by age. A step for a
+   different host or agent is not held up by a full one.
+5. **Live config.** Caps are re-read each time, so raising one releases waiters at once.
+6. **Impossible waits fail.** When a cap is full only of `per-run` sessions of the waiting step's
+   own run, no slot can return. The step fails at once with `CONFIG_INVALID`, naming the cap and
+   agents. Raise the cap or make those agents `per-step`.
+7. **Possibly endless waits do not fail.** When slots are held by runs above the step, or by runs
+   whose children wait in the queue, the wait reason adds "it may never be granted". Only
+   `limits.agentSlotWaitMs`, if set, fails such a wait, with `STEP_TIMEOUT`.
+8. **Remote caps (#884).** A `type: orca-daemon` agent is also held to its remote daemon's
+   `limits.maxAgentSessions`, as its `hello` reports it. Until a remote has answered once since
+   startup, its cap is taken as 1. The remote also enforces its cap, which bounds several parents.
+9. **Unconfirmed exits.** A slot whose process exit cannot be confirmed stays held; `agents.list`
+   reports `teardownUnconfirmed` and the log warns.
+10. **Cancel wins.** A step cancelled while waiting, or after getting a slot but before opening,
+    spawns nothing and returns the slot.
+11. **Reporting.** `hello` reports the daemon cap, open sessions and queue depth. `agents.list`
+    adds per-agent and per-host caps and use.
 
 ## Delegating steps to another daemon
 
-An agent of `type: orca-daemon` does not start a process: it hands each of its steps to
-another ORCA daemon, which runs a named workflow there as one of its own runs (#883). The
-remote is reached over SSH with the same tunnel the desktop app's SSH profiles use (#874):
-typed fields only, no ssh config file read. A remote takes delegated steps only once it is
-enrolled, and only over the host keys and with the credential enrollment recorded.
-[Running across machines](MULTI-MACHINE.md) compares this with SSH-hosted agents and the
-app watching several daemons, with a worked worker and parent config.
+An agent of `type: orca-daemon` starts no process. It hands each step to another ORCA daemon,
+which runs a named workflow as one of its own runs (#883). The remote is reached over SSH through
+the same tunnel as the app's SSH profiles (#874), with typed fields only and no ssh config file. A
+remote takes delegated steps only once enrolled, and only over the enrolled host keys with the
+enrolled credential. [Running across machines](MULTI-MACHINE.md) compares the options.
 
 ```yaml
 remotes:
@@ -620,8 +526,7 @@ agents:
     roles: [builder]
 ```
 
-One-time setup: enroll the remote. With no credential saved for it, enrollment has the
-remote's own ORCA CLI issue one over the same verified ssh:
+### Enrolling a remote
 
 ```sh
 # on build-box: its host key's fingerprint
@@ -630,41 +535,41 @@ ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
 orca remote enroll build-box --host-key SHA256:...    # plus --jump-host-key for a jump host
 ```
 
-The remote runs `<serverCommand> auth issue delegate-<this workspace id> --preset client
---workflow-scope <each workflow this config's agents delegate there>` (with `--config
-<serverConfig>` when set): a credential that may start only those workflows and see only the
-runs it started. Enrollment checks it like any other and saves it in its own file,
-`auth/remotes/<id>.<credential id>.token`, readable only by this user; the enrollment record
-names that file. Enrolling again reuses it while the route and host keys are unchanged.
-`orca remote enroll <id> --issue` replaces it. The ssh login must be able to run that CLI
-(`remotes[].serverCommand`, default `orca`).
+1. **Host keys.** Enrollment trusts a key only if it is pinned in
+   `auth/remotes/<id>.known_hosts` (`.jump` for a jump host) or matches a fingerprint you give.
+   Any other key is refused before anything is sent.
+2. **Credential.** With none saved, the remote's own CLI issues one over the verified ssh:
+   `<serverCommand> auth issue delegate-<this workspace id> --preset client --workflow-scope
+   <each delegated workflow>` (plus `--config <serverConfig>` when set). It may start only those
+   workflows and see only its own runs. It is saved as `auth/remotes/<id>.<credential id>.token`,
+   readable only by this user. Enrolling again reuses it while route and host keys are unchanged;
+   `orca remote enroll <id> --issue` replaces it. The ssh login must be able to run
+   `remotes[].serverCommand` (default `orca`).
+3. **Checks.** Before saving, enrollment checks that the remote takes delegated runs and that the
+   credential can start every delegated workflow. An issued credential must be scoped to exactly
+   those workflows and its own runs; one that no longer fits is replaced.
+4. **Record.** Enrollment pins the keys and writes `auth/remotes/<id>.json` last, naming the
+   remote's workspace, principal and credential id (never the secret). A failed or interrupted
+   enrollment leaves the previous one in use.
 
-Before anything is saved, enrollment checks what the credential may actually do there: the
-remote must take delegated runs, and the credential must be able to start every workflow this
-config delegates to it. An issued one must be scoped to exactly those workflows and to its own
-runs; one that no longer fits (the config now delegates other workflows) is replaced.
+Rules around enrollment:
 
-The enrollment record is written last, so an enrollment that fails or is cut off at any step
-leaves the previous one in use. Only one enrollment of a remote runs at a time
-(`auth/remotes/<id>.json.lock`; a lock left by a process that is gone is taken over), and none
-runs while delegations to that remote are still in progress, since a new enrollment would
-strand them. The other way round, a delegated step that starts while its remote is being
-enrolled waits for the enrollment to finish before it sends anything; if the enrollment
-replaced the record it was about to use, the step is refused with nothing sent and can be
-retried. Each file enrollment writes is flushed together with its directory, so the order holds
-across a power loss. Windows cannot flush a directory, so there enrollment does not issue
-credentials: save one by hand, as below.
+- One enrollment per remote at a time (`auth/remotes/<id>.json.lock`; a lock from a dead process
+  is taken over). None runs while delegations to that remote are in progress.
+- A delegated step that starts during an enrollment waits for it. If the record it was about to
+  use was replaced, the step is refused with nothing sent and can be retried.
+- Each file is flushed with its directory, so the order survives a power loss. Windows cannot
+  flush a directory, so there enrollment does not issue credentials; save one by hand.
+- Every issued credential has a unique label and is listed in
+  `auth/remotes/<id>.json.pending-revoke` before the request and before a newer enrollment
+  replaces it. A listed credential is revoked only on the daemon that issued it, over the same
+  route and keys, once that daemon lists the label. Anything that cannot be proven or revoked
+  stays listed with a reason and a warning; the next enrollment retries. Otherwise run
+  `orca auth revoke <credential id>` on that daemon and remove the entry.
+- Enroll again after replacing the credential, or after the remote's workspace or host keys
+  change on purpose (delete the old `known_hosts` file first for new keys).
 
-Every credential enrollment issues carries a label unique to that request, and is listed in
-`auth/remotes/<id>.json.pending-revoke` before the request is sent and again before a newer
-enrollment replaces it. A listed credential is revoked only on the daemon that issued it: over
-the same route and host keys, at the same workspace, and only once that daemon's own credential
-list shows the label. Anything that cannot be proven or revoked yet (another daemon issued it,
-a delegation still uses it, or the request never arrived) stays listed with the reason and a
-warning. The next enrollment retries; otherwise run `orca auth revoke <credential id>` on the
-daemon that issued it and remove the entry.
-
-To use a credential issued by hand instead, save it first and enroll as above:
+To use a hand-issued credential, save it, then enroll as above:
 
 ```sh
 # on build-box, in the remote daemon's workspace
@@ -673,114 +578,71 @@ orca auth issue parent-daemon --preset client --json > build-box.token
 install -m 600 build-box.token auth/remotes/build-box.token   # or set remotes[].credentialFile
 ```
 
-`orca remote enroll` trusts a host key only when it is already pinned in
-`auth/remotes/<id>.known_hosts` (`.jump` for the jump host) or matches a fingerprint you give.
-A host that presents any other key is refused before anything, the credential included, is
-sent to it. Enrollment then pins the keys, checks the credential, and records in
-`auth/remotes/<id>.json` the workspace and principal the remote daemon names and the
-credential's id (never the secret). From then on a delegated step:
+From then on, a delegated step opens SSH trusting only the enrolled keys, sends the bearer only if
+the credential file still holds the enrolled credential, and admits nothing unless the remote names
+the enrolled workspace and principal.
 
-- opens SSH trusting only the enrolled keys; a changed or missing key refuses the step before
-  any byte reaches the remote;
-- sends the bearer only if the credential file still holds the enrolled credential;
-- refuses before admitting anything unless the remote daemon names the enrolled workspace and
-  principal, and binds the admission to them.
+### How a delegated step runs
 
-Enroll again after replacing the credential, or after the remote's workspace or host keys
-change on purpose (remove the old `known_hosts` file first for new host keys).
-
-- **The step's task becomes a remote run, once.** The step's rendered prompt (without ORCA's
-  deliverable instructions) is passed as the remote workflow's `prompt` variable, and the run
-  is admitted with `runs.admit` under a key derived from this run and the step's first
-  attempt. Before anything is sent, a receipt is written under the store's `delegations/`,
-  bound to the enrollment and to the remote target and workflow: after a re-enrollment or a
-  retarget, an earlier delegation's receipt is never acted on (its step is refused instead).
-  A retried step, or this daemon after a restart, reads the receipt: it sends the same key
-  again while the answer is unknown (the remote replays it), follows a run that was admitted
-  (and brings back the artifacts of one that already succeeded: a succeeded run stays the
-  step's result across its retries), and starts new remote work only once the earlier run is
-  known to have ended without success, or known never to have been admitted.
-- **A protected value stays protected on the remote (#363).** When the task holds a value
-  this run protects (a `sensitive` launch input, or a secret value read for the run), the
-  admission names the prompt variable in `sensitiveVars` and sends each original protected
-  value the task holds in `protectedValues`, on the same authenticated admission. The remote
-  keeps the prompt as it would a declared `sensitive` input, in its encrypted execution store,
-  and redacts each value on its own wherever it appears: run views, events, notifications,
-  logs and artifact bodies it serves. An agent there that repeats the value apart from the
-  rest of the task is redacted too. The value stays in the bytes the agent wrote (its checkout
-  and the stored artifact blob), as on this daemon.
-  - Only a remote whose `hello` lists both `sensitiveVars` and `protectedValues` in
-    `admitFields` (protocol 2.11) is sent such a task. Every admission opens a connection of
-    its own, asks `hello` on it, and goes on that same connection only if the answer
-    positively names the enrolled workspace and still lists both fields; a `hello` with no
-    workspace identity is not a match. A remote that no longer lists them (a restart onto an
-    older build) is refused the step (reason `protocol`), and another workspace or none is
-    refused with `scope-changed`. If the connection breaks after the check, the admission is
-    not sent on another one: the attempt starts again with a new connection and a new check.
-    A remote that does not know the fields refuses the admission outright, since its
-    parameters are strict.
-  - An artifact whose body held a protected value comes back redacted. The remote's
-    `maxBytes` limit applies to the body as sent, so one that redaction makes too long is not
-    sent. The copy is checked against the size and digest the remote reports for what it
-    sent: that proves the copy arrived intact, not that the redaction was complete.
-  - Detection matches the values as they appear in the task, so a value transformed by the
-    template (encoded, split) is not recognised; keep sensitive inputs out of delegated
-    prompts where you can.
-- **The work is the remote daemon's.** It appears in that daemon's run list, owned by the
-  credential's principal, and its audit log names that principal on the admission.
-- **The remote run records where it came from.** A remote whose `hello` lists `origin` in
-  `admitFields` (protocol 2.6) records
-  this daemon's workspace id, the parent run and the step as the run's `origin` (on
-  `runs.list` and `runs.get`); its audit record of the admission names the principal and that
-  run (the origin itself stays out of the audit log). The origin is what the admitting
-  principal stated; the principal is what the remote authenticated. Only canonical ids are
-  taken, and an origin a remote secret happens to match is left off the remote's public view.
-  A remote that does not list it is delegated to without one; a step whose earlier admission
-  stated one is refused (reason `protocol`) by a remote that no longer takes it, rather than
-  replayed differently.
-- **Progress shows on the step.** Remote step milestones and the remote agents' updates
-  appear as the step's agent output.
-- **Remote gates are asked here.** A question the remote run (or a child run the remote's
-  records tie to it) opens is forwarded as a question on this step; the answer is sent back
-  to the remote. Free-text remote questions
-  are left to be answered on the remote daemon.
-- **Cancelling cancels the remote run, and never starts one.** So does the step's turn
-  timeout (`turnTimeoutMs`, 30 minutes by default; raise it for long remote work). Cancelled
-  while an admission's answer is unknown, this daemon fences the key (`admissions.fence`:
-  from then on no admission under it can start a run, however late it arrives) or, if a run
-  was already admitted, cancels it. A cancel counts as done only once the remote run is seen
-  ended; until then every later session to that remote takes it up again.
-- **A dropped connection reattaches.** The session keeps the remote run id and its place in
-  the run's log and keeps trying until the turn's deadline. Once the log shows the run ended,
-  the session reads the run's result until it gets it.
-- **Artifacts come back.** When the remote run succeeds, each of the step's `produces`
-  entries is matched to an artifact of the remote run's own succeeded steps with the same
-  `name` (or, without a name, the same `kind`). Its text is checked against the remote's
-  record (size and sha256) and written where the step collects it.
-- **Failures are typed.** `DELEGATION_REFUSED` (not retried) means the remote or the way to
-  it refused for a reason a retry cannot fix: a refused credential, an incompatible
-  protocol, a daemon that admits no runs (read-only, or an older ORCA), an unknown workflow,
-  a remote that is not enrolled, a credential other than the enrolled one, a remote that
-  names another workspace or principal, a changed or missing host key, failed SSH sign-in. `AGENT_TRANSPORT` means the remote could
-  not be reached. `DELEGATED_RUN_FAILED` means the remote run ended without success; its
-  error is in the step's error details.
+- **One remote run per task.** The rendered prompt (without ORCA's deliverable instructions) goes
+  to the remote workflow's `prompt` variable. The run is admitted with `runs.admit` under a key
+  derived from this run and the step's first attempt. A receipt is written under the store's
+  `delegations/` first, bound to the enrollment, target and workflow; after re-enrollment or
+  retargeting, an old receipt is never acted on. A retry or restart reads the receipt: it resends
+  the same key while the answer is unknown, follows an admitted run, brings back artifacts of one
+  that succeeded, and starts new work only once the earlier run is known to have failed or never
+  been admitted.
+- **Protected values stay protected (#363).** If the task holds a value this run protects (a
+  `sensitive` input or a secret read for the run), the admission names the prompt variable in
+  `sensitiveVars` and sends each value in `protectedValues`. The remote stores the prompt
+  encrypted and redacts each value in run views, events, notifications, logs and served artifact
+  bodies. The value stays in bytes the agent wrote.
+  - Only a remote whose `hello` lists both fields in `admitFields` (protocol 2.11) gets such a
+    task. Each admission opens its own connection, checks `hello` names the enrolled workspace and
+    lists both fields, and admits on that same connection. Otherwise: reason `protocol` (fields
+    missing) or `scope-changed` (other or no workspace). A broken connection restarts the
+    attempt with a new check.
+  - An artifact that held a protected value comes back redacted. The remote's `maxBytes` applies
+    to the redacted body. The copy is checked against the size and digest the remote reports;
+    that proves it arrived intact, not that redaction was complete.
+  - Detection matches values as they appear in the task. A transformed value (encoded, split) is
+    not recognised. Keep sensitive inputs out of delegated prompts where you can.
+- **The work belongs to the remote daemon.** It shows in that daemon's run list, owned by the
+  credential's principal.
+- **Origin.** A remote whose `hello` lists `origin` in `admitFields` (protocol 2.6) records this
+  daemon's workspace id, parent run and step as the run's `origin`. The origin is what the
+  principal stated; the principal is what the remote authenticated. A step whose earlier
+  admission stated an origin is refused (reason `protocol`) by a remote that no longer takes it.
+- **Progress** from the remote shows as the step's agent output.
+- **Remote gates are asked here** and answered back. Free-text remote questions are answered on
+  the remote.
+- **Cancel** cancels the remote run and never starts one. So does the turn timeout
+  (`turnTimeoutMs`, default 30 minutes). If cancelled while an admission's answer is unknown, the
+  key is fenced (`admissions.fence`) so no late admission can start a run. A cancel is done only
+  once the remote run is seen ended.
+- **Dropped connections reattach** using the stored run id and log position, until the turn's
+  deadline.
+- **Artifacts come back** when the remote run succeeds. Each `produces` entry is matched to an
+  artifact of the remote run's succeeded steps by `name` (or `kind`), checked against the
+  remote's size and sha256, and written where the step collects it.
+- **Typed failures.** `DELEGATION_REFUSED` (not retried): refused credential, incompatible
+  protocol, a daemon that admits no runs, unknown workflow, not enrolled, wrong credential, wrong
+  workspace or principal, changed host key, failed SSH sign-in. `AGENT_TRANSPORT`: unreachable.
+  `DELEGATED_RUN_FAILED`: the remote run ended without success; its error is in the step's
+  details.
+- **Not supported yet:** binary artifacts, and `secretEnv` on a delegating step.
 
 ### Working from a named git ref
 
-With `gitRef`, each remote run works from that branch or tag, named in full
-(`refs/heads/feature/login`, `refs/tags/v1.2.0`): a short name could match a branch and a tag,
-and a commit id is not accepted because a commit the remote's repository happens to hold says
-nothing about where it came from. The remote daemon checks the ref before it admits the run,
-then fetches it from its workspace's fetch remote (`workspace.fetchRemote`, default `origin`)
-and gives the run its own checkout of the commit it named, recorded as the run's
-`workspace.rootProvisioning` (`ref` and `baseCommit`). A retried or resumed run keeps that
-commit; nothing is fetched twice.
+With `gitRef`, each remote run works from that full branch or tag name (`refs/heads/feature/login`,
+`refs/tags/v1.2.0`). Short names and commit ids are refused. The remote checks the ref, fetches it
+from `workspace.fetchRemote` (default `origin`), and gives the run its own checkout, recorded as
+`workspace.rootProvisioning` (`ref`, `baseCommit`). A retried or resumed run keeps that commit.
 
-Choosing a ref replaces the remote's default checkout, so it is the remote administrator's
-decision, not the caller's: a `runs.admit` grant alone never lets a caller pick one. The remote
-names the refs it allows in `workspace.allowedRefs`, each a full ref or a prefix ending in
-`/*`, and refuses every other ref (and every ref when the list is absent or empty). It also
-needs a workspace that gives each run its own checkout:
+Choosing a ref is the remote administrator's decision. A `runs.admit` grant never lets a caller
+pick one. The remote lists allowed refs in `workspace.allowedRefs` (full refs or prefixes ending
+in `/*`); every other ref is refused, and all are refused when the list is empty. It also needs a
+workspace that gives each run its own checkout:
 
 ```yaml
 # the remote daemon's config
@@ -794,48 +656,34 @@ workspace:
   # fetchRemote: origin
 ```
 
-The remote checks the ref under exactly its name on the fetch remote (never Git's suffix
-matching) and remembers the object it names (for an annotated tag, the tag object). It then
-fetches only that ref, into a run-private ref, and refuses the run if the fetched object is
-not the one it checked. The admission keeps that object
-with its own record, so creating the run, and recovering an interrupted admission, use exactly
-it rather than looking the ref up again. A ref that moved before the run was created ends the
-admission with the failure code `GIT_REF_MOVED`, naming the ref (#956). That is final: no run
-is ever created under that idempotency key, and replaying or reconciling it answers the same,
-even if the ref moves back. The delegating step fails at once with `DELEGATION_REFUSED`, reason
-`git-ref`, and a retry of the step admits again under a new key, from where the ref is now. The
-same holds whether the move is seen before creation starts or only when provisioning fetches the
-ref. The refusal is kept with the reserved run's own write-once record, so an older worker started on
-the same store also never creates that run. If the worker cannot record the refusal, it answers
-the usual reconcilable failure instead, and the next reconcile decides again. The fetch leaves the rest of the
-repository alone: no remote-tracking refs, pruning, `FETCH_HEAD`, tags, submodules or automatic
-maintenance. Listing and fetching run
-with no prompts (no terminal, askpass or credential-manager prompt, and batch-mode SSH unless
-`core.sshCommand` is set) and a deadline (30 seconds to list, 2 minutes to fetch); a remote
-that does not answer refuses the ref. The checkout is prepared outside any agent sandbox, so
-it runs no repository hook, fsmonitor command or submodule recursion, and every configured
-filter driver is switched off: files are written as stored (a Git LFS file arrives as its
-pointer).
-
-ORCA does not push anything: the ref must already be on that remote (code sync beyond
-fetching a named ref is out of scope). A remote that cannot check the ref out (another
-workspace provider, a ref it does not allow, an unknown ref, a ref that is not a full branch
-or tag name, a fetch remote that fails or times out) fails the step with `DELEGATION_REFUSED`
-and reason `git-ref` before any run is admitted. A remote whose `hello` does not list `gitRef`
-in `admitFields` (older than protocol 2.7) is refused with reason `protocol`, never run
-without the ref.
-
-Not yet: binary artifacts.
+- **Exact ref.** The remote looks the ref up under exactly its name (never Git's suffix matching),
+  remembers the object (the tag object for an annotated tag), fetches only that ref into a
+  run-private ref, and refuses if the fetched object differs. The admission keeps that object, so
+  creating and recovering the run use it without looking the ref up again.
+- **A moved ref (#956).** If the ref moved before the run was created, admission ends with
+  `GIT_REF_MOVED`. That is final for the idempotency key, even if the ref moves back. The step
+  fails with `DELEGATION_REFUSED`, reason `git-ref`; a retry admits again under a new key. The
+  refusal is stored with the reserved run's write-once record, so an older worker never creates
+  that run. If the worker cannot record it, it answers a reconcilable failure instead.
+- **A quiet fetch.** No remote-tracking refs, pruning, `FETCH_HEAD`, tags, submodules or automatic
+  maintenance. No prompts (no terminal, askpass or credential manager; batch-mode SSH unless
+  `core.sshCommand` is set). Deadlines: 30 seconds to list, 2 minutes to fetch.
+- **A safe checkout.** Prepared outside any agent sandbox: no hooks, no fsmonitor, no submodule
+  recursion, every filter driver off. Git LFS files arrive as pointers.
+- **ORCA never pushes.** The ref must already be on the remote.
+- **Refusals.** Another workspace provider, a disallowed, unknown or short ref, or a failing fetch
+  fails the step with `DELEGATION_REFUSED`, reason `git-ref`, before admission. A remote whose
+  `hello` does not list `gitRef` in `admitFields` (before protocol 2.7) is refused with reason
+  `protocol`.
 
 ## MCP servers and skills for agent steps
 
-ORCA can pass an agent session **outbound** MCP servers (servers the *agent* talks to, given
-in ACP `session/new`) and select **skills** for it (#335). This is unrelated to ORCA's own
-**inbound** MCP interface (`orca mcp`, [mcp-operator.md](mcp-operator.md)), which lets an MCP
-client drive ORCA.
+ORCA can give an agent session **outbound** MCP servers (in ACP `session/new`) and **skills**
+(#335). This is unrelated to ORCA's **inbound** MCP interface (`orca mcp`,
+[MCP operator](mcp-operator.md)).
 
-Define each server and skill once, in a catalog in `orca.config.yaml`, then select from it at
-four scopes, each applied over the one before:
+Define each server and skill once in a catalog, then select at four scopes, each applied over the
+one before:
 
 ```yaml
 capabilities:
@@ -866,146 +714,94 @@ nodes:
       mcpServers: { enable: [db] }
 ```
 
-- A selection is `replace: [...]`, or `enable: [...]` and/or `disable: [...]`. `replace` sets
-  the whole list from that scope on and cannot be combined with the other two.
-- The config scopes (`capabilities.workspace` and `agents[].capabilities`) may also list
-  `available`: entries the agent does not get by default but a workflow or node may turn on.
-- **A workflow or node can never grant more than the config permits.** It may turn on only
-  what the workspace or agent scope enabled or listed as `available`, and an agent-scope
-  `disable` or `replace` takes that permission away again. Anything else fails before the
-  run starts, naming the field: `workflow.nodes.migrate.capabilities.mcpServers.enable[0]:
-  ... agent 'claude' is not permitted to use it`.
-- Unknown ids, an id listed twice, the same id in `enable` and `disable`, and a legacy inline
-  server named like a catalog entry are all errors at the field that caused them: the config
-  scopes when the config loads, workflow and node scopes when the workflow is validated and
-  again when a run is launched under its role overrides.
-- **Legacy `agents[].mcpServers` keep working unchanged.** Each inline server is on for its
-  agent, as if it were in the catalog and enabled at the agent scope, so a config with no
-  `capabilities` behaves exactly as before. Workflows and nodes can `disable` one by its `name`.
-- One resolver decides what a step gets, and validation, the launch preview, the run's launch
-  record and the session open all call it, so they agree. The preview lists every agent step,
-  nested loop and parallel bodies included (a nested step under its qualified id, such as
-  `review-loop::review`), with each server's and skill's id and the scope that decided it
-  (`source`), plus a skill's version and content digest - never a command, argument or
-  environment value. A nested graph runs under its workflow's scope; a `subworkflow` that
-  names another workflow runs under that workflow's own.
-- **What reaches an agent session.** The agent's own inline `mcpServers`, narrowed by any
-  scope, as configured. A catalog server selected for a step reaches that step's session
-  only when, at that session open (#337):
-  1. the run's owner holds **one** current credential with `capabilities.use` whose grant
-     covers the step's whole selected set: each server as it is defined now, on the
-     agent's host and that host's endpoint (`orca auth issue <principal> --mcp-server
-     github@local`, or `--mcp-server '*'`; the `owner` preset grants every server). Grants
-     on two credentials do not combine. A grant does not follow a server redefined to
-     another command or a host id pointed at another machine, and a revoked or expired
-     credential stops the next step, even one that would reuse a `per-run` session. The
-     decision is asked again after any wait for a session slot, immediately before
-     `session/new` hands the agent its servers, and before every prompt, so authority
-     revoked while a step waits is not used; a `per-run` session refused there is closed
-     and never handed to another step;
-  2. the server's command resolves on the **agent's host** to an executable regular file,
-     and the agent is handed that absolute path, so it starts what was checked and does
-     not search again. Over SSH that is one quiet `command -v` on that host. ORCA never
-     installs one, and never tries another host.
+### Selection rules
 
-  Otherwise the step is refused before anything starts, naming the step and the server. A
-  run with no recorded owner, or a daemon with no use decision, refuses catalog servers at
-  launch.
+- A selection is `replace: [...]`, or `enable` and/or `disable`. `replace` cannot be combined with
+  the others.
+- The config scopes (`capabilities.workspace`, `agents[].capabilities`) may list `available`:
+  off by default, but a workflow or node may turn it on.
+- **A workflow or node never grants more than the config permits.** It may enable only what the
+  workspace or agent scope enabled or made `available`; an agent-scope `disable` or `replace`
+  removes that. Anything else fails before the run, naming the field, for example
+  `workflow.nodes.migrate.capabilities.mcpServers.enable[0]: ... agent 'claude' is not permitted to use it`.
+- Unknown ids, duplicates, an id in both `enable` and `disable`, and a legacy inline server named
+  like a catalog entry are errors at the field that caused them. Config scopes are checked at
+  load; workflow and node scopes at validation and again at launch.
+- **Legacy `agents[].mcpServers` still work**, as if enabled at the agent scope. Workflows and
+  nodes can `disable` one by `name`.
+- **One resolver decides**, used by validation, the launch preview, the launch record and session
+  open. The preview lists every agent step (nested ones under qualified ids such as
+  `review-loop::review`) with each server's and skill's id and deciding scope (`source`), plus a
+  skill's version and digest. Never a command, argument or environment value. A nested graph uses
+  its workflow's scope; a `subworkflow` uses its own workflow's.
+- **Who decides.** The workspace and agent scopes are in `orca.config.yaml`, which needs config
+  authority. A role override picks another configured agent, whose ceiling then applies. The host
+  is the agent's configured `hostId`; a run cannot move it.
+- A `per-run` session is reused only by steps with the same set.
 
-  What a grant covers when a server is launched:
-  - **The executable.** A grant for named servers covers only a server whose `command` is
-    a **trusted executable** on the agent's host, checked there at every delivery: an
-    absolute path that is the file itself (no extension appended, no `PATH`), canonical
-    (no symbolic link, `.` or `..` anywhere on it), an executable regular file, and owned,
-    with every directory above it up to `/`, by root or the account the agent runs as,
-    writable by neither group nor others and carrying no ACL. So only an administrator of
-    that host, or the agent's own account, can put another program at the granted path.
-    Anything else (a file under `/tmp`, a symlinked `/bin/...`, a group-writable
-    `/usr/local`, any Windows machine, whose permissions this check cannot read) runs only
-    under `'*'`. A bare name
-    (searched on the server's literal `env.PATH`, else the agent's, else the host's) or a
-    relative path (resolved against the session's working directory, which is the run's
-    workspace) is covered only by `'*'`, and `orca auth issue` refuses to write a named
-    grant for one.
-  - **Arguments** are passed exactly as configured, and the grant pins them. ORCA does not
-    resolve them; a relative path in an argument is the server's to interpret, in the
-    session's working directory.
-  - **Environment.** The server's configured `env` is pinned by the grant, with secret
-    references read on the agent's host under `secrets.use`. Anything else the server
-    inherits comes from the agent process that starts it: the agent's configured `env` and
-    what the agent passes on. That is the agent's behaviour, not something ORCA enforces.
+### When a catalog server is delivered
 
-  The executable being there is not proof the server works: the agent starts it, over
-  ACP's stdio transport, which every ACP agent supports. Skills are delivered under the
-  same decision; see [Skills](#skills).
-- **Who decides.** The workspace and agent scopes live in `orca.config.yaml`, which only
-  config authority can change. A workflow or node can only narrow that, or turn on what the
-  agent permits. A caller's role override picks a different configured agent, and then that
-  agent's ceiling applies (an override cannot name an unconfigured agent). The host is the
-  agent's configured `hostId`: a run cannot move an agent to another host.
-- A `per-run` session is reused only by steps that resolve to the same set; a step with a
-  different set gets its own session.
-- **Availability is not permission, and ORCA does not see every MCP call.** ORCA decides
-  which servers an agent session is given and evaluates the
-  [permission requests](#permissions) the agent sends over ACP. Calls an agent makes to an
-  MCP server without asking are between the agent and that server: whether a given agent
-  asks before each MCP tool call is its own behaviour, not something ORCA enforces. Nothing
-  in a skill grants anything.
+The agent's own inline `mcpServers` are delivered as configured. A catalog server reaches a
+session only when, at that session open (#337):
+
+1. **One** current credential of the run's owner has `capabilities.use` with a grant covering the
+   step's whole set, each server as defined now, on the agent's host and endpoint
+   (`orca auth issue <principal> --mcp-server github@local`, or `--mcp-server '*'`; the `owner`
+   preset grants all). Grants on two credentials do not combine. A grant does not follow a server
+   redefined to another command or a host id moved to another machine. The decision is asked
+   again after a slot wait, right before `session/new`, and before every prompt. A `per-run`
+   session refused there is closed.
+2. The command resolves on the **agent's host** to an executable regular file, and the agent gets
+   that absolute path. Over SSH that is one `command -v`. ORCA never installs a server or tries
+   another host.
+
+Otherwise the step is refused before anything starts, naming step and server. A run with no
+recorded owner, or a daemon with no use decision, refuses catalog servers at launch.
+
+What a named grant covers:
+
+| Part | Rule |
+| --- | --- |
+| Executable | Only a **trusted executable**, checked on the agent's host at every delivery: an absolute, canonical path (no symlink, `.` or `..`, no extension appended, no `PATH`), an executable regular file, owned with every parent directory up to `/` by root or the agent's account, writable by neither group nor others, with no ACL. Anything else (under `/tmp`, a symlinked `/bin/...`, a group-writable `/usr/local`, any Windows host) needs `'*'`. Bare names and relative paths need `'*'`; `orca auth issue` refuses a named grant for them. |
+| Arguments | Passed exactly as configured and pinned by the grant. |
+| Environment | The server's `env` is pinned, with secret references read on the agent's host under `secrets.use`. Anything else is inherited from the agent process; ORCA does not control that. |
+
+A present executable does not prove the server works; the agent starts it over stdio.
+
+**Availability is not permission.** ORCA decides which servers a session gets and evaluates the
+[permission requests](#permissions) the agent sends. MCP calls an agent makes without asking are
+between it and the server. Nothing in a skill grants anything.
 
 ### Skills
 
-A skill is a directory (or a single file) on the daemon's machine. ORCA never fetches or
-installs one. Its identity is its catalog id, the author's `version` label, and a content
-digest: `sha256:` over every file's relative path, size and bytes. A symbolic link inside a
-skill is refused rather than followed. Set `digest: sha256:...` on the catalog entry to pin
-the content; a skill whose files no longer hash to the pin is refused, and the error shows
-the digest it found so you can review the change and update the pin. A run is pinned to its
-configuration, so only a skill's files could change under it: a step whose skill no longer
-hashes to what its launch recorded is refused rather than given the edited skill.
+A skill is a directory or single file on the daemon's machine. ORCA never fetches or installs one.
 
-**How a skill reaches a session (#337).** A step's selected skills travel in its prompts,
-not through any host's filesystem: every prompt the step sends starts with each skill file
-as an ACP `resource` block, its text inline, named
-`orca-skill://<id>/<file>?digest=<sha256:...>`. So no host path is involved, and a skill
-on the daemon's machine reaches an agent on an SSH host the same way.
-
-- The run's owner must hold one current credential with `capabilities.use` whose grant
-  covers the step's whole set, servers and skills together. A named skill grant pins the
-  content digest (`orca auth issue <principal> --skill review`), so an edited skill needs a
-  new grant; `--skill '*'` (and the `owner` preset) covers every skill. A wildcard is per
-  kind: `--mcp-server '*'` grants no skill, and `--skill '*'` no server.
-- The skill is read once at session open, hashed over exactly the bytes that are sent, and
-  refused if that is not what the launch recorded. The configured path is resolved to its
-  real place once, and every directory above it must be one only root or the daemon's
-  account can change (owned by one of them, writable by no one else unless sticky, like
-  `/tmp`). The walk goes through each directory's open descriptor, so a rename meanwhile
-  cannot lead it outside the skill; every file and directory is opened without following a
-  symbolic link and checked by its descriptor to be what the walk found. That walk needs a
-  Linux daemon: elsewhere only a single-file skill can be delivered, and on Windows none.
-  A step's skills share one budget, spent as they are read and never checked after: at most
-  256 KiB together, counting each file's content and the block that names it (so empty
-  files are paid for), and at most 64 files and directories together. A directory is
-  listed one entry at a time and never past what is left.
-  Every file must be UTF-8 text; a leading byte-order mark is kept in the text, so what is
-  sent is exactly the bytes the digest names.
-- The use decision is asked again before every prompt that carries the skills, so a grant
-  revoked while the step waits sends nothing.
-- The agent must say at `initialize` that it accepts embedded context
-  (`promptCapabilities.embeddedContext`). One that does not is refused right after
-  `initialize`, before `session/new` or `session/load` configures any MCP server, and the
-  step fails; a `per-run` session that could not take the skills is closed rather than kept
-  in the pool. ORCA does not fall back to leaving the skill out or pasting it in as plain
-  text.
-- **A skill is instructions, not authority.** It grants nothing: tool calls still go through
-  the agent's permission policy and ORCA's asks. ORCA delivers the skills it lists in the
-  preview and nothing else, but it cannot stop an agent from also loading skills of its own
-  (for example from the user's home directory); those are not shown as selected.
+- **Identity:** catalog id, the author's `version` label, and a content digest (`sha256:` over each
+  file's relative path, size and bytes). Symlinks inside are refused.
+- **Pinning:** set `digest: sha256:...` on the entry. A skill that no longer matches is refused,
+  and the error shows the digest found. A step whose skill changed since launch is refused.
+- **Delivery (#337):** in the prompt, not through any file system. Every prompt the step sends
+  starts with each skill file as an ACP `resource` block, inline, named
+  `orca-skill://<id>/<file>?digest=<sha256:...>`. Skills reach SSH hosts the same way.
+- **Grant:** the run owner's single credential with `capabilities.use` must cover servers and
+  skills together. A named skill grant pins the digest (`orca auth issue <principal> --skill review`),
+  so an edited skill needs a new grant. `--skill '*'` and the `owner` preset cover all skills.
+  Wildcards are per kind. The decision is asked again before every prompt.
+- **Reading:** once at session open, hashed over exactly the bytes sent. The path is resolved once;
+  every parent directory must be changeable only by root or the daemon's account (sticky
+  directories like `/tmp` are fine). The walk uses open descriptors and never follows symlinks, so
+  it needs a Linux daemon; elsewhere only single-file skills work, and none on Windows.
+- **Budget per step:** 256 KiB in total (content plus each naming block) and 64 files and
+  directories. Files must be UTF-8; a leading byte-order mark is kept.
+- **Agent support:** the agent must report `promptCapabilities.embeddedContext` at `initialize`.
+  Otherwise it is refused before `session/new` configures any MCP server, and the step fails. ORCA
+  never drops the skill or pastes it as plain text.
+- **A skill is instructions, not authority.** ORCA cannot stop an agent loading its own skills
+  (for example from the user's home); those are not shown as selected.
 
 ## Secret references
 
-An agent's `env`, or an MCP server's `env`, can name a credential instead of holding it
-(#336). Say once in `orca.config.yaml` where each credential lives and on which host, then
-refer to it by id:
+An agent's `env`, or an MCP server's `env`, can name a credential instead of holding it (#336):
 
 ```yaml
 secrets:
@@ -1023,70 +819,46 @@ agents:
         env: { GITHUB_PERSONAL_ACCESS_TOKEN: { secret: github-token } }
 ```
 
-- **Delivered only under a grant.** At every session open the daemon asks whether the
-  principal that owns the run (the root run's starter, as durably recorded) may use each
-  secret, with its provider, on the host it is bound to, from that principal's credentials
-  as they are *now*: a revoked or expired credential stops the next open. One credential
-  must cover the whole use, including the run's workflow in its scope. A credential grants
-  references with `orca auth issue <principal> --secret github-token@local` (repeatable) or
-  `--secret '*'`; the `owner` preset, which the local client's bootstrap credential uses,
-  grants every reference, and no other preset grants any. A denial fails that step before
-  anything is read, with `reason: unauthorized`. In standalone mode (no credentials file)
-  the verified OS user owns the config and its secrets outright; with `orca serve
-  --unauthenticated-loopback` every local run may use every reference. A direct `orca run`
-  with `--cwd` or `--agent`/`--model` overrides records no owner and cannot use references,
-  and `agents.ping` never starts an agent that uses one. See
-  [secret-use-authority.md](secret-use-authority.md).
-- **Only where it lives is configured, never the value.** `provider: env` reads a variable
-  from the host's environment: the daemon's own on a local host, the remote login shell's on
-  an SSH host. `provider: file` reads a file on the host whole, dropping one trailing newline;
-  the path must be absolute.
-- **A secret is only ever read on its own host.** Each definition is bound to one `host`. An
-  agent may only refer to secrets bound to the host it runs on (its `hostId`), and the config
-  does not load otherwise, naming the field: `agents[0].env.GITHUB_TOKEN: secret
-  'db-password' is bound to host 'build-box', but this agent runs on 'local'`. There is no
-  fallback: ORCA never uses a value of the same name from the daemon's environment, another
-  host, or an earlier session. A reference in a catalog MCP server is read on the host
-  of the agent it is given to, like any other in that session (#337).
-- **Read at every session open.** The value is read on the host immediately before the agent
-  process starts, and not cached, so a rotated value is used by the next session and a
-  revoked one stops working then. A missing or unreadable value refuses the step before
-  anything is spawned (`secret 'github-token' is unavailable: environment variable
-  GITHUB_TOKEN is not set on host 'local'`). A `per-run` session keeps the values it was
-  started with for its lifetime; a step that needs a fresh value needs a fresh session.
-- **Read and delivered in one step, on one connection.** A local host reads the values in
-  the daemon immediately before it starts the agent. Over SSH, the remote shell that is about
-  to start the agent reads them itself, exports them, reports them back to ORCA on that same
-  connection (for redaction and for MCP server env), and then becomes the agent: the machine
-  that read a value is always the machine the agent runs on, never a second connection to
-  something with the same host name. The remote host needs `base64` and `printenv`
-  (coreutils).
-- **Never on a command line.** Values travel through environment and shell variables only,
-  so neither machine's process list shows them.
-- **Only through a reference.** Every environment variable a secret on a host is read from
-  (`provider: env`) is removed from what each agent on that host inherits, the
-  `orca agent ping` check included. An agent gets a credential only under the variables
-  whose references name it.
-- **Never written.** Config, drafts, launch records, provenance, events and logs hold the
-  reference (`{ secret: github-token }`), never the value. As defense in depth, a value ORCA
-  read is replaced with `[REDACTED]` in every event and log line the run writes afterwards,
-  the run's parents included, in every artifact body ORCA records from then on (before it is
-  stored, hashed, parsed for structured data or handed to planning), and in every error the
-  session reports, its stderr tail included, before it is returned or written. This catches the
-  value copied verbatim, not encodings, transformations or fragments of it, and it does not
-  rewrite the files an agent leaves in its own workspace.
-- **Moving from literal values.** A literal in `env` keeps working, but it is stored in
-  `orca.config.yaml` as written, shown to anyone who can read the config, and only redacted
-  from run output where ORCA recognises it as a credential. To move one, put the value where
-  the host can read it (an environment variable of the daemon, or a file only the daemon's
-  user can read), add a `secrets` entry bound to that host, and replace the literal with
-  `{ secret: <id> }`.
+- **Delivered only under a grant.** At every session open the daemon asks whether the run's owner
+  (the root run's recorded starter) may use each secret, with its provider, on its host, from
+  their credentials as they are now. One credential must cover the whole use, the run's workflow
+  included. Grant with `orca auth issue <principal> --secret github-token@local` (repeatable) or
+  `--secret '*'`. The `owner` preset (used by the local bootstrap credential) grants all; no other
+  preset grants any. A denial fails the step before anything is read, with `reason: unauthorized`.
+  - Standalone mode (no credentials file): the verified OS user owns the config and its secrets.
+  - `orca serve --unauthenticated-loopback`: every local run may use every reference.
+  - A direct `orca run` with `--cwd` or `--agent`/`--model` records no owner and cannot use
+    references. `agents.ping` never starts an agent that uses one.
+  - See [secret use authority](secret-use-authority.md).
+- **Only the location is configured.** `provider: env` reads a variable from the host's
+  environment (the daemon's locally; the remote login shell's over SSH). `provider: file` reads an
+  absolute path whole, dropping one trailing newline.
+- **Read only on its own host.** Each secret is bound to one `host`. An agent may refer only to
+  secrets on its `hostId`, or the config fails to load, naming the field:
+  `agents[0].env.GITHUB_TOKEN: secret 'db-password' is bound to host 'build-box', but this agent runs on 'local'`.
+  There is no fallback. A catalog MCP server's reference is read on its agent's host.
+- **Read at every session open**, right before the agent starts, never cached. A missing value
+  refuses the step before anything spawns
+  (`secret 'github-token' is unavailable: environment variable GITHUB_TOKEN is not set on host 'local'`).
+  A `per-run` session keeps its values for its lifetime.
+- **One connection.** Locally the daemon reads values just before starting the agent. Over SSH the
+  remote shell reads them, exports them, reports them back on the same connection (for redaction
+  and MCP env), then becomes the agent. The remote needs `base64` and `printenv`.
+- **Never on a command line.** Values travel only through environment and shell variables.
+- **Only through a reference.** Every variable a `provider: env` secret reads is removed from what
+  agents on that host inherit, `orca agent ping` included.
+- **Never written.** Config, drafts, launch records, events and logs hold the reference, not the
+  value. A read value is also replaced with `[REDACTED]` in later events and logs of the run and
+  its parents, in artifact bodies before they are stored or parsed, and in session errors and
+  stderr tails. This catches verbatim copies only, and does not touch files in the agent's
+  workspace.
+- **Moving from literals.** A literal in `env` still works but is stored in plain text and shown
+  to config readers. Put the value where the host can read it, add a `secrets` entry, and replace
+  the literal with `{ secret: <id> }`.
 
 ### Choosing the secret at launch
 
-A workflow can let whoever starts the run pick which configured secret a step uses (#363),
-for example the deploy token of the target environment. Declare a launch input of type
-`secret` and map it to an environment variable of the step's agent with `secretEnv`:
+A workflow can let whoever starts the run choose which configured secret a step uses (#363):
 
 ```yaml
 inputSchema:
@@ -1100,82 +872,71 @@ nodes:
     secretEnv: { DEPLOY_TOKEN: deployToken }
 ```
 
-- **The launcher names a secret, never a value.** The input's value is the id of an entry in
-  `secrets` (`orca run deploy --var deployToken=prod-deploy`). Anything else, an unknown id,
-  or a secret bound to another host than the step's agent is refused before the run is
-  written, with `reason` `not-found` or `wrong-host`.
-- **Agent environment only.** The step's session gets `{ secret: <id> }` under that variable
-  and reads it like any other reference: on the agent's host, at session open, under the run
-  owner's grant, redacted from everything the run writes. The value never enters the prompt,
-  the model's context or the store; `{{ vars.deployToken }}` renders the id.
-- **The secret the launch chose.** The id is read from the launch record in the private
-  execution store, never from the run's working vars, so nothing a step sets later can point
-  a step at another secret. Steps inside the workflow's own inline graphs (loop bodies,
-  parallel branches) get the same sealed choice, whatever the working vars or a loop or
-  branch overlay say by then. A registered child workflow is launched on its own inputs,
-  checked and sealed when it starts, like any launch.
-- **A process per step.** A step with `secretEnv` always gets an agent process of its own,
-  opened for that step and closed with it, even for a `per-run` agent: it neither takes the
-  pooled session nor leaves its own for the next step. Its agent slot is held for that step
-  only. The run's pooled session, if idle, is closed first so it does not keep the slot the
-  step needs under a cap (one still in a turn is closed when that turn ends, never under it),
-  and the steps after it pool again. Each step's open asks for the grant
-  again and reads the value again, so a revoked grant stops the next step before its process
-  starts, and a rotated value is what the next step gets.
-- **Checked when the workflow is validated.** Every `secretEnv` entry must name a top-level
-  input of type `secret`. A `secret` input nested inside an object or array is refused.
-- **Not across daemons.** A step whose agent delegates to another daemon cannot take a
-  `secretEnv` mapping, and the launch is refused with `reason: unsupported`. A daemon with
-  no use check refuses it with `reason: unauthorized`, as for any reference.
+- **The launcher names a secret, never a value:** `orca run deploy --var deployToken=prod-deploy`.
+  An unknown id, or one bound to another host than the step's agent, is refused before the run is
+  written (`reason` `not-found` or `wrong-host`).
+- **Agent environment only.** The session gets `{ secret: <id> }` under that variable and reads it
+  like any reference. The value never enters the prompt or the store; `{{ vars.deployToken }}`
+  renders the id.
+- **Sealed at launch.** The id comes from the launch record in the private store, never from
+  working vars, so a later step cannot redirect it. Inline graphs (loop bodies, parallel branches)
+  get the same choice. A registered child workflow is launched on its own inputs.
+- **A process per step.** A `secretEnv` step always gets its own agent process, even for a
+  `per-run` agent, and holds its slot for that step only. An idle pooled session is closed first
+  so it does not hold the slot (one mid-turn is closed when the turn ends). Each step asks for the
+  grant and reads the value again.
+- **Validated:** every `secretEnv` entry must name a top-level `secret` input. Nested `secret`
+  inputs are refused.
+- **Not across daemons:** a delegating step cannot use `secretEnv` (`reason: unsupported`). A daemon
+  with no use check refuses it with `reason: unauthorized`.
 
 ## Templates
 
-Markdown files with front matter (`id`, `name`, `description`, `version`, `requires`,
-`produces`; anything else lands in `meta`), rendered with
-`{{ expr }}`, `{{#if}}…{{else}}…{{/if}}`, `{{#each xs as x, i}}…{{/each}}`,
-`{{> partial-id}}` and `{{!-- comments --}}`. The expression language is documented in
-`packages/core/src/expr/README.md`; the context in `docs/DATA-MODEL.md`.
+Templates are Markdown with front matter (`id`, `name`, `description`, `version`, `requires`,
+`produces`; anything else goes to `meta`). They support `{{ expr }}`,
+`{{#if}}…{{else}}…{{/if}}`, `{{#each xs as x, i}}…{{/each}}`, `{{> partial-id}}` and
+`{{!-- comments --}}`. The expression language is in `packages/core/src/expr/README.md`; the
+context in [DATA-MODEL](DATA-MODEL.md).
 
-ORCA appends the **deliverables block** to the rendered prompt of every node that declares
-`produces`; do not repeat the file list by hand. Tell the agent *what good looks like* (sections, front‑matter fields).
+ORCA appends the **deliverables block** to every node that declares `produces`. Do not list the
+files by hand. Tell the agent what good looks like: sections and front-matter fields.
 
 ### Template packs
 
-A workflow names its templates by literal id (`template: sdlc/review`), and a **template
-pack** lets a run swap some of them without editing the YAML (#191). A pack is a directory
-under `templates/<pack>/` whose files carry the front‑matter id `<pack>/<id>`; the default
-`templates` glob loads it with everything else. When a run selects a pack — `--template-pack
-<name>` on the CLI, `orca/template-pack` in an ACP session, `overrides.templatePack` on the
-record — every agent step resolves `<pack>/<id>` first and falls back to `<id>`, so a pack
-that overrides two of six templates inherits the other four. Partials (`{{> partials/… }}`)
-are not looked up in the pack. `orca validate --template-pack <name>` lists which templates
-the pack overrides and which the validated workflows inherit, and fails with
-`TEMPLATE_NOT_FOUND` on a pack that overrides nothing, so a typo cannot silently run the base
-set; `run`, `submit` and `plan dispatch` refuse such a pack the same way. The shipped example is
-`templates/strict/`, which replaces `sdlc/review` with a stricter review.
+A pack lets a run swap some templates without editing the workflow (#191). It is a directory
+`templates/<pack>/` whose files have front-matter ids `<pack>/<id>`; the default `templates` glob
+loads it.
+
+- Select it with `--template-pack <name>` (CLI), `orca/template-pack` (ACP session) or
+  `overrides.templatePack` (selection record).
+- Every agent step resolves `<pack>/<id>` first, then `<id>`. Partials are not looked up in the
+  pack.
+- `orca validate --template-pack <name>` lists which templates the pack overrides and which are
+  inherited. A pack that overrides nothing fails with `TEMPLATE_NOT_FOUND`, and `run`, `submit`
+  and `plan dispatch` refuse it the same way.
+- The shipped example is `templates/strict/`, which replaces `sdlc/review`.
 
 ## Shipped workflows
 
-- `workflows/ai-sdlc.yaml` — plan → design → spec‑gate → await‑deps → build ⇄ test → review ⇄ build → deploy.
-  High‑risk specs stop at the gate; `await-deps` holds the build until build‑phase
-  dependencies are satisfied; tests and review loop back with bounded budgets.
-- `workflows/program.yaml` — decompose → register (plan) → assess‑risks → decide (matrix per
-  open decision) → schedule → plan‑gate → dispatch (the item workflow per item,
-  dependency‑ordered across the plan) → summarize.
-- `workflows/plan-resume.yaml` — schedule → gate → dispatch with `scope: plan`; picks up
-  work deferred by earlier requests (`orca plan dispatch`).
+| Workflow | Flow |
+| --- | --- |
+| `workflows/ai-sdlc.yaml` | plan → design → spec-gate → await-deps → build ⇄ test → review ⇄ build → deploy. High-risk specs stop at the gate; `await-deps` holds the build until build-phase dependencies are met; test and review loop back with bounded budgets. |
+| `workflows/program.yaml` | decompose → register → assess-risks → decide (a matrix per open decision) → schedule → plan-gate → dispatch → summarize. |
+| `workflows/plan-resume.yaml` | schedule → gate → dispatch with `scope: plan`. Picks up deferred work (`orca plan dispatch`). |
 
-Neither pins the item workflow on its `custom:plan-dispatch` node: both default
-`vars.itemWorkflow` to `ai-sdlc`, and `orca submit` / `orca plan dispatch` override it with
-`program.itemWorkflow` from `orca.config.yaml`, so the same setting steers both. The
-precedence, stated once: an item that names its own `workflowId` wins; otherwise the node's
-`workflow` pin, then `overrides.itemWorkflow` from the run's selection record (#186), then
-`vars.itemWorkflow`. A pin that differs from the selection is logged as a warning, and the
-dispatch result's `itemWorkflowSource` says which one applied (`node`, `override`, `var`).
-On the command line, `--item-workflow <id>` on `orca submit` and `orca plan dispatch` writes
-`overrides.itemWorkflow`, so it beats `program.itemWorkflow` for that one run without a config
-edit. `--workflow` on `orca plan dispatch` keeps its meaning: it picks the *program* workflow
-to run instead of `plan-resume`, never the item workflow, and one with no
-`custom:plan-dispatch` node is refused with `CONFIG_INVALID` before anything starts (#126).
+**Which item workflow runs.** Neither shipped program pins it on `custom:plan-dispatch`. Both
+default `vars.itemWorkflow` to `ai-sdlc`, and `orca submit` and `orca plan dispatch` set it from
+`program.itemWorkflow` in `orca.config.yaml`. First match wins:
 
-Render any of them as Mermaid with `pnpm run orca graph <id>` (or `orca validate --mermaid`).
+1. the item's own `workflowId`;
+2. the node's `workflow`;
+3. `overrides.itemWorkflow` (#186), set by `--item-workflow <id>` on `orca submit` and
+   `orca plan dispatch`;
+4. `vars.itemWorkflow`.
+
+A node pin that differs from the selection logs a warning. The dispatch result's
+`itemWorkflowSource` says which applied (`node`, `override`, `var`). `--workflow` on
+`orca plan dispatch` picks the program workflow to run instead of `plan-resume`, never the item
+workflow; one without a `custom:plan-dispatch` node is refused with `CONFIG_INVALID` (#126).
+
+Draw any of them as Mermaid with `pnpm run orca graph <id>` or `orca validate --mermaid`.
