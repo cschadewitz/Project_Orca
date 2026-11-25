@@ -455,6 +455,18 @@ class AutoUpdateTests(unittest.TestCase):
         self.assertEqual(self.calls, [("daemon-reload",), ("enable", "--now", "orca-auto-update.timer")])
 
 
+    def test_install_timer_keeps_the_timer_a_server_has_from_before_the_rename(self):
+        units = self.root / "config" / "systemd" / "user"
+        units.mkdir(parents=True)
+        (units / "legacy-auto-update.timer").write_text("[Timer]\n")
+        with patch.dict(os.environ, {"XDG_CONFIG_HOME": str(self.root / "config")}), \
+                patch.object(release, "LEGACY_AUTO_UPDATE_UNIT", "legacy-auto-update"):
+            timer = self.deployment.install_timer()
+        self.assertEqual(timer, units / "legacy-auto-update.timer")
+        self.assertIn("OnUnitActiveSec=1h", timer.read_text())
+        self.assertEqual(sorted(p.name for p in units.iterdir()), ["legacy-auto-update.service", "legacy-auto-update.timer"])
+        self.assertEqual(self.calls, [("daemon-reload",), ("enable", "--now", "legacy-auto-update.timer")])
+
 @unittest.skipUnless(shutil.which("node") and shutil.which("openssl"), "needs node and openssl")
 class LiveFeedTests(unittest.TestCase):
     """The real Worker (feed-local.js) serves the server channel to a server-only token."""

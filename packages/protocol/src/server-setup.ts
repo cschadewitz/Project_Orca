@@ -36,6 +36,17 @@ import {
 export const SETUP_SCRIPT = "orca-server-setup.py";
 export const SETUP_ADAPTER = "orca-release.py";
 
+/** The prefix of each line the setup reports on. */
+export const SETUP_LINE = "orca-setup: ";
+/**
+ * A server set up before the rename to Orrery (0.8) keeps its own names: its launcher, and the
+ * lines a setup of that release reports on. Recognised until 0.10.
+ */
+// rename-keep-start: the names of a 0.8 server setup
+export const LEGACY_SETUP_LINE = "orca-setup: ";
+export const LEGACY_LAUNCHER = "orca";
+// rename-keep-end
+
 /** Setup downloads and verifies a bundle and runs its checks: minutes, not seconds. */
 export const SETUP_TIMEOUT_MS = 30 * 60_000;
 
@@ -162,10 +173,11 @@ function readLines(result: RemoteResult): { steps: SetupStep[]; values: unknown[
   const steps: SetupStep[] = [];
   const values: unknown[] = [];
   for (const line of result.stdout.split(/\r?\n/)) {
-    if (!line.startsWith("orca-setup: ")) continue;
+    const prefix = [SETUP_LINE, LEGACY_SETUP_LINE].find((p) => line.startsWith(p));
+    if (prefix === undefined) continue;
     let value: unknown;
     try {
-      value = JSON.parse(line.slice("orca-setup: ".length));
+      value = JSON.parse(line.slice(prefix.length));
     } catch {
       continue;
     }
@@ -220,6 +232,14 @@ export function managedLauncher(root: string): string {
 }
 
 /**
+ * The launchers a setup in `root` may have: today's, or, in a directory set up before the
+ * rename (which keeps its names), that one's. Both derived here; the server only picks one.
+ */
+export function managedLaunchers(root: string): string[] {
+  return [...new Set([managedLauncher(root), `${root.replace(/\/+$/, "")}/${LEGACY_LAUNCHER}`])];
+}
+
+/**
  * A ready result counts only as the setup that was confirmed: exactly the version, daemon
  * port, account and directory, and the launcher derived from that directory here. Anything
  * else is a `mismatch`, from which nothing may be saved or signed in to.
@@ -234,8 +254,8 @@ export function confirmedResult(
     outcome.port !== expected.port && `port ${outcome.port}, not ${expected.port}`,
     outcome.account !== expected.account && `account ${outcome.account}, not ${expected.account}`,
     outcome.root !== expected.root && `directory ${outcome.root}, not ${expected.root}`,
-    outcome.command !== managedLauncher(expected.root) &&
-      `launcher ${outcome.command}, not ${managedLauncher(expected.root)}`,
+    !managedLaunchers(expected.root).includes(outcome.command) &&
+      `launcher ${outcome.command}, not ${managedLaunchers(expected.root).join(" or ")}`,
   ].filter((item): item is string => typeof item === "string");
   return differs.length
     ? {

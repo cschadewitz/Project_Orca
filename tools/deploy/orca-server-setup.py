@@ -78,8 +78,36 @@ import sys
 import tempfile
 import time
 
-SETUP_MARKER = "orca-server-setup"
-SERVICE = "orca.service"
+class Layout:
+    """The names one setup directory uses: its own directory under ~/.local/share, the marker
+    file that says this setup made it, the marker string in every file it writes, its systemd
+    unit, its adapter, its two launchers and its two configs."""
+
+    def __init__(self, directory, marker, setup, service, adapter, cli, acp, config, acp_config):
+        self.directory, self.marker, self.setup, self.service = directory, marker, setup, service
+        self.adapter, self.cli, self.acp, self.config, self.acp_config = adapter, cli, acp, config, acp_config
+
+    def owned_files(self):
+        """The files this setup writes in its directory, and their modes: journaled, so a failed
+        run puts each back as it found it (or removes it, if this run created it)."""
+        return ((self.adapter, 0o755), ("deployment.json", 0o600), (self.cli, 0o755), (self.acp, 0o755),
+                (self.config, 0o600), (self.acp_config, 0o600), ("daemon.env", 0o600))
+
+
+# A new setup uses today's names.
+LAYOUT = Layout("orca-server", ".orca-setup.json", "orca-server-setup", "orca.service", "orca-release.py",
+                "orca", "orca-acp", "orca.config.yaml", "orca-kepler.config.yaml")
+# A directory set up before the rename to Orrery (0.8) keeps its own names: its daemon, unit and
+# launchers run under them, and saved profiles name its launcher. Its marker file says which it
+# is, so a 0.9 setup recognises it, repairs it in place and never renames anything under a
+# running daemon. Read until 0.10.
+# rename-keep-start: the names a 0.8 setup wrote
+LEGACY_LAYOUT = Layout("orca-server", ".orca-setup.json", "orca-server-setup", "orca.service", "orca-release.py",
+                       "orca", "orca-acp", "orca.config.yaml", "orca-kepler.config.yaml")
+# rename-keep-end
+LAYOUTS = (LAYOUT, LEGACY_LAYOUT)
+SETUP_MARKER = LAYOUT.setup
+SERVICE = LAYOUT.service
 HEALTH_SECONDS = 60
 VERSION_RE = r"\d+\.\d+\.\d+(?:-(?:rc|beta|alpha)\.\d+)?"
 RECONCILE = ("Reconcile it separately with orca-release.py (docs/UPDATING.md): this setup starts only a "
@@ -88,10 +116,8 @@ RECONCILE = ("Reconcile it separately with orca-release.py (docs/UPDATING.md): t
 OWNED_KEYS = ("root", "service", "userService", "setup", "url")
 # This setup's staging scratch, a direct child of the root: the only thing recovery removes.
 SCRATCH_PREFIX = ".setup-stage-"
-# The files this setup writes in its directory, and their modes: journaled, so a failed run
-# puts each back as it found it (or removes it, if this run created it).
-OWNED_FILES = (("orca-release.py", 0o755), ("deployment.json", 0o600), ("orca", 0o755), ("orca-acp", 0o755),
-               ("orca.config.yaml", 0o600), ("orca-kepler.config.yaml", 0o600), ("daemon.env", 0o600))
+# The files a new setup writes in its directory (Layout.owned_files).
+OWNED_FILES = LAYOUT.owned_files()
 GUIDANCE = ("Migrate it by hand first (docs/UPDATING.md, \"Debian: inventory before migration\"); "
             "this setup never takes over an installation it did not make.")
 # What an ORCA process or launcher looks like, as orca-release.py's own inventory reads it.
@@ -162,13 +188,23 @@ class Setup:
                  expect_account=None, expect_root=None, expect_current=None):
         # The effective account's own home, not $HOME: what the confirmation names is canonical.
         self.home = Path(home or pwd.getpwuid(os.geteuid()).pw_dir)
-        self.root = Path(os.path.realpath(root if root else self.home / ".local" / "share" / "orca-server"))
+        if not root:
+            # A 0.8 setup's directory, where there is one and no new one yet: repaired in place.
+            share = self.home / ".local" / "share"
+            root = share / LAYOUT.directory
+            legacy = share / LEGACY_LAYOUT.directory
+            if not os.path.lexists(root) and (legacy / LEGACY_LAYOUT.marker).is_file():
+                root = legacy
+        self.root = Path(os.path.realpath(root))
+        # The names this directory already uses, by its marker file; today's for a new one.
+        self.layout = next((layout for layout in LAYOUTS if (self.root / layout.marker).is_file()), LAYOUT)
+        self.owned_files = self.layout.owned_files()
         self.version = version
         self.port = port
         self.adapter_source = adapter_source
         self.bundle = bundle
         self.unit_dir = self.home / ".config" / "systemd" / "user"
-        self.unit = self.unit_dir / SERVICE
+        self.unit = self.unit_dir / self.layout.service
         self.systemctl_bin = systemctl or "systemctl"
         self.proc = Path("/proc")
         self.expect_account = expect_account
@@ -197,13 +233,13 @@ class Setup:
     def ours(self, path):
         """A file this setup wrote: it carries the marker."""
         try:
-            return SETUP_MARKER in Path(path).read_text(errors="replace")
+            return self.layout.setup in Path(path).read_text(errors="replace")
         except OSError:
             return False
 
     @property
     def marker(self):
-        return self.root / ".orca-setup.json"
+        return self.root / self.layout.marker
 
     @property
     def manifest(self):
@@ -211,7 +247,7 @@ class Setup:
 
     @property
     def adapter(self):
-        return self.root / "orca-release.py"
+        return self.root / self.layout.adapter
 
     @property
     def journal(self):
@@ -231,7 +267,7 @@ class Setup:
             return None
         try:
             journal = json.loads(self.journal.read_text())
-            if journal.get("by") != SETUP_MARKER or not isinstance(journal.get("before"), dict):
+            if journal.get("by") != self.layout.setup or not isinstance(journal.get("before"), dict):
                 raise ValueError
         except (OSError, ValueError, AttributeError):
             raise Refused(f"{self.journal} is unreadable: inspect the server and remove it by hand.") from None
@@ -283,19 +319,21 @@ class Setup:
         if self.root.exists() and not self.marker.is_file():
             if not self.root.is_dir() or any(self.root.iterdir()):
                 found.append(f"{self.root} exists and was not made by this setup")
-        # A user unit for ORCA other than ours.
-        for unit in sorted(self.unit_dir.glob("*orca*")) if self.unit_dir.is_dir() else []:
-            if unit.name != SERVICE or not self.ours(unit):
+        # A user unit for ORCA, under either name, other than ours.
+        stems = sorted({layout.service.split(".")[0] for layout in LAYOUTS})
+        units = sorted({unit for stem in stems for unit in self.unit_dir.glob(f"*{stem}*")}) if self.unit_dir.is_dir() else []
+        for unit in units:
+            if unit.name != self.layout.service or not self.ours(unit):
                 found.append(f"systemd user unit {unit.name}")
         # A launcher on PATH that runs ORCA, other than our wrapper.
         for directory in os.environ.get("PATH", "").split(os.pathsep):
-            for name in ("orca", "orca-acp"):
+            for name in sorted({name for layout in LAYOUTS for name in (layout.cli, layout.acp)}):
                 candidate = Path(directory) / name
                 try:
                     head = candidate.read_bytes()[:65536] if candidate.is_file() else b""
                 except OSError:
                     continue
-                if ORCA_LAUNCHER.search(head) and str(self.root) + "/orca-release.py" not in head.decode(errors="replace"):
+                if ORCA_LAUNCHER.search(head) and str(self.adapter) not in head.decode(errors="replace"):
                     found.append(f"launcher {candidate}")
         # An ORCA process of this user that is not the managed daemon of this root.
         releases = str(self.root / "releases") + "/"
@@ -310,7 +348,7 @@ class Setup:
                 continue
             except PermissionError:
                 raise Refused("Cannot read this user's processes, so an unmanaged ORCA cannot be ruled out.") from None
-            if ORCA_PROCESS.search(args) and releases not in args and SETUP_MARKER not in args:
+            if ORCA_PROCESS.search(args) and releases not in args and not any(layout.setup in args for layout in LAYOUTS):
                 # Its pid only: a command line can hold anything, secrets included.
                 found.append(f"process {directory.name}")
         if found:
@@ -327,7 +365,10 @@ class Setup:
         """What a receipt vouches for: the whole release, every file the service may consume
         (runtime, entry, helpers, assets, workflows, templates), by path, kind, mode and
         content, and the record naming its runtime inside it."""
-        record = json.loads((release / ".orca-release.json").read_text())
+        record_path = release / ".orca-release.json"
+        if not os.path.lexists(record_path):
+            record_path = release / ".orca-release.json"  # rename-keep: a release a 0.8 adapter staged
+        record = json.loads(record_path.read_text())
         if record.get("source") != "bundle" or record.get("version") != self.version:
             raise Refused(f"{release} is not the server bundle for v{self.version}. " + RECONCILE)
         node, entry = release / record.get("node", ""), release / record.get("entry", "")
@@ -368,13 +409,13 @@ class Setup:
             digests = self.release_digests(release)
         except (OSError, ValueError):
             raise Refused(f"{release} has no readable release record. " + RECONCILE) from None
-        if receipt != {"by": SETUP_MARKER, "version": self.version, "release": str(release), **digests}:
+        if receipt != {"by": self.layout.setup, "version": self.version, "release": str(release), **digests}:
             raise Refused(f"{release} changed since this setup staged and verified it. " + RECONCILE)
 
     def write_receipt(self, staged):
         """For `releases/vVERSION`, from what this run staged (digests are path-independent),
         before it is published there."""
-        receipt = {"by": SETUP_MARKER, "version": self.version, "release": str(self.release),
+        receipt = {"by": self.layout.setup, "version": self.version, "release": str(self.release),
                    **self.release_digests(staged)}
         self.receipt.parent.mkdir(mode=0o700, exist_ok=True)
         write_file(self.receipt, json.dumps(receipt, sort_keys=True) + "\n", 0o600)
@@ -383,12 +424,12 @@ class Setup:
         root = self.root
         return {
             "root": str(root), "repository": "cschadewitz/Project_Orca", "cwd": str(root),
-            "cliConfig": str(root / "orca.config.yaml"), "daemonConfig": str(root / "orca.config.yaml"),
-            "acpConfig": str(root / "orca-kepler.config.yaml"), "url": f"http://127.0.0.1:{self.port}",
-            "service": SERVICE, "userService": True,
+            "cliConfig": str(root / self.layout.config), "daemonConfig": str(root / self.layout.config),
+            "acpConfig": str(root / self.layout.acp_config), "url": f"http://127.0.0.1:{self.port}",
+            "service": self.layout.service, "userService": True,
             # This setup made every launcher there is (it refused any other): the inventory holds.
             "launchAudit": "all-cli-acp-and-daemon-launches-migrated",
-            "setup": SETUP_MARKER,
+            "setup": self.layout.setup,
         }
 
     def existing_manifest(self):
@@ -401,7 +442,7 @@ class Setup:
             existing = json.loads(self.manifest.read_text())
         except (OSError, ValueError):
             raise Refused(f"{self.manifest} is not readable JSON. Repair it by hand.") from None
-        if self.manifest.is_symlink() or not isinstance(existing, dict) or existing.get("setup") != SETUP_MARKER:
+        if self.manifest.is_symlink() or not isinstance(existing, dict) or existing.get("setup") != self.layout.setup:
             raise Refused(f"{self.manifest} was not written by this setup. " + GUIDANCE)
         if existing.get("url") != wanted["url"]:
             raise Refused(f"This server already listens on {existing.get('url')}; set up with that port.")
@@ -417,7 +458,7 @@ class Setup:
         current = self.root / "current"
         # Rollback restores text and mode of regular files only: anything else is refused here,
         # before any change, rather than replaced by a plain file later.
-        for path in [self.root / name for name, _mode in OWNED_FILES] + [self.unit]:
+        for path in [self.root / name for name, _mode in self.owned_files] + [self.unit]:
             if path.is_symlink() or (os.path.lexists(path) and not path.is_file()):
                 raise Refused(f"{path} is not a plain file this setup wrote. Repair it by hand.")
         self.existing_manifest()
@@ -442,7 +483,7 @@ class Setup:
         self.check_confirmed(quiet=True)
         self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
         if not self.marker.is_file():
-            write_file(self.marker, json.dumps({"by": SETUP_MARKER, "version": 1}) + "\n", 0o600)
+            write_file(self.marker, json.dumps({"by": self.layout.setup, "version": 1}) + "\n", 0o600)
         fd = os.open(self.root / "admission.lock", os.O_RDWR | os.O_CREAT, 0o600)
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -481,11 +522,11 @@ class Setup:
         current = self.root / "current"
         return {
             "unit": snapshot(self.unit),
-            "enabled": query("is-enabled", SERVICE) == "enabled",
-            "active": query("is-active", SERVICE) == "active",
+            "enabled": query("is-enabled", self.layout.service) == "enabled",
+            "active": query("is-active", self.layout.service) == "active",
             "current": os.readlink(current) if os.path.islink(current) else None,
             "linger": (linger.stdout.strip() == "yes") if linger.returncode == 0 else None,
-            "files": {name: snapshot(self.root / name) for name, _mode in OWNED_FILES},
+            "files": {name: snapshot(self.root / name) for name, _mode in self.owned_files},
         }
 
     def check_confirmed(self, quiet=False):
@@ -519,7 +560,7 @@ class Setup:
         self.write_journal()
 
     def write_journal(self):
-        journal = {"by": SETUP_MARKER, "operation": "setup", "version": self.version, "root": str(self.root),
+        journal = {"by": self.layout.setup, "operation": "setup", "version": self.version, "root": str(self.root),
                    "before": self.before, **({"staging": self.staging} if self.staging else {})}
         write_file(self.journal, json.dumps(journal, sort_keys=True) + "\n", 0o600)
 
@@ -547,10 +588,10 @@ class Setup:
                     current.symlink_to(before["current"], target_is_directory=True)
             attempt("current", link)
         if now["active"] and not before["active"]:
-            attempt("stop", lambda: self.systemctl("stop", SERVICE))
+            attempt("stop", lambda: self.systemctl("stop", self.layout.service))
         if now["enabled"] != before["enabled"]:
             attempt("enable" if before["enabled"] else "disable",
-                    lambda: self.systemctl("enable" if before["enabled"] else "disable", SERVICE))
+                    lambda: self.systemctl("enable" if before["enabled"] else "disable", self.layout.service))
         if now["unit"] != before["unit"]:
             def unit():
                 if before["unit"] is None:
@@ -560,14 +601,14 @@ class Setup:
                 self.systemctl("daemon-reload")
             attempt("unit file", unit)
         if before["active"] and not now["active"]:
-            attempt("start", lambda: self.systemctl("start", SERVICE))
+            attempt("start", lambda: self.systemctl("start", self.layout.service))
         if before["linger"] is False and now["linger"] is True:
             def linger():
                 if subprocess.run([self.loginctl_bin, "disable-linger", self.user], stdout=subprocess.DEVNULL,
                                   stderr=subprocess.DEVNULL).returncode != 0:
                     raise RuntimeError("loginctl disable-linger failed")
             attempt("lingering", linger)
-        for name, mode in OWNED_FILES:
+        for name, mode in self.owned_files:
             if now["files"].get(name) != before.get("files", {}).get(name, now["files"].get(name)):
                 def put(name=name):
                     prior = before["files"][name]
@@ -582,7 +623,7 @@ class Setup:
         after = self.state()
         if scratch is not None and os.path.lexists(scratch):
             problems.append("the staging scratch is still there")
-        for name, _mode in OWNED_FILES:
+        for name, _mode in self.owned_files:
             if name in before.get("files", {}) and after["files"][name] != before["files"][name]:
                 problems.append(f"{name} is not back as it was")
         for key in ("unit", "enabled", "active", "current", "linger"):
@@ -595,7 +636,7 @@ class Setup:
     def install_adapter(self):
         changed = write_file(self.adapter, self.adapter_source, 0o755)
         digest = hashlib.sha256(self.adapter_source.encode()).hexdigest()[:12]
-        report("adapter", "changed" if changed else "ok", f"orca-release.py sha256:{digest}")
+        report("adapter", "changed" if changed else "ok", f"{self.layout.adapter} sha256:{digest}")
 
     def install_files(self):
         root, adapter = self.root, self.adapter
@@ -614,19 +655,19 @@ class Setup:
         else:
             write_file(self.manifest, json.dumps(manifest, indent=2) + "\n", 0o600)
             changed.append("deployment.json")
-        config = (f"# Written by {SETUP_MARKER} (#881). Yours to edit: setup never rewrites it.\n"
+        config = (f"# Written by {self.layout.setup} (#881). Yours to edit: setup never rewrites it.\n"
                   "workflows: ['${ORCA_RELEASE}/workflows/**/*.yaml']\n"
                   "templates: ['${ORCA_RELEASE}/templates/**/*.md']\n")
-        for name in ("orca.config.yaml", "orca-kepler.config.yaml"):
+        for name in (self.layout.config, self.layout.acp_config):
             if not (root / name).exists():
                 write_file(root / name, config, 0o600)
                 changed.append(name)
         if not (root / "daemon.env").exists():
-            write_file(root / "daemon.env", f"# {SETUP_MARKER}: the daemon's environment (agent PATH, credentials).\n"
+            write_file(root / "daemon.env", f"# {self.layout.setup}: the daemon's environment (agent PATH, credentials).\n"
                        "PATH=/usr/local/bin:/usr/bin:/bin\n", 0o600)
             changed.append("daemon.env")
-        for name, kind in (("orca", "cli"), ("orca-acp", "acp")):
-            wrapper = (f"#!/bin/sh\n# {SETUP_MARKER}: the managed ORCA launcher.\n"
+        for name, kind in ((self.layout.cli, "cli"), (self.layout.acp, "acp")):
+            wrapper = (f"#!/bin/sh\n# {self.layout.setup}: the managed ORCA launcher.\n"
                        f"exec /usr/bin/env python3 '{adapter}' --deployment '{self.manifest}' {kind} \"$@\"\n")
             if write_file(root / name, wrapper, 0o755):
                 changed.append(name)
@@ -713,7 +754,7 @@ class Setup:
         report("select", "changed", f"current -> v{self.version}")
 
     def install_unit(self):
-        unit = (f"# {SETUP_MARKER}: the managed ORCA daemon (docs/UPDATING.md).\n"
+        unit = (f"# {self.layout.setup}: the managed ORCA daemon (docs/UPDATING.md).\n"
                 "[Unit]\nDescription=ORCA managed daemon\nAfter=network.target\n"
                 f"[Service]\nType=simple\nWorkingDirectory={self.root}\nEnvironmentFile={self.root}/daemon.env\n"
                 f"ExecStart=/usr/bin/env python3 {self.adapter} --deployment {self.manifest} daemon\n"
@@ -724,11 +765,11 @@ class Setup:
         self.created_unit = not existed
         if changed:
             self.systemctl("daemon-reload")
-        enabled = self.systemctl("is-enabled", SERVICE, check=False).stdout.strip() == "enabled"
+        enabled = self.systemctl("is-enabled", self.layout.service, check=False).stdout.strip() == "enabled"
         if not enabled:
-            self.systemctl("enable", SERVICE)
+            self.systemctl("enable", self.layout.service)
             self.enabled_unit = True
-        report("unit", "changed" if changed or not enabled else "ok", SERVICE)
+        report("unit", "changed" if changed or not enabled else "ok", self.layout.service)
         # Without lingering the user manager, and the daemon, stop at logout.
         user = self.user
         # The journaled baseline decides: unknown when the run began means never touched,
@@ -749,9 +790,9 @@ class Setup:
                    "(an administrator can run: loginctl enable-linger " + user + ")")
 
     def start(self):
-        active = self.systemctl("is-active", SERVICE, check=False).stdout.strip() == "active"
+        active = self.systemctl("is-active", self.layout.service, check=False).stdout.strip() == "active"
         if not active:
-            self.systemctl("start", SERVICE)
+            self.systemctl("start", self.layout.service)
         self.check_health()
         report("start", "ok" if active else ("changed" if self.enabled_unit or self.created_current else "repaired"),
                f"daemon healthy on 127.0.0.1:{self.port}")
@@ -802,7 +843,7 @@ class Setup:
             # Finished under the same fence: the journal is retired and the result read
             # before any other setup or update can start.
             step = "finish"
-            done = {"done": True, "root": str(self.root), "command": str(self.root / "orca"), "account": self.user,
+            done = {"done": True, "root": str(self.root), "command": str(self.root / self.layout.cli), "account": self.user,
                     "version": (self.root / "current").resolve().name[1:], "port": self.port}
             self.journal.unlink(missing_ok=True)
         except Refused as error:

@@ -97,6 +97,18 @@ AUTO_UPDATE_STOP = "auto-update.stop"     # a local stop: while it exists, nothi
 FEED_STOP_HEADER = "x-orca-feed-stop"     # the feed's servers' stop switch (#878)
 FEED_STOP_HEADERS = tuple(dict.fromkeys((FEED_STOP_HEADER, "x-orca-feed-stop", "x-orrery-feed-stop")))  # rename-keep: either
 AUTO_UPDATE_UNIT = "orca-auto-update"
+# A staged release's record, and the timer install-timer writes, under the names a 0.8 adapter
+# gave them: a server set up before the rename to Orrery keeps both, read until 0.10.
+RELEASE_RECORD = ".orca-release.json"
+LEGACY_RELEASE_RECORD = ".orca-release.json"  # rename-keep: a release a 0.8 adapter staged
+LEGACY_AUTO_UPDATE_UNIT = "orca-auto-update"  # rename-keep: the timer a 0.8 adapter installed
+
+
+def release_record(release):
+    """The record of a staged release: today's name, or the one a 0.8 adapter wrote."""
+    path, legacy = Path(release) / RELEASE_RECORD, Path(release) / LEGACY_RELEASE_RECORD
+    return legacy if not os.path.lexists(path) and os.path.lexists(legacy) else path
+
 
 def run(args, **kwargs):
     return subprocess.run(args, check=True, text=True, **kwargs)
@@ -279,7 +291,7 @@ def metadata(release):
     its entry (one of BUNDLE_ENTRIES) inside the release (relative, so the record stays true
     after the staging directory is renamed into place); any other value is refused, never
     resolved."""
-    result = json.loads((release / ".orca-release.json").read_text())
+    result = json.loads(release_record(release).read_text())
     if result.get("source") == "bundle":
         if result.get("node") != BUNDLE_NODE or result.get("entry") not in BUNDLE_ENTRIES:
             raise RuntimeError("Bundle release record names an unexpected runtime or entry; restage the release")
@@ -843,7 +855,7 @@ class Deployment(BundleSource):
     def validate_stage(self, stage, release, record, env, demo_env):
         """Shared by source and bundle stages: compiled version, scripted demo, the three
         operator configs, a temporary daemon's exact hello; then the rename into place."""
-        self.typed_dispatch(write_json, stage / ".orca-release.json", record)
+        self.typed_dispatch(write_json, stage / RELEASE_RECORD, record)
         meta = metadata(stage)
         node, cli = meta["node"], Path(meta["entry"])
         if self.typed_process(capture, [node, str(cli), "--version"], cwd=stage, env=env) != record["version"]:
@@ -1310,17 +1322,19 @@ class Deployment(BundleSource):
                 raise RuntimeError(f"Path {path} needs quoting in a unit file; use a plain path")
         units = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "systemd" / "user"
         units.mkdir(parents=True, exist_ok=True)
-        (units / f"{AUTO_UPDATE_UNIT}.service").write_text(
+        # A server set up before the rename keeps the timer it has, rather than gaining a second.
+        unit = LEGACY_AUTO_UPDATE_UNIT if (units / f"{LEGACY_AUTO_UPDATE_UNIT}.timer").exists() else AUTO_UPDATE_UNIT
+        (units / f"{unit}.service").write_text(
             "[Unit]\nDescription=ORCA server automatic update (orca-release.py auto-update)\n\n"
             "[Service]\nType=oneshot\n"
             f"ExecStart={sys.executable} -I {adapter} --deployment {self.manifest} auto-update\n")
-        (units / f"{AUTO_UPDATE_UNIT}.timer").write_text(
+        (units / f"{unit}.timer").write_text(
             "[Unit]\nDescription=Check the update feed for ORCA server releases\n\n"
             f"[Timer]\nOnBootSec=5min\nOnUnitActiveSec={auto['interval']}\nRandomizedDelaySec=5min\n"
             "Persistent=true\n\n[Install]\nWantedBy=timers.target\n")
         self.systemctl("daemon-reload")
-        self.systemctl("enable", "--now", f"{AUTO_UPDATE_UNIT}.timer")
-        return units / f"{AUTO_UPDATE_UNIT}.timer"
+        self.systemctl("enable", "--now", f"{unit}.timer")
+        return units / f"{unit}.timer"
 
 
 def fetch_only(argv):
