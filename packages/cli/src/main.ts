@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 /** `orca` command line. */
+// First, before any module that reads the environment while it loads.
+import "./legacy-env.js";
 import { parseArgs } from "node:util";
 import { consoleLogger, describeError, isOrcaError, type Logger } from "@orca/core";
 import { isProtocolFault } from "@orca/protocol";

@@ -11,7 +11,7 @@ import {
   closedUpdateOwnsConfiguredRoots,
 } from "./update-bootstrap.js";
 import { enterClosedFirstRunInspection } from "@orca/protocol/update-window";
-import { admissionRetryFaults } from "@orca/core";
+import { admissionRetryFaults, CONFIG_FILENAMES, LEGACY_CONFIG_FILENAMES } from "@orca/core";
 import { DIAGNOSTICS_DIR, FileRetryClaimStore, HOOK_SESSION_DIR, STORE_FORMAT_BACKUP_DIR } from "@orca/store";
 import { enterDaemonStoreFormat } from "./desktop-carryover.js";
 import {
@@ -98,6 +98,7 @@ import {
 import { KeplerTaskWorkspaceProvider } from "@orca/integrations";
 import { delegatingSessionFactory, RemoteCapacity, validateRemotes } from "@orca/daemon";
 import {
+  adoptLegacyStoreDir,
   fileStores,
   holdStoreWriter,
   memoryStores,
@@ -124,17 +125,12 @@ import {
   type VerifiedPluginRelease,
 } from "./plugin-release.js";
 
-export const CONFIG_FILENAMES = ["orca.config.yaml", "orca.config.yml", "orca.config.json"];
 /**
- * The same names from before the rename to Orrery. Discovery takes one when a directory has
- * none of `CONFIG_FILENAMES`, with a warning, until 0.10; nothing writes them. Until the
- * codemod runs they equal `CONFIG_FILENAMES`, and `findConfig` reads each name once.
+ * The config names discovery looks for, and the names from before the rename to Orrery, which
+ * it takes when a directory has none of the current ones, with a warning, until 0.10. Until the
+ * codemod runs the two lists are equal, and `findConfig` reads each name once.
  */
-export const LEGACY_CONFIG_FILENAMES = [
-  "orca.config.yaml", // rename-keep: pre-rename config name, read until 0.10
-  "orca.config.yml", // rename-keep: pre-rename config name, read until 0.10
-  "orca.config.json", // rename-keep: pre-rename config name, read until 0.10
-];
+export { CONFIG_FILENAMES, LEGACY_CONFIG_FILENAMES };
 
 export interface BootstrapOptions {
   /** Trusted composition supplies an independently approved closed-bundle release pin; never read from config/RPC/env. */
@@ -237,27 +233,44 @@ export async function findConfig(
 export async function loadConfig(
   cwd: string,
   configPath?: string,
+  options: { adoptStoreDir?: boolean } = {},
 ): Promise<{ config: OrcaConfig; configDir: string; configFile?: string }> {
   assertNoUnownedTypedWorkspace([cwd, ...(configPath ? [dirname(resolve(configPath))] : [])]);
   const file = configPath ?? (await findConfig(cwd));
   if (!file) {
-    const config = parseOrcaConfig({}),
-      configDir = resolve(cwd);
+    const configDir = resolve(cwd);
+    const config = await withAdoptedStoreDir(parseOrcaConfig({}), configDir, options.adoptStoreDir);
     await enterConfiguredUpdateBootstrap(configDir, resolve(configDir, config.storeDir));
     return { config, configDir };
   }
   const text = await readFile(file, "utf8");
   const raw = parseConfigFile(file, text);
+  let parsed: OrcaConfig;
   try {
-    // The path travels with the parsed config: `config.get`/`config.set` serve the file
-    // itself, and rediscovering it in the daemon could find a different one (#174).
-    const config = parseOrcaConfig(raw),
-      configDir = dirname(resolve(file));
-    await enterConfiguredUpdateBootstrap(configDir, resolve(configDir, config.storeDir));
-    return { config, configDir, configFile: resolve(file) };
+    parsed = parseOrcaConfig(raw);
   } catch (e) {
     throw new OrcaError("CONFIG_INVALID", `${file}: ${(e as Error).message}`, {}, { cause: e });
   }
+  // The path travels with the parsed config: `config.get`/`config.set` serve the file
+  // itself, and rediscovering it in the daemon could find a different one (#174).
+  const configDir = dirname(resolve(file));
+  const config = await withAdoptedStoreDir(parsed, configDir, options.adoptStoreDir);
+  await enterConfiguredUpdateBootstrap(configDir, resolve(configDir, config.storeDir));
+  return { config, configDir, configFile: resolve(file) };
+}
+
+/**
+ * Before anything opens or fences the store: a workspace from before the rename to Orrery has
+ * its store under the old default name, which `adoptLegacyStoreDir` moves to the new one once
+ * (until 0.10). When it cannot, the store is opened where it is, so `storeDir` names
+ * that directory and every `resolve(configDir, config.storeDir)` after this reaches it. Not on a
+ * closed update start, which only checks, and not when `adopt` is false (an ephemeral start).
+ */
+async function withAdoptedStoreDir(config: OrcaConfig, configDir: string, adopt = true): Promise<OrcaConfig> {
+  if (!adopt || isClosedUpdateBootstrap()) return config;
+  const storeDir = resolve(configDir, config.storeDir);
+  const opened = await adoptLegacyStoreDir(storeDir, { appVersion: storeWriterVersion() });
+  return opened === storeDir ? config : { ...config, storeDir: opened };
 }
 
 /** Match the initial loader when checking startup bytes too (JSON permits duplicate keys). */
@@ -618,8 +631,12 @@ function registeredUntilClosed(hold: StoreWriterHold | undefined, open: () => St
 export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
   const cwd = opts.cwd ?? process.cwd();
   const { config, configDir, configFile } = opts.config
-    ? { config: opts.config, configDir: opts.configDir ?? cwd, configFile: undefined }
-    : await loadConfig(cwd, opts.configPath);
+    ? {
+        config: await withAdoptedStoreDir(opts.config, opts.configDir ?? cwd, !opts.ephemeral),
+        configDir: opts.configDir ?? cwd,
+        configFile: undefined,
+      }
+    : await loadConfig(cwd, opts.configPath, { adoptStoreDir: !opts.ephemeral });
   const firstRunLaunch = process.env.ORCA_FIRST_RUN_LAUNCH;
   delete process.env.ORCA_FIRST_RUN_LAUNCH;
   // The desktop app asks for its store's switch to SQLite on one launch (#339); never inherited.
