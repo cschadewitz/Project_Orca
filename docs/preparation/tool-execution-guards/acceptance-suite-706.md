@@ -279,14 +279,21 @@ The Claude installed run (`enforcement-installed-claude-1026.test.js`) records t
 - **`cancelled`**: an MCP call and a write each ask, and the turn is cancelled while the ask
   is pending. Neither has any effect. Each call's evidence is taken again after a wait
   (`afterWait`, the same call id or file), and its effect is recomputed from that, not from a
-  label.
-- **`fresh`**: a new session asks again for each call. Every ask records its ACP session and
-  is bound to its own call, and the fresh asks share one session that is not the cancelled
-  one. Unanswered, nothing runs; answered once,
-  it runs. None of them is a cancelled call.
+  label. Only a verified absence counts: the MCP log exists before the calls, and a target
+  file counts as absent only if it was missing before. An observer that cannot read its
+  evidence gives `unobservable`, which qualifies nothing.
+- **`fresh`**: a new session asks again for each call, and nothing runs unanswered. The write
+  then runs on a one-time answer, and that answer is bound to exactly one ask. The ask must
+  come from that session, in a turn of that one call, with that tool name and exact raw input,
+  and only one-time allow may be offered. Any other ask gets no answer. An MCP call asks twice
+  on this route, once from the hook and once from ORCA's relay, so one bound answer cannot run
+  it. Its positive case is listed as unverified rather than answered broadly. Every ask records
+  its ACP session and is bound to its own call. The fresh asks share one session, which is not
+  the cancelled one.
 - **`judged`** (`checks.judgedAction`): with the experimental command judge on, a command
   that a judged rule is about reaches the person carrying the judge's advisory verdict. It runs
-  nothing unanswered and runs on their one-time answer, whichever verdict the judge gave. The
+  nothing unanswered and runs on their one-time answer, bound the same way, whichever verdict
+  the judge gave. The
   judge is ORCA's own (`preparePlainRuleJudge`), prepared against a provider stand-in
   (`connected/judge-stand-in.js`). The daemon's key, grant and budget plumbing is covered by
   its own tests, not by this run. On this route, ORCA's hook asks the person before the MCP

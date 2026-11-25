@@ -12,8 +12,9 @@
  *   The receipt's `agentSettings` are the ORCA settings every case ran under.
  * - `checks.cancelledNoEffect`: a normally pending ask whose turn is cancelled has no effect,
  *   shown again after a wait, for an MCP call and a file write.
- * - `checks.freshSessionFreshDecision`: a new session for the same calls asks again, runs
- *   nothing unanswered, and runs only on its own one-time answer.
+ * - `checks.freshSessionFreshDecision`: a new session for the same calls asks again and runs
+ *   nothing unanswered; the write runs on a one-time answer bound to exactly it. An MCP call
+ *   asks twice on this route (hook, then relay), so its positive case is left unverified.
  * - `checks.judgedAction`: with the experimental command judge on (ORCA's own judge, prepared
  *   against a provider stand-in), a command a judged rule is about carries the judge's advice
  *   to the person, still asks, runs nothing unanswered and runs on their one-time answer,
@@ -32,8 +33,10 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { CLAUDE_HOOK_VERIFIED_PAIRS } from "@orca/agents";
@@ -124,6 +127,91 @@ describe("the installed run and the matrix agree", () => {
 
   it("every unsupported route of the Claude row has a probe", () => {
     expect(Object.keys(PROBES).sort()).toEqual([...row.unsupportedRoutes].sort());
+  });
+});
+
+describe("the after-wait observer takes only a verified absence as no effect", () => {
+  const world = { root: "/nonexistent-orca-706" };
+  const mcpGot = { detail: { effectRef: { kind: "mcp", callRef: "c1", loggedFor: [], unaccountedLines: 0 } } };
+  const fileGot = (before) => ({
+    detail: { effectRef: { kind: "file", path: "p", before, after: null, written: "w" } },
+  });
+
+  it("an MCP log it cannot read, or that is gone, is no evidence of absence", async () => {
+    for (const read of [async () => ({ failed: "EACCES" }), async () => ({ missing: true })])
+      expect(effectFrom(await effectAgain(world, mcpGot, {}, read))).toBe("indeterminate");
+    expect(effectFrom(await effectAgain(world, mcpGot, {}, async () => ({ text: "" })))).toBe("none");
+  });
+
+  it("a target file it cannot read is no evidence; one missing as before is", async () => {
+    expect(effectFrom(await effectAgain(world, fileGot(null), { path: "p" }, async () => ({ failed: "EACCES" })))).toBe(
+      "indeterminate",
+    );
+    expect(effectFrom(await effectAgain(world, fileGot(null), { path: "p" }, async () => ({ missing: true })))).toBe(
+      "none",
+    );
+    expect(effectFrom(await effectAgain(world, fileGot("abc"), { path: "p" }, async () => ({ missing: true })))).toBe(
+      "indeterminate",
+    );
+  });
+
+  it("reads a real unreadable file as a failure and a real missing one as missing", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orca-706-observe-"));
+    try {
+      expect(await observe(join(dir, "nope"))).toEqual({ missing: true });
+      // A directory cannot be read as a file: a failed observation, not an absence.
+      expect(await observe(dir)).toEqual({ failed: "EISDIR" });
+      if (process.getuid?.() !== 0) {
+        const locked = join(dir, "locked");
+        await writeFile(locked, "x");
+        await chmod(locked, 0o000);
+        expect(await observe(locked)).toEqual({ failed: "EACCES" });
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("the simulated person allows only the one expected fixture", () => {
+  const req = (over = {}) => ({
+    sessionId: "s1",
+    toolCall: { name: "Bash", rawInput: { command: "touch /w/a" } },
+    options: [
+      { optionId: "once", kind: "allow_once" },
+      { optionId: "always", kind: "allow_always" },
+    ],
+    ...over,
+  });
+  const turn = [{ name: "Bash", input: { command: "touch /w/a" } }];
+
+  it("answers the exact call once, in its session, with the one-time option", async () => {
+    const allow = allowOnlyFixture("s1");
+    expect(await allow(req(), turn)).toBe("once");
+    expect(await allow(req(), turn)).toBeUndefined();
+  });
+
+  it("refuses another session, input, tool, turn shape or an ambiguous offer", async () => {
+    const cases = [
+      [req({ sessionId: "s2" }), turn],
+      [req({ toolCall: { name: "Bash", rawInput: { command: "rm -rf /w" } } }), turn],
+      [req({ toolCall: { name: "Write", rawInput: { command: "touch /w/a" } } }), turn],
+      [req(), [...turn, ...turn]],
+      [req(), undefined],
+      [req({ toolCall: undefined }), turn],
+      [
+        req({
+          options: [
+            { optionId: "a", kind: "allow_once" },
+            { optionId: "b", kind: "allow_once" },
+          ],
+        }),
+        turn,
+      ],
+      [req({ options: [{ optionId: "always", kind: "allow_always" }] }), turn],
+    ];
+    for (const [r, t] of cases) expect(await allowOnlyFixture("s1")(r, t)).toBeUndefined();
+    expect(await allowOnlyFixture(undefined)(req(), turn)).toBeUndefined();
   });
 });
 
@@ -234,6 +322,9 @@ describe.skipIf(ADAPTER === undefined || OTHER_RUNTIME === undefined)("installed
   it("cancellation: a pending ask whose turn is cancelled has no effect, and a fresh session decides afresh", async () => {
     const world = await realWorld();
     try {
+      // The MCP recorder's log exists before the calls, so later a missing log is a failed
+      // observation, not an absence of calls.
+      await writeFile(join(world.root, "mcp-calls.jsonl"), "", { flag: "a" });
       // Edits ask (MCP calls ask by default), so both calls wait on a person.
       world.configured = { rules: [{ match: { kind: "edit" }, decision: "ask" }] };
       const calls = [
@@ -270,17 +361,23 @@ describe.skipIf(ADAPTER === undefined || OTHER_RUNTIME === undefined)("installed
       for (const action of calls) {
         const unanswered = await live.decide(world, action, { expect: ["ask"], noAnswerer: true });
         expect(unanswered.outcome, JSON.stringify(unanswered.detail)).toBe("ask");
-        const once = await live.decide(world, action, {
-          expect: ["allow"],
-          onAsk: async (req) => req.options.find((o) => o.kind === "allow_once")?.optionId,
-        });
+        fresh.push(record(unanswered));
+        // An MCP call asks twice on this route (the hook, then ORCA's relay), so one bound
+        // answer cannot run it; its positive case stays unverified rather than answering more.
+        if (action.tool === "mcp") continue;
+        const session = unanswered.detail.approvals[0]?.sessionId;
+        const once = await live.decide(world, action, { expect: ["allow"], onAsk: allowOnlyFixture(session) });
         expect(once.outcome, JSON.stringify(once.detail)).toBe("allow");
+        expect(once.detail.approvals.map((a) => a.sessionId)).toEqual([session]);
         expect(once.detail.approvals.map((a) => a.answer)).toEqual(["allow_once"]);
-        fresh.push(record(unanswered), record(once));
+        fresh.push(record(once));
       }
       const before = new Set(cancelled.map((got) => got.detail.toolUseId));
       expect(fresh.filter((r) => before.has(r.toolUseId))).toEqual([]);
       receipt.lifecycle.fresh = fresh;
+      receipt.lifecycle.unverified = [
+        "fresh session: an MCP call's one-time allow (the hook and ORCA's relay each ask, so one bound answer does not run it)",
+      ];
       receipt.checks.freshSessionFreshDecision = "pass";
     } finally {
       await world.dispose();
@@ -295,14 +392,18 @@ describe.skipIf(ADAPTER === undefined || OTHER_RUNTIME === undefined)("installed
       world.configured = {
         rules: [{ match: { kind: "execute" }, judge: { criterion: "Creating an empty marker file is fine." } }],
       };
-      const allowOnce = async (req) => req.options.find((o) => o.kind === "allow_once")?.optionId;
       const judged = [];
       for (const verdict of ["covered", "not-covered"]) {
         judge.state.verdict = verdict;
         const command = `touch ${join(world.workspace, `judged-${verdict}.txt`)}`;
         const asked = judge.state.requests.length;
         const unanswered = await live.decide(world, { tool: "shell", command }, { expect: ["ask"], noAnswerer: true });
-        const answered = await live.decide(world, { tool: "shell", command }, { expect: ["allow"], onAsk: allowOnce });
+        const session = unanswered.detail.approvals[0]?.sessionId;
+        const answered = await live.decide(
+          world,
+          { tool: "shell", command },
+          { expect: ["allow"], onAsk: allowOnlyFixture(session) },
+        );
         expect(unanswered.outcome, JSON.stringify(unanswered.detail)).toBe("ask");
         expect(answered.outcome, JSON.stringify(answered.detail)).toBe("allow");
         for (const got of [unanswered, answered])
@@ -349,18 +450,61 @@ describe.skipIf(ADAPTER === undefined || OTHER_RUNTIME === undefined)("installed
 
 const sha256 = (data) => createHash("sha256").update(data).digest("hex");
 
+/**
+ * A simulated person's one-time allow, bound to one expected fixture (#1026 review): only for
+ * an ask in `sessionId`, for a turn of exactly one call, whose tool name and raw input are that
+ * call's exactly, and only once. Anything missing, unexpected or ambiguous gets no answer, so
+ * nothing runs on it. Native policy is not changed.
+ */
+function allowOnlyFixture(sessionId) {
+  let used = false;
+  return async (req, turnCalls) => {
+    const [want] = turnCalls ?? [];
+    const options = (req.options ?? []).filter((o) => o.kind === "allow_once");
+    const exact =
+      !used &&
+      typeof sessionId === "string" &&
+      req.sessionId === sessionId &&
+      turnCalls?.length === 1 &&
+      req.toolCall?.name === want.name &&
+      isDeepStrictEqual(req.toolCall?.rawInput, want.input) &&
+      options.length === 1;
+    if (!exact) return undefined;
+    used = true;
+    return options[0].optionId;
+  };
+}
+
 /** One call's record as the receipt keeps it: what the runner observed, without the result text. */
 function record(got) {
   const { result: _result, ...rest } = got.detail;
   return rest;
 }
 
-/** A cancelled call's evidence taken again after a wait, for its effect to be recomputed from. */
-async function effectAgain(world, got, action) {
+/**
+ * What an observer read: the file's text, a missing file, or a failure to read it. Only a missing
+ * file is ever taken as an absence, and only where absence is expected.
+ */
+export async function observe(file) {
+  try {
+    return { text: await readFile(file, "utf8") };
+  } catch (e) {
+    return e?.code === "ENOENT" ? { missing: true } : { failed: String(e?.code ?? "error") };
+  }
+}
+
+/**
+ * A cancelled call's evidence taken again after a wait, for its effect to be recomputed from.
+ * An observer that could not read its evidence gives `unobservable`, which shows no absence
+ * (`effectFrom` makes it indeterminate). The MCP log exists before the calls, so a missing log
+ * is unobservable too. A missing target file is an absence only if it was missing before.
+ */
+export async function effectAgain(world, got, action, read = observe) {
   const ref = got.detail.effectRef;
   if (ref.kind === "mcp") {
-    const log = await readFile(join(world.root, "mcp-calls.jsonl"), "utf8").catch(() => "");
-    const lines = log
+    const seen = await read(join(world.root, "mcp-calls.jsonl"));
+    if (seen.text === undefined) return { kind: "unobservable", of: "mcp", why: seen.failed ?? "log missing" };
+    const lines = seen.text
       .split("\n")
       .filter(Boolean)
       .map((l) => JSON.parse(l));
@@ -371,8 +515,11 @@ async function effectAgain(world, got, action) {
     };
   }
   if (ref.kind === "file") {
-    const now = await readFile(action.path, "utf8").catch(() => undefined);
-    return { ...ref, after: now === undefined ? null : sha256(now).slice(0, 16) };
+    const seen = await read(action.path);
+    if (seen.failed) return { kind: "unobservable", of: "file", why: seen.failed };
+    if (seen.missing)
+      return ref.before === null ? { ...ref, after: null } : { kind: "unobservable", of: "file", why: "target gone" };
+    return { ...ref, after: sha256(seen.text).slice(0, 16) };
   }
   return { kind: "none-available" };
 }

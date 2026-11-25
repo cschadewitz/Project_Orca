@@ -262,7 +262,12 @@ export function claudeConnected(env) {
       const shellBefore = (await lines(logs(world).shell)).length;
       const mcpBefore = (await lines(logs(world).mcp)).length;
       if (opts.noAnswerer) state.answer = () => undefined;
-      else if (opts.onAsk) state.answer = opts.onAsk;
+      // The person sees the ask with the calls this turn was made of: the tool and its exact
+      // input, so a simulated answer can be bound to the one fixture it is for.
+      else if (opts.onAsk) {
+        const turnCalls = prepared.map((p) => ({ name: p.name, input: structuredClone(p.input) }));
+        state.answer = (req) => opts.onAsk(req, turnCalls);
+      }
       let seen;
       try {
         seen = await path.turn(
@@ -453,6 +458,11 @@ async function readToken(world, file, callRef) {
 }
 
 const digest = (text) => createHash("sha256").update(text).digest("hex").slice(0, 16);
-const bytes = (file) => readFile(file, "utf8").catch(() => undefined);
+/** A file's text, or undefined when it does not exist. Any other read failure is not an absence: it throws. */
+const bytes = (file) =>
+  readFile(file, "utf8").catch((e) => {
+    if (e?.code === "ENOENT") return undefined;
+    throw e;
+  });
 const lines = async (file) => ((await bytes(file)) ?? "").split("\n").filter(Boolean);
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
