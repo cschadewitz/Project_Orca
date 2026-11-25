@@ -239,6 +239,8 @@ describe.skipIf(process.platform === "win32")("cutover scripts", () => {
   });
 
   describe("cloudflare.sh", () => {
+    const FEED_DOMAIN_VARIABLE =
+      "GET repos/cschadewitz/Orrery-Infra/environments/production/variables/FEED_DOMAIN_HOSTNAME";
     const zones = {
       "GET /zones?name=orrery-control.dev": { success: true, result: [{ id: "zdev", status: "active" }] },
       "GET /zones?name=orrery-control.com": { success: true, result: [{ id: "zcom", status: "active" }] },
@@ -256,7 +258,7 @@ describe.skipIf(process.platform === "win32")("cutover scripts", () => {
           result: { rules: [{ id: "r1", ref: "existing", expression: "true", action: "redirect", version: "1" }] },
         },
       },
-      gh: {},
+      gh: { [FEED_DOMAIN_VARIABLE]: { value: "feed.orrery-control.com" } },
     });
 
     it("in a dry run says each thing it would create and changes nothing", () => {
@@ -270,7 +272,7 @@ describe.skipIf(process.platform === "win32")("cutover scripts", () => {
         "would create DNS A orrery-control.com -> 192.0.2.1",
         "would create DNS A www.orrery-control.com -> 192.0.2.1",
         "would add the redirect rule orrery_cutover_site_to_docs",
-        "would attach feed.orrery-control.com to orca-desktop-feed",
+        "TODO  feed.orrery-control.com is not attached yet: dispatch Infrastructure on Orrery-Infra",
       ])
         expect(r.stdout).toContain(line);
     });
@@ -287,13 +289,8 @@ describe.skipIf(process.platform === "win32")("cutover scripts", () => {
         preserve_query_string: false,
         target_url: { value: "https://docs.orrery-control.dev" },
       });
-      const worker = r.writes.find((c) => c.some((a) => a.endsWith("/workers/domains")));
-      expect(JSON.parse(worker[worker.indexOf("--data") + 1])).toEqual({
-        hostname: "feed.orrery-control.com",
-        service: "orca-desktop-feed",
-        zone_id: "zcom",
-        environment: "production",
-      });
+      // Terraform in Orrery-Infra owns the feed domain: nothing here writes it.
+      expect(r.writes.filter((c) => c.some((a) => a.includes("/workers/")))).toEqual([]);
       expect(r.log.map((e) => e.kind)).toEqual([
         "cf-pages-project-created",
         "cf-pages-domain-created",
@@ -301,7 +298,6 @@ describe.skipIf(process.platform === "win32")("cutover scripts", () => {
         "cf-dns-created",
         "cf-dns-created",
         "cf-redirect-rule-added",
-        "cf-worker-domain-created",
       ]);
       // The token goes in a header, never in the log.
       expect(readFileSync(join(dir, "cutover-log.json"), "utf8")).not.toContain("test-token");
@@ -337,11 +333,21 @@ describe.skipIf(process.platform === "win32")("cutover scripts", () => {
             result: [{ service: "orca-desktop-feed" }],
           },
         },
+        gh: { [FEED_DOMAIN_VARIABLE]: { value: "feed.orrery-control.com" } },
       };
       const r = run("cloudflare.sh", [], done);
       expect(r.status, r.stderr + r.stdout).toBe(0);
       expect(r.writes).toEqual([]);
       expect(r.log).toEqual([]);
+    });
+
+    it("fails, and attaches nothing, unless Orrery-Infra's Terraform owns the feed domain", () => {
+      for (const gh of [{}, { [FEED_DOMAIN_VARIABLE]: { value: "other.orrery-control.com" } }]) {
+        const r = run("cloudflare.sh", [], { ...fresh(), gh });
+        expect(r.status).not.toBe(0);
+        expect(r.stdout).toContain("FEED_DOMAIN_HOSTNAME is");
+        expect(r.writes.filter((c) => c.some((a) => a.includes("/workers/")))).toEqual([]);
+      }
     });
 
     it("needs the token", () => {

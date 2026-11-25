@@ -9,9 +9,10 @@
 # 3. orrery-control.com and www.orrery-control.com redirected (301) to https://docs.orrery-control.dev,
 #    by one single-redirect rule in the zone's dynamic redirect ruleset, over proxied placeholder
 #    records for the two names (192.0.2.1 / 100::, the documented "originless" addresses).
-# 4. feed.orrery-control.com attached to the feed Worker (orca-desktop-feed) as a Workers custom
-#    domain, which creates its DNS record. If Orrery-Infra's FEED_DOMAIN_HOSTNAME variable names
-#    this host, Terraform owns the domain and this step only checks it.
+# 4. feed.orrery-control.com: only checked. Orrery-Infra's Terraform owns the feed Worker's custom
+#    domain (FEED_DOMAIN_HOSTNAME), so this never attaches or detaches it. A domain not attached
+#    yet is a TODO (dispatch Infrastructure); a variable naming another host, or the host on
+#    another Worker, fails.
 #
 # Every step reads first and changes only what is missing; each change is logged for rollback.sh.
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -93,19 +94,17 @@ else
   record cf-redirect-rule-added "$(jq -cn --arg zone "$SITE_ZONE_ID" --arg ref "$RULE_REF" '{zone: $zone, ref: $ref}')"
 fi
 
-step "$FEED_HOST -> Worker $FEED_WORKER"
+step "$FEED_HOST -> Worker $FEED_WORKER (owned by $NEW_INFRA's Terraform; checked only)"
 domains=$(cf GET "/accounts/$ACCOUNT/workers/domains?hostname=$FEED_HOST" | jq -c '.result // []')
-if jq -e --arg w "$FEED_WORKER" 'any(.service == $w)' >/dev/null <<<"$domains"; then
-  ok "attached"
+owner=$(ghq "repos/$OWNER/$NEW_INFRA/environments/production/variables/FEED_DOMAIN_HOSTNAME" | jq -r '.value // empty' 2>/dev/null) || owner=""
+if [[ "$owner" != "$FEED_HOST" ]]; then
+  bad "$NEW_INFRA's FEED_DOMAIN_HOSTNAME is '${owner}', not $FEED_HOST: set it there and dispatch Infrastructure"
+elif jq -e --arg w "$FEED_WORKER" 'any(.service == $w)' >/dev/null <<<"$domains"; then
+  ok "attached to $FEED_WORKER"
 elif [[ "$(jq length <<<"$domains")" -gt 0 ]]; then
   bad "$FEED_HOST is attached to $(jq -r '.[0].service' <<<"$domains"), not $FEED_WORKER; left as it is"
-elif [[ "$(ghq "repos/$OWNER/$NEW_INFRA/environments/production/variables/FEED_DOMAIN_HOSTNAME" | jq -r '.value // empty' 2>/dev/null)" == "$FEED_HOST" ]]; then
-  todo "Orrery-Infra's Terraform owns $FEED_HOST (FEED_DOMAIN_HOSTNAME): dispatch Infrastructure to attach it"
 else
-  body=$(jq -cn --arg h "$FEED_HOST" --arg w "$FEED_WORKER" --arg z "$SITE_ZONE_ID" \
-    '{hostname: $h, service: $w, zone_id: $z, environment: "production"}')
-  change "attach $FEED_HOST to $FEED_WORKER" -- cf PUT "/accounts/$ACCOUNT/workers/domains" "$body" >/dev/null
-  record cf-worker-domain-created "$(jq -cn --arg a "$ACCOUNT" --arg h "$FEED_HOST" '{account: $a, hostname: $h}')"
+  todo "$FEED_HOST is not attached yet: dispatch Infrastructure on $NEW_INFRA (Terraform attaches it; verify.sh checks it)"
 fi
 
 ((DRY_RUN)) && say $'\n(dry run: nothing was changed)'

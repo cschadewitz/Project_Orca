@@ -12,8 +12,8 @@
 #   repo-settings/-topics     the description, homepage and topics put back
 #   variable-created          the ORRERY_ copy deleted (the ORCA_ original was never touched)
 #   azure-subject             the federated credential's subject put back
-#   cf-*                      the DNS record, Pages domain or project, redirect rule or Worker
-#                             domain the cutover created, deleted
+#   cf-*                      the DNS record, Pages domain or project or redirect rule the
+#                             cutover created, deleted (the feed's Worker domain is Terraform's)
 #   remote-url                a clone's remote URL put back
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=cutover-lib.sh
@@ -76,11 +76,6 @@ undo() {
       entry=$(cf GET "/zones/$(f zone)/rulesets/phases/http_request_dynamic_redirect/entrypoint")
       body=$(jq -c --arg ref "$(f ref)" '{rules: [.result.rules[] | select(.ref != $ref) | del(.id, .version, .last_updated)]}' <<<"$entry")
       change "remove the redirect rule $(f ref)" -- cf PUT "/zones/$(f zone)/rulesets/phases/http_request_dynamic_redirect/entrypoint" "$body"
-      ;;
-    cf-worker-domain-created)
-      local id
-      id=$(cf GET "/accounts/$(f account)/workers/domains?hostname=$(f hostname)" | jq -r '.result[0].id // empty')
-      [[ -n "$id" ]] && change "detach $(f hostname)" -- cf DELETE "/accounts/$(f account)/workers/domains/$id"
       ;;
     remote-url)
       change "point $(f clone) $(f remote) back at $(f before)" -- git -C "$(f clone)" config --fixed-value --replace-all "remote.$(f remote).url" "$(f before)" "$(f after)"
