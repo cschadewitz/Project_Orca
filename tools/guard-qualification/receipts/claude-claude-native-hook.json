@@ -6,7 +6,7 @@
   "adapterVersion": "0.109.1",
   "host": "linux-x64",
   "route": "claude-native-hook",
-  "build": "0611d8e3fea0794ed0ef2b9ed9a761ac3d2163db",
+  "build": "a73dc3cb2f66a9bee95aa16e2f92675debdb3ee9",
   "node": "v24.22.3",
   "inputs": {
     "adapter": {
@@ -32,9 +32,9 @@
               "type": "command",
               "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
               "args": [
-                "/tmp/orca-test-bundles-3GA9hQ/claude-pre-tool-hook-1026-installed/hook.mjs",
+                "/tmp/orca-test-bundles-o8kum2/claude-pre-tool-hook-1026-installed/hook.mjs",
                 "--attest",
-                "/tmp/orca-706-ZWIkTi/config/.orca/private-execution/tool-hooks/f3aa0437-d31a-4222-9bb8-8458c82651a7.json"
+                "/tmp/orca-706-SJQwCk/config/.orca/private-execution/tool-hooks/a8c2d843-b4f1-473f-a072-41faec6cfac8.json"
               ],
               "timeout": 10
             }
@@ -49,8 +49,8 @@
               "type": "command",
               "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
               "args": [
-                "/tmp/orca-test-bundles-3GA9hQ/claude-pre-tool-hook-1026-installed/hook.mjs",
-                "/tmp/orca-706-ZWIkTi/config/.orca/private-execution/tool-hooks/f3aa0437-d31a-4222-9bb8-8458c82651a7.json"
+                "/tmp/orca-test-bundles-o8kum2/claude-pre-tool-hook-1026-installed/hook.mjs",
+                "/tmp/orca-706-SJQwCk/config/.orca/private-execution/tool-hooks/a8c2d843-b4f1-473f-a072-41faec6cfac8.json"
               ],
               "timeout": 10,
               "onFailure": "block"
@@ -85,7 +85,7 @@
           "effect": "observed",
           "effectRef": {
             "kind": "file",
-            "path": "26c9e11d3e355948",
+            "path": "96f6d64a5a24cd25",
             "before": null,
             "after": "3964064e09ea7ea7",
             "written": "3964064e09ea7ea7"
@@ -105,7 +105,7 @@
           "effect": "none",
           "effectRef": {
             "kind": "file",
-            "path": "402e387f457c5546",
+            "path": "d642df3ada1bd328",
             "before": null,
             "after": null,
             "written": "3964064e09ea7ea7"
@@ -126,7 +126,7 @@
         "approvals": [
           {
             "toolCallId": "toolu_171_0",
-            "sessionId": "9c1733ea-aacc-4eac-a0f8-2eeef2584ee7",
+            "sessionId": "21e9a8f9-c228-4f02-852e-8fc2f5f13311",
             "answer": "pending"
           }
         ],
@@ -158,21 +158,21 @@
         "approvals": [
           {
             "toolCallId": "toolu_172_0",
-            "sessionId": "9c1733ea-aacc-4eac-a0f8-2eeef2584ee7",
+            "sessionId": "21e9a8f9-c228-4f02-852e-8fc2f5f13311",
             "answer": "pending"
           }
         ],
         "effect": "none",
         "effectRef": {
           "kind": "file",
-          "path": "d6fc6d2a3008a9db",
+          "path": "b0d4791c97002fab",
           "before": null,
           "after": null,
           "written": "bb283c744018a0d6"
         },
         "afterWait": {
           "kind": "file",
-          "path": "d6fc6d2a3008a9db",
+          "path": "b0d4791c97002fab",
           "before": null,
           "after": null,
           "written": "bb283c744018a0d6"
@@ -192,7 +192,7 @@
         "approvals": [
           {
             "toolCallId": "toolu_175_0",
-            "sessionId": "da25b059-7184-4344-9641-14a853a52e69",
+            "sessionId": "25797b3b-dc8c-43a8-8fd9-d074396ca0ed",
             "answer": "no-answer"
           }
         ],
@@ -217,14 +217,14 @@
         "approvals": [
           {
             "toolCallId": "toolu_177_0",
-            "sessionId": "da25b059-7184-4344-9641-14a853a52e69",
+            "sessionId": "25797b3b-dc8c-43a8-8fd9-d074396ca0ed",
             "answer": "no-answer"
           }
         ],
         "effect": "none",
         "effectRef": {
           "kind": "file",
-          "path": "d6fc6d2a3008a9db",
+          "path": "b0d4791c97002fab",
           "before": null,
           "after": null,
           "written": "3752c4abc9632ca5"
@@ -242,14 +242,14 @@
         "approvals": [
           {
             "toolCallId": "toolu_180_0",
-            "sessionId": "da25b059-7184-4344-9641-14a853a52e69",
+            "sessionId": "25797b3b-dc8c-43a8-8fd9-d074396ca0ed",
             "answer": "allow_once"
           }
         ],
         "effect": "observed",
         "effectRef": {
           "kind": "file",
-          "path": "d6fc6d2a3008a9db",
+          "path": "b0d4791c97002fab",
           "before": null,
           "after": "8e6ab11c25c52b05",
           "written": "8e6ab11c25c52b05"
@@ -272,7 +272,7 @@
         "approvals": [
           {
             "toolCallId": "toolu_184_0",
-            "sessionId": "207ffe1b-4db2-4d23-98d1-72be6562dbeb",
+            "sessionId": "4995f0fc-6f7b-44ac-9583-db8714ec85f8",
             "answer": "no-answer",
             "judged": {
               "verdict": "covered",
@@ -285,7 +285,7 @@
         "effect": "none",
         "effectRef": {
           "kind": "shell",
-          "command": "f60b5265226d365c",
+          "command": "571b49dd13b344d7",
           "matching": 0,
           "unaccountedLines": 0
         }
@@ -302,7 +302,7 @@
         "approvals": [
           {
             "toolCallId": "toolu_186_0",
-            "sessionId": "207ffe1b-4db2-4d23-98d1-72be6562dbeb",
+            "sessionId": "4995f0fc-6f7b-44ac-9583-db8714ec85f8",
             "answer": "allow_once",
             "judged": {
               "verdict": "covered",
@@ -315,7 +315,7 @@
         "effect": "observed",
         "effectRef": {
           "kind": "shell",
-          "command": "f60b5265226d365c",
+          "command": "571b49dd13b344d7",
           "matching": 1,
           "unaccountedLines": 0
         }
@@ -332,7 +332,7 @@
         "approvals": [
           {
             "toolCallId": "toolu_189_0",
-            "sessionId": "207ffe1b-4db2-4d23-98d1-72be6562dbeb",
+            "sessionId": "4995f0fc-6f7b-44ac-9583-db8714ec85f8",
             "answer": "no-answer",
             "judged": {
               "verdict": "not-covered",
@@ -345,7 +345,7 @@
         "effect": "none",
         "effectRef": {
           "kind": "shell",
-          "command": "1fc408f48919a120",
+          "command": "c0466fadb254d720",
           "matching": 0,
           "unaccountedLines": 0
         }
@@ -362,7 +362,7 @@
         "approvals": [
           {
             "toolCallId": "toolu_192_0",
-            "sessionId": "207ffe1b-4db2-4d23-98d1-72be6562dbeb",
+            "sessionId": "4995f0fc-6f7b-44ac-9583-db8714ec85f8",
             "answer": "allow_once",
             "judged": {
               "verdict": "not-covered",
@@ -375,7 +375,7 @@
         "effect": "observed",
         "effectRef": {
           "kind": "shell",
-          "command": "1fc408f48919a120",
+          "command": "c0466fadb254d720",
           "matching": 1,
           "unaccountedLines": 0
         }
@@ -430,9 +430,9 @@
             "kind": "mcp",
             "callRef": "c2",
             "loggedFor": [
-              "2f1cd09a922c30e6"
+              "298ae17303581fa4"
             ],
-            "answeredWith": "2f1cd09a922c30e6",
+            "answeredWith": "298ae17303581fa4",
             "unaccountedLines": 0
           }
         },
@@ -451,9 +451,9 @@
             "kind": "mcp",
             "callRef": "c3",
             "loggedFor": [
-              "6d312f1d94a73b6d"
+              "9d7d7b7df99925d0"
             ],
-            "answeredWith": "6d312f1d94a73b6d",
+            "answeredWith": "9d7d7b7df99925d0",
             "unaccountedLines": 0
           }
         },
@@ -472,9 +472,9 @@
             "kind": "mcp",
             "callRef": "c4",
             "loggedFor": [
-              "b1170d239e4cf3fe"
+              "67fda2f8c4ba6f12"
             ],
-            "answeredWith": "b1170d239e4cf3fe",
+            "answeredWith": "67fda2f8c4ba6f12",
             "unaccountedLines": 0
           }
         },
@@ -490,7 +490,7 @@
           "approvals": [
             {
               "toolCallId": "toolu_17_0",
-              "sessionId": "b2efc6fd-8a97-4bc7-95db-d46a2cc08280",
+              "sessionId": "cc925605-3a6a-4bab-95e6-2cba518a68d8",
               "answer": "reject_once"
             }
           ],
@@ -528,9 +528,9 @@
             "kind": "mcp",
             "callRef": "c2",
             "loggedFor": [
-              "4686ed72c822be17"
+              "3696f246556a7e12"
             ],
-            "answeredWith": "4686ed72c822be17",
+            "answeredWith": "3696f246556a7e12",
             "unaccountedLines": 0
           }
         },
@@ -549,9 +549,9 @@
             "kind": "mcp",
             "callRef": "c3",
             "loggedFor": [
-              "1e4a5805ad17f4a5"
+              "1efe3290460cad44"
             ],
-            "answeredWith": "1e4a5805ad17f4a5",
+            "answeredWith": "1efe3290460cad44",
             "unaccountedLines": 0
           }
         },
@@ -567,7 +567,7 @@
           "approvals": [
             {
               "toolCallId": "toolu_26_0",
-              "sessionId": "bfec57b5-45d3-4a8e-a8a6-8dbf94041ee0",
+              "sessionId": "f2e4c7f6-47c5-4121-b84c-231962be8b62",
               "answer": "reject_once"
             }
           ],
@@ -603,7 +603,7 @@
           "effect": "observed",
           "effectRef": {
             "kind": "file",
-            "path": "269eed3b71c25f9a",
+            "path": "4a1f2e720fc1121c",
             "before": null,
             "after": "3964064e09ea7ea7",
             "written": "3964064e09ea7ea7"
@@ -622,7 +622,7 @@
           "effect": "none",
           "effectRef": {
             "kind": "file",
-            "path": "269eed3b71c25f9a",
+            "path": "4a1f2e720fc1121c",
             "before": "3964064e09ea7ea7",
             "after": "3964064e09ea7ea7",
             "written": "93d7a887c1ee6fc6"
@@ -642,7 +642,7 @@
           "effect": "observed",
           "effectRef": {
             "kind": "file",
-            "path": "55c5cc2354623da5",
+            "path": "4ab94d57ed10fdc8",
             "before": null,
             "after": "3752c4abc9632ca5",
             "written": "3752c4abc9632ca5"
@@ -674,9 +674,9 @@
             "kind": "mcp",
             "callRef": "c2",
             "loggedFor": [
-              "32c9ae9e567ff0dc"
+              "88c50e7595b2dcc5"
             ],
-            "answeredWith": "32c9ae9e567ff0dc",
+            "answeredWith": "88c50e7595b2dcc5",
             "unaccountedLines": 0
           }
         },
@@ -724,9 +724,9 @@
             "kind": "mcp",
             "callRef": "c2",
             "loggedFor": [
-              "7b90361e9d3b1143"
+              "984411616544ee02"
             ],
-            "answeredWith": "7b90361e9d3b1143",
+            "answeredWith": "984411616544ee02",
             "unaccountedLines": 0
           }
         },
@@ -745,9 +745,9 @@
             "kind": "mcp",
             "callRef": "c3",
             "loggedFor": [
-              "beb4b844eebff19e"
+              "4a71446a4c15a3b8"
             ],
-            "answeredWith": "beb4b844eebff19e",
+            "answeredWith": "4a71446a4c15a3b8",
             "unaccountedLines": 0
           }
         },
@@ -766,9 +766,9 @@
             "kind": "mcp",
             "callRef": "c4",
             "loggedFor": [
-              "e3b6674c4ace860c"
+              "ec85deafd9653418"
             ],
-            "answeredWith": "e3b6674c4ace860c",
+            "answeredWith": "ec85deafd9653418",
             "unaccountedLines": 0
           }
         },
@@ -787,9 +787,9 @@
             "kind": "mcp",
             "callRef": "c5",
             "loggedFor": [
-              "74893a387b454d00"
+              "da5d3a98da4b8165"
             ],
-            "answeredWith": "74893a387b454d00",
+            "answeredWith": "da5d3a98da4b8165",
             "unaccountedLines": 0
           }
         },
@@ -808,9 +808,9 @@
             "kind": "mcp",
             "callRef": "c6",
             "loggedFor": [
-              "ccdb2c1c9004d25d"
+              "9d601894b370c6dd"
             ],
-            "answeredWith": "ccdb2c1c9004d25d",
+            "answeredWith": "9d601894b370c6dd",
             "unaccountedLines": 0
           }
         },
@@ -829,9 +829,9 @@
             "kind": "mcp",
             "callRef": "c7",
             "loggedFor": [
-              "bd830b6ce563d195"
+              "cb8112f9e1f8a841"
             ],
-            "answeredWith": "bd830b6ce563d195",
+            "answeredWith": "cb8112f9e1f8a841",
             "unaccountedLines": 0
           }
         },
@@ -850,9 +850,9 @@
             "kind": "mcp",
             "callRef": "c8",
             "loggedFor": [
-              "eeeb5a4cb3d8c5ce"
+              "7b79642bce1b34fd"
             ],
-            "answeredWith": "eeeb5a4cb3d8c5ce",
+            "answeredWith": "7b79642bce1b34fd",
             "unaccountedLines": 0
           }
         },
@@ -871,9 +871,9 @@
             "kind": "mcp",
             "callRef": "c9",
             "loggedFor": [
-              "a4b61faa535670bb"
+              "51d3789d0f55f490"
             ],
-            "answeredWith": "a4b61faa535670bb",
+            "answeredWith": "51d3789d0f55f490",
             "unaccountedLines": 0
           }
         },
@@ -892,9 +892,9 @@
             "kind": "mcp",
             "callRef": "c10",
             "loggedFor": [
-              "817cc0ef7c4c6b43"
+              "d91341f72f2caf34"
             ],
-            "answeredWith": "817cc0ef7c4c6b43",
+            "answeredWith": "d91341f72f2caf34",
             "unaccountedLines": 0
           }
         },
@@ -913,9 +913,9 @@
             "kind": "mcp",
             "callRef": "c11",
             "loggedFor": [
-              "73cf86faec491b77"
+              "5755ad8408a290e8"
             ],
-            "answeredWith": "73cf86faec491b77",
+            "answeredWith": "5755ad8408a290e8",
             "unaccountedLines": 0
           }
         },
@@ -934,9 +934,9 @@
             "kind": "mcp",
             "callRef": "c12",
             "loggedFor": [
-              "112cd65322def3e5"
+              "0c294021b5d52f25"
             ],
-            "answeredWith": "112cd65322def3e5",
+            "answeredWith": "0c294021b5d52f25",
             "unaccountedLines": 0
           }
         },
@@ -955,9 +955,9 @@
             "kind": "mcp",
             "callRef": "c13",
             "loggedFor": [
-              "c6faa3069826bf7b"
+              "adb76b7369c30f7d"
             ],
-            "answeredWith": "c6faa3069826bf7b",
+            "answeredWith": "adb76b7369c30f7d",
             "unaccountedLines": 0
           }
         },
@@ -976,9 +976,9 @@
             "kind": "mcp",
             "callRef": "c14",
             "loggedFor": [
-              "065b7a155a656fe9"
+              "f37a4c3ce89c79a5"
             ],
-            "answeredWith": "065b7a155a656fe9",
+            "answeredWith": "f37a4c3ce89c79a5",
             "unaccountedLines": 0
           }
         },
@@ -997,9 +997,9 @@
             "kind": "mcp",
             "callRef": "c15",
             "loggedFor": [
-              "afd0097b13c13aae"
+              "9abc45fc8b00439e"
             ],
-            "answeredWith": "afd0097b13c13aae",
+            "answeredWith": "9abc45fc8b00439e",
             "unaccountedLines": 0
           }
         },
@@ -1018,9 +1018,9 @@
             "kind": "mcp",
             "callRef": "c16",
             "loggedFor": [
-              "79d0c1327154f6d1"
+              "952bdb2b62ccb93d"
             ],
-            "answeredWith": "79d0c1327154f6d1",
+            "answeredWith": "952bdb2b62ccb93d",
             "unaccountedLines": 0
           }
         },
@@ -1039,9 +1039,9 @@
             "kind": "mcp",
             "callRef": "c17",
             "loggedFor": [
-              "84b5d1065e89c0cb"
+              "3466088b648259e6"
             ],
-            "answeredWith": "84b5d1065e89c0cb",
+            "answeredWith": "3466088b648259e6",
             "unaccountedLines": 0
           }
         },
@@ -1057,7 +1057,7 @@
           "approvals": [
             {
               "toolCallId": "toolu_50_0",
-              "sessionId": "3027276a-f5a9-4f2f-bbb8-b0d754cf0e0d",
+              "sessionId": "54a0940b-393b-4340-b963-504da5734b57",
               "answer": "reject_once"
             }
           ],
@@ -1082,7 +1082,7 @@
           "approvals": [
             {
               "toolCallId": "toolu_50_1",
-              "sessionId": "3027276a-f5a9-4f2f-bbb8-b0d754cf0e0d",
+              "sessionId": "54a0940b-393b-4340-b963-504da5734b57",
               "answer": "reject_once"
             }
           ],
@@ -1107,7 +1107,7 @@
           "approvals": [
             {
               "toolCallId": "toolu_50_2",
-              "sessionId": "3027276a-f5a9-4f2f-bbb8-b0d754cf0e0d",
+              "sessionId": "54a0940b-393b-4340-b963-504da5734b57",
               "answer": "reject_once"
             }
           ],
@@ -1132,7 +1132,7 @@
           "approvals": [
             {
               "toolCallId": "toolu_50_3",
-              "sessionId": "3027276a-f5a9-4f2f-bbb8-b0d754cf0e0d",
+              "sessionId": "54a0940b-393b-4340-b963-504da5734b57",
               "answer": "reject_once"
             }
           ],
@@ -1157,7 +1157,7 @@
           "approvals": [
             {
               "toolCallId": "toolu_50_4",
-              "sessionId": "3027276a-f5a9-4f2f-bbb8-b0d754cf0e0d",
+              "sessionId": "54a0940b-393b-4340-b963-504da5734b57",
               "answer": "reject_once"
             }
           ],
@@ -1182,7 +1182,7 @@
           "approvals": [
             {
               "toolCallId": "toolu_50_5",
-              "sessionId": "3027276a-f5a9-4f2f-bbb8-b0d754cf0e0d",
+              "sessionId": "54a0940b-393b-4340-b963-504da5734b57",
               "answer": "reject_once"
             }
           ],
@@ -1207,7 +1207,7 @@
           "approvals": [
             {
               "toolCallId": "toolu_50_6",
-              "sessionId": "3027276a-f5a9-4f2f-bbb8-b0d754cf0e0d",
+              "sessionId": "54a0940b-393b-4340-b963-504da5734b57",
               "answer": "reject_once"
             }
           ],
@@ -1232,7 +1232,7 @@
           "approvals": [
             {
               "toolCallId": "toolu_50_7",
-              "sessionId": "3027276a-f5a9-4f2f-bbb8-b0d754cf0e0d",
+              "sessionId": "54a0940b-393b-4340-b963-504da5734b57",
               "answer": "reject_once"
             }
           ],
@@ -1257,7 +1257,7 @@
           "approvals": [
             {
               "toolCallId": "toolu_50_8",
-              "sessionId": "3027276a-f5a9-4f2f-bbb8-b0d754cf0e0d",
+              "sessionId": "54a0940b-393b-4340-b963-504da5734b57",
               "answer": "reject_once"
             }
           ],
@@ -1282,7 +1282,7 @@
           "approvals": [
             {
               "toolCallId": "toolu_50_9",
-              "sessionId": "3027276a-f5a9-4f2f-bbb8-b0d754cf0e0d",
+              "sessionId": "54a0940b-393b-4340-b963-504da5734b57",
               "answer": "reject_once"
             }
           ],
@@ -1307,7 +1307,7 @@
           "approvals": [
             {
               "toolCallId": "toolu_50_10",
-              "sessionId": "3027276a-f5a9-4f2f-bbb8-b0d754cf0e0d",
+              "sessionId": "54a0940b-393b-4340-b963-504da5734b57",
               "answer": "reject_once"
             }
           ],
@@ -1332,7 +1332,7 @@
           "approvals": [
             {
               "toolCallId": "toolu_50_11",
-              "sessionId": "3027276a-f5a9-4f2f-bbb8-b0d754cf0e0d",
+              "sessionId": "54a0940b-393b-4340-b963-504da5734b57",
               "answer": "reject_once"
             }
           ],
@@ -1357,7 +1357,7 @@
           "approvals": [
             {
               "toolCallId": "toolu_50_12",
-              "sessionId": "3027276a-f5a9-4f2f-bbb8-b0d754cf0e0d",
+              "sessionId": "54a0940b-393b-4340-b963-504da5734b57",
               "answer": "reject_once"
             }
           ],
@@ -1382,7 +1382,7 @@
           "approvals": [
             {
               "toolCallId": "toolu_50_13",
-              "sessionId": "3027276a-f5a9-4f2f-bbb8-b0d754cf0e0d",
+              "sessionId": "54a0940b-393b-4340-b963-504da5734b57",
               "answer": "reject_once"
             }
           ],
@@ -1407,7 +1407,7 @@
           "approvals": [
             {
               "toolCallId": "toolu_50_14",
-              "sessionId": "3027276a-f5a9-4f2f-bbb8-b0d754cf0e0d",
+              "sessionId": "54a0940b-393b-4340-b963-504da5734b57",
               "answer": "reject_once"
             }
           ],
@@ -1432,7 +1432,7 @@
           "approvals": [
             {
               "toolCallId": "toolu_50_15",
-              "sessionId": "3027276a-f5a9-4f2f-bbb8-b0d754cf0e0d",
+              "sessionId": "54a0940b-393b-4340-b963-504da5734b57",
               "answer": "reject_once"
             }
           ],
@@ -1470,9 +1470,9 @@
             "kind": "mcp",
             "callRef": "c2",
             "loggedFor": [
-              "e6bb0d63fc12c998"
+              "595fdf778d31c650"
             ],
-            "answeredWith": "e6bb0d63fc12c998",
+            "answeredWith": "595fdf778d31c650",
             "unaccountedLines": 0
           }
         },
@@ -1488,7 +1488,7 @@
           "approvals": [
             {
               "toolCallId": "toolu_56_0",
-              "sessionId": "89a13431-7a3e-4115-b242-b93247919fcc",
+              "sessionId": "72b985c6-c56b-4e14-aa58-86069cb66734",
               "answer": "reject_once"
             }
           ],
@@ -1532,14 +1532,14 @@
           "approvals": [
             {
               "toolCallId": "toolu_62_0",
-              "sessionId": "89a13431-7a3e-4115-b242-b93247919fcc",
+              "sessionId": "72b985c6-c56b-4e14-aa58-86069cb66734",
               "answer": "reject_once"
             }
           ],
           "effect": "none",
           "effectRef": {
             "kind": "file",
-            "path": "9fe15a9ca3015ad6",
+            "path": "2627b03b63cbec1e",
             "before": null,
             "after": null,
             "written": "8e6ab11c25c52b05"
@@ -1570,9 +1570,9 @@
             "kind": "mcp",
             "callRef": "c2",
             "loggedFor": [
-              "64b18d65a799d5a3"
+              "047bab013ede6c79"
             ],
-            "answeredWith": "64b18d65a799d5a3",
+            "answeredWith": "047bab013ede6c79",
             "unaccountedLines": 0
           }
         },
@@ -1588,7 +1588,7 @@
           "approvals": [
             {
               "toolCallId": "toolu_68_0",
-              "sessionId": "ec1d2723-6a28-4ad7-8918-35bde6d35add",
+              "sessionId": "f64a02a5-1fb5-4979-95a7-8972534c21a3",
               "answer": "reject_once"
             }
           ],
@@ -1663,7 +1663,7 @@
           "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
           "args": "installed",
           "input": {
-            "sha256": "cfcd140ee681d5ec6b690f112738617491f2c9a2b954e7a5bb49a2062d124c1f",
+            "sha256": "2e1165fdab66963eb279a1f0e125e108dc251a7e1f3279e050f85200158fe10b",
             "bytes": 163
           },
           "exitCode": 2,
@@ -1675,7 +1675,7 @@
           "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
           "args": "installed",
           "input": {
-            "sha256": "16f8fdca384096b28cc33cd209b961baf11baeab5208fd2662f522cc3d3ce680",
+            "sha256": "5abc72b0ffbd115254ef62df31c7605acf5154247e0f1473721b004d2958d56d",
             "bytes": 143
           },
           "exitCode": 2,
@@ -1687,7 +1687,7 @@
           "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
           "args": "installed",
           "input": {
-            "sha256": "0ddc867d78ff33f92bfc9368aa2ad11a8ac24b29bc5cdc599dc06264470e6327",
+            "sha256": "e2cbd94e4d4499538dbac8fd1ea95515599f98bdc514a95ef1212e6a941b58e0",
             "bytes": 157
           },
           "exitCode": 2,
@@ -1699,7 +1699,7 @@
           "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
           "args": "installed",
           "input": {
-            "sha256": "8bf5e323d9196c81e98dd1884beeb202762ea63c5f6aa0651ad0372c5b7549dc",
+            "sha256": "7d986e52d47381522f8ebf269521c9e0f61e74b1da0478cf1915ed6cc255f3d7",
             "bytes": 121
           },
           "exitCode": 2,
@@ -1711,7 +1711,7 @@
           "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
           "args": "installed",
           "input": {
-            "sha256": "5943f590178930938b4fffcad77964d74e7f336271b4b1ab9ab223db737c9099",
+            "sha256": "43ef3a54b3eb7d3c20c4fc63c8e9f73da5642bff07458a1f5807562a283029a6",
             "bytes": 149
           },
           "exitCode": 2,
@@ -1723,7 +1723,7 @@
           "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
           "args": "installed",
           "input": {
-            "sha256": "7c8e2e4c6cd75239737c6fabef1d7d41d39824fa7795e723512217a903f1f2b3",
+            "sha256": "4ba42b58d059d1099fb6146f6a47e2f4c2d5cc380eba837b20d803623f248876",
             "bytes": 128
           },
           "exitCode": 2,
@@ -1735,7 +1735,7 @@
           "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
           "args": "installed",
           "input": {
-            "sha256": "8052a171d83a756b2243532b1bca1d1c34724e3a4d3bf739f9548c3675382809",
+            "sha256": "982b77b395cf5520b0f4255522ded7e63f989f875aad87caa1b17fe69d82234b",
             "bytes": 4194430
           },
           "exitCode": 2,
@@ -1747,7 +1747,7 @@
           "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
           "args": "installed",
           "input": {
-            "sha256": "7cae0c24eaec7e563a66ab3f9cd24a7da40879a782e6da6e91059c5970e18ac6",
+            "sha256": "44f9b5b9aa076a22dedd98aba9988dcca7537a87d909a978cab9af830e88c2cf",
             "bytes": 162
           },
           "exitCode": 0,
@@ -1769,7 +1769,7 @@
           "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
           "args": "replaced",
           "input": {
-            "sha256": "15d2ad7e0950524b35867c511503765f89ad307a78c41855e18a4c24976b334e",
+            "sha256": "7bb2579c76fe737b9f5447fffa54b6dff2d66f5e0f99968132f038eee173e485",
             "bytes": 162
           },
           "exitCode": 2,
@@ -1781,7 +1781,7 @@
           "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
           "args": "replaced",
           "input": {
-            "sha256": "15d2ad7e0950524b35867c511503765f89ad307a78c41855e18a4c24976b334e",
+            "sha256": "7bb2579c76fe737b9f5447fffa54b6dff2d66f5e0f99968132f038eee173e485",
             "bytes": 162
           },
           "exitCode": 2,
@@ -1793,7 +1793,7 @@
           "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
           "args": "replaced",
           "input": {
-            "sha256": "15d2ad7e0950524b35867c511503765f89ad307a78c41855e18a4c24976b334e",
+            "sha256": "7bb2579c76fe737b9f5447fffa54b6dff2d66f5e0f99968132f038eee173e485",
             "bytes": 162
           },
           "exitCode": 2,
@@ -1805,7 +1805,7 @@
           "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
           "args": "replaced",
           "input": {
-            "sha256": "15d2ad7e0950524b35867c511503765f89ad307a78c41855e18a4c24976b334e",
+            "sha256": "7bb2579c76fe737b9f5447fffa54b6dff2d66f5e0f99968132f038eee173e485",
             "bytes": 162
           },
           "exitCode": 2,
@@ -1817,7 +1817,7 @@
           "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
           "args": "replaced",
           "input": {
-            "sha256": "15d2ad7e0950524b35867c511503765f89ad307a78c41855e18a4c24976b334e",
+            "sha256": "7bb2579c76fe737b9f5447fffa54b6dff2d66f5e0f99968132f038eee173e485",
             "bytes": 162
           },
           "exitCode": 2,
@@ -1829,7 +1829,7 @@
           "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
           "args": "replaced",
           "input": {
-            "sha256": "15d2ad7e0950524b35867c511503765f89ad307a78c41855e18a4c24976b334e",
+            "sha256": "7bb2579c76fe737b9f5447fffa54b6dff2d66f5e0f99968132f038eee173e485",
             "bytes": 162
           },
           "exitCode": 2,
@@ -1841,7 +1841,7 @@
           "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
           "args": "replaced",
           "input": {
-            "sha256": "15d2ad7e0950524b35867c511503765f89ad307a78c41855e18a4c24976b334e",
+            "sha256": "7bb2579c76fe737b9f5447fffa54b6dff2d66f5e0f99968132f038eee173e485",
             "bytes": 162
           },
           "exitCode": 2,
@@ -1853,7 +1853,7 @@
           "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
           "args": "replaced",
           "input": {
-            "sha256": "15d2ad7e0950524b35867c511503765f89ad307a78c41855e18a4c24976b334e",
+            "sha256": "7bb2579c76fe737b9f5447fffa54b6dff2d66f5e0f99968132f038eee173e485",
             "bytes": 162
           },
           "exitCode": 2,
@@ -1865,7 +1865,7 @@
           "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
           "args": "replaced",
           "input": {
-            "sha256": "15d2ad7e0950524b35867c511503765f89ad307a78c41855e18a4c24976b334e",
+            "sha256": "7bb2579c76fe737b9f5447fffa54b6dff2d66f5e0f99968132f038eee173e485",
             "bytes": 162
           },
           "exitCode": 2,
@@ -1877,7 +1877,7 @@
           "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
           "args": "replaced",
           "input": {
-            "sha256": "15d2ad7e0950524b35867c511503765f89ad307a78c41855e18a4c24976b334e",
+            "sha256": "7bb2579c76fe737b9f5447fffa54b6dff2d66f5e0f99968132f038eee173e485",
             "bytes": 162
           },
           "exitCode": 2,
@@ -1889,7 +1889,7 @@
           "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
           "args": "replaced",
           "input": {
-            "sha256": "15d2ad7e0950524b35867c511503765f89ad307a78c41855e18a4c24976b334e",
+            "sha256": "7bb2579c76fe737b9f5447fffa54b6dff2d66f5e0f99968132f038eee173e485",
             "bytes": 162
           },
           "exitCode": 2,
@@ -1901,7 +1901,7 @@
           "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
           "args": "replaced",
           "input": {
-            "sha256": "15d2ad7e0950524b35867c511503765f89ad307a78c41855e18a4c24976b334e",
+            "sha256": "7bb2579c76fe737b9f5447fffa54b6dff2d66f5e0f99968132f038eee173e485",
             "bytes": 162
           },
           "exitCode": 2,
@@ -1932,7 +1932,7 @@
           "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
           "args": "installed",
           "input": {
-            "sha256": "95fd17b29bb807687e46b3a86670e20c6fcfe2753dd9369c07ece964ff01b1e5",
+            "sha256": "00bae2778f603a10fd0b0281e6ac67225646acbb7d63fd628cf70af627d6c8a0",
             "bytes": 234
           },
           "exitCode": 0,
@@ -1944,7 +1944,7 @@
           "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
           "args": "installed",
           "input": {
-            "sha256": "91c276bfa396731efd5e624f042436a403fb9696bbc7d893207dabbbd2a1e819",
+            "sha256": "f7322a5b585a501bab76be0372a8a64605b28389b161067a03cb9202ce47bebe",
             "bytes": 228
           },
           "exitCode": 0,
@@ -1956,7 +1956,7 @@
           "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
           "args": "installed",
           "input": {
-            "sha256": "7ccf5fa318927da9e2658e711c08b4a61f7c0d7a9310d5cf249c261e4b769bd5",
+            "sha256": "9f6c1f5abeeea6bac199944713a9e478d78f1092c908320a27ae22f7d8b12c0e",
             "bytes": 221
           },
           "exitCode": 0,
@@ -1968,7 +1968,7 @@
           "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
           "args": "installed",
           "input": {
-            "sha256": "5b0f70adef6691b390d05b0c69508e02df286b8f70e8b0ee53c8c82327836a13",
+            "sha256": "df3254c5632760c0437a1e806345991e0c0330c59c65b55d856af941420d29ee",
             "bytes": 225
           },
           "exitCode": 0,
@@ -2001,9 +2001,9 @@
             "kind": "mcp",
             "callRef": "c2",
             "loggedFor": [
-              "154a09be97daffcf"
+              "f1e78e490bb2dd7f"
             ],
-            "answeredWith": "154a09be97daffcf",
+            "answeredWith": "f1e78e490bb2dd7f",
             "unaccountedLines": 0
           }
         },
@@ -2019,7 +2019,7 @@
           "approvals": [
             {
               "toolCallId": "toolu_74_0",
-              "sessionId": "01ac52bf-1e0b-4fbf-85eb-1f41d4af83bd",
+              "sessionId": "022ae2c3-e96c-409c-ad28-e1ee775c4418",
               "answer": "reject_once"
             }
           ],
@@ -2044,7 +2044,7 @@
           "approvals": [
             {
               "toolCallId": "toolu_77_0",
-              "sessionId": "01ac52bf-1e0b-4fbf-85eb-1f41d4af83bd",
+              "sessionId": "022ae2c3-e96c-409c-ad28-e1ee775c4418",
               "answer": "reject_once"
             }
           ],
@@ -2069,7 +2069,7 @@
           "approvals": [
             {
               "toolCallId": "toolu_80_0",
-              "sessionId": "01ac52bf-1e0b-4fbf-85eb-1f41d4af83bd",
+              "sessionId": "022ae2c3-e96c-409c-ad28-e1ee775c4418",
               "answer": "reject_once"
             }
           ],
@@ -2096,7 +2096,7 @@
           "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
           "args": "installed",
           "input": {
-            "sha256": "635601ad6f1067170dc805f02fd3cf3fbb2e19133bbcbcb9615d9a22f97bb37e",
+            "sha256": "e636a74e8402f2c2d9c56e72ce22cf9947bdbc1af2d8504c589a18bdf06aa230",
             "bytes": 275
           },
           "exitCode": 0,
@@ -2108,7 +2108,7 @@
           "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
           "args": "installed",
           "input": {
-            "sha256": "21c944aeef11cc508f3b62797124ef459b2cbb56f6d930d58c458061b335d8af",
+            "sha256": "1e2824012d89632344f87b25672dd8ab5a3ae8e89eb328d3bc840f7165432fc4",
             "bytes": 280
           },
           "exitCode": 0,
@@ -2120,7 +2120,7 @@
           "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
           "args": "installed",
           "input": {
-            "sha256": "c5ab5b68e676a61d81bcfde5d489fd9239a48e352acff06c77bd9be75147c238",
+            "sha256": "fb341cf253c76cc6c193b2e30415664d973c7ed9fa136ef34adcb4a76dd387db",
             "bytes": 288
           },
           "exitCode": 0,
@@ -2132,7 +2132,7 @@
           "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
           "args": "installed",
           "input": {
-            "sha256": "cc7b6fb56c5796250bbb6d9413395130595fc04278caf6a9c2e52544e096023d",
+            "sha256": "ac7e23e1b7f4c5ab1dc1d48f2c3b8dee20771de25b48840c58b77062f0ac53c9",
             "bytes": 282
           },
           "exitCode": 0,
@@ -2144,7 +2144,7 @@
           "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
           "args": "installed",
           "input": {
-            "sha256": "d0afd0fd34184d706348c9a5f78e510e7b175c57389c58d3aa38369214674d2a",
+            "sha256": "077d947501032c75363be6e3d18bddf9d750759421f6014aae26080ace0ef4db",
             "bytes": 266
           },
           "exitCode": 0,
@@ -2246,7 +2246,7 @@
           "approvals": [
             {
               "toolCallId": "toolu_95_0",
-              "sessionId": "85f98432-c30d-4bb5-ba30-cd20f507a2ae",
+              "sessionId": "db382ad6-c9d1-4ecf-8823-4d17718beebe",
               "answer": "reject_once"
             }
           ],
@@ -2270,7 +2270,7 @@
           "approvals": [
             {
               "toolCallId": "toolu_98_0",
-              "sessionId": "85f98432-c30d-4bb5-ba30-cd20f507a2ae",
+              "sessionId": "db382ad6-c9d1-4ecf-8823-4d17718beebe",
               "answer": "reject_once"
             }
           ],
@@ -2294,7 +2294,7 @@
           "approvals": [
             {
               "toolCallId": "toolu_101_0",
-              "sessionId": "85f98432-c30d-4bb5-ba30-cd20f507a2ae",
+              "sessionId": "db382ad6-c9d1-4ecf-8823-4d17718beebe",
               "answer": "reject_once"
             }
           ],
@@ -2321,7 +2321,7 @@
           "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
           "args": "installed",
           "input": {
-            "sha256": "8693df8c5a7ac03f65b7e24b53d0e656296e69e92195eda87a0efcebe1e39215",
+            "sha256": "660c20c4796129147404847504c56995020e3d5cb74d2e736da87f37504c450e",
             "bytes": 238
           },
           "exitCode": 0,
@@ -2333,7 +2333,7 @@
           "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
           "args": "installed",
           "input": {
-            "sha256": "4c47881c8519a9ec1856e4f441ae85659ae847af1a02ab7ff1c7ee19405c9f08",
+            "sha256": "ae0b325c764930181a22e62b91010445bc53e4bbe78cd76a03b8bcccf3c465be",
             "bytes": 243
           },
           "exitCode": 0,
@@ -2345,7 +2345,7 @@
           "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
           "args": "installed",
           "input": {
-            "sha256": "912c5dec2699a1c6dc2d189160bc02814c467f698bf209de43e801c8ec537fa5",
+            "sha256": "302bcbe0edbd984c5c9ea95fac93cc022489d2edd21fa738b9d997cbf3d3fec4",
             "bytes": 280
           },
           "exitCode": 0,
@@ -2367,7 +2367,7 @@
           "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
           "args": "installed",
           "input": {
-            "sha256": "ad9d92478203aa759f5aa8ca3ce92d7a1aa94a989379b1715620d0e641218fe0",
+            "sha256": "4abf68c1c53fe3b9b8437f67993e533bb51489737f05d88b49576d1c31416fcd",
             "bytes": 294
           },
           "exitCode": 0,
@@ -2379,7 +2379,7 @@
           "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
           "args": "installed",
           "input": {
-            "sha256": "17e91cd5cac28ae1991ce205b9776f83ad1b36211a859a3d63f29a833cb6452b",
+            "sha256": "271fe65ef845420d714796590cde30b670aa90068cd48537af1a08bfa54c5662",
             "bytes": 314
           },
           "exitCode": 0,
@@ -2391,7 +2391,7 @@
           "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
           "args": "installed",
           "input": {
-            "sha256": "c5b6da2fdbb3c60ca81ab75955a1b286f53f4b9dd14e9819e89f8e55f8ad3aa9",
+            "sha256": "0c9076421ae95f8b83cc3eaa31a88105767770c745e04234f4a52f1f314ef041",
             "bytes": 289
           },
           "exitCode": 0,
@@ -2403,7 +2403,7 @@
           "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
           "args": "installed",
           "input": {
-            "sha256": "a43a8174a1819c7c1bfe4795c72a8b8fe8ef144234048dbd00850cddd668be57",
+            "sha256": "6b1eb195c5064f5ee7c693e832a7dd4fc8aefa0ed0f397a79bbbc43d945e92a2",
             "bytes": 309
           },
           "exitCode": 0,
@@ -2415,7 +2415,7 @@
           "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
           "args": "installed",
           "input": {
-            "sha256": "4ccbb521f486b78cbd60798e5acd940065dfcaee7cf0592e105cefa92fbd82ee",
+            "sha256": "b0e4e3ce445dee0e635d3283aa0263f6baac508fbbae1ae63d2bd9a165751dcd",
             "bytes": 296
           },
           "exitCode": 0,
@@ -2427,7 +2427,7 @@
           "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
           "args": "installed",
           "input": {
-            "sha256": "ac6588d001118e0b89d7b3e217d5d7f3b5fe98eefd0bef81986fb0d2239f7a6e",
+            "sha256": "256ccd3ff2bf4f344c811627c49e38db40758e679c3f9eebf2be30bb6c0f1e4a",
             "bytes": 316
           },
           "exitCode": 0,
@@ -2439,7 +2439,7 @@
           "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
           "args": "installed",
           "input": {
-            "sha256": "c6a028e11ffe1d1fa9c55a16c47ae35139d463aea7e76551be1daad6a4ede6aa",
+            "sha256": "1e25e18bcfff9b603b6309b5d85ac993fda6a43251d175bb1d9aa6d2f85dc20f",
             "bytes": 287
           },
           "exitCode": 0,
@@ -2451,7 +2451,7 @@
           "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
           "args": "installed",
           "input": {
-            "sha256": "432c4ff0b5bd935a9234c0703f710a761de77394e2c2a8c5a8b870f02a0310a0",
+            "sha256": "19ce4f363d8dd44cc4417b91576406f54b5eb9ed314e5fd4696244a7d1edb7a3",
             "bytes": 307
           },
           "exitCode": 0,
@@ -2463,7 +2463,7 @@
           "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
           "args": "installed",
           "input": {
-            "sha256": "fc2259faac5cc5ba8574915fe26640a914040ea3a77dd9414983bda010566f84",
+            "sha256": "96b318aa9c00c6fa2ed08154fd121b0f3845a15234e7842503437fe361a38475",
             "bytes": 289
           },
           "exitCode": 0,
@@ -2475,7 +2475,7 @@
           "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
           "args": "installed",
           "input": {
-            "sha256": "41e5604f598118b8a095738ea673d696311b31ab67e92e35a21a22a0ec4a85f2",
+            "sha256": "3ddd7d99728d94cc98008b4e0721385ead981294292a1e5da60d0964b1e79f86",
             "bytes": 310
           },
           "exitCode": 0,
@@ -2487,7 +2487,7 @@
           "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
           "args": "installed",
           "input": {
-            "sha256": "c0d1c1d8838ab95eff4a3a968525a03ae86e7138a448a1756c4e424245771e69",
+            "sha256": "2fd29068d425e2750c2bc721ef142a9ff87b85191a6df605e967bb7c213f617e",
             "bytes": 276
           },
           "exitCode": 0,
@@ -2518,7 +2518,7 @@
           "effect": "none",
           "effectRef": {
             "kind": "file",
-            "path": "018421a8a48cb6df",
+            "path": "6079e05e90e79983",
             "before": "eb2c98ffe63924ea",
             "after": "eb2c98ffe63924ea",
             "written": "3964064e09ea7ea7"
@@ -2538,7 +2538,7 @@
           "effect": "none",
           "effectRef": {
             "kind": "file",
-            "path": "a5dc4087848492be",
+            "path": "db62d5476247fe34",
             "before": null,
             "after": null,
             "written": "bb283c744018a0d6"
@@ -2566,7 +2566,7 @@
           "approvals": [
             {
               "toolCallId": "toolu_114_0",
-              "sessionId": "7da45fee-c07b-4f77-a63d-379a8f3e5b46",
+              "sessionId": "3805cdcb-c622-4d55-b3d7-8b7f32889298",
               "answer": "reject_once"
             }
           ],
@@ -2590,7 +2590,7 @@
           "approvals": [
             {
               "toolCallId": "toolu_116_0",
-              "sessionId": "7da45fee-c07b-4f77-a63d-379a8f3e5b46",
+              "sessionId": "3805cdcb-c622-4d55-b3d7-8b7f32889298",
               "answer": "reject_once"
             }
           ],
@@ -2614,7 +2614,7 @@
           "approvals": [
             {
               "toolCallId": "toolu_119_0",
-              "sessionId": "7da45fee-c07b-4f77-a63d-379a8f3e5b46",
+              "sessionId": "3805cdcb-c622-4d55-b3d7-8b7f32889298",
               "answer": "reject_once"
             }
           ],
@@ -2648,7 +2648,7 @@
           "approvals": [
             {
               "toolCallId": "toolu_123_0",
-              "sessionId": "4ce64511-27e0-44a7-a27f-365e6e04638b",
+              "sessionId": "57000f92-61dc-44d4-925a-a4662a27549e",
               "answer": "reject_once"
             }
           ],
@@ -2673,14 +2673,14 @@
           "approvals": [
             {
               "toolCallId": "toolu_125_0",
-              "sessionId": "4ce64511-27e0-44a7-a27f-365e6e04638b",
+              "sessionId": "57000f92-61dc-44d4-925a-a4662a27549e",
               "answer": "reject_once"
             }
           ],
           "effect": "none",
           "effectRef": {
             "kind": "file",
-            "path": "6fed215e677791e3",
+            "path": "b5022cc18009221f",
             "before": null,
             "after": null,
             "written": "bb283c744018a0d6"
@@ -2698,7 +2698,7 @@
           "approvals": [
             {
               "toolCallId": "toolu_128_0",
-              "sessionId": "4ce64511-27e0-44a7-a27f-365e6e04638b",
+              "sessionId": "57000f92-61dc-44d4-925a-a4662a27549e",
               "answer": "reject_once"
             }
           ],
@@ -2733,7 +2733,7 @@
           "effect": "none",
           "effectRef": {
             "kind": "file",
-            "path": "9b8ce8ae4958d2bc",
+            "path": "ff9102191de5a499",
             "before": null,
             "after": null,
             "written": "3964064e09ea7ea7"
@@ -2752,7 +2752,7 @@
           "effect": "none",
           "effectRef": {
             "kind": "file",
-            "path": "dc4f0929563101af",
+            "path": "d9ca33ff8f16720a",
             "before": null,
             "after": null,
             "written": "bb283c744018a0d6"
@@ -2781,14 +2781,14 @@
           "approvals": [
             {
               "toolCallId": "toolu_138_0",
-              "sessionId": "289d2e56-c52c-4b98-a10a-2e548cae310e",
+              "sessionId": "291e4d05-2a33-4c03-9623-ee71c4be6765",
               "answer": "reject_once"
             }
           ],
           "effect": "none",
           "effectRef": {
             "kind": "shell",
-            "command": "134bdd6eb2b00caf",
+            "command": "03c5eb55fc12869e",
             "matching": 0,
             "unaccountedLines": 0
           }
@@ -2806,17 +2806,17 @@
           "approvals": [
             {
               "toolCallId": "toolu_140_0",
-              "sessionId": "289d2e56-c52c-4b98-a10a-2e548cae310e",
+              "sessionId": "291e4d05-2a33-4c03-9623-ee71c4be6765",
               "answer": "reject_once"
             }
           ],
           "effect": "none",
           "effectRef": {
             "kind": "file",
-            "path": "7a810e73748074b3",
+            "path": "497914ba50776ed9",
             "before": null,
             "after": null,
-            "written": "95756a4aa5f1d93e"
+            "written": "e7f677faa6ed9d5d"
           }
         },
         {
@@ -2833,10 +2833,10 @@
           "effect": "none",
           "effectRef": {
             "kind": "file",
-            "path": "d009cba78031324f",
+            "path": "5235ed9bea78f6db",
             "before": null,
             "after": null,
-            "written": "95756a4aa5f1d93e"
+            "written": "e7f677faa6ed9d5d"
           }
         },
         {
@@ -2852,7 +2852,7 @@
           "approvals": [
             {
               "toolCallId": "toolu_146_0",
-              "sessionId": "289d2e56-c52c-4b98-a10a-2e548cae310e",
+              "sessionId": "291e4d05-2a33-4c03-9623-ee71c4be6765",
               "answer": "reject_once"
             }
           ],
@@ -2878,14 +2878,14 @@
           "approvals": [
             {
               "toolCallId": "toolu_149_0",
-              "sessionId": "289d2e56-c52c-4b98-a10a-2e548cae310e",
+              "sessionId": "291e4d05-2a33-4c03-9623-ee71c4be6765",
               "answer": "reject_once"
             }
           ],
           "effect": "none",
           "effectRef": {
             "kind": "read",
-            "token": "f071473c1f258a88",
+            "token": "f14e6fb3d113fd0b",
             "ownResult": true,
             "inOwnResult": false,
             "inOtherResult": false
@@ -2905,7 +2905,7 @@
           "effect": "none",
           "effectRef": {
             "kind": "read",
-            "token": "e5fdfb7a4fe37a9e",
+            "token": "f288238bdde4d052",
             "ownResult": true,
             "inOwnResult": false,
             "inOtherResult": false
@@ -2925,7 +2925,7 @@
           "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
           "args": "installed",
           "input": {
-            "sha256": "15f01058a1f1acf701c908b3ee22c4f9f8df335bedb4790dcaa466501e3289bd",
+            "sha256": "57a75d3abfe3da45b7fc4adee385665dc627fc22ad98c604ec007afabf9f6b2c",
             "bytes": 46
           },
           "exitCode": 2,
@@ -2937,7 +2937,7 @@
           "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
           "args": "installed",
           "input": {
-            "sha256": "693963381665c1d7eb0eb3611c7160e504d879e5dbe242a2d7968b304487279b",
+            "sha256": "159cb0ba94946098c1313363f35537e1c04bac42b489b5e1beb0458a74b15ba0",
             "bytes": 101
           },
           "exitCode": 2,
@@ -2949,7 +2949,7 @@
           "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
           "args": "installed",
           "input": {
-            "sha256": "f84c7416fa1891271d3bcfd61aa362b5d7c172311d481b14c2cacd6ce299bd61",
+            "sha256": "2676f71cb38486a83c9c75e0ee2852af9488dcf578dd7b2407f8d945210d2a03",
             "bytes": 51
           },
           "exitCode": 2,
@@ -2961,7 +2961,7 @@
           "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
           "args": "installed",
           "input": {
-            "sha256": "b1f4095f76b51abb6acf239618176c2087bc15b8a6fac8ddc13787094cf12261",
+            "sha256": "3cd7f73ee594a61e7ec24aa6a75265642f8e185480d64fc8fe58dad05f0c9b8a",
             "bytes": 146
           },
           "exitCode": 2,
@@ -2973,7 +2973,7 @@
           "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
           "args": "installed",
           "input": {
-            "sha256": "ded7056e76627b955cb8d0866766a710ac77abd4bfe2f6609027be8df57a5b32",
+            "sha256": "04d40beec51670ffd5573fd49cdc4842d63899e93870b94ed3923f5f7a19e32a",
             "bytes": 4194328
           },
           "exitCode": 2,
@@ -2985,7 +2985,7 @@
           "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
           "args": "replaced",
           "input": {
-            "sha256": "4cb958b54cfedeb1f1d773666374e30be39e283937f549c9b34274c51cd015f5",
+            "sha256": "042b677a451ec185e23399402ba4b6bf365a559e73e08ec41f7f0dca4b2cd436",
             "bytes": 162
           },
           "exitCode": 2,
@@ -3007,7 +3007,7 @@
           "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
           "args": "installed",
           "input": {
-            "sha256": "d914f47bd0c1624e5e52ab40c53ef7fe8852668f9b60e424dbbdd5758436231e",
+            "sha256": "c277adc78b278918277bb275572082353f037dd8e204dbfca1b5905aa627e412",
             "bytes": 262373
           },
           "exitCode": 0,
@@ -3019,7 +3019,7 @@
           "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
           "args": "installed",
           "input": {
-            "sha256": "d73575bea079f27d4273567d250a14bea6fef3a5c6586d61f59a5c1898cc77b9",
+            "sha256": "bd0f0861383c7b7021dc6b0ce81328100b3b9b623214f47dd6da1ac38a63eebc",
             "bytes": 262438
           },
           "exitCode": 0,
@@ -3031,7 +3031,7 @@
           "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
           "args": "installed",
           "input": {
-            "sha256": "9e91f09e977a0486a922ddb06fdc8375a908b2062b5dcc0668f7f18081db924d",
+            "sha256": "d30d84ec1610c268f654fa50dccfd87b93cb6e4ae837e0f37a2bc73806664008",
             "bytes": 262374
           },
           "exitCode": 0,
@@ -3043,7 +3043,7 @@
           "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
           "args": "installed",
           "input": {
-            "sha256": "1fb09860b7d7f6462007fafb1e1a2a1d1be6c61d4bce30fe2e9c54c0bae92035",
+            "sha256": "99d04ba8fbda1700216f4482f1a513d0c80be1c723229c1378ec6d7626b109aa",
             "bytes": 4313
           },
           "exitCode": 0,
