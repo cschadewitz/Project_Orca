@@ -545,7 +545,7 @@ rl.on("line", (line) => {
   /* ------------------------------ Claude's permission mode ------------------------------ */
 
   /** A session the factory opens for the agent without ORCA's hook. */
-  const unhookedSession = (permissions: unknown): Promise<AgentSession> =>
+  const unhookedSession = (permissions: unknown, resumeSessionId?: string): Promise<AgentSession> =>
     makeSessionFactory(
       { configDir, storeDir: ".orca" },
       openAcpSession,
@@ -556,6 +556,7 @@ rl.on("line", (line) => {
       askPermission,
       logger: silentLogger,
       handshakeTimeoutMs: 60_000,
+      ...(resumeSessionId ? { resumeSessionId, requireContextRecovery: true } : {}),
     });
 
   const modeOf = (session: AgentSession) => session.configOptions.find((o) => o.id === "mode")?.currentValue;
@@ -643,6 +644,39 @@ rl.on("line", (line) => {
       await session.close();
     }
   }, 120_000);
+
+  it("pins a session it loads (session/load) to Manual too, and the loaded session asks ORCA", async () => {
+    asks.length = 0;
+    await writeFile(join(claudeConfig, "settings.json"), "{}", "utf8");
+    // A session ORCA did not pin: Claude Code records it in auto.
+    const first = await openAcpSession({
+      host: new LocalHost({ id: "local", type: "local" }),
+      agent: AgentSpecSchema.parse({ ...agent({ default: "allow", rules: [] }), nativeToolHook: undefined }),
+      cwd: workspace,
+      askPermission,
+      logger: silentLogger,
+      handshakeTimeoutMs: 60_000,
+    });
+    let resumeId: string;
+    try {
+      expect(modeOf(first)).toBe("auto");
+      await first.prompt(CALL);
+      expect(await marks()).toBe(1);
+      resumeId = first.acpSessionId;
+    } finally {
+      await first.close();
+    }
+    // Loaded through the factory, with recovery required, it opens in Manual and ORCA's deny holds.
+    const loaded = await unhookedSession({ default: "deny", rules: [] }, resumeId);
+    try {
+      expect(modeOf(loaded)).toBe("default");
+      await loaded.prompt(CALL);
+      expect(await marks()).toBe(1);
+      expect(asks).toEqual([]);
+    } finally {
+      await loaded.close();
+    }
+  }, 180_000);
 
   it("pins a hooked Claude session to Manual too", async () => {
     const session = await factorySession();

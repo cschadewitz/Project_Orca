@@ -6,14 +6,19 @@
  * checkout or user settings file can start it in `acceptEdits` or `bypassPermissions`. In
  * those modes Claude Code settles calls itself, so they never reach ORCA's permission policy
  * as a `session/request_permission`: an agent without ORCA's pre-tool hook ran a Bash command
- * that ORCA's policy denied, and ORCA was never asked. ORCA's model is that Claude asks and
- * ORCA decides, so every Claude session runs in `default` (Manual, "always ask"):
+ * that ORCA's policy denied, and ORCA was never asked. So a recognized Claude session runs in
+ * `default` (Manual), where Claude Code asks about what its own rules do not settle:
  *
  * - at open, the session is switched to `default` when it starts in another mode, and refused
  *   when the adapter does not offer it or does not take it;
  * - ORCA never switches it to another mode (`setConfigOption("mode", …)` is refused);
  * - before each prompt, a session found in another mode (the agent changed it itself) is
  *   switched back, or the prompt is refused.
+ *
+ * This is narrower than the hook's guarantee: Claude Code's native rules still settle calls
+ * in Manual, and a mode the agent changes during a turn is only seen at the next prompt. That
+ * every call reaches ORCA is the native hook's assurance (`native-tool-hook-session.ts`), not
+ * this pin's. A loaded session (`session/load`) is pinned the same way as a new one.
  *
  * The adapter is recognised by what it says at `initialize`, not by the configured command.
  */
