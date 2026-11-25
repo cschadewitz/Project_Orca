@@ -33,7 +33,11 @@ it("requires production MCP acceptance rather than letting it skip", () => {
 it("runs every static check ci.yml's full path runs", () => {
   for (const run of ["pnpm run typecheck", "pnpm run design:check", "pnpm run format:check", "pnpm run lint"])
     expect(position(release, run), run).toBeGreaterThan(-1);
-  expect(release[position(release, "pnpm run lint")].env).toEqual(ci[position(ci, "pnpm run lint")].env);
+  // ci.yml's lint settings, single-threaded whatever the runner asks for.
+  expect(release[position(release, "pnpm run lint")].env).toEqual({
+    ...ci[position(ci, "pnpm run lint")].env,
+    ESLINT_CONCURRENCY: "off",
+  });
 });
 
 it("bounds workers and runs the no-skip retry acceptance exactly as ci.yml does", () => {
