@@ -403,4 +403,16 @@ describe("the command table", () => {
   it("gives every command a help line starting with its own name", () => {
     for (const [name, command] of Object.entries(commands)) expect(command.help.startsWith(name)).toBe(true);
   });
+
+  it("gives every command a summary after its syntax, two spaces apart", () => {
+    for (const command of Object.values(commands)) expect(command.help).toMatch(/\S {2}[A-Z]\S/);
+  });
+
+  it("cites no issue numbers or repository paths, which a user cannot follow", () => {
+    for (const command of Object.values(commands))
+      for (const text of [command.help, command.usage ?? ""]) {
+        expect(text).not.toMatch(/#\d{2,}/);
+        expect(text).not.toMatch(/\b(?:docs|packages|tools)\/|\.md\b/);
+      }
+  });
 });
