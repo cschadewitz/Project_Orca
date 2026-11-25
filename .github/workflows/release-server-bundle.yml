@@ -229,8 +229,12 @@ jobs:
             cliConfig: ($root + "/orca.config.yaml"), daemonConfig: ($root + "/orca.config.yaml"),
             acpConfig: ($root + "/orca.config.yaml"), url: "http://127.0.0.1:6722", service: "orca.service",
             launchAudit: "all-cli-acp-and-daemon-launches-migrated"}' > "$srv/deployment.json"
-          # The image has Python 3 and util-linux; it has no gh, git, mise, pnpm or Node.
+          # The image has Python 3 and util-linux; it has no gh, git, mise, pnpm or Node. The
+          # runner's account files come in read-only so the staging user has a name, as a
+          # server's service account does: ORCA's local authority identifies the OS user by
+          # uid and name, and a uid with no passwd entry has no name to read.
           docker run --rm --user "$(id -u):$(id -g)" -e HOME="$srv" -v "$clean:$clean" -w "$srv" \
+            -v /etc/passwd:/etc/passwd:ro -v /etc/group:/etc/group:ro \
             python:3.12-slim-bookworm sh -c '
               for tool in gh git mise pnpm node; do
                 if command -v "$tool" >/dev/null; then echo "clean host has $tool" >&2; exit 1; fi

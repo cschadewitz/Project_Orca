@@ -407,6 +407,8 @@ it("signs the server bundle only from main, in a job that runs none of the relea
   expect(staging).toContain("python:3.12-slim-bookworm");
   expect(staging).toContain("stage --bundle");
   expect(staging).toContain("for tool in gh git mise pnpm node; do");
+  // The staging user has a passwd entry, as a server's service account does.
+  expect(staging).toContain("-v /etc/passwd:/etc/passwd:ro -v /etc/group:/etc/group:ro");
 });
 
 it("pins the same signer identity in the workflow and the adapter (#876)", () => {
