@@ -172,70 +172,7 @@
         "A hook is not an operating-system boundary; Claude's sandbox and ORCA's protected-path rules stay in force beside it",
         "Admission checks (adapter, runtime image) run once when the session opens; nothing re-checks them during the session"
       ],
-      "next": "Tiers A and B from an attested installed receipt on claude-native-hook (guard-receipts.yml, #1026); C after #1026's independent observer.",
-      "scoped": {
-        "level": "A",
-        "route": "claude-native-hook",
-        "pin": {
-          "agentVersion": "2.1.330",
-          "adapterVersion": "0.109.1",
-          "host": "linux-x64",
-          "build": "41b4a51f515747de173ea80631231bd48fae35f4",
-          "artifacts": {
-            "adapterIntegrity": "sha512-tGT3IH6ey3V7wvFRhxK+1XLYDC6FBUyIehvNBm06/as/HG2MWhC6r8hRffSpS7osnMjARZMfDeLyQB0Wjjm0uQ==",
-            "runtimeSha256": "f390eaa0814e6a1bff74cbb47acb74cb9c89d30ced809fe0af5af00c7bfe8ebb",
-            "hookProgramSha256": "cb7f5fdc807bf1e62bc0c560ce56dc81fadaf2552b87b89f14ee5faa469c7868"
-          }
-        },
-        "settings": {
-          "nativeToolHook": "experimental"
-        },
-        "covers": [
-          "L01",
-          "L02",
-          "L03",
-          "L04",
-          "L05",
-          "L06",
-          "L07",
-          "A01",
-          "A03",
-          "B02",
-          "B03",
-          "B04",
-          "B05",
-          "P01",
-          "P04"
-        ],
-        "excludes": {
-          "A02": "Claude Code refuses this call itself before ORCA answers, so ORCA's decision is run on the installed program instead: The relative Edit (../elsewhere/a.md) is refused by Claude Code (the file does not exist from its working directory) before any hook runs, so that assertion's ORCA decision is unobserved; the case's other calls are observed but cannot stand in for it.",
-          "A04": "A live agent cannot make this call: One session has one working directory, fixed when it opens; a live agent cannot make a call from another one.",
-          "B01": "Claude Code refuses this call itself before ORCA answers, so ORCA's decision is run on the installed program instead: Claude Code refuses Edits of ORCA files that do not exist yet, and a change to a file whose read ORCA denied, before any hook runs, so those assertions' ORCA decisions are unobserved; the denied writes in the same case cannot stand in for them.",
-          "F01": "A live agent cannot make this call: The agent builds the hook's input itself; a live run cannot hand the hook malformed bytes. Run on claude-native-hook.",
-          "F02": "A live agent cannot make this call: The session's context file is written by ORCA's factory; damaging it mid-session is a hook-program case. Run on claude-native-hook.",
-          "F03": "A live agent cannot make this call: The installed settings are the factory's own; their shape is checked on claude-native-hook and by the #704 acceptance test.",
-          "F04": "The hook never answers allow and offers no options, so there is no option for ORCA to pick on this route.",
-          "F05": "Claude Code refuses this call itself before ORCA answers, so ORCA's decision is run on the installed program instead: Claude Code refuses a tool it does not offer (No such tool available) before any hook runs, so ORCA's decision is never observed. Run as a diagnostic: nothing runs, shown by the request's tool list.",
-          "L08": "The hook only hands an ask back to Claude. Whether that ask reaches ORCA's answerer for the same call is unverified until an installed receipt shows it; the answerer cases run on acp-ask.",
-          "P02": "A live agent cannot make this call: No raw input or context file can be damaged from inside a live run (see F01 and F02).",
-          "P03": "Claude Code refuses this call itself before ORCA answers, so ORCA's decision is run on the installed program instead: The call to a 4 KB unknown tool name is refused by Claude Code (not offered) before any hook runs, so ORCA's answer for it is unobserved; the other calls' short answers cannot stand in for it."
-        },
-        "stillOff": [
-          "ORCA's judge is off by default and cannot auto-approve shell commands; a command routed to a human approval prompt still requires the person's answer",
-          "Without nativeToolHook: experimental there is no hook, and Claude runs remembered calls without asking ORCA",
-          "Remote sessions over SSH while the hook is on, and any Claude Code other than the pinned one"
-        ],
-        "unverified": [
-          "That Claude blocks the call when the hook times out or cannot start (recovery; B stays off)",
-          "fresh session: an MCP call's one-time allow (the hook and ORCA's relay each ask, so one bound answer does not run it)",
-          "Judge review in the packaged product journey: command advice reaching the person's approval prompt was observed only in the installed run, with a stand-in provider",
-          "Judge review of MCP calls: the hook asks the person before the relay's judge runs",
-          "Behaviour of a real model, which may make calls in shapes the stand-in does not",
-          "Events and logs about its calls are redacted"
-        ],
-        "judge": "unverified",
-        "receipts": ["tools/guard-qualification/receipts/claude-claude-native-hook.json"]
-      }
+      "next": "Tiers A and B from an attested installed receipt on claude-native-hook (guard-receipts.yml, #1026); C after #1026's independent observer."
     },
     {
       "id": "codex",
