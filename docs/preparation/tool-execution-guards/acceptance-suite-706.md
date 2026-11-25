@@ -234,6 +234,47 @@ Today every agent is `none` until a reviewed pull request promotes its row on it
 preflight, but no receipt backs that, so the matrix lists it as unverified. Each stream edits
 only its own agent's row and adds its own path adapter.
 
+### Scoped assurance (#1026)
+
+A row may carry a narrower claim than a tier in its own field, `scoped`. It never goes in
+`tier`: the checker refuses any value there but `none`, `A`, `B` and `C`, and a scoped claim
+leaves the base tier as it is. The field is absent by default. Nothing renders it as a badge.
+It is checked only so that a claim written in it holds; no badge shows, and no claim is
+accepted, until a reviewed change enables it (below).
+
+When present, `check-support-matrix.js` (`scopedProblems`) requires:
+
+- `level` `A` or `B`, on one of the row's routes;
+- `pin`: the exact build, agent and adapter versions, host and artifact digests;
+- `settings`: the ORCA settings the claim holds under, for example
+  `{ "nativeToolHook": "experimental" }`, equal to the receipt's `agentSettings`;
+- `covers`: cases the route asserts on an installed agent. B covers every one of them;
+- `excludes`: every case of the route it does not cover, each with a reason;
+- `stillOff`: what stays refused or human-controlled. `unverified`: what it does not verify;
+- `judge`: `verified` only with an installed judged action observed
+  (`checks.judgedAction`), otherwise `unverified`;
+- `receipts`: an attested installed receipt on that pin and route that passes every covered
+  case and `checks.optInDefaultOff` (the opt-in is off by default and explicit).
+
+B also needs `checks.cancelledNoEffect` and `checks.freshSessionFreshDecision`. These show
+that a normally pending request that is cancelled has no independently observed effect, and
+that a fresh session needs a fresh decision rather than inheriting the cancelled request's
+authorization. Without them, B stays off.
+
+No check is taken on its word. Each one stands on the receipt's `lifecycle` evidence
+(`optIn`, `cancelled`, `fresh`, `judged`), and `lifecycleEvidenceProblems` re-derives every
+call's effect from its `effectRef`, evidence that neither ORCA nor the agent writes. A receipt
+with the labels but not the observations qualifies nothing.
+
+**Scoped claims are disabled.** `SCOPED_ENABLED` is empty, so the checker refuses any populated
+`scoped` field, the way `PROMOTABLE_TIERS` refuses a promoted tier. A separate, reviewed change
+enables a specific route and level, together with that route's eligibility requirements. One
+example: a known fail-open path where fail-closed is required keeps the route ineligible.
+
+Hook timeout and startup failure are listed under `unverified`. They are not run with live
+fault fixtures. `--release` checks a scoped claim's build for staleness the same way it checks
+a promoted row's.
+
 ## Adding a path
 
 Write an adapter in `paths.js` with `id`, `capabilities` and `decide(world, action, opts)`

@@ -36,6 +36,33 @@ const TIERS = ["none", "A", "B", "C"];
 export const PROMOTABLE_TIERS = [];
 export const PROMOTION_DISABLED =
   "tier promotion is disabled until guard-receipts.yml's receipts and end-to-end check are reviewed on main (#1026)";
+/**
+ * Scoped assurance (#1026): a narrower claim than a tier, kept in its own field (`scoped`) so the
+ * `tier` enum never holds a starred value and the base tier is unchanged by it. Absent by
+ * default. It names one route, the exact installed build, agent, adapter, host, artifacts and
+ * ORCA settings, the cases it covers, every case of the route it does not cover with a reason,
+ * what stays refused or human-controlled, and attested installed receipts that show all of it.
+ * Nothing renders it as a badge; this only checks that a claim written in it holds.
+ */
+export const SCOPED_LEVELS = ["A", "B"];
+/**
+ * The `route:level` scopes a row may claim: none yet. Like tier promotion, a populated `scoped`
+ * claim is refused until a separate, reviewed change enables a specific route and level, once
+ * that route's eligibility requirements (for example, no known fail-open path where fail-closed
+ * is required) are applied to it.
+ */
+export const SCOPED_ENABLED = [];
+export const SCOPED_DISABLED =
+  "scoped claims are disabled until a reviewed change enables this route and level (#1026)";
+/** Installed checks every scoped claim needs: the opt-in is off by default and explicit. */
+export const SCOPED_CHECKS = ["optInDefaultOff"];
+/**
+ * Further checks a scoped B claim needs: a normally pending request that is cancelled has no
+ * observed effect, and a fresh session needs a fresh decision rather than carrying over the
+ * cancelled request's authorization. Without them B stays off.
+ */
+export const SCOPED_B_CHECKS = ["cancelledNoEffect", "freshSessionFreshDecision"];
+
 /** What a receipt is when nothing verified its attestation (the function's default). */
 export const UNVERIFIED = "attestation not verified (run check-support-matrix.js, which verifies it)";
 
@@ -466,6 +493,7 @@ export function checkSupportMatrix(
   assertions = loadAssertions(),
   verifyReceipt = () => [UNVERIFIED],
   promotable = PROMOTABLE_TIERS,
+  scopedEnabled = SCOPED_ENABLED,
 ) {
   const problems = [];
   const ids = new Set(catalogue.cases.map((c) => c.id));
@@ -578,6 +606,14 @@ export function checkSupportMatrix(
       problems.push(
         `${at}: notAsserted must name exactly its routes' installed diagnostics (${diagnostics.join(",") || "none"})`,
       );
+    if (agent.scoped !== undefined && !scopedEnabled.includes(`${agent.scoped?.route}:${agent.scoped?.level}`))
+      problems.push(`${at}: scoped: ${SCOPED_DISABLED}`);
+    if (agent.scoped !== undefined)
+      problems.push(
+        ...scopedProblems(matrix, catalogue, assertions, agent, paths, exists, readReceipt, verifyReceipt).map(
+          (p) => `${at}: scoped: ${p}`,
+        ),
+      );
     if (tier === 0) continue;
     if (!promotable.includes(agent.tier)) problems.push(`${at}: ${PROMOTION_DISABLED}`);
 
@@ -680,13 +716,200 @@ export function checkSupportMatrix(
 }
 
 /**
- * Why promoted rows are not current at HEAD: each row above `none` must pin a build whose
+ * Why `agent.scoped` does not hold. Every listed receipt must be attested, installed, on the
+ * scoped pin and route, carry the scoped settings and pass every covered case and the checks
+ * its level needs. Empty when it holds.
+ */
+export function scopedProblems(
+  matrix,
+  catalogue,
+  assertions,
+  agent,
+  paths,
+  exists = () => false,
+  readReceipt = () => undefined,
+  verifyReceipt = () => [UNVERIFIED],
+) {
+  const s = agent.scoped;
+  if (!s || typeof s !== "object" || Array.isArray(s)) return ["must be an object when present"];
+  const problems = [];
+  if (!SCOPED_LEVELS.includes(s.level)) problems.push(`level ${s.level}, must be one of ${SCOPED_LEVELS.join(", ")}`);
+  const path = paths.get(s.route);
+  if (!agent.routes.includes(s.route) || !path || path.connected) {
+    problems.push(`route ${s.route} is not one of the row's routes`);
+    return problems;
+  }
+  const pin = s.pin;
+  const artifacts = ["adapterIntegrity", "runtimeSha256", "hookProgramSha256"];
+  if (
+    !pin ||
+    !pin.agentVersion ||
+    !pin.adapterVersion ||
+    !pin.host ||
+    !/^[0-9a-f]{40}$/.test(pin.build ?? "") ||
+    artifacts.some((k) => typeof pin.artifacts?.[k] !== "string")
+  )
+    problems.push("needs a pinned agent version, adapter version, host, exact build and artifact digests");
+  const settings = s.settings;
+  if (!settings || typeof settings !== "object" || Array.isArray(settings) || Object.keys(settings).length === 0)
+    problems.push("needs the ORCA settings the claim holds under");
+
+  const asserted = assertedCases(path, catalogue);
+  const runs = casesFor(path, catalogue);
+  const covers = Array.isArray(s.covers) ? s.covers : [];
+  if (covers.length === 0) problems.push("needs the cases it covers");
+  if (new Set(covers).size !== covers.length) problems.push("covers a case twice");
+  for (const id of covers)
+    if (!asserted.includes(id)) problems.push(`covers ${id}, which ${s.route} does not assert on an installed agent`);
+  if (s.level === "B")
+    for (const id of asserted)
+      if (!covers.includes(id)) problems.push(`B covers every asserted case; ${id} is missing`);
+  // Everything the route does not cover as evidence is named, with a reason, so the claim reads as its scope.
+  const uncovered = [
+    ...new Set([...runs.filter((id) => !covers.includes(id)), ...Object.keys(path.excluded ?? {})]),
+  ].sort();
+  const excludes = s.excludes && typeof s.excludes === "object" ? s.excludes : {};
+  if (Object.keys(excludes).sort().join() !== uncovered.join())
+    problems.push(`excludes must name exactly the cases it does not cover (${uncovered.join(",") || "none"})`);
+  for (const [id, reason] of Object.entries(excludes))
+    if (typeof reason !== "string" || reason.trim().length < 20)
+      problems.push(`exclusion of ${id} needs a reason a reader can check`);
+  for (const list of ["stillOff", "unverified"])
+    if (!Array.isArray(s[list]) || s[list].length === 0 || s[list].some((x) => typeof x !== "string" || !x.trim()))
+      problems.push(
+        `needs ${list}: ${list === "stillOff" ? "what stays refused or human-controlled" : "what it does not verify"}`,
+      );
+  if (!["verified", "unverified"].includes(s.judge)) problems.push("judge must say verified or unverified");
+  if (problems.length) return problems;
+
+  const checks = [
+    ...SCOPED_CHECKS,
+    ...(s.level === "B" ? SCOPED_B_CHECKS : []),
+    ...(s.judge === "verified" ? ["judgedAction"] : []),
+  ];
+  const pinned = { ...agent, pin };
+  const profile = qualificationProfile(matrix, catalogue, assertions, agent, path);
+  const files = Array.isArray(s.receipts) ? s.receipts : [];
+  if (files.length === 0) problems.push("needs an attested installed receipt");
+  const refused = [];
+  for (const file of files) {
+    if (!exists(file)) {
+      problems.push(`receipt ${file} does not exist`);
+      continue;
+    }
+    const receipt = readReceipt(file);
+    const why = [
+      ...verifyReceipt(file, receipt),
+      ...receiptProblems(receipt, pinned, s.route, "installed", covers, assertions, path, profile),
+      ...(canonical(receipt?.agentSettings) === canonical(settings)
+        ? []
+        : ["agentSettings are not the scoped settings"]),
+      ...checks.filter((c) => receipt?.checks?.[c] !== "pass").map((c) => `needs checks.${c} passing`),
+      ...lifecycleEvidenceProblems(
+        receipt,
+        checks.filter((c) => c in LIFECYCLE_EVIDENCE),
+      ),
+    ];
+    if (why.length === 0) return problems;
+    refused.push(...why.map((p) => `${file}: ${p}`));
+  }
+  // One receipt that backs every part of the claim is enough; otherwise say why each falls short.
+  return [...problems, ...refused];
+}
+
+/** The receipt's `lifecycle` evidence each scoped check stands on. */
+const LIFECYCLE_EVIDENCE = {
+  optInDefaultOff: "optIn",
+  cancelledNoEffect: "cancelled",
+  freshSessionFreshDecision: "fresh",
+  judgedAction: "judged",
+};
+
+/**
+ * Why a receipt's `lifecycle` evidence does not show the `checks` it claims. A check's "pass" is
+ * not taken on its word: each call's effect is recomputed from its `effectRef`
+ * (`connected/evidence.js`), evidence that neither ORCA nor the agent writes.
+ *
+ * - `optInDefaultOff`: with the field left out, a write ORCA's rule denies took effect (no hook
+ *   was installed); `on` was refused; with `experimental`, the same kind of write was denied and
+ *   had no effect.
+ * - `cancelledNoEffect`: every cancelled call was asked about, never answered, and had no
+ *   effect, then or after a wait.
+ * - `freshSessionFreshDecision`: in the new session, calls with no answer had no effect, calls
+ *   answered once took effect, each on its own ask, and none is a cancelled call.
+ * - `judgedAction`: every judged call reached the person with the judge's advisory verdict;
+ *   unanswered it had no effect, answered once it took effect. The judge allowed nothing itself.
+ */
+export function lifecycleEvidenceProblems(receipt, checks = Object.keys(LIFECYCLE_EVIDENCE)) {
+  const problems = [];
+  const life = receipt?.lifecycle ?? {};
+  const effect = (r) => (r?.effectRef ? effectFrom(r.effectRef) : "indeterminate");
+  const answers = (r) => (r?.approvals ?? []).map((a) => a.answer);
+  const list = (v) => (Array.isArray(v) ? v : []);
+  if (checks.includes("optInDefaultOff")) {
+    const o = life.optIn ?? {};
+    if (list(o.default).length === 0 || list(o.default).some((r) => effect(r) !== "observed"))
+      problems.push("lifecycle.optIn: without the field, the denied write did not take effect (a hook was in force)");
+    if (o.on !== "refused") problems.push("lifecycle.optIn: nativeToolHook: on was not refused");
+    if (
+      list(o.experimental).length === 0 ||
+      list(o.experimental).some((r) => r.outcome !== "deny" || effect(r) !== "none")
+    )
+      problems.push("lifecycle.optIn: with experimental, the write was not denied without effect");
+  }
+  const cancelled = list(life.cancelled);
+  if (checks.includes("cancelledNoEffect")) {
+    if (cancelled.length === 0) problems.push("lifecycle.cancelled: no cancelled call");
+    for (const r of cancelled)
+      if (
+        r.outcome !== "ask" ||
+        answers(r).length === 0 ||
+        answers(r).some((a) => a !== "pending") ||
+        effect(r) !== "none" ||
+        r.effectAfterWait !== "none"
+      )
+        problems.push(`lifecycle.cancelled: ${r.toolUseId ?? "a call"} was not a pending ask without effect`);
+  }
+  if (checks.includes("judgedAction")) {
+    const judged = list(life.judged);
+    const advised = (r) =>
+      (r.approvals ?? []).length > 0 &&
+      r.approvals.every((a) => a.judged?.advisory === true && typeof a.judged?.verdict === "string");
+    const unanswered = judged.filter((r) => advised(r) && answers(r).every((a) => a === "no-answer"));
+    const once = judged.filter((r) => advised(r) && answers(r).every((a) => a === "allow_once"));
+    if (unanswered.length === 0 || once.length === 0 || unanswered.length + once.length !== judged.length)
+      problems.push("lifecycle.judged: needs judged calls the person was asked about, unanswered and answered once");
+    for (const r of unanswered)
+      if (effect(r) !== "none") problems.push(`lifecycle.judged: ${r.toolUseId} ran on the judge's advice alone`);
+    for (const r of once)
+      if (effect(r) !== "observed") problems.push(`lifecycle.judged: ${r.toolUseId} did not run on its answer`);
+  }
+  if (checks.includes("freshSessionFreshDecision")) {
+    const fresh = list(life.fresh);
+    const before = new Set(cancelled.map((r) => r.toolUseId));
+    const unanswered = fresh.filter((r) => answers(r).length > 0 && answers(r).every((a) => a === "no-answer"));
+    const once = fresh.filter((r) => answers(r).length > 0 && answers(r).every((a) => a === "allow_once"));
+    if (unanswered.length === 0 || once.length === 0 || unanswered.length + once.length !== fresh.length)
+      problems.push("lifecycle.fresh: needs calls asked again, both unanswered and answered once");
+    for (const r of unanswered)
+      if (effect(r) !== "none") problems.push(`lifecycle.fresh: ${r.toolUseId} ran without an answer`);
+    for (const r of once)
+      if (effect(r) !== "observed") problems.push(`lifecycle.fresh: ${r.toolUseId} did not run on its answer`);
+    if (fresh.some((r) => !r.toolUseId || before.has(r.toolUseId)))
+      problems.push("lifecycle.fresh: a call is not the fresh session's own");
+  }
+  return problems;
+}
+
+/**
+ * Why promoted rows are not current at HEAD: each row above `none`, and each scoped claim, must pin a build whose
  * certified code and requirements HEAD has not changed (`attestation.js`, `staleProblems`). The release gate.
  */
 export function releaseProblems(matrix, repoRoot = REPO_ROOT, stale = staleProblems) {
-  return matrix.agents
-    .filter((a) => a.tier !== "none" && a.pin?.build)
-    .flatMap((a) => stale(repoRoot, a.pin.build).map((p) => `agent ${a.id}: ${p}`));
+  return matrix.agents.flatMap((a) => [
+    ...(a.tier !== "none" && a.pin?.build ? stale(repoRoot, a.pin.build).map((p) => `agent ${a.id}: ${p}`) : []),
+    ...(a.scoped?.pin?.build ? stale(repoRoot, a.scoped.pin.build).map((p) => `agent ${a.id}: scoped: ${p}`) : []),
+  ]);
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
