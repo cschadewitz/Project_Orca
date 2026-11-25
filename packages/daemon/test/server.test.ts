@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { HelloResultSchema, PROTOCOL_VERSION } from "@orca/protocol";
+import { HelloResultSchema, legacyVersionField, PROTOCOL_VERSION } from "@orca/protocol";
 import { dispatch, methods, startDaemon, type DaemonHandle } from "@orca/daemon";
 
 const ctx = { orcaVersion: "0.1.0-test", capabilities: ["runs.read" as const] };
@@ -36,6 +36,8 @@ describe("startDaemon", () => {
     const result = HelloResultSchema.parse(r.result);
     expect(result).toEqual({
       protocol: PROTOCOL_VERSION,
+      // Sent under its name from before the rename too, until 0.10.
+      ...legacyVersionField("0.1.0-test"),
       orcaVersion: "0.1.0-test",
       processId: process.pid,
       storeDir: "/tmp/store",
