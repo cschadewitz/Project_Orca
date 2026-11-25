@@ -91,8 +91,10 @@ export const SQLITE_MIGRATIONS: readonly string[] = [
 ];
 
 /**
- * `PRAGMA application_id` of every ORCA metadata database: "ORCA" in ASCII. It is what tells an
- * ORCA database from any other healthy SQLite file, which a schema number alone cannot.
+ * `PRAGMA application_id` of every ORCA metadata database. It is what tells an ORCA database from
+ * any other healthy SQLite file, which a schema number alone cannot. The value spells the
+ * product's name before the rename to Orrery and stays: every existing database carries it.
+ * It is "ORCA" in ASCII (rename-keep: the bytes are the old name).
  */
 export const ORCA_SQLITE_APPLICATION_ID = 0x4f524341;
 

@@ -122,7 +122,7 @@ describe("Windows format carryover into a pre-boot backup slot (#910)", () => {
       const info = await lstat(slot(dir, n), { bigint: true });
       expect(await identityOf(slot(dir, n))).toEqual({
         format: 1,
-        tool: "orca-backup-slot",
+        tool: "orca-backup-slot", // rename-keep: persisted name kept on purpose
         slot: STORE_FORMAT_BACKUP_SLOTS[n],
         volume: info.dev.toString(),
         file: info.ino.toString(),
@@ -164,7 +164,7 @@ describe("Windows format carryover into a pre-boot backup slot (#910)", () => {
       // The archive names its conversion and the very slot it was written into.
       expect(manifest).toMatchObject({
         format: 1,
-        tool: "orca-store-format",
+        tool: "orca-store-format", // rename-keep: persisted name kept on purpose
         from: "unmarked",
         to: STORE_FORMAT_EPOCH,
         files: 3,
@@ -253,7 +253,7 @@ describe("Windows format carryover into a pre-boot backup slot (#910)", () => {
       const path = slot(dir, n as 0 | 1);
       const manifest = {
         format: 1,
-        tool: "orca-store-format",
+        tool: "orca-store-format", // rename-keep: persisted name kept on purpose
         from,
         to,
         createdAt: new Date(Date.UTC(2026, 10, 22, 0, n)).toISOString(),
@@ -345,7 +345,7 @@ describe("Windows format carryover into a pre-boot backup slot (#910)", () => {
           path: STORE_FORMAT_BACKUP_MANIFEST,
           text: JSON.stringify({
             format: 1,
-            tool: "orca-store-format",
+            tool: "orca-store-format", // rename-keep: persisted name kept on purpose
             from: STORE_FORMAT_EPOCH,
             to: "next-format",
             createdAt: new Date().toISOString(),

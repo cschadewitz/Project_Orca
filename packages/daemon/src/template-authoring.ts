@@ -7,6 +7,7 @@ import {
   expandPatterns,
   OrcaError,
   parseOrcaConfig,
+  legacyFallbackPath,
   parsePromptTemplate,
   parseWorkflow,
   renderTemplate,
@@ -567,8 +568,13 @@ export class TemplateAuthoringService {
       return { written: true, candidateRevision, snapshot };
     });
   }
+  /** Until 0.10, a workspace with only the history's name from before the rename keeps using it. */
   private historyPath(): string {
-    return join(this.options.baseDir, ".orca-template-history.json");
+    return legacyFallbackPath(
+      this.options.baseDir,
+      ".orca-template-history.json",
+      ".orca-template-history.json", // rename-keep: the history's name before the rename
+    );
   }
   private async historyEntries(): Promise<{ key: string; revision: string; at: string; generation?: string }[]> {
     try {

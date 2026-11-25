@@ -345,13 +345,13 @@ it("rejects caller Request/correlation vars and validates the real draft fields 
     target,
     purpose: "request",
     request: draft,
-    vars: { request: { title: "PRIVATE-FAKE" }, __orcaAdmissionId: "PRIVATE-FAKE" },
+    vars: { request: { title: "PRIVATE-FAKE" }, __orcaAdmissionId: "PRIVATE-FAKE" }, // rename-keep: persisted name kept on purpose
   });
   expect(result.validation.ok).toBe(false);
   expect(result.validation.errors).toEqual(
     expect.arrayContaining([
       { path: "vars.request", message: "is supplied by Request submission" },
-      { path: "vars.__orcaAdmissionId", message: "is supplied by Request submission" },
+      { path: "vars.__orcaAdmissionId", message: "is supplied by Request submission" }, // rename-keep: persisted name kept on purpose
     ]),
   );
   expect(f.validateStartRun).not.toHaveBeenCalled();

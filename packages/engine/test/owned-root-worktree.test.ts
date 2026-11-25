@@ -43,7 +43,7 @@ async function rootFixture() {
   };
   const provider = new GitWorktreeProvider(options);
   const input = { runId: `run_${randomUUID()}`, workflowId: "test" };
-  const receipt = join(repo, ".git", "orca-root-workspaces", `${input.runId}.json`);
+  const receipt = join(repo, ".git", "orca-root-workspaces", `${input.runId}.json`); // rename-keep: persisted name kept on purpose
   return { dir, repo, options, provider, input, receipt };
 }
 
@@ -159,7 +159,7 @@ it("syncs the receipt and its directory and parent before the first Git mutation
   const mkdir = fs.mkdir;
   vi.spyOn(fs, "mkdir").mockImplementation(async (...args: Parameters<typeof fs.mkdir>) => {
     if (args[0] === f.options.worktreeRoot) {
-      expect(synced).toEqual([f.receipt, join(f.repo, ".git", "orca-root-workspaces"), join(f.repo, ".git")]);
+      expect(synced).toEqual([f.receipt, join(f.repo, ".git", "orca-root-workspaces"), join(f.repo, ".git")]); // rename-keep: persisted name kept on purpose
       expect(git(f.repo, "worktree", "list", "--porcelain")).not.toContain(f.input.runId);
     }
     return mkdir(...args);
@@ -263,7 +263,7 @@ async function refFixture(allowedRefs: string[] = ["refs/heads/feature"]) {
   };
 }
 
-const receiptsOf = (repo: string) => fs.readdir(join(repo, ".git", "orca-root-workspaces"));
+const receiptsOf = (repo: string) => fs.readdir(join(repo, ".git", "orca-root-workspaces")); // rename-keep: persisted name kept on purpose
 
 it("checks out an allowed ref fetched from the remote into a run's own root, running no hook (#883)", async () => {
   const f = await refFixture();

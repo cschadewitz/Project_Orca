@@ -28,7 +28,7 @@ export const RequestSourceSchema = z.discriminatedUnion("kind", [
 export type RequestSource = z.infer<typeof RequestSourceSchema>;
 
 /** Legacy v1 correlation name, reserved against caller spoofing; new launches use out-of-band metadata. */
-export const SUBMISSION_CORRELATION_VAR = "__orcaAdmissionId";
+export const SUBMISSION_CORRELATION_VAR = "__orcaAdmissionId"; // rename-keep: variable recorded in stored runs
 
 /** A new Request, never a caller-selected association or execution identity. */
 export const SubmissionCommandSchema = z.strictObject({

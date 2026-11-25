@@ -7,6 +7,7 @@
 import { z } from "zod";
 import { OPERATOR_METHODS } from "./operator-reads.js";
 import { ProtocolVersionSchema } from "./version.js";
+import { LEGACY_VERSION_SHAPE, readingLegacyVersion } from "./legacy-wire.js";
 import { AGENTS_LIST_METHOD, AGENTS_PING_METHOD, SessionSlotsSummarySchema } from "./agents.js";
 import { ARTIFACTS_GET_METHOD, ARTIFACTS_LIST_METHOD } from "./artifacts.js";
 import { CLAIMS_LIST_METHOD, CLAIMS_RELEASE_METHOD } from "./claims.js";
@@ -275,35 +276,39 @@ export const StoreStatusSchema = z.object({
 });
 export type StoreStatus = z.infer<typeof StoreStatusSchema>;
 
-export const HelloResultSchema = z.object({
-  identity: z.object({ workspaceId: z.uuid(), instanceId: z.uuid() }).optional(),
-  protocol: ProtocolVersionSchema,
-  orcaVersion: z.string(),
-  /** Local supervisors bind health/admission to the process they actually own. Protocol 1.8. */
-  processId: z.number().int().positive().optional(),
-  /** Absolute path of the `.orca` store the daemon serves, for a client that also reads files. */
-  storeDir: z.string().optional(),
-  capabilities: z.array(DaemonCapabilitySchema),
-  /** Every method this daemon answers, `hello` included. Added in protocol 1.1; absent from an older daemon. */
-  methods: z.array(z.string()).optional(),
-  /**
-   * Agent session slots at the moment of the handshake (#873): the daemon-wide cap when one is
-   * configured, sessions open and steps queued. Present when the daemon serves the agent
-   * surface; `agents.list` carries the per-agent and per-host detail. Optional.
-   */
-  sessionSlots: SessionSlotsSummarySchema.optional(),
-  /**
-   * The managed server updater that launched this daemon (#879), for a caller holding
-   * `config.read`. Absent for any other daemon. Protocol 2.2.
-   */
-  deployment: ManagedDeploymentSchema.optional(),
-  /**
-   * The optional `runs.admit` fields this daemon takes and records (#883), named explicitly
-   * because `runs.admit` params are strict: a caller sends such a field only to a daemon that
-   * lists it here, never on the strength of a protocol minor alone. Protocol 2.6: `origin`.
-   */
-  admitFields: z.array(z.string()).optional(),
-  /** The store this daemon serves and whether the app may switch it to SQLite (#339). Protocol 2.7. */
-  store: StoreStatusSchema.optional(),
-});
+export const HelloResultSchema = readingLegacyVersion(
+  z.object({
+    ...LEGACY_VERSION_SHAPE,
+    identity: z.object({ workspaceId: z.uuid(), instanceId: z.uuid() }).optional(),
+    protocol: ProtocolVersionSchema,
+    /** The release the daemon runs. Sent under its old name too until 0.10 (legacy-wire.ts). */
+    orcaVersion: z.string(),
+    /** Local supervisors bind health/admission to the process they actually own. Protocol 1.8. */
+    processId: z.number().int().positive().optional(),
+    /** Absolute path of the `.orca` store the daemon serves, for a client that also reads files. */
+    storeDir: z.string().optional(),
+    capabilities: z.array(DaemonCapabilitySchema),
+    /** Every method this daemon answers, `hello` included. Added in protocol 1.1; absent from an older daemon. */
+    methods: z.array(z.string()).optional(),
+    /**
+     * Agent session slots at the moment of the handshake (#873): the daemon-wide cap when one is
+     * configured, sessions open and steps queued. Present when the daemon serves the agent
+     * surface; `agents.list` carries the per-agent and per-host detail. Optional.
+     */
+    sessionSlots: SessionSlotsSummarySchema.optional(),
+    /**
+     * The managed server updater that launched this daemon (#879), for a caller holding
+     * `config.read`. Absent for any other daemon. Protocol 2.2.
+     */
+    deployment: ManagedDeploymentSchema.optional(),
+    /**
+     * The optional `runs.admit` fields this daemon takes and records (#883), named explicitly
+     * because `runs.admit` params are strict: a caller sends such a field only to a daemon that
+     * lists it here, never on the strength of a protocol minor alone. Protocol 2.6: `origin`.
+     */
+    admitFields: z.array(z.string()).optional(),
+    /** The store this daemon serves and whether the app may switch it to SQLite (#339). Protocol 2.7. */
+    store: StoreStatusSchema.optional(),
+  }),
+);
 export type HelloResult = z.infer<typeof HelloResultSchema>;

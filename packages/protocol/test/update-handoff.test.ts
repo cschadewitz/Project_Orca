@@ -28,7 +28,7 @@ function fixture() {
   const stopped = sha("stopped claim");
   const handoff: UpdateHandoff = {
     version: 1,
-    kind: "orca-update-handoff",
+    kind: "orca-update-handoff", // rename-keep: persisted name kept on purpose
     reservationId: randomUUID(),
     claimHash: stopped,
     workspace,

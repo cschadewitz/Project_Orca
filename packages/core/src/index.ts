@@ -21,6 +21,7 @@ export * from "./util/glob.js";
 export * from "./util/hash.js";
 export * from "./util/path-get.js";
 export * from "./util/jsonl.js";
+export * from "./util/legacy-names.js";
 
 export * from "./model/run-provenance.js";
 export * from "./model/recovery.js";

@@ -438,7 +438,7 @@ export function tunnelHops(profile: ConnectionProfile, knownHostsFile: string, j
   const server = {
     identityFile: profile.identityFile,
     knownHostsFile,
-    hostKeyAlias: `orca-${profile.id}`,
+    hostKeyAlias: `orca-${profile.id}`, // rename-keep: the alias existing known_hosts entries are pinned under
     stdio: `127.0.0.1:${profile.remotePort}`,
   };
   if (!profile.jump) return { daemon: { ...server, target: profile.destination, port: profile.sshPort } };
@@ -450,7 +450,7 @@ export function tunnelHops(profile: ConnectionProfile, knownHostsFile: string, j
       port: profile.jump.sshPort,
       identityFile: profile.jump.identityFile,
       knownHostsFile: `${knownHostsFile}.jump`,
-      hostKeyAlias: `orca-${profile.id}-jump`,
+      hostKeyAlias: `orca-${profile.id}-jump`, // rename-keep: the alias existing known_hosts entries are pinned under
       forward: `127.0.0.1:${jumpPort}:${hostOf(profile.destination)}:${profile.sshPort ?? 22}`,
     },
     daemon: { ...server, target: user ? `${user}@127.0.0.1` : "127.0.0.1", port: jumpPort },

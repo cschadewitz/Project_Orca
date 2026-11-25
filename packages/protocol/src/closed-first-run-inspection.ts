@@ -9,6 +9,8 @@ import {
   fenceHash,
   fenceRead,
   firstRunAttempts,
+  firstRunLayout,
+  holdsFirstRunOwnership,
   FenceBootSchema,
   FenceDirectorySchema,
   WriterSchema,
@@ -41,20 +43,17 @@ export async function enterClosedFirstRunInspection(
   for (const input of [configDir, storeDir]) {
     let path = resolve(input);
     for (let depth = 0; depth < 256; depth++) {
-      if (
-        (exists(join(path, ".orca-first-run-ownership")) || exists(join(path, ".orca-first-run-ownership.json"))) &&
-        path !== configDir
-      )
-        throw unavailable();
+      if (holdsFirstRunOwnership(path) && path !== configDir) throw unavailable();
       const parent = dirname(path);
       if (parent === path) break;
       path = parent;
     }
   }
-  const journal = join(configDir, ".orca-first-run-ownership"),
-    anchorPath = join(configDir, ".orca-first-run-ownership.json");
+  const layout = firstRunLayout(configDir);
+  const journal = layout.journal,
+    anchorPath = layout.anchor;
   if (!exists(journal) && !exists(anchorPath)) return;
-  if (storeDir !== join(configDir, ".orca")) throw unavailable();
+  if (storeDir !== layout.store) throw unavailable();
   const workspace = fenceDirectory(configDir);
   let retained: z.infer<typeof WriterSchema> | undefined;
   const kernel = await acquireFirstRunFence(workspace, () =>
@@ -88,7 +87,7 @@ export async function enterClosedFirstRunInspection(
     if (
       !same(claim.workspace, workspace) ||
       !same(claim.boot, fenceBoot()) ||
-      claim.configHash !== fenceHash(fenceRead(join(configDir, "orca.config.yaml"), 1024 * 1024)) ||
+      claim.configHash !== fenceHash(fenceRead(layout.config, 1024 * 1024)) ||
       retained.claimHash !== fenceHash(claimBytes) ||
       retained.reservationId !== claim.reservationId ||
       !same(retained.workspace, workspace) ||
