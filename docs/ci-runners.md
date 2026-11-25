@@ -112,7 +112,7 @@ loopback destinations; and the only credential a job holds is its `GITHUB_TOKEN`
 untrusted-by-default code.
 
 In this repository `ci.yml`'s `check` job selects the `tyler` label on its own. The Linux jobs of `app-smoke.yml` and `desktop.yml` (manual runs and release calls),
-and `release-publish.yml`'s `check` job ("verify the merge commit", which holds only a read token and uses `ci.yml`'s worker cap and pnpm cache choice for the runner it gets),
+and `release-publish.yml`'s `verify` job ("verify the merge commit", the release's test work, with a read-only token and `ci.yml`'s worker cap and pnpm cache choice for the runner it gets),
 use it too when the health endpoint reports at least one idle runner, and GitHub-hosted
 `ubuntu-24.04` otherwise; [`tools/linux-runner.js`](../tools/linux-runner.js) makes that
 choice once per run, and `CI_FORCE_HOSTED` applies to it as well. On the hosted fallback a step installs xvfb if it is missing and loads an
@@ -125,6 +125,10 @@ It is also no boundary against the job's own code: the executable sits in the
 runner-writable workspace and the job user has passwordless sudo on these VMs. The step
 runs only on GitHub-hosted runners, never on a self-hosted one. Every other job runs on GitHub-hosted runners, including
 `release-prepare.yml`, `release-publish.yml`'s other jobs, `changelog.yml` and
-`codeql.yml`, which hold write tokens or deploy keys. A release rehearsal (`dry_run`) keeps
-its `check` on GitHub-hosted runners too, since its ref may be any branch. `tyler` is the only self-hosted
+`codeql.yml`, which hold write tokens or deploy keys. In `release-publish.yml` the release's
+identity and authorization (the exact commit, its lane and review, and the version) come only
+from the GitHub-hosted `check` job, and every job that writes or dispatches takes them from
+there; `verify` only passes or fails the commit `check` pinned. Its runner picker gets the
+health endpoint only for a real release dispatched from the default branch or a merged release
+pull request, so a rehearsal (`dry_run`), whose ref may be any branch, stays GitHub-hosted. `tyler` is the only self-hosted
 label; a new workflow that targets it takes on the same assumptions.
