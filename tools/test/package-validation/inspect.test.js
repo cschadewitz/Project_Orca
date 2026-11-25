@@ -825,8 +825,7 @@ describe("what sits beside the daemon follows the candidate's build rule (#704, 
 
   it("accepts the hook entry named from packages/app or from the repository root, exactly once", () => {
     const at = (hookBody) => only(win, windowsArchive(VERSION, "x64", source, { hookBody }));
-    for (const agents of ["../agents", "packages/agents"])
-      expect(at(claudeHookBody(agents)).status).toBe("consistent");
+    for (const agents of ["../agents", "packages/agents"]) expect(at(claudeHookBody(agents)).status).toBe("consistent");
     const both = Buffer.concat([claudeHookBody("../agents"), claudeHookBody("packages/agents")]);
     expect(refusal(at(both), win)).toMatch(/bundled_hook_unrecognized: 2 hook entry modules/);
     for (const agents of ["../../agents", "agents", "../packages/agents"])
