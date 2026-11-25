@@ -54,7 +54,11 @@
           "P03": "Claude Code refuses this call itself before ORCA answers, so ORCA's decision is run on the installed program instead: The call to a 4 KB unknown tool name is refused by Claude Code (not offered) before any hook runs, so ORCA's answer for it is unobserved; the other calls' short answers cannot stand in for it.",
           "F05": "Claude Code refuses this call itself before ORCA answers, so ORCA's decision is run on the installed program instead: Claude Code refuses a tool it does not offer (No such tool available) before any hook runs, so ORCA's decision is never observed. Run as a diagnostic: nothing runs, shown by the request's tool list."
         }
-      }
+      },
+      "recoveryUnverified": [
+        "That Claude blocks the call when the hook times out",
+        "That Claude blocks the call when the hook cannot start"
+      ]
     },
     {
       "id": "gemini-acp-ask",
@@ -98,6 +102,9 @@
         "That Codex trusts and blocks on the hook; ORCA's startup probe is not run here",
         "Reads through the shell; only view_image is hooked by name",
         "That events, logs and stored records about the call are redacted"
+      ],
+      "knownFailOpen": [
+        "Codex lets a call through when its hook runner fails after the session-open probe (exit 1, quiet exit 2, timeout)"
       ]
     },
     {

@@ -46,12 +46,16 @@ export const PROMOTION_DISABLED =
  */
 export const SCOPED_LEVELS = ["A", "B"];
 /**
- * The `route:level` scopes a row may claim: none yet. Like tier promotion, a populated `scoped`
- * claim is refused until a separate, reviewed change enables a specific route and level, once
- * that route's eligibility requirements (for example, no known fail-open path where fail-closed
- * is required) are applied to it.
+ * The `route:level` scopes a row may claim. Like tier promotion, a populated `scoped` claim is
+ * refused unless its route and level are listed here, and each listed scope must meet its
+ * route's eligibility requirements (`scopedEligibilityProblems`) in the committed matrix.
+ *
+ * Claude's native hook route is enabled at A only. B stays off: the route lists recovery checks
+ * (the hook timing out, the hook failing to start) as unverified, and a required recovery check
+ * that is missing leaves B off (#1026). Enabling a scope awards nothing by itself: a row holds a
+ * claim only with an attested installed receipt on the exact build it pins.
  */
-export const SCOPED_ENABLED = [];
+export const SCOPED_ENABLED = ["claude-native-hook:A"];
 export const SCOPED_DISABLED =
   "scoped claims are disabled until a reviewed change enables this route and level (#1026)";
 /** Installed checks every scoped claim needs: the opt-in is off by default and explicit. */
@@ -62,6 +66,30 @@ export const SCOPED_CHECKS = ["optInDefaultOff"];
  * cancelled request's authorization. Without them B stays off.
  */
 export const SCOPED_B_CHECKS = ["cancelledNoEffect", "freshSessionFreshDecision"];
+
+/**
+ * Why `scope` (`route:level`) may not be enabled on the matrix's `paths`. Any level needs a route
+ * path (not a connected one) with a live installed runner, and no known fail-open path where
+ * fail-closed is required (`knownFailOpen`). B also needs every recovery check verified: the
+ * route must say so with an empty `recoveryUnverified`; a route that lists one, or says nothing,
+ * stays at A.
+ */
+export function scopedEligibilityProblems(scope, paths) {
+  const [route, level, ...rest] = String(scope).split(":");
+  if (rest.length || !SCOPED_LEVELS.includes(level))
+    return [`must be route:level with level ${SCOPED_LEVELS.join(" or ")}`];
+  const path = paths.get(route);
+  if (!path || path.connected) return [`${route} is not a route path`];
+  const problems = [];
+  if (!path.installed?.live) problems.push(`${route} has no live installed runner`);
+  for (const f of path.knownFailOpen ?? []) problems.push(`${route} has a known fail-open path: ${f}`);
+  if (level === "B") {
+    if (!Array.isArray(path.recoveryUnverified))
+      problems.push(`${route} does not say which recovery checks are unverified`);
+    else for (const r of path.recoveryUnverified) problems.push(`${route}: recovery check unverified: ${r}`);
+  }
+  return problems;
+}
 
 /** What a receipt is when nothing verified its attestation (the function's default). */
 export const UNVERIFIED = "attestation not verified (run check-support-matrix.js, which verifies it)";
@@ -526,6 +554,16 @@ export function checkSupportMatrix(
         problems.push(`path ${path.id}: unobserved ${id} needs a reason a reader can check`);
     }
   }
+  for (const path of matrix.paths)
+    for (const field of ["knownFailOpen", "recoveryUnverified"])
+      if (
+        path[field] !== undefined &&
+        (!Array.isArray(path[field]) || path[field].some((x) => typeof x !== "string" || x.trim().length < 20))
+      )
+        problems.push(`path ${path.id}: ${field} must list what a reader can check`);
+  // Each enabled scope meets its route's eligibility requirements, whatever any row claims.
+  for (const scope of scopedEnabled)
+    for (const p of scopedEligibilityProblems(scope, paths)) problems.push(`scoped ${scope}: ${p}`);
   // A connected path runs a live agent through one route end to end, and proves that route.
   for (const path of matrix.paths) {
     if (!path.connected) {

@@ -266,10 +266,27 @@ No check is taken on its word. Each one stands on the receipt's `lifecycle` evid
 call's effect from its `effectRef`, evidence that neither ORCA nor the agent writes. A receipt
 with the labels but not the observations qualifies nothing.
 
-**Scoped claims are disabled.** `SCOPED_ENABLED` is empty, so the checker refuses any populated
-`scoped` field, the way `PROMOTABLE_TIERS` refuses a promoted tier. A separate, reviewed change
-enables a specific route and level, together with that route's eligibility requirements. One
-example: a known fail-open path where fail-closed is required keeps the route ineligible.
+**Only Claude's native hook route is enabled, and only at A.** The checker refuses a populated
+`scoped` field unless its `route:level` is in `SCOPED_ENABLED`, the way `PROMOTABLE_TIERS`
+refuses a promoted tier. Today that list is `claude-native-hook:A`. Each enabled scope must
+also meet its route's eligibility requirements in the committed matrix
+(`scopedEligibilityProblems`):
+
+- any level: a route path (not a connected one) with a live installed runner, and no
+  `knownFailOpen` entry. A known fail-open path where fail-closed is required keeps the route
+  ineligible. `codex-native-hook` lists one: Codex lets a call through when its hook runner
+  fails after the session-open probe;
+- B: an empty `recoveryUnverified`. If the route lists a recovery check, or says nothing,
+  it stays at A. `claude-native-hook` lists two: the hook timing out and the hook failing to
+  start. Live fault fixtures for them were removed, so B stays off.
+
+Enabling a scope awards nothing by itself. The committed matrix carries no `scoped` claim. A
+row holds one only after an attested installed receipt is recorded. The receipt pins one exact
+build. The release need not be that commit: the release gate (`--release`, `releaseProblems`)
+accepts a descendant of it whose certified inputs are unchanged. Permitted changes are docs,
+receipts, a `package.json` version, and in the matrix the row's `tier`, `pin`, `receipts` and
+`scoped` (the claim can only be written after the build it pins). Route requirements,
+eligibility (`knownFailOpen`, `recoveryUnverified`), cases and covered source must be unchanged. Nothing renders it as a badge until that is reviewed.
 
 The Claude installed run (`enforcement-installed-claude-1026.test.js`) records that evidence:
 

@@ -16,6 +16,7 @@ import {
   SCOPED_DISABLED,
   SCOPED_ENABLED,
   UNVERIFIED,
+  scopedEligibilityProblems,
   REPO_ROOT,
   casesFor,
   checkSupportMatrix,
@@ -104,7 +105,10 @@ describe("the matrix checker refuses claims beyond the evidence", () => {
    * inventory (below) is one Write that ORCA must deny per case; each route path gets an
    * `installed` entry naming it and no diagnostics. The evidence rules are tested on their own.
    */
-  const withInstalled = (paths) => paths.map((p) => (p.connected ? p : { ...p, installed: { live: "fixture-live" } }));
+  const withInstalled = (paths) =>
+    paths.map((p) =>
+      p.connected ? p : { ...p, installed: { live: "fixture-live" }, recoveryUnverified: p.recoveryUnverified ?? [] },
+    );
   /** A write ORCA denied: the file is as it was, bound to this call's own tool_use id. */
   const denied = {
     toolUseId: "toolu_1_0",
@@ -512,7 +516,8 @@ describe("the matrix checker refuses claims beyond the evidence", () => {
     const paths = structuredClone(matrix.paths);
     paths.find((p) => p.id === "claude-connected").proves = "claude-connected";
     paths.find((p) => p.id === "acp-ask").proves = "claude-native-hook";
-    expect(check(claude({ routes: ["claude-connected"] }), {}, paths)).toEqual([
+    const problems = check(claude({ routes: ["claude-connected"] }), {}, paths, undefined, attested, undefined, []);
+    expect(problems).toEqual([
       "path acp-ask: only a connected path proves a route",
       "path claude-connected: proves claude-connected, which is not a route path",
       "agent claude: route claude-connected is a connected path, not a route",
@@ -605,8 +610,70 @@ describe("the matrix checker refuses claims beyond the evidence", () => {
     const checkScoped = (s, r = scopedReceipt(), verify = attested) =>
       check(claude({ scoped: s }), { "s.json": r }, testPaths, inventoryFor(testPaths), verify, PROMOTABLE_TIERS);
 
-    it("is disabled in the production checker, whatever the receipt says", () => {
-      expect(SCOPED_ENABLED).toEqual([]);
+    it("enables only Claude's native hook route at A in the production checker", () => {
+      expect(SCOPED_ENABLED).toEqual(["claude-native-hook:A"]);
+      const committed = new Map(matrix.paths.map((p) => [p.id, p]));
+      expect(scopedEligibilityProblems("claude-native-hook:A", committed)).toEqual([]);
+      // B stays off while the route lists recovery checks as unverified.
+      expect(scopedEligibilityProblems("claude-native-hook:B", committed)).toEqual([
+        "claude-native-hook: recovery check unverified: That Claude blocks the call when the hook times out",
+        "claude-native-hook: recovery check unverified: That Claude blocks the call when the hook cannot start",
+      ]);
+      // A known fail-open path keeps a route ineligible at any level.
+      expect(scopedEligibilityProblems("codex-native-hook:A", committed)).toContain(
+        "codex-native-hook has a known fail-open path: Codex lets a call through when its hook runner fails after the session-open probe (exit 1, quiet exit 2, timeout)",
+      );
+      expect(scopedEligibilityProblems("acp-ask:A", committed)).toEqual(["acp-ask has no live installed runner"]);
+      expect(scopedEligibilityProblems("claude-connected:A", committed)).toEqual([
+        "claude-connected is not a route path",
+      ]);
+      expect(scopedEligibilityProblems("claude-native-hook:A*", committed)).toEqual([
+        "must be route:level with level A or B",
+      ]);
+      // The committed matrix carries no claim: enabling a scope awards nothing by itself.
+      expect(matrix.agents.some((a) => a.scoped !== undefined)).toBe(false);
+      expect(checkSupportMatrix(matrix, catalogue)).toEqual([]);
+    });
+
+    it("refuses an enabled scope whose route is not eligible, whatever any row claims", () => {
+      const unrecovered = testPaths.map((p) =>
+        p.id === "acp-ask" ? { ...p, recoveryUnverified: ["That the agent blocks when the hook times out"] } : p,
+      );
+      const failOpen = testPaths.map((p) =>
+        p.id === "acp-ask" ? { ...p, knownFailOpen: ["The agent runs the call when the hook runner fails"] } : p,
+      );
+      const run = (paths, enabled) =>
+        check(claude(), {}, paths, inventoryFor(paths), attested, PROMOTABLE_TIERS, enabled);
+      expect(run(unrecovered, ["acp-ask:A"])).toEqual([]);
+      expect(run(unrecovered, ["acp-ask:B"])).toEqual([
+        "scoped acp-ask:B: acp-ask: recovery check unverified: That the agent blocks when the hook times out",
+      ]);
+      expect(run(failOpen, ["acp-ask:A"])).toEqual([
+        "scoped acp-ask:A: acp-ask has a known fail-open path: The agent runs the call when the hook runner fails",
+      ]);
+      const silent = testPaths.map((p) => (p.id === "acp-ask" ? { ...p, recoveryUnverified: undefined } : p));
+      expect(run(silent, ["acp-ask:B"])).toEqual([
+        "scoped acp-ask:B: acp-ask does not say which recovery checks are unverified",
+      ]);
+      const vague = testPaths.map((p) => (p.id === "acp-ask" ? { ...p, knownFailOpen: ["?"] } : p));
+      expect(run(vague, [])).toEqual(["path acp-ask: knownFailOpen must list what a reader can check"]);
+    });
+
+    it("refuses Claude's committed row a B claim on the hook route, and an A claim without its receipt", () => {
+      const row = matrix.agents.find((a) => a.id === "claude");
+      const claim = (level) => ({
+        ...matrix,
+        agents: matrix.agents.map((a) =>
+          a === row ? { ...a, scoped: { ...scoped({ route: "claude-native-hook" }), level } } : a,
+        ),
+      });
+      expect(checkSupportMatrix(claim("B"), catalogue)).toContain(`agent claude: scoped: ${SCOPED_DISABLED}`);
+      const a = checkSupportMatrix(claim("A"), catalogue);
+      expect(a).not.toContain(`agent claude: scoped: ${SCOPED_DISABLED}`);
+      expect(a.length).toBeGreaterThan(0);
+    });
+
+    it("refuses a scope that is not enabled, whatever the receipt says", () => {
       // Pass labels with no observations behind them, through the production defaults.
       const labelsOnly = scopedReceipt({ lifecycle: undefined });
       const production = checkSupportMatrix(

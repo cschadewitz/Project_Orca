@@ -4,7 +4,8 @@
  * gate's staleness check. `gh` and `git` are injected; the real verification runs in CI
  * (guard-matrix.yml).
  */
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -15,7 +16,7 @@ import {
   bundlePathFor,
   staleProblems,
 } from "../guard-qualification/attestation.js";
-import { releaseProblems } from "../guard-qualification/check-support-matrix.js";
+import { REPO_ROOT, releaseProblems } from "../guard-qualification/check-support-matrix.js";
 
 const build = "0123456789abcdef0123456789abcdef01234567";
 const receipt = { format: "orca-enforcement-receipt/1", build };
@@ -221,6 +222,76 @@ describe("the release gate refuses a certification that is not current", () => {
         git({ changed, files: { ...files(m({})), [`HEAD:${at}`]: JSON.stringify({ paths: [], agents: [] }) } }),
       )[0],
     ).toContain(at);
+  });
+
+  it("accepts recording a scoped claim after its checks-only build, in a real repository", () => {
+    const root = mkdtempSync(join(tmpdir(), "orca-scoped-"));
+    const g = (...args) =>
+      execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    const at = "tools/guard-qualification/support-matrix.json";
+    const write = (path, text) => {
+      mkdirSync(join(root, path, ".."), { recursive: true });
+      writeFileSync(join(root, path), text);
+    };
+    const matrix = () => JSON.parse(readFileSync(join(root, at), "utf8"));
+    const commit = (message) => {
+      g("add", "-A");
+      g("-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", message);
+      return g("rev-parse", "HEAD").trim();
+    };
+    g("init", "-q", "-b", "main");
+    write(at, `${JSON.stringify(JSON.parse(readFileSync(join(REPO_ROOT, at), "utf8")), null, 2)}\n`);
+    write("tools/guard-qualification/cases.json", '{"cases":[]}\n');
+    write(
+      "tools/guard-qualification/check-support-matrix.js",
+      'export const SCOPED_ENABLED = ["claude-native-hook:A"];\n',
+    );
+    write("packages/agents/src/permissions.ts", "export const x = 1;\n");
+    // The checks-only build the receipt pins.
+    const pinned = commit("checks-only build");
+    // Recording it: the receipt, its bundle and the row's scoped claim, all after the build.
+    const m = matrix();
+    const claude = m.agents.find((a) => a.id === "claude");
+    claude.scoped = { level: "A", route: "claude-native-hook", pin: { build: pinned }, receipts: ["r.json"] };
+    write(at, `${JSON.stringify(m, null, 2)}\n`);
+    write("tools/guard-qualification/receipts/claude-scoped.json", "{}\n");
+    write("docs/agent-support.md", "Claude: scoped A\n");
+    commit("record the scoped claim");
+    expect(staleProblems(root, pinned)).toEqual([]);
+
+    // Anything the receipt was judged against still counts, one change at a time.
+    const changes = {
+      "a route's eligibility": () => {
+        const n = matrix();
+        n.paths.find((p) => p.id === "claude-native-hook").recoveryUnverified = [];
+        write(at, `${JSON.stringify(n, null, 2)}\n`);
+      },
+      "a row's routes": () => {
+        const n = matrix();
+        n.agents.find((a) => a.id === "claude").routes.push("acp-ask");
+        write(at, `${JSON.stringify(n, null, 2)}\n`);
+      },
+      "a path's cases": () => {
+        const n = matrix();
+        delete n.paths.find((p) => p.id === "claude-native-hook").excluded.F04;
+        write(at, `${JSON.stringify(n, null, 2)}\n`);
+      },
+      "the case catalogue": () => write("tools/guard-qualification/cases.json", '{"cases":[{"id":"X"}]}\n'),
+      "the enabled scopes": () =>
+        write(
+          "tools/guard-qualification/check-support-matrix.js",
+          'export const SCOPED_ENABLED = ["claude-native-hook:B"];\n',
+        ),
+      "covered source": () => write("packages/agents/src/permissions.ts", "export const x = 2;\n"),
+    };
+    const recorded = g("rev-parse", "HEAD").trim();
+    for (const [what, change] of Object.entries(changes)) {
+      change();
+      commit(`change ${what}`);
+      expect(staleProblems(root, pinned), what).toHaveLength(1);
+      expect(staleProblems(root, pinned)[0], what).toContain(`build ${pinned} is stale`);
+      g("reset", "-q", "--hard", recorded);
+    }
   });
 
   it("checks only promoted rows", () => {
