@@ -89,7 +89,6 @@ const EXPECTED_MODE = "agent";
 
 /** What these cases do not cover, and why; recorded so nothing reads as more than it is. */
 const NOT_COVERED = [
-  "MCP tool calls (follow-up PR)",
   "cancellation of a pending call, and a fresh session after it (follow-up PR)",
   "the experimental judge (tracked separately)",
   "known limitation, documented, not re-created here: Codex lets a call through when its hook runner fails after the startup probe",
@@ -101,10 +100,43 @@ interface Case {
   id: string;
   action: string;
   rule: unknown;
-  step: Step;
+  /** The one call the scripted model makes, given the case's workspace. */
+  step: Step | ((workspace: string) => Step);
   /** The workspace's change expected: path -> exact content, or nothing at all. */
   expect: Record<string, string>;
+  /** What the case adds to Codex's config: an MCP server, say. Nothing that loosens a protection. */
+  codex?: (base: string) => Promise<Record<string, unknown>>;
 }
+
+/**
+ * A stdio MCP server with one tool, `touch`, that writes "mcp" to the file it is given. Codex
+ * starts it under its default settings: no tool approval mode is set, so Codex's own MCP
+ * approval policy applies as it would in use.
+ */
+async function mcpTouch(base: string): Promise<Record<string, unknown>> {
+  const server = join(base, "mcp-touch.mjs");
+  await writeFile(
+    server,
+    `import { createInterface } from "node:readline";
+import { writeFileSync } from "node:fs";
+const out = (m) => process.stdout.write(JSON.stringify(m) + "\\n");
+createInterface({ input: process.stdin }).on("line", (l) => {
+  const m = JSON.parse(l);
+  if (m.method === "initialize") out({ jsonrpc: "2.0", id: m.id, result: { protocolVersion: m.params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: "touch", version: "1" } } });
+  else if (m.method === "tools/list") out({ jsonrpc: "2.0", id: m.id, result: { tools: [{ name: "touch", description: "write a file", inputSchema: { type: "object", properties: { file: { type: "string" } }, required: ["file"] } }] } });
+  else if (m.method === "tools/call") { writeFileSync(m.params.arguments.file, "mcp"); out({ jsonrpc: "2.0", id: m.id, result: { content: [{ type: "text", text: "ok" }] } }); }
+  else if (m.id !== undefined) out({ jsonrpc: "2.0", id: m.id, result: {} });
+});
+`,
+    "utf8",
+  );
+  // A model Codex does not defer MCP tools for, so the scripted model can call one directly.
+  return { model: "gpt-5", mcp_servers: { t: { command: process.execPath, args: [server] } } };
+}
+
+const mcpCall =
+  (file: string) =>
+  (workspace: string): Step => ({ tool: "touch", namespace: "mcp__t", args: { file: join(workspace, file) } });
 
 const CASES: Case[] = [
   {
@@ -134,6 +166,22 @@ const CASES: Case[] = [
     rule: { match: { kind: "edit" }, decision: "deny" },
     step: patch("*** Add File: patch-denied.txt", "+orca-1026"),
     expect: {},
+  },
+  {
+    id: "mcp-allow",
+    action: "mcp: t.touch mcp-allowed.txt",
+    rule: { match: { titlePattern: "^t: touch$" }, decision: "allow" },
+    step: mcpCall("mcp-allowed.txt"),
+    expect: { "mcp-allowed.txt": "mcp" },
+    codex: mcpTouch,
+  },
+  {
+    id: "mcp-deny",
+    action: "mcp: t.touch mcp-denied.txt",
+    rule: { match: { titlePattern: "^t: touch$" }, decision: "deny" },
+    step: mcpCall("mcp-denied.txt"),
+    expect: {},
+    codex: mcpTouch,
   },
 ];
 
@@ -197,12 +245,13 @@ describe.skipIf(ADAPTER === undefined)("installed-session evidence for Codex's h
   });
 
   /** One disposable workspace, config directory and Codex home, and a session the factory opens. */
-  const open = async (id: string, rule: unknown) => {
+  const open = async (id: string, rule: unknown, extra?: Case["codex"]) => {
     const base = join(root, id);
     const configDir = join(base, "config");
     const workspace = join(base, "work");
     const codexHome = join(base, "codex-home");
     for (const dir of [configDir, workspace, codexHome]) await mkdir(dir, { recursive: true });
+    const added = (await extra?.(base)) ?? {};
     // A native approval that reaches the person is recorded and refused: the test never acts
     // as the person to let a call through.
     const personAsked: { title: string; answer: string | undefined }[] = [];
@@ -230,6 +279,7 @@ describe.skipIf(ADAPTER === undefined)("installed-session evidence for Codex's h
           model_providers: {
             standin: { name: "standin", base_url: model.url, wire_api: "responses", env_key: "ORCA_1026_KEY" },
           },
+          ...added,
         }),
         ORCA_1026_KEY: "sk-orca-1026-test",
         NO_PROXY: "127.0.0.1",
@@ -256,13 +306,25 @@ describe.skipIf(ADAPTER === undefined)("installed-session evidence for Codex's h
     session.hookTelemetry?.attach(async (lines) => {
       hookLines.push(...lines);
     });
-    return { session, workspace, personAsked, native, hookLines, recorded: session.hookTelemetry !== undefined };
+    return {
+      session,
+      workspace,
+      personAsked,
+      native,
+      hookLines,
+      recorded: session.hookTelemetry !== undefined,
+      codexAdded: added,
+    };
   };
 
   for (const c of CASES)
     it(`${c.id}: ${c.action}`, async () => {
       const allow = Object.keys(c.expect).length > 0;
-      const { session, workspace, personAsked, native, hookLines, recorded } = await open(c.id, c.rule);
+      const { session, workspace, personAsked, native, hookLines, recorded, codexAdded } = await open(
+        c.id,
+        c.rule,
+        c.codex,
+      );
       // The mode the adapter reports for the session, with its own description of it.
       const modeOption = session.configOptions.find((o) => o.category === "mode");
       const mode = modeOption?.currentValue ?? null;
@@ -274,7 +336,7 @@ describe.skipIf(ADAPTER === undefined)("installed-session evidence for Codex's h
       try {
         // The pinned adapter's mode, reported explicitly, before anything is asked of it.
         expect(mode).toBe(EXPECTED_MODE);
-        await session.prompt(script(c.step));
+        await session.prompt(script(typeof c.step === "function" ? c.step(workspace) : c.step));
         // The hook hands its record to a detached writer after answering, so it can land a
         // little after the call: read the spool until it does, within the writer's deadline.
         for (const until = Date.now() + 5_000; session.hookTelemetry && hookLines.length === 0 && Date.now() < until;) {
@@ -321,6 +383,7 @@ describe.skipIf(ADAPTER === undefined)("installed-session evidence for Codex's h
         id: c.id,
         action: c.action,
         rule: c.rule,
+        codexConfigAdded: codexAdded,
         status,
         reasons: failures.length > 0 ? failures : unverified,
         orca: {
