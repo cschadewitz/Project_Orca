@@ -112,31 +112,38 @@ it("does not follow a redirect with the token", async () => {
   expect(existsSync(join(selected, "demo-seed"))).toBe(false);
 });
 
-it("changes only the plans this run made, not an older plan with a fixture's key", async () => {
+it("never submits a program into an existing plan, and writes only to plans it made", async () => {
   const selected = workspace();
-  const older = { id: "plan-older-billing", key: "billing", requestIds: ["req-from-before"] };
-  // A plan that appears during the run with a fixture's key but someone else's request.
-  const foreign = { id: "plan-foreign-mobile", key: "mobile", requestIds: ["req-someone-else"] };
+  // Every fixture key, already taken by older plans: the seed must neither join nor change them.
+  const older = ["billing", "search", "mobile", "platform"].map((key) => ({
+    id: `plan-older-${key}`,
+    key,
+    requestIds: [`req-before-${key}`],
+  }));
   let n = 0;
-  const requestFor = new Map();
+  const programs = new Map(); // title -> { requestId, planKey }
   let plansListed = 0;
   const daemon = await fakeDaemon({
     "config.get": { config: { path: join(selected, "orca.config.yaml") } },
     "requests.submit": (params) => {
       const requestId = `req-${++n}`;
-      requestFor.set(params.title, requestId);
+      if (params.vars?.plan) programs.set(params.title, { requestId, planKey: params.vars.plan });
       return { state: "accepted", admissionId: `adm-${n}`, requestId, runId: `run-${n}` };
     },
     "plans.list": () => {
       plansListed++;
-      if (plansListed === 1) return { plans: [older] };
-      // Ours: the search program's own request, so the seed may update it (the control case).
-      const search = {
-        id: "plan-new-search",
-        key: "search",
-        requestIds: [requestFor.get("Search that understands typos")],
+      if (plansListed === 1) return { plans: older };
+      // Ours: the search program's own plan (the control the seed may update). Mobile's new
+      // plan was joined by another request, so it is not the seed's alone.
+      const search = programs.get("Search that understands typos");
+      const mobile = programs.get("Offline mode for the mobile app");
+      return {
+        plans: [
+          ...older,
+          { id: "plan-new-search", key: search.planKey, requestIds: [search.requestId] },
+          { id: "plan-joined-mobile", key: mobile.planKey, requestIds: [mobile.requestId, "req-someone-else"] },
+        ],
       };
-      return { plans: [older, foreign, search] };
     },
     "decisions.list": () => ({ decisions: [{ key: "engine" }] }),
     "inputs.list": { inputs: [] },
@@ -154,6 +161,18 @@ it("changes only the plans this run made, not an older plan with a fixture's key
     "11",
   ]);
   expect(code, output).toBe(0);
+
+  // The submissions themselves: four programs, each into a new key of its own, none existing.
+  const keys = daemon.calls.filter((call) => call.method === "requests.submit" && call.params.vars?.plan);
+  expect(keys).toHaveLength(4);
+  const existing = new Set(older.map((plan) => plan.key));
+  for (const call of keys) {
+    expect(existing.has(call.params.vars.plan)).toBe(false);
+    expect(call.params.vars.plan).toMatch(/^(billing|search|mobile|platform)-[a-z0-9]+$/);
+  }
+  expect(new Set(keys.map((call) => call.params.vars.plan)).size).toBe(4);
+
+  // The later writes: only the plan this run made and alone fed.
   const planWrites = daemon.calls.filter((call) => ["decisions.decide", "risks.update"].includes(call.method));
   expect(planWrites.map((call) => call.params.planId)).toEqual(["plan-new-search"]);
   expect(planWrites.map((call) => call.params.key)).toEqual(["hosted-cost"]);

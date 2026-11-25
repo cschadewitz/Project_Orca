@@ -73,8 +73,9 @@ Titles include a very long one, an unbroken one, an accented one and a Japanese 
 (`approval-chain`), a nested workflow (`nested-release`), a ten-lane fan (`wide-graph`) and one
 with very long id, name and version. Each gets runs.
 
-**Programs**: four requests through `program`, each with its own planner agent and plan
-(`billing`, `search`, `mobile`, `platform`): work items with dependencies, risks and decisions.
+**Programs**: four requests through `program`, each with its own planner agent and its own new
+plan (`billing-<stamp>`, `search-<stamp>`, `mobile-<stamp>`, `platform-<stamp>`, with one
+stamp per invocation): work items with dependencies, risks and decisions.
 Billing's plan is approved, so its items run; its decision is decided and a risk moved to
 mitigating. The others wait at the plan gate, with risks accepted and realized.
 
@@ -91,6 +92,9 @@ planner per program, one with a very long name, and one whose command does not e
 - The store grows by about 5,000 files at scale 1 under the file store. The desktop app checks
   at most 8,192 files under `.orca` and `auth` when it reopens a workspace, so a large `--scale`
   can make the app refuse the workspace.
-- Plan decisions and risk updates only touch plans this invocation made: new since it started, and fed only by its own program requests. An older plan with the same key is left alone.
-- Populate is once per workspace; the plan slugs are fixed, so a second batch collides. Start
-  from a fresh workspace instead of `--force` unless you only want more runs.
+- The seed never adds work to a plan that already exists: each program names a plan key with
+  this invocation's stamp, and it skips a program whose key is somehow taken. Plan decisions
+  and risk updates only go to plans this invocation made: new since it started, and fed only by
+  its own program request.
+- Populate is once per workspace (`demo-seed/seeded.json`). The work-item slugs inside the
+  programs are fixed, so prefer a fresh workspace to `--force`.

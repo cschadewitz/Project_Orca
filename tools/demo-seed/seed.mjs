@@ -24,6 +24,7 @@ import {
   realpathSync,
   writeFileSync,
 } from "node:fs";
+import { randomBytes } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
@@ -422,7 +423,9 @@ async function populate(call, workspace) {
     log(`already seeded (${marker}); pass --force to add another batch`);
     return;
   }
-  const stamp = Date.now().toString(36).slice(-5);
+  // One stamp per invocation: in work-item slugs, and in every plan key this batch creates, so
+  // its programs never join a plan that already exists (another seed's, or anyone's).
+  const stamp = `${Date.now().toString(36).slice(-5)}${randomBytes(2).toString("hex")}`;
   const submitted = [];
   const submit = async (label, params, extra = {}) => {
     const result = await call("requests.submit", {
@@ -438,6 +441,7 @@ async function populate(call, workspace) {
   // Plans that exist before this batch are never touched, whatever their key (see ownedPlan).
   const before = await call("plans.list", {});
   const existingPlans = new Set((before.plans ?? []).map((plan) => plan.id));
+  const existingKeys = new Set((before.plans ?? []).map((plan) => plan.key));
   log(
     `submitting ${WORK.length * scale} work items, ${WORKFLOW_RUNS.length * scale} workflow runs, ${PROGRAMS.length} programs`,
   );
@@ -479,16 +483,21 @@ async function populate(call, workspace) {
     }
   }
   for (const program of PROGRAMS) {
+    const planKey = `${program.plan}-${stamp}`;
+    if (existingKeys.has(planKey)) {
+      log(`skipping ${program.title}: a plan ${planKey} already exists`);
+      continue;
+    }
     await submit(
       program.title,
       {
         title: program.title,
         body: program.body,
         labels: ["program"],
-        vars: { plan: program.plan, maxAutoApproveItems: 0 },
+        vars: { plan: planKey, maxAutoApproveItems: 0 },
         overrides: { roles: { decomposer: program.planner, planner: program.planner } },
       },
-      { program: program.plan },
+      { program: program.plan, planKey },
     );
   }
   log(`submitted ${submitted.length} requests (${submitted.filter((s) => s.runId).length} with a run)`);
@@ -579,15 +588,15 @@ async function populate(call, workspace) {
 
 /**
  * The fixture program for `plan` when this invocation made the plan, else undefined: a plan
- * that is new since the batch started, whose key is a fixture's, and whose every contributing
- * request is that fixture's program request from this batch. An older plan with the same key, a
- * plan another request joined, or one from a rejected submission is left alone.
+ * that is new since the batch started, whose key is one this batch submitted (`<fixture>-<stamp>`),
+ * and whose every contributing request is that accepted program request. Any other plan, one
+ * another request joined, or one from a rejected submission is left alone.
  */
 function ownedPlan(plan, existingPlans, submitted) {
   if (existingPlans.has(plan.id)) return undefined;
-  const program = PROGRAMS.find((p) => p.plan === plan.key);
-  const ours = submitted.find((s) => s.program === plan.key && s.state === "accepted")?.requestId;
-  if (!program || !ours || plan.requestIds.length === 0 || plan.requestIds.some((id) => id !== ours)) return undefined;
+  const ours = submitted.find((s) => s.planKey === plan.key && s.state === "accepted");
+  const program = ours && PROGRAMS.find((p) => p.plan === ours.program);
+  if (!program || plan.requestIds.length === 0 || plan.requestIds.some((id) => id !== ours.requestId)) return undefined;
   return program;
 }
 
