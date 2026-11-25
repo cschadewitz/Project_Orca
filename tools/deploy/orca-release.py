@@ -59,8 +59,8 @@ DEPLOYMENT_RINGS = ("internal", "preview", "stable")
 BUNDLE_MAX_BYTES = 512 << 20          # compressed archive
 BUNDLE_MAX_UNPACKED = 1536 << 20      # everything it unpacks to
 # cosign is fetched once into the deployment root and checked against this digest every time
-# it is used, so nothing on PATH or in the cache is trusted by name. The same version
-# release-server-bundle.yml signs with (sigstore/cosign-installer's pinned bootstrap).
+# it is used, so nothing on PATH or in the cache is trusted by name.
+# release-server-bundle.yml installs and checks the same version and digest before it signs.
 COSIGN_VERSION = "v3.1.4"
 COSIGN_SHA256 = {
     "x86_64": ("cosign-linux-amd64", "424e2c97d0b45fd7a6b608a87f090f35633f4c23ece5f092d48bba11aaf4bbfa"),

@@ -416,11 +416,15 @@ it("pins the same signer identity in the workflow and the adapter (#876)", () =>
     'BUNDLE_SIGNER = f"https://github.com/{BUNDLE_REPOSITORY}/.github/workflows/release-server-bundle.yml@refs/heads/main"',
   );
   expect(adapter).toContain('BUNDLE_TRIGGER = "workflow_dispatch"');
+  // The signer installs the cosign the adapter verifies with, checked against the same digest.
   const sign = workflow("release-server-bundle.yml").jobs.sign.steps;
-  expect(sign.find((step) => step.uses?.startsWith("sigstore/cosign-installer@")).with).toEqual({
-    "cosign-release": "v3.1.4",
-  });
-  expect(adapter).toContain('COSIGN_VERSION = "v3.1.4"');
+  const install = sign.find((step) => step.name === "Install the pinned cosign");
+  expect(adapter).toContain(`COSIGN_VERSION = "${install.env.COSIGN_VERSION}"`);
+  expect(adapter).toContain(`"x86_64": ("cosign-linux-amd64", "${install.env.COSIGN_SHA256}")`);
+  expect(install.run).toContain("sha256sum -c -");
+  expect(install.run).toContain("/cosign-linux-amd64");
+  // Only GitHub's own actions run while the job holds its OIDC token.
+  for (const step of sign) if (step.uses) expect(step.uses).toMatch(/^actions\//);
 });
 
 it("accepts the signed arm64 installer on a GitHub-hosted arm64 machine, unattended (#889)", () => {
