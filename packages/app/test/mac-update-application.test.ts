@@ -14,7 +14,7 @@ import type { OrcaBridge } from "../src/bridge.js";
 import { MacCandidateSession } from "../src/main/mac-update-candidates.js";
 import { MacUpdateApplication, installMacUpdateIPC } from "../src/main/mac-update-application.js";
 import { macUpdateRehearsal } from "./mac-update-rehearsal-fixture.js";
-import { fencePorts, selectFenceDirectory } from "./fixtures/fence-ports.js";
+import { fencePorts, selectFenceDirectory } from "../../protocol/test/fixtures/fence-ports.js";
 import { ClosedUpdateWindow, enterUpdateWriter, provisionUpdateWindow } from "@orca/protocol/update-window";
 
 const source = stripTypeScriptTypes(
