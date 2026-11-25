@@ -1,7 +1,8 @@
-/** Kernel-fence port selection for disposable update-window fixtures (#807, #819).
+/** Kernel-fence port selection for disposable fixtures (#807, #819, #1084, #1088).
  *
  * The update window fences a directory by listening on eight loopback ports hashed from its
- * identity (path, device, inode). Those ports land anywhere in 20000-59999, and most of that
+ * identity (path, device, inode), and the first-run fence holds one such port for a workspace.
+ * Those ports land anywhere in 20000-59999, and most of that
  * span overlaps the kernel's ephemeral (autobind) range, where every outgoing loopback
  * connection made by any process on the machine, including parallel test workers, takes
  * its local port. A fixture whose slot fell there failed with EADDRINUSE, or startup closed
@@ -12,7 +13,7 @@
  * the fixture's inode is chosen; every scenario still binds the real hashed ports. */
 import { readFileSync } from "node:fs";
 import { mkdir, rename, rm, stat } from "node:fs/promises";
-import { fenceBoot, fenceDirectory, fenceHash } from "@orca/protocol/first-run-fence";
+import { fenceBoot, fenceDirectory, fenceHash, fencePort } from "@orca/protocol/first-run-fence";
 
 export type FenceIdentity = ReturnType<typeof fenceDirectory>;
 
@@ -43,24 +44,42 @@ export function autobindRange(): readonly [number, number] {
   return (range = [32768, 65535]);
 }
 
-/** Whether no slot of `identity`, fenced under any of `paths`, can be taken by kernel autobind. */
-export function clearOfAutobind(identity: FenceIdentity, paths: readonly string[] = [identity.path]): boolean {
+/** Which fences a fixture directory is held under: the update window's eight slots (the
+ * default), the first-run fence's one port for a workspace, or both. */
+export type Fences = { readonly updateWindow?: boolean; readonly firstRun?: boolean };
+const UPDATE_WINDOW: Fences = { updateWindow: true };
+
+/** Whether no port of `identity`, fenced under any of `paths` by `fences`, can be taken by kernel autobind. */
+export function clearOfAutobind(
+  identity: FenceIdentity,
+  paths: readonly string[] = [identity.path],
+  fences: Fences = UPDATE_WINDOW,
+): boolean {
   const [low, high] = autobindRange();
-  return paths.every((path) => fencePorts({ ...identity, path }).every((port) => port < low || port > high));
+  const clear = (port: number) => port < low || port > high;
+  return paths.every((path) => {
+    const at = { ...identity, path };
+    return (!fences.updateWindow || fencePorts(at).every(clear)) && (!fences.firstRun || clear(fencePort(at)));
+  });
 }
 
 const SELECTION_LIMIT = 256;
 
 /** Replace the empty directory at `path` with fresh ones until its identity is clear of
- * autobind under `path` and every alias (paths the same inode is later fenced under, such
- * as after a rename). Rejected directories are kept until the end so a freed inode cannot
- * come straight back. About a third of identities qualify per path, so this is bounded. */
-export async function selectFenceDirectory(path: string, aliases: readonly string[] = []): Promise<void> {
+ * autobind for `fences` under `path` and every alias (paths the same inode is later fenced
+ * under, such as after a rename). Rejected directories are kept until the end so a freed
+ * inode cannot come straight back. About a third of identities qualify per path and fence,
+ * so this is bounded. */
+export async function selectFenceDirectory(
+  path: string,
+  aliases: readonly string[] = [],
+  fences: Fences = UPDATE_WINDOW,
+): Promise<void> {
   const { mode } = await stat(path);
   const rejected: string[] = [];
   try {
     for (let attempt = 0; attempt < SELECTION_LIMIT; attempt++) {
-      if (clearOfAutobind(fenceDirectory(path), [path, ...aliases])) return;
+      if (clearOfAutobind(fenceDirectory(path), [path, ...aliases], fences)) return;
       const aside = `${path}.rejected-${attempt}`;
       await rename(path, aside);
       rejected.push(aside);
