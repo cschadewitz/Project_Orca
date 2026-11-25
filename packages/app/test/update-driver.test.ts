@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
@@ -28,7 +28,7 @@ vi.mock("electron-updater", () => ({
     },
   },
 }));
-import { acceptsVersion, updateDriver } from "../src/main/update-driver.js";
+import { acceptsVersion, feedTokenFiles, readFeedToken, updateDriver } from "../src/main/update-driver.js";
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.clearAllMocks();
@@ -169,5 +169,41 @@ it("offers release candidates only to installs that opt in", async () => {
       Promise.resolve({ isUpdateAvailable: true, updateInfo: { version: "0.6.1" } }),
     );
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+it("reads the feed credential from the env file, else the app folder, else the pre-rename folder", async () => {
+  const local = mkdtempSync(join(tmpdir(), "orca-feed-localappdata-"));
+  try {
+    const legacyDir = join(local, "ORCA"); // rename-keep: the folder before the rename
+    const currentDir = join(local, "ORCA");
+    mkdirSync(legacyDir, { recursive: true });
+    mkdirSync(currentDir, { recursive: true });
+    writeFileSync(join(legacyDir, "feed-token.txt"), "legacy-token\n");
+    expect(feedTokenFiles({ LOCALAPPDATA: local }).at(-1)).toBe(join(legacyDir, "feed-token.txt"));
+    expect(feedTokenFiles({ LOCALAPPDATA: local })[0]).toBe(join(currentDir, "feed-token.txt"));
+    // Only the old folder has one: it is read.
+    expect(readFeedToken(feedTokenFiles({ LOCALAPPDATA: local }))).toBe("legacy-token");
+    // The app's own folder wins once it has one.
+    writeFileSync(join(currentDir, "feed-token.txt"), "current-token\n");
+    expect(readFeedToken(feedTokenFiles({ LOCALAPPDATA: local }))).toBe("current-token");
+    // The environment's file, when named, is the only one read.
+    const named = join(local, "named-token");
+    expect(feedTokenFiles({ LOCALAPPDATA: local, ORCA_UPDATE_TOKEN_FILE: named })).toEqual([named]);
+    expect(readFeedToken([named])).toBe("");
+    expect(feedTokenFiles({})).toEqual([]);
+
+    vi.stubEnv("ORCA_UPDATE_URL", "https://feed.example/");
+    vi.stubEnv("ORCA_UPDATE_TOKEN_FILE", "");
+    vi.stubEnv("LOCALAPPDATA", local);
+    await updateDriver(true, "win32", "x64")!.check();
+    expect(fake.options).toHaveBeenLastCalledWith(
+      expect.objectContaining({ requestHeaders: { Authorization: "Bearer current-token" } }),
+    );
+    rmSync(join(currentDir, "feed-token.txt"), { force: true });
+    rmSync(join(legacyDir, "feed-token.txt"), { force: true });
+    await expect(updateDriver(true, "win32", "x64")!.check()).rejects.toThrow("Missing feed credential");
+  } finally {
+    rmSync(local, { recursive: true, force: true });
   }
 });

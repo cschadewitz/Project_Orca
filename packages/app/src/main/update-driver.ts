@@ -1,5 +1,6 @@
 /** Private HTTPS feed credentials are read only in main, from an operator-provisioned file. */
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import electronUpdater from "electron-updater";
 import type { UpdateDriver } from "./updates.js";
 /**
@@ -11,6 +12,34 @@ export function acceptsVersion(version: string, env: NodeJS.ProcessEnv = process
   return !version.includes("-") || env.ORCA_UPDATE_PRERELEASE === "1";
 }
 
+/**
+ * Where the feed credential is read from, in order. `ORCA_UPDATE_TOKEN_FILE` when it is set,
+ * and nothing else then. Without it, `%LOCALAPPDATA%\\ORCA\\feed-token.txt`, then the same
+ * file in the folder the app had before the rename, for v0.9.0 only.
+ */
+export function feedTokenFiles(env: NodeJS.ProcessEnv = process.env): string[] {
+  if (env.ORCA_UPDATE_TOKEN_FILE) return [env.ORCA_UPDATE_TOKEN_FILE];
+  if (!env.LOCALAPPDATA) return [];
+  const current = join(env.LOCALAPPDATA, "ORCA", "feed-token.txt");
+  const legacy = join(env.LOCALAPPDATA, "ORCA", "feed-token.txt"); // rename-keep: the pre-rename folder
+  return current === legacy ? [current] : [current, legacy];
+}
+
+/** The first of `files` that exists, trimmed; a missing file moves on to the next. */
+export function readFeedToken(files: string[]): string {
+  for (const file of files) {
+    let text: string;
+    try {
+      text = readFileSync(file, "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw error;
+    }
+    return text.trim();
+  }
+  return "";
+}
+
 export function updateDriver(packaged: boolean, platform: string, arch: string): UpdateDriver | undefined {
   if (!packaged || platform !== "win32" || !["x64", "arm64"].includes(arch)) return undefined;
   let updater: InstanceType<typeof electronUpdater.NsisUpdater> | undefined;
@@ -19,7 +48,7 @@ export function updateDriver(packaged: boolean, platform: string, arch: string):
     const url = new URL(process.env.ORCA_UPDATE_URL ?? "https://updates.invalid/");
     if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash)
       throw new Error("Invalid update feed");
-    const token = readFileSync(process.env.ORCA_UPDATE_TOKEN_FILE ?? "", "utf8").trim();
+    const token = readFeedToken(feedTokenFiles());
     if (!token || /[\r\n]/.test(token)) throw new Error("Missing feed credential");
     updater = new electronUpdater.NsisUpdater({
       provider: "generic",
