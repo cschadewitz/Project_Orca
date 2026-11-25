@@ -144,7 +144,7 @@
         "agentVersion": "2.1.330",
         "adapterVersion": "0.109.1",
         "host": "linux-x64",
-        "build": "0da4a3d118748fde9fc8400453120e6fcee9c7d4",
+        "build": "20df0c5b02ab969516e398ca8e015ed32c17a3db",
         "artifacts": {
           "adapterIntegrity": "sha512-tGT3IH6ey3V7wvFRhxK+1XLYDC6FBUyIehvNBm06/as/HG2MWhC6r8hRffSpS7osnMjARZMfDeLyQB0Wjjm0uQ==",
           "runtimeSha256": "f390eaa0814e6a1bff74cbb47acb74cb9c89d30ced809fe0af5af00c7bfe8ebb",
@@ -180,7 +180,7 @@
           "agentVersion": "2.1.330",
           "adapterVersion": "0.109.1",
           "host": "linux-x64",
-          "build": "0da4a3d118748fde9fc8400453120e6fcee9c7d4",
+          "build": "20df0c5b02ab969516e398ca8e015ed32c17a3db",
           "artifacts": {
             "adapterIntegrity": "sha512-tGT3IH6ey3V7wvFRhxK+1XLYDC6FBUyIehvNBm06/as/HG2MWhC6r8hRffSpS7osnMjARZMfDeLyQB0Wjjm0uQ==",
             "runtimeSha256": "f390eaa0814e6a1bff74cbb47acb74cb9c89d30ced809fe0af5af00c7bfe8ebb",
