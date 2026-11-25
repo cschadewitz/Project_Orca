@@ -11,7 +11,11 @@
     {
       "id": "acp-ask",
       "what": "ORCA's answer to an ACP session/request_permission ask (resolvePermission, read fresh per ask by acp-session.ts)",
-      "capabilities": ["answerer", "offered-options", "mcp-grant-allows"],
+      "capabilities": [
+        "answerer",
+        "offered-options",
+        "mcp-grant-allows"
+      ],
       "excluded": {
         "F01": "The ask arrives as an ACP request the SDK has already parsed; there are no raw bytes for ORCA to refuse.",
         "F02": "Decided in the session's own process; there is no separate context file to lose.",
@@ -29,7 +33,13 @@
     {
       "id": "claude-native-hook",
       "what": "ORCA's Claude Code PreToolUse hook (#704), run as its process runs it (runClaudePreToolHook)",
-      "capabilities": ["raw-input", "context-file", "cwd", "hook-settings", "mcp-grant-allows"],
+      "capabilities": [
+        "raw-input",
+        "context-file",
+        "cwd",
+        "hook-settings",
+        "mcp-grant-allows"
+      ],
       "excluded": {
         "L08": "The hook only hands an ask back to Claude. Whether that ask reaches ORCA's answerer for the same call is unverified until an installed receipt shows it; the answerer cases run on acp-ask.",
         "F04": "The hook never answers allow and offers no options, so there is no option for ORCA to pick on this route."
@@ -63,7 +73,9 @@
     {
       "id": "gemini-acp-ask",
       "what": "ORCA's answer to a session/request_permission ask shaped as Gemini CLI 0.70.0 sends it (resolvePermission, read fresh per ask): no rawInput, Gemini's display title, its locations, MCP server and tool only in _meta",
-      "capabilities": ["answerer"],
+      "capabilities": [
+        "answerer"
+      ],
       "excluded": {
         "F01": "The ask arrives as an ACP request the SDK has already parsed; there are no raw bytes for ORCA to refuse.",
         "F02": "Decided in the session's own process; there is no separate context file to lose.",
@@ -90,7 +102,12 @@
     {
       "id": "codex-native-hook",
       "what": "ORCA's Codex PreToolUse hook (#705), run as its process runs it (runClaudePreToolHook after --codex), with Codex 0.171.0's frames (Bash, apply_patch, view_image, mcp__server__tool)",
-      "capabilities": ["raw-input", "context-file", "cwd", "mcp-grant-allows"],
+      "capabilities": [
+        "raw-input",
+        "context-file",
+        "cwd",
+        "mcp-grant-allows"
+      ],
       "excluded": {
         "L08": "Codex cannot pause a call for a person from a hook: an ask is answered with a block (exit 2), so there is no answerer on this route.",
         "F03": "Codex's hook config is session flags with a trust hash, not Claude settings, and Codex lets a call through when its hook runner fails; ORCA's startup probe covers that and is tested by the #705 Codex acceptance, not here.",
@@ -112,7 +129,11 @@
       "connected": true,
       "proves": "claude-native-hook",
       "what": "A real Claude Code through the real Claude ACP adapter, in a session opened by ORCA's session factory with the pre-tool hook installed, Claude's own settings allowing every tool, and a model stand-in making each case's tool calls (tools/guard-qualification/connected/)",
-      "capabilities": ["answerer", "agent-turn", "mcp-grant-allows"],
+      "capabilities": [
+        "answerer",
+        "agent-turn",
+        "mcp-grant-allows"
+      ],
       "excluded": {
         "F01": "The agent builds the hook's input itself; a live run cannot hand the hook malformed bytes. Run on claude-native-hook.",
         "F02": "The session's context file is written by ORCA's factory; damaging it mid-session is a hook-program case. Run on claude-native-hook.",
@@ -140,11 +161,35 @@
     {
       "id": "claude",
       "tuple": "Claude ACP adapter 0.109.1 with Claude Code 2.1.330, linux-x64 (CLAUDE_HOOK_VERIFIED_PAIRS); not pinned here until a trusted receipt exists",
-      "pin": null,
+      "pin": {
+        "agentVersion": "2.1.330",
+        "adapterVersion": "0.109.1",
+        "host": "linux-x64",
+        "build": "18db5e2669fb3df3e6a496fca2376fc3061061d7",
+        "artifacts": {
+          "adapterIntegrity": "sha512-tGT3IH6ey3V7wvFRhxK+1XLYDC6FBUyIehvNBm06/as/HG2MWhC6r8hRffSpS7osnMjARZMfDeLyQB0Wjjm0uQ==",
+          "runtimeSha256": "f390eaa0814e6a1bff74cbb47acb74cb9c89d30ced809fe0af5af00c7bfe8ebb",
+          "hookProgramSha256": "cb7f5fdc807bf1e62bc0c560ce56dc81fadaf2552b87b89f14ee5faa469c7868"
+        }
+      },
       "tier": "none",
-      "routes": ["claude-native-hook"],
-      "notAsserted": ["A02", "A04", "B01", "F01", "F02", "F03", "F05", "P02", "P03"],
-      "receipts": [],
+      "routes": [
+        "claude-native-hook"
+      ],
+      "notAsserted": [
+        "A02",
+        "A04",
+        "B01",
+        "F01",
+        "F02",
+        "F03",
+        "F05",
+        "P02",
+        "P03"
+      ],
+      "receipts": [
+        "tools/guard-qualification/receipts/claude-claude-native-hook.json"
+      ],
       "unverified": [
         "Any tier: only with nativeToolHook: experimental, on the pinned pair and host; without the hook Claude runs remembered calls without asking ORCA",
         "Behaviour of a real model, which may make calls in shapes the stand-in does not",
@@ -169,7 +214,9 @@
       "tuple": "Codex ACP adapter 2.9.0 with Codex 0.171.0, linux-x64 (CODEX_HOOK_VERIFIED_PAIRS); not pinned here until a trusted receipt exists",
       "pin": null,
       "tier": "none",
-      "routes": ["acp-ask"],
+      "routes": [
+        "acp-ask"
+      ],
       "pendingRoutes": {
         "codex-native-hook": "#705 Codex adapter, shipped as an experimental, unqualified opt-in (nativeToolHook: experimental, off by default). An ORCA ask blocks the call; the hook runner fails open after the session-open probe; typed stdin is outside. No tier"
       },
@@ -198,7 +245,9 @@
       "tuple": "Gemini CLI 0.70.0 (gemini --acp), linux-x64 (GEMINI_CLI_SUPPORT, approval-tested); not pinned here until a trusted receipt exists",
       "pin": null,
       "tier": "none",
-      "routes": ["gemini-acp-ask"],
+      "routes": [
+        "gemini-acp-ask"
+      ],
       "receipts": [],
       "unverified": [
         "Connects and first-run preflight recognises it; no installed receipt here (gemini-acp-acceptance.yml runs the installed CLI)",
