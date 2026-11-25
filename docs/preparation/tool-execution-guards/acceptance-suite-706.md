@@ -271,6 +271,23 @@ with the labels but not the observations qualifies nothing.
 enables a specific route and level, together with that route's eligibility requirements. One
 example: a known fail-open path where fail-closed is required keeps the route ineligible.
 
+The Claude installed run (`enforcement-installed-claude-1026.test.js`) records that evidence:
+
+- **`optIn`**: a session from a config without the field gets no hook, so a write ORCA's rule
+  denies lands through Claude's own allow. `on` is refused. With `experimental`, the same
+  write is denied and does not land.
+- **`cancelled`**: an MCP call and a write each ask, and the turn is cancelled while the ask
+  is pending. Neither has any effect, then or after a wait.
+- **`fresh`**: a new session asks again for each call. Unanswered, nothing runs; answered once,
+  it runs. None of them is a cancelled call.
+- **`judged`** (`checks.judgedAction`): with the experimental command judge on, a command
+  that a judged rule is about reaches the person carrying the judge's advisory verdict. It runs
+  nothing unanswered and runs on their one-time answer, whichever verdict the judge gave. The
+  judge is ORCA's own (`preparePlainRuleJudge`), prepared against a provider stand-in
+  (`connected/judge-stand-in.js`). The daemon's key, grant and budget plumbing is covered by
+  its own tests, not by this run. On this route, ORCA's hook asks the person before the MCP
+  relay's judge runs, so no judged MCP allow is claimed. The Claude row lists that.
+
 Hook timeout and startup failure are listed under `unverified`. They are not run with live
 fault fixtures. `--release` checks a scoped claim's build for staleness the same way it checks
 a promoted row's.

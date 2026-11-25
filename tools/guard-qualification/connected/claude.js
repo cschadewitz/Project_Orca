@@ -94,7 +94,7 @@ export function claudeConnected(env) {
     },
 
     /** Open a session the daemon's way. The world's `configured` is read now, as at session open. */
-    async openSession(world, { askPermission, extraEnv, host, nativeToolHook } = {}) {
+    async openSession(world, { askPermission, extraEnv, host, nativeToolHook, judge } = {}) {
       const claudeConfig = join(world.root, "claude-config");
       await mkdir(claudeConfig, { recursive: true });
       await writeFile(join(claudeConfig, "settings.json"), JSON.stringify(CLAUDE_SETTINGS));
@@ -123,6 +123,8 @@ export function claudeConnected(env) {
         askPermission: askPermission ?? (async () => undefined),
         logger: silentLogger,
         handshakeTimeoutMs: 60_000,
+        // A judge prepared for this session (#701), as the daemon's judged factory hands it over.
+        ...(judge ?? {}),
       });
     },
 
@@ -132,11 +134,23 @@ export function claudeConnected(env) {
       const session = await path.openSession(world, {
         // A world opts in like every case unless it says otherwise (null: a config without the field).
         nativeToolHook: world.nativeToolHook,
-        askPermission: async (req) => {
+        judge: world.judge,
+        askPermission: async (req, _invocation, judged) => {
           const approval = {
             toolCallId: req.toolCall.toolCallId,
             title: req.toolCall.title ?? "",
             answer: "pending",
+            // A judge's verdict shown with the ask (#701): only its fixed codes, never a criterion.
+            ...(judged
+              ? {
+                  judged: {
+                    verdict: judged.verdict,
+                    kind: judged.kind ?? null,
+                    advisory: judged.advisory === true,
+                    reasonCode: judged.reasonCode ?? null,
+                  },
+                }
+              : {}),
           };
           state.approvals.push(approval);
           world.asked.push(approval.title);
@@ -279,7 +293,11 @@ export function claudeConnected(env) {
           orcaDecision: unobserved ? "unobserved" : "observed",
           ...(unobserved ? { unobservedBecause: unobserved } : {}),
           refusal,
-          approvals: c.approvals.map((a) => ({ toolCallId: a.toolCallId, answer: a.answer })),
+          approvals: c.approvals.map((a) => ({
+            toolCallId: a.toolCallId,
+            answer: a.answer,
+            ...(a.judged ? { judged: a.judged } : {}),
+          })),
           effect,
           effectRef,
           ...(p.primed ? { primingRead: p.primed } : {}),

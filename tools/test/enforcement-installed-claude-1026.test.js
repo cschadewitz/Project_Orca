@@ -14,6 +14,10 @@
  *   shown again after a wait, for an MCP call and a file write.
  * - `checks.freshSessionFreshDecision`: a new session for the same calls asks again, runs
  *   nothing unanswered, and runs only on its own one-time answer.
+ * - `checks.judgedAction`: with the experimental command judge on (ORCA's own judge, prepared
+ *   against a provider stand-in), a command a judged rule is about carries the judge's advice
+ *   to the person, still asks, runs nothing unanswered and runs on their one-time answer,
+ *   whichever verdict the judge gave.
  *   Their per-call evidence is kept under `lifecycle`.
  * - `cases`: every case the `claude-native-hook` route can run. Each case the B claim asserts
  *   runs live (`connected/claude.js`), with each call's independent evidence and ORCA's
@@ -53,6 +57,7 @@ import { modelStandIn } from "../guard-qualification/connected/model-stand-in.js
 import { claudeConnected } from "../guard-qualification/connected/claude.js";
 import { claudeHookProgram, installedPreToolHook } from "../guard-qualification/installed/claude-hook-program.js";
 import { effectFrom } from "../guard-qualification/connected/evidence.js";
+import { judgeStandIn } from "../guard-qualification/connected/judge-stand-in.js";
 
 const ADAPTER = process.env["ORCA_CLAUDE_ADAPTER"];
 const OTHER_RUNTIME = process.env["ORCA_CLAUDE_OTHER_RUNTIME"];
@@ -282,6 +287,41 @@ describe.skipIf(ADAPTER === undefined || OTHER_RUNTIME === undefined)("installed
     }
   }, 300_000);
 
+  it("judged command: the judge advises, the person is still asked, and only their answer runs it", async () => {
+    const judge = await judgeStandIn();
+    const world = await realWorld();
+    try {
+      world.judge = await judge.prepare(world.agentId, ["command"]);
+      world.configured = {
+        rules: [{ match: { kind: "execute" }, judge: { criterion: "Creating an empty marker file is fine." } }],
+      };
+      const allowOnce = async (req) => req.options.find((o) => o.kind === "allow_once")?.optionId;
+      const judged = [];
+      for (const verdict of ["covered", "not-covered"]) {
+        judge.state.verdict = verdict;
+        const command = `touch ${join(world.workspace, `judged-${verdict}.txt`)}`;
+        const asked = judge.state.requests.length;
+        const unanswered = await live.decide(world, { tool: "shell", command }, { expect: ["ask"], noAnswerer: true });
+        const answered = await live.decide(world, { tool: "shell", command }, { expect: ["allow"], onAsk: allowOnce });
+        expect(unanswered.outcome, JSON.stringify(unanswered.detail)).toBe("ask");
+        expect(answered.outcome, JSON.stringify(answered.detail)).toBe("allow");
+        for (const got of [unanswered, answered])
+          expect(got.detail.approvals.map((a) => a.judged)).toEqual([
+            expect.objectContaining({ verdict, kind: "command", advisory: true }),
+          ]);
+        // The judge was asked about each call, and the person still answered it.
+        expect(judge.state.requests.length - asked).toBe(2);
+        judged.push(record(unanswered), record(answered));
+      }
+      receipt.lifecycle.judged = judged;
+      receipt.judge = { provider: "anthropic (stand-in)", classes: ["command"], requests: judge.state.requests.length };
+      receipt.checks.judgedAction = "pass";
+    } finally {
+      await world.dispose();
+      await judge.close();
+    }
+  }, 300_000);
+
   it("binds the receipt to what ran: the adapter, the runtime image and the hook program", async () => {
     receipt.inputs = await inputsOf(hookProgram);
     receipt.installedSettings = hookProgram.settings();
@@ -391,6 +431,7 @@ async function writeReceipt(receipt) {
         agentSettings: receipt.agentSettings,
         checks: receipt.checks,
         lifecycle: receipt.lifecycle,
+        judge: receipt.judge,
         uncoveredRoutes: receipt.uncoveredRoutes,
         cases: receipt.cases,
         program,

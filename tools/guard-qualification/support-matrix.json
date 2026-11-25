@@ -142,6 +142,7 @@
         "Any tier: only with nativeToolHook: experimental, on the pinned pair and host; without the hook Claude runs remembered calls without asking ORCA",
         "Behaviour of a real model, which may make calls in shapes the stand-in does not",
         "Events and logs about its calls are redacted",
+        "Judge review of MCP calls: ORCA's hook asks the person before the relay's judge runs, so a judged MCP rule never allows a call without them on this route; only the command judge's advice is shown with the ask",
         "Cases outside the B claim (notAsserted): the installed agent cannot make them or refuses them before ORCA answers, so its handling is not observed; they run on ORCA's installed hook program as diagnostics only"
       ],
       "unsupportedRoutes": [
