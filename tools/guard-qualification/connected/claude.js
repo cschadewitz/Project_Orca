@@ -61,8 +61,12 @@ export function claudeConnected(env) {
     id: "claude-connected",
     capabilities: ["answerer", "agent-turn", "mcp-grant-allows"],
 
-    /** The agent as ORCA's config would declare it for this world. */
-    agent(world, extraEnv = {}) {
+    /**
+     * The agent as ORCA's config would declare it for this world: with the hook opted in
+     * (`nativeToolHook: experimental`) unless `nativeToolHook` says otherwise, and with the
+     * field left out when it is null, as a config that never mentions it.
+     */
+    agent(world, extraEnv = {}, nativeToolHook = "experimental") {
       return AgentSpecSchema.parse({
         id: world.agentId,
         command: process.execPath,
@@ -85,12 +89,12 @@ export function claudeConnected(env) {
           env: { ORCA_706_MCP_LOG: logs(world).mcp },
         })),
         permissions: world.configured,
-        nativeToolHook: "experimental",
+        ...(nativeToolHook === null ? {} : { nativeToolHook }),
       });
     },
 
     /** Open a session the daemon's way. The world's `configured` is read now, as at session open. */
-    async openSession(world, { askPermission, extraEnv, host } = {}) {
+    async openSession(world, { askPermission, extraEnv, host, nativeToolHook } = {}) {
       const claudeConfig = join(world.root, "claude-config");
       await mkdir(claudeConfig, { recursive: true });
       await writeFile(join(claudeConfig, "settings.json"), JSON.stringify(CLAUDE_SETTINGS));
@@ -114,7 +118,7 @@ export function claudeConnected(env) {
         script: env.hookScript,
       })({
         host: host ?? new LocalHost({ id: "local", type: "local" }),
-        agent: path.agent(world, extraEnv),
+        agent: path.agent(world, extraEnv, nativeToolHook),
         cwd: world.workspace,
         askPermission: askPermission ?? (async () => undefined),
         logger: silentLogger,
@@ -126,6 +130,8 @@ export function claudeConnected(env) {
       if (world.connected) return world.connected;
       const state = { approvals: [], answer: undefined };
       const session = await path.openSession(world, {
+        // A world opts in like every case unless it says otherwise (null: a config without the field).
+        nativeToolHook: world.nativeToolHook,
         askPermission: async (req) => {
           const approval = {
             toolCallId: req.toolCall.toolCallId,

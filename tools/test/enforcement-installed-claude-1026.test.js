@@ -6,6 +6,15 @@
  *
  * - `checks.connects`: the factory admits a session and a workspace write takes effect.
  * - `uncoveredRoutes`: every route the Claude row lists as unsupported, shown refused here.
+ * - `checks.optInDefaultOff`: a config that never mentions the hook gets none (Claude's own
+ *   allow lets a write ORCA's rule denies land), `on` is refused, and only the explicit
+ *   `nativeToolHook: experimental` installs it (the same write is denied and has no effect).
+ *   The receipt's `agentSettings` are the ORCA settings every case ran under.
+ * - `checks.cancelledNoEffect`: a normally pending ask whose turn is cancelled has no effect,
+ *   shown again after a wait, for an MCP call and a file write.
+ * - `checks.freshSessionFreshDecision`: a new session for the same calls asks again, runs
+ *   nothing unanswered, and runs only on its own one-time answer.
+ *   Their per-call evidence is kept under `lifecycle`.
  * - `cases`: every case the `claude-native-hook` route can run. Each case the B claim asserts
  *   runs live (`connected/claude.js`), with each call's independent evidence and ORCA's
  *   decision observed. The ones the matrix lists under the route's `installed.diagnostic`
@@ -30,6 +39,7 @@ import {
   casesFor,
   assertedCases,
   installedCaseProblems,
+  lifecycleEvidenceProblems,
   programEvidenceProblems,
   loadAssertions,
   loadCatalogue,
@@ -41,7 +51,8 @@ import { SCENARIOS } from "../guard-qualification/scenarios.js";
 import { createWorld } from "../guard-qualification/world.js";
 import { modelStandIn } from "../guard-qualification/connected/model-stand-in.js";
 import { claudeConnected } from "../guard-qualification/connected/claude.js";
-import { claudeHookProgram } from "../guard-qualification/installed/claude-hook-program.js";
+import { claudeHookProgram, installedPreToolHook } from "../guard-qualification/installed/claude-hook-program.js";
+import { effectFrom } from "../guard-qualification/connected/evidence.js";
 
 const ADAPTER = process.env["ORCA_CLAUDE_ADAPTER"];
 const OTHER_RUNTIME = process.env["ORCA_CLAUDE_OTHER_RUNTIME"];
@@ -115,7 +126,7 @@ describe.skipIf(ADAPTER === undefined || OTHER_RUNTIME === undefined)("installed
   let model;
   let live;
   let hookProgram;
-  const receipt = { route: ROUTE, cases: [], uncoveredRoutes: [], checks: {} };
+  const receipt = { route: ROUTE, cases: [], uncoveredRoutes: [], checks: {}, lifecycle: {} };
 
   beforeAll(async () => {
     model = await modelStandIn();
@@ -177,6 +188,100 @@ describe.skipIf(ADAPTER === undefined || OTHER_RUNTIME === undefined)("installed
     );
   }
 
+  it("opt-in: off by default, and on only with nativeToolHook: experimental", async () => {
+    const denyEdits = { rules: [{ match: { kind: "edit" }, decision: "deny" }] };
+    const off = await realWorld();
+    try {
+      off.configured = denyEdits;
+      off.nativeToolHook = null;
+      expect(live.agent(off, {}, null).nativeToolHook, "a config without the field").toBeUndefined();
+      const got = await live.decide(off, { tool: "write", path: join(off.workspace, "default.md") });
+      // No hook was installed, so Claude's own allow ran the write ORCA's rule denies.
+      expect(off.installedMeta, "no hook settings were handed to the agent").toBeUndefined();
+      expect(got.detail.effect, JSON.stringify(got.detail)).toBe("observed");
+      receipt.lifecycle.optIn = { default: [record(got)] };
+    } finally {
+      await off.dispose();
+    }
+    const on = await realWorld();
+    try {
+      await expect(live.openSession(on, { nativeToolHook: "on" })).rejects.toMatchObject({ code: "NOT_SUPPORTED" });
+      receipt.lifecycle.optIn.on = "refused";
+    } finally {
+      await on.dispose();
+    }
+    const opted = await realWorld();
+    try {
+      opted.configured = denyEdits;
+      const got = await live.decide(opted, { tool: "write", path: join(opted.workspace, "opted.md") });
+      expect(() => installedPreToolHook(opted.installedMeta)).not.toThrow();
+      expect(got.outcome, JSON.stringify(got.detail)).toBe("deny");
+      expect(got.detail.effect).toBe("none");
+      receipt.lifecycle.optIn.experimental = [record(got)];
+      receipt.agentSettings = { nativeToolHook: live.agent(opted).nativeToolHook };
+    } finally {
+      await opted.dispose();
+    }
+    expect(receipt.agentSettings).toEqual({ nativeToolHook: "experimental" });
+    receipt.checks.optInDefaultOff = "pass";
+  }, 300_000);
+
+  it("cancellation: a pending ask whose turn is cancelled has no effect, and a fresh session decides afresh", async () => {
+    const world = await realWorld();
+    try {
+      // Edits ask (MCP calls ask by default), so both calls wait on a person.
+      world.configured = { rules: [{ match: { kind: "edit" }, decision: "ask" }] };
+      const calls = [
+        { tool: "mcp", server: "github", name: "create_issue" },
+        { tool: "write", path: join(world.workspace, "cancelled.md") },
+      ];
+      const cancelled = [];
+      for (const action of calls) {
+        const turn = new AbortController();
+        const got = await live.decide(world, action, {
+          expect: ["ask"],
+          signal: turn.signal,
+          // The ask reached ORCA's human channel; the turn is cancelled and nobody answers.
+          onAsk: () => {
+            turn.abort();
+            return new Promise(() => {});
+          },
+        });
+        expect(got.outcome, JSON.stringify(got.detail)).toBe("ask");
+        expect(got.detail.approvals.map((a) => a.answer)).toEqual(["pending"]);
+        cancelled.push(got);
+      }
+      // Anything the cancelled calls set off would have landed by now: look again.
+      await new Promise((done) => setTimeout(done, 5_000));
+      const later = await Promise.all(cancelled.map((got, i) => effectAgain(world, got, calls[i])));
+      expect(later).toEqual(["none", "none"]);
+      receipt.lifecycle.cancelled = cancelled.map((got, i) => ({ ...record(got), effectAfterWait: later[i] }));
+      receipt.checks.cancelledNoEffect = "pass";
+
+      // A fresh session: the same calls ask again, run nothing unanswered, and run only on their own answer.
+      await world.connected.session.close();
+      world.connected = undefined;
+      const fresh = [];
+      for (const action of calls) {
+        const unanswered = await live.decide(world, action, { expect: ["ask"], noAnswerer: true });
+        expect(unanswered.outcome, JSON.stringify(unanswered.detail)).toBe("ask");
+        const once = await live.decide(world, action, {
+          expect: ["allow"],
+          onAsk: async (req) => req.options.find((o) => o.kind === "allow_once")?.optionId,
+        });
+        expect(once.outcome, JSON.stringify(once.detail)).toBe("allow");
+        expect(once.detail.approvals.map((a) => a.answer)).toEqual(["allow_once"]);
+        fresh.push(record(unanswered), record(once));
+      }
+      const before = new Set(cancelled.map((got) => got.detail.toolUseId));
+      expect(fresh.filter((r) => before.has(r.toolUseId))).toEqual([]);
+      receipt.lifecycle.fresh = fresh;
+      receipt.checks.freshSessionFreshDecision = "pass";
+    } finally {
+      await world.dispose();
+    }
+  }, 300_000);
+
   it("binds the receipt to what ran: the adapter, the runtime image and the hook program", async () => {
     receipt.inputs = await inputsOf(hookProgram);
     receipt.installedSettings = hookProgram.settings();
@@ -196,11 +301,41 @@ describe.skipIf(ADAPTER === undefined || OTHER_RUNTIME === undefined)("installed
     // The diagnostics hold too, though they count toward no tier.
     expect(programEvidenceProblems({ ...receipt, route: ROUTE }, Object.keys(program), loadAssertions())).toEqual([]);
     expect(receipt.inputs.profile).toBe(qualificationProfile(matrix, catalogue, loadAssertions(), row, route));
+    // The opt-in and lifecycle checks hold on their own evidence, as the matrix checker re-derives it.
+    expect(lifecycleEvidenceProblems(receipt)).toEqual([]);
     expect(model.log.errors, "the model stand-in answered every request").toEqual([]);
   });
 });
 
 const sha256 = (data) => createHash("sha256").update(data).digest("hex");
+
+/** One call's record as the receipt keeps it: what the runner observed, without the result text. */
+function record(got) {
+  const { result: _result, ...rest } = got.detail;
+  return rest;
+}
+
+/** A cancelled call's effect, recomputed from the same independent evidence after a wait. */
+async function effectAgain(world, got, action) {
+  const ref = got.detail.effectRef;
+  if (ref.kind === "mcp") {
+    const log = await readFile(join(world.root, "mcp-calls.jsonl"), "utf8").catch(() => "");
+    const lines = log
+      .split("\n")
+      .filter(Boolean)
+      .map((l) => JSON.parse(l));
+    return effectFrom({
+      ...ref,
+      loggedFor: lines.filter((l) => l.input?.orca706Call === ref.callRef).map((l) => l.nonce),
+      unaccountedLines: lines.filter((l) => typeof l.input?.orca706Call !== "string").length,
+    });
+  }
+  if (ref.kind === "file") {
+    const now = await readFile(action.path, "utf8").catch(() => undefined);
+    return effectFrom({ ...ref, after: now === undefined ? null : sha256(now).slice(0, 16) });
+  }
+  return "indeterminate";
+}
 
 /**
  * What this run installed and ran: the adapter as its lockfile pins it, the Claude Code image
@@ -253,7 +388,9 @@ async function writeReceipt(receipt) {
         node: process.version,
         inputs: receipt.inputs,
         installedSettings: receipt.installedSettings,
+        agentSettings: receipt.agentSettings,
         checks: receipt.checks,
+        lifecycle: receipt.lifecycle,
         uncoveredRoutes: receipt.uncoveredRoutes,
         cases: receipt.cases,
         program,
