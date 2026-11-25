@@ -71,7 +71,7 @@ it("only manual dispatch offers reduction; selection comes from the workflow's o
     default: "all",
   });
   expect(Object.keys(workflow.on.workflow_dispatch.inputs)).toEqual(["platform"]);
-  expect(Object.keys(workflow.on.workflow_call.inputs)).toEqual(["ref", "version", "hosted_only"]);
+  expect(Object.keys(workflow.on.workflow_call.inputs)).toEqual(["ref", "version", "hosted_only", "caches"]);
   expect(workflow.jobs.package.needs).toBe("targets");
   expect(workflow.jobs.package.strategy.matrix).toBe("${{ fromJSON(needs.targets.outputs.matrix) }}");
   expect(workflow.jobs.targets.outputs.matrix).toBe("${{ steps.select.outputs.matrix }}");

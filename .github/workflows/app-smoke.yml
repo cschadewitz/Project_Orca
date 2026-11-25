@@ -33,6 +33,13 @@ on:
         required: false
         type: boolean
         default: false
+      # Restore and save the pnpm cache. A release rehearsal runs an arbitrary ref in the default
+      # branch's cache scope, so it passes false: that ref's install scripts must not write a
+      # cache a trusted run later restores.
+      caches:
+        required: false
+        type: boolean
+        default: true
       # Release verification always runs the upgrade launch check. A manual run on a ref from
       # before the check existed reports it as not applicable instead of failing.
       upgrade_launch_required:
@@ -139,7 +146,9 @@ jobs:
           # One version: this is about the app running at all, not about Node support.
           # `mise.toml` pins 24, so that is what a developer reproduces locally.
           node-version: 24
-          cache: pnpm
+          # No automatic npm cache detected from the checked-out package.json (it may be a rehearsed ref's).
+          package-manager-cache: false
+          cache: ${{ inputs.caches != false && 'pnpm' || '' }}
 
       # Deliberately without ELECTRON_SKIP_BINARY_DOWNLOAD: the binary is the point.
       # Playwright needs no browser download — the only driver used is Electron's.
@@ -306,7 +315,9 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
-          cache: pnpm
+          # No automatic npm cache detected from the checked-out package.json (it may be a rehearsed ref's).
+          package-manager-cache: false
+          cache: ${{ inputs.caches != false && 'pnpm' || '' }}
 
       # Without ELECTRON_SKIP_BINARY_DOWNLOAD, as above: the binary is the point.
       - run: pnpm install --frozen-lockfile
@@ -466,7 +477,9 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
-          cache: pnpm
+          # No automatic npm cache detected from the checked-out package.json (it may be a rehearsed ref's).
+          package-manager-cache: false
+          cache: ${{ inputs.caches != false && 'pnpm' || '' }}
 
       # With the Electron binary: electron-builder packages it.
       - run: pnpm install --frozen-lockfile

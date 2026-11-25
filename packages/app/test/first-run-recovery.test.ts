@@ -21,6 +21,7 @@ import { LocalDaemonToken } from "../src/client/auth.js";
 import { startBundledDaemon, type BundledDaemon } from "../src/main/daemon-process.js";
 import { FirstRunRecovery } from "../src/main/first-run/recovery.js";
 import { inspectFirstRunOwnership, reserveFirstRunOwnership } from "../src/main/first-run/ownership.js";
+import { selectFenceDirectory } from "../../protocol/test/fixtures/fence-ports.js";
 import { compiledSourceFixture } from "./compiled-source-fixture.js";
 
 const compileOwner = compiledSourceFixture(process.cwd(), "packages/app/test/fixtures/same-boot-owner.ts", []);
@@ -49,6 +50,9 @@ async function availableWorkspace() {
     roots.push(root);
     const path = join(root, "workspace");
     await mkdir(path);
+    // Its first-run fence port lies outside kernel autobind (#1088); the probe below still
+    // steps past a listener that holds it.
+    await selectFenceDirectory(path, [], { firstRun: true });
     let fence;
     try {
       // Select a fresh disposable identity before reservation; production keeps its fixed mapping.

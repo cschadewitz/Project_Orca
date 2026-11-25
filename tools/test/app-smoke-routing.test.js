@@ -59,7 +59,12 @@ it("on GitHub-hosted Linux, grants user namespaces to the launched Electron only
 
 it("keeps release-call inputs, exact test checkouts and both native hosted legs", () => {
   expect(Object.keys(workflow.on.workflow_dispatch.inputs)).toEqual(["ref"]);
-  expect(Object.keys(workflow.on.workflow_call.inputs)).toEqual(["ref", "hosted_only", "upgrade_launch_required"]);
+  expect(Object.keys(workflow.on.workflow_call.inputs)).toEqual([
+    "ref",
+    "hosted_only",
+    "caches",
+    "upgrade_launch_required",
+  ]);
   expect(workflow.on.workflow_call.inputs.hosted_only).toMatchObject({ type: "boolean", default: false });
   expect(workflow.on.workflow_call.inputs.upgrade_launch_required).toMatchObject({ type: "boolean", default: true });
   expect(matrix.map(({ os }) => os)).toEqual(["ubuntu-latest", "macos-latest", "windows-latest"]);

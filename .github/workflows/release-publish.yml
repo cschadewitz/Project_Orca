@@ -34,14 +34,16 @@
 # already exists" refusal does not apply, so it can rehearse a version already released.
 #
 # The rehearsed ref is untrusted, so it never meets a write token. The workflow's token is
-# read-only; every job that runs the ref's code (check, and the desktop and app-smoke calls)
-# checks out without persisted credentials, both calls pick runners with this workflow
-# revision's tooling, and a rehearsal runs GitHub-hosted only, without the runner health
-# endpoint. A rehearsal writes nothing: its last job, `rehearsal`, checks out this workflow's
-# own revision (which must be the default branch), runs only that revision's tooling, and
+# read-only; every job that runs the ref's code (verify, and the desktop and app-smoke calls)
+# checks out without persisted credentials, verify and both calls pick runners with this
+# workflow revision's tooling, and a rehearsal runs GitHub-hosted only, without the runner
+# health endpoint. The release's identity (commit and version) and its authorization come
+# only from `check`, which stays GitHub-hosted and runs none of the ref's code; `verify`,
+# which may run on a self-hosted runner, only passes or fails. A rehearsal writes nothing:
+# its last job, `rehearsal`, checks out this workflow's own revision (which must be the default branch), runs only that revision's tooling, and
 # treats the built artifacts and the version as data. `publish`, the real release, keeps its write grant to
 # itself and runs the released commit's tooling only once `check` has proved that commit is
-# on the default branch, i.e. reviewed.
+# on the default branch, i.e. reviewed, and `verify` has passed it.
 name: Release (publish)
 
 on:
@@ -68,8 +70,12 @@ permissions:
   contents: read
 
 jobs:
+  # Release identity and authorization stay GitHub-hosted: this job resolves the exact commit,
+  # checks it is reviewed on its lane, and reads and validates the version. Every later job,
+  # and every job that holds a write grant or dispatches, takes the commit and the version from
+  # here and only from here. It runs none of the ref's code.
   check:
-    name: verify the merge commit
+    name: release identity
     # checks: read, for the release line check's result on a release pull request's head.
     permissions:
       contents: read
@@ -148,12 +154,99 @@ jobs:
           echo "releasing $SHA (v$version) from $lane"
           echo "Released v$version from \`$lane\`." >> "$GITHUB_STEP_SUMMARY"
 
+      # Read once, here, and passed to every job below, so that the version the desktop
+      # artifacts are stamped with and the version that gets tagged cannot disagree.
+      - name: The version being released
+        id: version
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          version=$(node -p 'require("./package.json").version')
+          # The ref's package.json is data: anything but a plain semver stops here, before it
+          # reaches a release name, a tag or another job.
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::package.json version is not a semver version; nothing built"
+            exit 1
+          fi
+          if [ "$DRY_RUN" = "true" ]; then
+            # A distinct version, so nothing built here can be mistaken for the real one.
+            version="${version%%-*}-dryrun.$GITHUB_RUN_NUMBER"
+            echo "dry run: rehearsing as v$version; nothing will be tagged or published"
+          elif git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
+            echo "::error::tag v$version already exists; nothing published"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  # Chooses where `verify` runs: Tyler's self-hosted runners when one is idle, GitHub-hosted
+  # otherwise (tools/linux-runner.js, as app-smoke and desktop pick), with this workflow
+  # revision's tooling. Only a trusted workflow source gets the health endpoint: a real
+  # release dispatched from the default branch, or a merged release pull request, and only
+  # after `check` has authorized the commit. A rehearsal's ref may be any branch, so it stays
+  # hosted. Set the repository variable CI_FORCE_HOSTED to `true` to skip the self-hosted runners.
+  runner:
+    name: pick Linux runner
+    needs: check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    outputs:
+      runner: ${{ steps.pick.outputs.runner }}
+    steps:
+      # The workflow's own commit, not the released ref: the code that picks a runner is never
+      # the code being released.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: tools
+          persist-credentials: false
+
+      - id: pick
+        env:
+          FORCE_HOSTED: ${{ !((github.event_name == 'workflow_dispatch' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && !inputs.dry_run) || (github.event_name == 'pull_request' && github.event.pull_request.merged)) && 'true' || vars.CI_FORCE_HOSTED }}
+          HEALTH_URL: ${{ ((github.event_name == 'workflow_dispatch' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && !inputs.dry_run) || (github.event_name == 'pull_request' && github.event.pull_request.merged)) && secrets.CI_RUNNER_HEALTH_URL || '' }}
+        run: node tools/linux-runner.js
+
+  # The test work for the commit `check` pinned, where ci.yml's check runs. It returns only
+  # pass or fail: it has no outputs, and nothing downstream reads anything it produced.
+  verify:
+    name: verify the merge commit
+    needs: [check, runner]
+    permissions:
+      contents: read
+    runs-on: ${{ fromJSON(needs.runner.outputs.runner) }}
+    env:
+      # ci.yml's worker cap and pnpm cache for the picked runner (docs/ci-runners.md): 20
+      # workers and no Actions cache on the self-hosted runners, 2 and `cache: pnpm` hosted.
+      WORKERS_CAP: ${{ contains(needs.runner.outputs.runner, 'tyler') && '20' || '2' }}
+    steps:
+      # The trusted event's own ref, exactly as `check` resolved it, never a value a job
+      # produced. The next step requires it to be the commit `check` pinned: if a dispatched
+      # branch moved in between, verification fails instead of testing another commit.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref || github.event.pull_request.merge_commit_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: The pinned commit is checked out
+        env:
+          SHA: ${{ needs.check.outputs.sha }}
+        run: |
+          if [ "$(git rev-parse HEAD)" != "$SHA" ]; then
+            echo "::error::checked out $(git rev-parse HEAD), not the release commit $SHA; dispatch again (with the commit SHA as ref to pin it)"
+            exit 1
+          fi
+
       - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
-          cache: pnpm
+          # No automatic npm cache detected from the checked-out package.json (it may be a rehearsed ref's).
+          package-manager-cache: false
+          # A rehearsal's ref may be any branch and runs in the default branch's cache scope, so
+          # it restores and saves no dependency cache; neither do the self-hosted runners.
+          cache: ${{ !inputs.dry_run && !contains(needs.runner.outputs.runner, 'tyler') && 'pnpm' || '' }}
 
       # From here to the compiled smoke this is ci.yml's full path, in its order and with its
       # environment: the release PR never ran CI, so this is the only verification the tagged
@@ -240,52 +333,33 @@ jobs:
       - name: Smoke test the compiled build
         run: node packages/cli/dist/main.js demo
 
-      # Read once, here, and passed to the two jobs below, so that the version the desktop
-      # artifacts are stamped with and the version that gets tagged cannot disagree.
-      - name: The version being released
-        id: version
-        env:
-          DRY_RUN: ${{ inputs.dry_run }}
-        run: |
-          set -euo pipefail
-          version=$(node -p 'require("./package.json").version')
-          # The ref's package.json is data: anything but a plain semver stops here, before it
-          # reaches a release name, a tag or another job.
-          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
-            echo "::error::package.json version is not a semver version; nothing built"
-            exit 1
-          fi
-          if [ "$DRY_RUN" = "true" ]; then
-            # A distinct version, so nothing built here can be mistaken for the real one.
-            version="${version%%-*}-dryrun.$GITHUB_RUN_NUMBER"
-            echo "dry run: rehearsing as v$version; nothing will be tagged or published"
-          elif git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
-            echo "::error::tag v$version already exists; nothing published"
-            exit 1
-          fi
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-
   desktop:
     name: desktop artifacts
-    needs: check
+    # After verification passes, as before it moved: a failed candidate is never packaged.
+    needs: [check, verify]
     uses: ./.github/workflows/desktop.yml
     with:
       ref: ${{ needs.check.outputs.sha }}
       version: ${{ needs.check.outputs.version }}
-      # A rehearsal's ref may be any branch: hosted runners only, and no health endpoint.
+      # A rehearsal's ref may be any branch: hosted runners only, no health endpoint, and no
+      # caches in the default branch's scope.
       hosted_only: ${{ inputs.dry_run == true }}
+      caches: ${{ inputs.dry_run != true }}
     secrets:
       CI_RUNNER_HEALTH_URL: ${{ !inputs.dry_run && secrets.CI_RUNNER_HEALTH_URL || '' }}
 
   app-verification:
     name: desktop smoke and type proof
-    needs: check
+    # After verification passes, as before it moved: a failed candidate is never packaged.
+    needs: [check, verify]
     uses: ./.github/workflows/app-smoke.yml
     with:
       ref: ${{ needs.check.outputs.sha }}
       # A rehearsal's ref may be any branch: never route it to the self-hosted runners, and
       # do not hand it the health endpoint.
       hosted_only: ${{ inputs.dry_run == true }}
+      # Nor does it restore or save caches in the default branch's scope.
+      caches: ${{ inputs.dry_run != true }}
       # A real release requires the upgrade launch check. A rehearsal of a ref from before
       # the check existed reports it as not applicable instead.
       upgrade_launch_required: ${{ !inputs.dry_run }}
@@ -294,7 +368,7 @@ jobs:
 
   publish:
     name: tag and publish
-    needs: [check, desktop, app-verification]
+    needs: [check, verify, desktop, app-verification]
     if: ${{ !inputs.dry_run }}
     runs-on: ubuntu-24.04
     permissions:
@@ -503,7 +577,7 @@ jobs:
   # this run's `desktop-*` artifacts. It keeps the workflow's read-only token.
   rehearsal:
     name: check the rehearsal's release assets
-    needs: [check, desktop, app-verification]
+    needs: [check, verify, desktop, app-verification]
     if: ${{ inputs.dry_run }}
     runs-on: ubuntu-24.04
     steps:
