@@ -1,1 +1,0 @@
-The Runs board previews recovery for runs that have stopped: which steps need review first, the first way back that is open with the steps it would run again, or why every way back is blocked. An Open recovery link goes to the run's recovery section.

@@ -29,6 +29,502 @@ Pending entries live in [`changelog.d/`](changelog.d/), one file per entry; prep
 release renders them into a dated section below. Run `node tools/release.js notes --unreleased`
 to read them as they stand.
 
+## 0.8.0-rc.1 - 2026-11-25
+
+### Store format
+
+Windows store format carryover is built but stays switched off: a Windows ORCA refuses to change
+a store's format (`UNDURABLE`), touching nothing, until an automated power-cut test proves it.
+The design writes the backup as one ZIP archive into a backup slot file
+(`format-backups/store-backup-1.zip` or `-2.zip`) that survived a Windows restart, checked by the
+slot's recorded file ID and Windows `BootId`, flushed before the format marker is created. The
+archive names its conversion, so if a power cut loses the marker it either finishes the
+conversion (store unchanged) or refuses (`INTERRUPTED`) and keeps the only pre-upgrade backup.
+Every Windows start creates the two slots if they are missing. There is no supported way to
+restore a slot archive yet: extracting it by hand does not restore the store's access rules.
+
+Tool-call records (#1000) go in a new `diagnostics/tool-calls/` directory of the store, only for agents that keep them. No existing file changes and the store's format epoch is the same; an earlier ORCA ignores the directory, and backups, carryover and SQLite conversion copy it with the rest of the store.
+The pre-tool hook's per-session files (`private-execution/tool-hooks`: each open session's hook context and telemetry spool) are transient and are left out of every store copy: backups, carryover and SQLite conversion.
+
+### Added
+
+The Runs board previews recovery for runs that have stopped: which steps need review first, the first way back that is open with the steps it would run again, or why every way back is blocked. An Open recovery link goes to the run's recovery section.
+
+#### agents
+
+- review judges can use your own API key through a secret reference. A secret
+  gains an optional `destination` (environment-variable secrets only for now), which pins its value to the one judge endpoint ORCA sends
+  it to: only such a pinned secret can be a judge's key, and a pinned secret can never be
+  referenced by an agent or MCP server (the config check and session open both refuse it).
+  The key is read on the daemon's own machine at each use, after the run owner's secret use
+  check, and is never cached, logged or serialized. Judges are still not switched on.
+- experimental, off-by-default switches under `review.plainRules.experimental.kinds` let
+  the plain-language rule judge also answer tool calls to MCP servers ORCA relays (`mcpCalls`), as a
+  one-time allow for a rule naming that server and tool, and give advice on file writes ORCA makes
+  itself (`edits`) and on command asks (`commands`) while the person is still asked. Deny and ask rules
+  still win, nothing is saved as a standing grant, and each kind needs its own owner grant (`orca auth
+  issue --judge-disclosure --judge-disclosure-kind <edits|mcp-calls|commands>`). The judge is still not
+  switched on.
+- plain-language permission rules can now be switched on (#701). They stay off, and existing configurations behave as before, until you opt in with `review.plainRules.enabled: true`. Once you also configure a judge on your own API key (`review.plainRules.judge`, Anthropic or an OpenAI-compatible endpoint), grant it disclosure (`orca auth issue --judge-disclosure`) and create its daily budget (`orca judge budget init`, Linux and macOS), a rule written as a sentence can allow a single file read that ORCA performs for the agent. Reads and searches the agent makes itself, edits and commands still go to you (for edits and commands, with the judge's view shown as advice). Nothing is sent when any part of the call's description would contain one of the session's secret values. Written deny and ask rules still decide first, nothing is saved as a standing grant, and every call the judge does not allow goes to you, with its reason shown on the ask. The Config surface's checklist says which step is missing. To turn it off, set `enabled: false`. See [docs/plain-language-rules.md](docs/plain-language-rules.md).
+- Plain-language permission rules can now be written in the config (#702): `judge: { criterion: "..." }` instead of a `decision`. When a judge is configured (not yet available in the app or CLI), a rule like this can allow a single read or search the person would otherwise have been asked about. That happens only when no deny or ask rule matches, only for files ORCA checked are inside the workspace and not its own, and only once per call. Every other case is decided by the usual rules.
+- Each permission decision in the run log now says what decided it (#702): ORCA's protected files, a rule, the policy's fallthrough, or the shell-command restriction. For a rule it gives where the rule lives (the config, the permission sidecar or ORCA's defaults) and its position there. This applies to an agent's permission asks and to ORCA's file reads and writes for an agent.
+- ORCA's `PreToolUse` hook for local Claude agents, **experimental and not
+  guard-qualified**: opt-in per agent with the explicit `nativeToolHook: experimental`, off by
+  default (`nativeToolHook: on` is kept for a qualified hook and is still refused, so a config
+  that set it earlier stays inactive), and no agent
+  qualified by the #706 support matrix. In acceptance runs with a scripted model it puts every
+  tool call Claude hooks, including calls Claude
+  remembers as "always allowed", through ORCA's rules, so a revoked grant applies to the very
+  next call; a hook that fails blocks the call; and ORCA admits a session only with the
+  adapter and Claude Code build it was verified with (`@agentclientprotocol/claude-agent-acp`
+  0.109.1 with Claude Code 2.1.330 on Linux x64), checked by hashing the image the session's
+  runtime process actually runs, once, when the session opens. Not covered: what a shell
+  command touches beyond its own text, and sessions on SSH hosts (refused). See
+  `docs/agent-hook-coverage.md` (#704).
+- with `nativeToolHook: experimental`, a hooked session is held until ORCA has checked the Claude Code or Codex
+  it runs: until then ORCA reads and writes no file for it and asks nobody on its behalf, and a
+  session that fails the check is refused all of it. A hooked Claude agent's MCP servers are
+  run by ORCA and served to Claude Code over the ACP connection, so Claude Code sees each
+  server's name but never its command or environment (secrets included). A server starts only
+  after the check, and every request to it is checked again when it is sent: a tool call only
+  in the session's live turn and only if ORCA's rules allow it then (and again after a server
+  had to start), each request within a deadline. A server never sees the variables ORCA
+  withholds from the agent, and its errors reach the agent short and redacted. Secrets in the agent's own `env` still reach it as environment variables, through
+  one delivery strategy that a key store can later replace (#704).
+- the same experimental, not guard-qualified hook for local Codex agents
+  (`@agentclientprotocol/codex-acp` 2.9.0 running Codex 0.171.0 on Linux x64), under the
+  opt-in `nativeToolHook: experimental`. In acceptance runs with a scripted model, the shell commands,
+  patches, MCP tool calls and image reads Codex hooks are checked against ORCA's rules; typed
+  stdin to a running command is not. An ORCA deny blocks the call, and so does an ORCA ask, because Codex
+  can't pause for a person from a hook. Codex's hosted web search is switched off, since no
+  hook can see it. Codex lets a call through when its hook fails, so ORCA refuses to open the
+  session unless Codex lists ORCA's hook as trusted and the hook blocks a test call the way
+  Codex runs it. That check is made once, when the session opens: Codex lets a call through
+  if its hook runner fails later, and nothing re-checks it. ORCA admits the session only once it has found the Codex process the adapter
+  started among the agent's own processes and hashed the image it runs against the digest
+  pinned for that adapter. Gemini and pi agents with `nativeToolHook: experimental` are refused. See
+  `docs/agent-hook-coverage.md` (#705).
+- Gemini CLI 0.70.0 is qualified as an ACP agent without a hook (#705): a CI suite runs ORCA against the real CLI, `docs/agent-hook-coverage.md` lists which of its calls reach ORCA and which it runs on its own, and `orca agents` shows an advisory of the known Gemini settings it can see in an agent's command line and environment (YOLO in a trusted workspace, allowed tools, policy files, the user's own Gemini home) that let calls run without asking ORCA.
+- pi (through `pi-acp` 0.0.35, pi 1.6.0) is connectivity tested as an ACP agent without a hook (#705): a CI suite runs ORCA against the real agent, and `orca agents` and `docs/agent-hook-coverage.md` say plainly that pi runs every tool call without asking ORCA, so ORCA's rules and protected files do not apply to it. Run pi only inside an operating-system sandbox.
+- GitHub Copilot CLI (`copilot --acp`) is a supported agent at version 1.0.114, as the npm builds for Linux x64 and macOS arm64 (pinned by SHA-256), on this computer. ORCA checks the launch, the executable and Copilot's own profile directory before every session, and refuses saved approvals, trusted folders or unrecognised state in that profile, flags and variables that approve tools up front, a token written into the config or inherited from the daemon's environment, a missing `COPILOT_HOME` or `--no-auto-update`, and any other Copilot build or platform. It never sends Copilot a prompt that starts with a slash command (Copilot runs `/allow-all on` from a prompt), refuses to turn on Copilot's allow-all option or autopilot mode and ends a session that reports either on, and answers Copilot's "Always allow" with "Allow once" so every later call is asked about again. See docs/agents/copilot-cli.md.
+- OpenCode 1.19.4 as a supported agent (`opencode acp`), on Linux x64 and macOS arm64. ORCA starts only the exact published build in an isolated OpenCode profile, refuses a launch it cannot isolate, and answers OpenCode's "Always allow" as "Allow once" so every later call is asked again. See `docs/agent-support.md`.
+- Cline CLI (`cline --acp`) is a supported agent at version 3.0.75, on this computer (Linux x64 tested). ORCA checks the launch before starting it: the executable's SHA-256 must be the published 3.0.75 build, only `--acp` and its own `--config` directory (holding nothing but Cline's own settings), Cline's sessions in the agent process (`CLINE_SESSION_BACKEND_MODE=local`, not its background hub), auto-update off, no other `CLINE_*` variable, the API key only as a secret, and no Cline hooks, plugins or MCP servers of its own. It refuses any other Cline version at the handshake, gives Cline's permission asks the paths and commands its policy needs (Cline sends neither), keeps Cline's auto-approve option off, rejects Cline sub-agents (whose tools Cline runs without asking), and answers "Always allow" with "Allow once". See docs/agents/cline.md.
+- `codexExecGate: experimental`, a separate opt-in route for Codex through ORCA's
+  gate in its executor path. It is **refused for every session for now**, before the agent
+  starts, with each reason numbered: ORCA's config directory, store or loaded config file inside
+  a directory the agent may write (the default layout included), a host that is not Linux x64
+  with the system's bubblewrap and `unshare` and no `/etc/codex`, what the closed executor still
+  cannot close, and that the route is not wired yet. It cannot be combined with
+  `nativeToolHook`, and nothing falls back to running Codex without the gate. No support tier is
+  claimed.
+- an opted-in Codex session (`nativeToolHook: experimental`) now logs, once admitted,
+  the potential host communication endpoints observed from the ORCA daemon at startup: listening
+  unix sockets and TCP ports in the daemon's network namespace, and named pipes in the per-user
+  runtime, temporary and home directories. Sandbox reachability is not tested. When nothing is
+  found where it looked it says "None detected at startup; isolation has not been verified.", and
+  it names any part of the check that was incomplete. It runs in the background with a deadline
+  and does not delay or block the session. It is a warning only: it does not restrict the agent
+  or verify isolation.
+
+#### agents, engine
+
+- Each file read or write that ORCA performs for an agent is now recorded in
+  the run before it starts (`agent.fs.authorized`), and its outcome after
+  (`agent.fs.completed`). The authorization is synced to disk first; if the event store cannot
+  do that, or the record cannot be written, the operation does not start. After the record,
+  the permission policy is read again and must still allow the operation, so a deny saved
+  meanwhile refuses it. The record names the file by a short path relative to the workspace,
+  never the full or resolved path. A write that fails after it may have changed the file is
+  recorded as effect-unknown, not as failed, and the agent is told it is not safe to retry as
+  if nothing happened. If the daemon stops between the two records, the operation is shown as
+  execution-unknown rather than assumed done or repeated.
+  The record also says how the file was reached: bound to the file or folder ORCA checked, the
+  best-effort way for new files, or a remote host's path as written.
+
+#### agents, engine, store
+
+- an agent can keep a record of every tool call its native pre-tool hook decides (`agents[].diagnostics.toolCalls: keep`, off by default, kept `diagnostics.retainDays` days, 30 by default). The hook hands each record to ORCA through an owner-only spool ORCA creates; ORCA validates every line as untrusted input, stamps the run and session itself, redacts the session's secret values and stores it, marked as reported by the hook, under the store's `diagnostics/tool-calls/`. Recording never changes a hook's answer. Linux and macOS only: on Windows nothing is recorded and the CLI says it is not supported. ORCA's own pre-tool hook records every call it answers, for Claude Code and Codex, once the hook itself is turned on (#704, #705).
+
+#### app
+
+- the workflow editor's validation panel shows capability and secret-reference problems where the step selects them: an MCP server or skill the catalog lacks or the agent may not use, one listed twice, a skill whose content no longer matches its pin, and a catalog MCP server whose secret lives on another host.
+- the workflow editor's validation panel is bound to the draft's current revision. A late answer never replaces newer findings; while the daemon is away the panel says `Checking` instead of calling the draft clean, and it validates the draft again on reconnecting, on a different daemon, and when the active configuration changes. Publishing waits for that. The live region speaks only when the draft goes between clean and having errors.
+- the workflow editor can dry-run a draft (#183). **Dry run** in the draft bar opens a
+  panel where each gate and person-made decision gets a fixture choice. The result shows the
+  choices made, the branches never taken, the nodes never reached and what was assumed, and
+  the canvas draws the unreached part of the graph until the draft changes. A dry run opened in
+  Runs is marked in its header and in every status chip (`running · dry`), and dry runs stay
+  out of the Runs list and Attention unless a link opens one.
+- the command palette searches event text and artifact contents through the daemon, and each hit opens its run, step or artifact. Against a daemon without `search` the palette keeps searching names only.
+- the configuration form can now create, edit and remove catalog skills, catalog
+  MCP servers (id and command; arguments stay in raw editing) and secret references, whose
+  ids it checks against the rule the daemon names (dotted ids stay in raw editing). A catalog MCP server's environment
+  is edited with a secret picker: each variable references one of the configuration's
+  secrets, and an existing literal value is never shown, only replaced or removed. Capability
+  selections at the workspace and agent scopes offer the catalog's ids (and, for an agent's
+  MCP servers, its own inline servers) instead of free text.
+- reviewing a configuration change now previews, for each affected agent, which MCP
+  servers and skills it gets once applied, against the running configuration, and which
+  scope decides each one. `config.get` and `config.set` (under `validateOnly`) report these
+  sets as `capabilities`: ids and sources only, never definitions.
+- the Runs surface has a **Search** view next to Tree and Board. It searches event text and text artifact contents through the daemon's `search`, across all runs or within the selected run, and each hit opens its step, run or artifact by its canonical link. It says when the daemon cut the scan short, and it is visibly unavailable on a daemon that does not answer `search`. Results belong to one connection: a reconnect, another daemon or another grant clears them, and a late reply from before is dropped. A caller limited to some runs is told to search one run at a time and offered the selected run.
+- each run a machine lists on the Machines surface has a console line: its step counts, what it is waiting on, which process holds it and its last activity, read from that machine's daemon (protocol 2.3 or later). A machine that sends no such facts shows none, never zeros.
+- the Runs surface has a Board view next to the Tree. It follows the active runs the filter shows, live, with their state, step counts, what each is waiting on (an agent slot included), last activity, owner, and whether the card is live, catching up, reconnecting, not current or finished. Choosing a card opens the run in the tree. The filter bar adds a workflow and a start-time filter.
+- the Runs tree reads history a page at a time and offers **Load older runs** until the store has nothing older (by cursor on a 2.8 daemon, by offset on an older one). A page that answers after the filter changed is dropped. A link to a run no page holds yet reads that one run and opens it.
+- The run summary has a Recovery section for a run that stopped. It shows how the run could be recovered and why each way is or is not available, lets you mark a step that may have acted outside ORCA to run again or abandon the run there, and starts a checkpoint attempt from a completed step. An unresolved start is kept by the app across navigation, reload and restart and asked again with the same request, so it never starts a second attempt; a reserved attempt is finished by reconciling it, and the attempt a recovery started stays linked until you choose to start a separate one. `admissions.reconcile` takes `kind: "run.recover"` and then refuses any other kind of receipt before doing anything. A step reused by a checkpoint attempt, and a step's effect review, are shown in its detail.
+- A pending text correction can be composed before it is replaced: **Add after pending** keeps the pending text and adds the draft after it, **Replace pending** (still the default) sends the draft alone, and either way the card shows the whole payload the next agent will receive with a line diff against the pending correction. **Edit a copy of the current correction** starts the draft from it, and earlier versions read in the same window can be copied into the draft. Nothing is sent, answered or granted until the submit button; submission keeps the one pending correction and the existing stale-version checks.
+- the Windows app updates itself (#566). It checks and downloads in the background,
+  then installs after 15 minutes without input, or when you close its last window, and only
+  when the bundled daemon proves nothing is running and no window holds an unsaved draft. It
+  never stops work: a busy app tries again later, and after three days the header highlights
+  **Restart to update**. **Turn off automatic updates** in the command palette makes every step
+  manual again.
+- Plain-language permission rules can be written, edited and removed in the app (#701). The permission panel on the Agents surface has a "Plain-language rules" section after the written grants: write the rule in a sentence, choose read or search, and optionally narrow it to a path inside the workspace. The row says what is missing before Save would be refused. The Config surface lists each agent's plain-language rules in their own group, after the rules that decide in order. Nothing is allowed by a rule until a judge is configured.
+- first-run setup names a configured `copilot` executable as a Copilot CLI candidate and says what ORCA needs from its profile.
+- first-run setup names a configured `cline` executable as a Cline CLI candidate.
+- Connect to a daemon on another machine with a saved SSH profile (`user@host`, optional
+  port, key file and one jump host). The app runs its own ssh without reading any ssh config,
+  pins the server's host key on the first connect (and refuses to re-pin a key that went missing
+  until you forget it), and keeps the profile's daemon credential in the system keychain. Every
+  connection to the daemon is its own authenticated `ssh -W` stream, so the credential reaches
+  the pinned server or nowhere. A changed or missing host key, failed SSH sign-in, missing ssh
+  client and a server with no daemon listening each get their own message. `ORCA_DAEMON_URL` and
+  `ORCA_DAEMON_TOKEN_FILE` still take precedence.
+- SSH profiles sign in on their own. The first connect has ORCA's command line on the
+  server issue this computer a credential over the profile's pinned SSH connection and keeps it
+  in the system keychain, with no token to copy. A new credential is used only once the daemon
+  has accepted it. It is renewed before it expires, a revoked or expired one is replaced once,
+  and every replaced credential is revoked on the server and workspace it came from, including
+  when the profile is removed. Imported credentials are never replaced. Profiles gain a server
+  command (for a managed install's wrapper), a workspace config path and a read-only option, and
+  each setup failure says what to do.
+- Update a remote server from the connection dialog. For a server reached through an SSH
+  profile and installed by the managed server updater, the dialog shows its version, protocol,
+  ring, host key and workspace and whether it is older than the app. You enter the server's
+  updater and manifest paths once (the server's own report is shown as a hint and must match),
+  and the approval holds for that server's host key and workspace only. **Update now** then runs
+  that updater over the profile's pinned SSH connection to the app's version, showing its
+  output. The app only updates a server that is older than it; the server's updater refuses (new
+  `update --expect-current`) if another update moved it after you checked; and the app reports
+  "updated" only once the server itself confirms the new version, and a connection lost
+  mid-update as unknown. The server's rules apply unchanged: a server running work keeps its
+  release and nothing is cancelled, and an update already holding the server's update lock is
+  reported as such.
+- A Machines surface (`⌘7`) watches several daemons at once: saved SSH profiles you
+  choose, and the bundled daemon while another daemon is focused. Each machine shows its
+  connection state, waiting gates and permission asks, active runs and agent session slots;
+  a machine that drops out keeps its last answer marked stale. One daemon stays focused for
+  writes, and **Focus** switches with the usual draft check. Notifications name the machine
+  they came from (#882).
+- after an in-app update the desktop app carries its workspace's store forward to a new
+  store format by itself, only while its daemon provably holds the store's exclusive writer fence
+  and the updater handed it that exact store (#897).
+- on the Linux `.deb`, once `apt` has upgraded ORCA while it runs, the title bar offers
+  **Restart to finish update**: it drains and stops the bundled daemon, hands the workspace store
+  to the installed version as the Windows updater does, and starts it, so the new version can
+  carry an older-format store forward (#905).
+
+#### app, cli
+
+- Make a reachable Linux machine a managed ORCA server in one step: **Add a
+  machine** in the connection dialog, or `orca remote add user@host` from a source checkout.
+  It first checks the machine read only and shows the server's host key fingerprints, the
+  account and what it will do; nothing is pinned or installed until you confirm exactly that.
+  It then installs this version's signed server bundle, the wrappers and the systemd user unit,
+  starts the daemon and checks it, and in the app signs in automatically. A re-run verifies and
+  repairs instead of reinstalling, keeps the operator's settings, and starts only a release it
+  staged and verified for exactly that version. A machine with an unmanaged ORCA installation
+  is refused with the inventory guidance. Setup is fenced against a concurrent setup or update;
+  a failed run puts the service, link and lingering back as it found them (durably, even if the
+  session drops), and nothing is saved or signed in to unless the result matches what was
+  confirmed.
+
+#### app, daemon, agents
+
+- **Always allow** and **Always deny** on a permission card now show the exact rule ORCA would save, the agent it is for and a lifetime (1 hour, 1 day, 7 days, 30 days or until removed; 7 days by default) before anything is written. Only **Save rule and allow/deny** saves it. A rule with a lifetime records `expiresAt` in `orca.permissions.json` and stops deciding at that instant without anyone editing the file; the Config surface shows when each rule expires. Protocol 2.8 adds `standing` to `inputs.list` entries, `durationMs` to `inputs.answer`'s `always` (at most 90 days) and `expiresAt` to effective rules in `config.get`. A file holding a timed rule is written as `orca.permissions.json` version 3, which ORCA 0.7.x refuses (it asks instead of allowing) rather than reading the rule as permanent; it goes back to version 1 when no timed rule is left. Saving a rule echoes the preview's `previewRef`, and the daemon refuses with `CONFIG_STALE` if the rule it would write is no longer the one shown.
+
+#### cli
+
+- `orca recovery <runId> [--checkpoint <nodeId>] [--json]` previews how a run could be recovered without changing anything: Resume, New run and Checkpoint attempt, each with why it is or is not available; the steps whose effects are uncertain because they started and did not complete; and, for a failed run, which steps a checkpoint attempt would reuse and which ran after it last time. Approvals and permissions are never carried forward. Starting a checkpoint attempt is not available yet.
+- `orca auth issue --judge-disclosure` records the owner's approval that a credential's
+  runs may send action evidence to the plain-language rule judge configured under
+  `review.plainRules.judge`: that destination, provider and model only. No preset includes it, and
+  changing the judge's destination, provider or model needs a new grant (its timeout and daily call
+  limit do not). Revoking or expiring the
+  credential stops the next send. The judge is still not switched on.
+- `orca store carry-forward` refuses desktop-app-owned workspaces (`APP_OWNED`) (#897).
+- `orca diagnostics tool-calls (runs | export <runId> [sessionId] | delete <runId> [sessionId] | prune)`.
+
+#### core, agents, daemon, app
+
+- Permission rules can match a shell command by its words: `command: "git push"` denies or asks for `git push` however it is written (`git -C repo push`, `sudo git push`, `bash -c "git push"`, or as one part of a compound command), and a final `*` covers a family (`npm *`). A command rule can deny or ask, never allow, because a command's words do not prove what it runs. For the same reason ORCA no longer offers, writes or honours a standing "Always allow" for a shell command: each command is answered once, and earlier title-based allows for commands in the permission sidecar are ignored. The "Always deny" review offers wider command rules (`npm run *`, `npm *`) alongside the exact command, and the Config surface shows and edits the new **Command** field. A config holding a command rule must declare `version: 2`, and a permission sidecar holding one is written as version 3, so ORCA 0.7.x refuses them. Once an agent's policy holds a command rule (in the config or saved by "Always deny"), no shell command is allowed automatically for that agent: commands not denied are asked, even if an older title rule or `default: allow` would have allowed them. A config that pairs command rules with `default: allow` or an allow for `kind: execute` (or no kind) is refused; set `default: ask` (or leave it unset) and give each allow rule a kind other than `execute`. The same holds for a call the agent did not classify or whose input carries a command whatever kind it claims, and for every agent whose permission sidecar cannot be read until it is repaired. Policies without command rules behave as before.
+
+#### daemon
+
+- a workflow draft with no active configuration to check against carries one whole-workflow error saying so, rather than looking clean, and a missing start node reports once instead of once more for every node it leaves unreachable. Every rule the panel shows has a fixture draft that produces exactly its row.
+- `workflowDrafts.dryRun` runs a dry run of your own draft, at the revision you name,
+  with fixtures for agent turns and gate answers, and answers with what it did: the choices made,
+  the branches never taken and what was assumed (#183, protocol 2.9). `runs.dryRunReport` reads
+  that report again. Dry runs are marked `dryRun` on their rows and left out of `runs.list`
+  unless asked for, and one left unfinished by a stopped daemon is cancelled on the next start.
+- `search` reads the runs the caller may see, newest first, within a hit limit and a deadline. Only text artifacts are read, secrets are redacted before matching, and artifact hits need `artifacts.read`.
+- A delegated step whose task holds a value the run protects (a `sensitive` launch
+  input or a secret read for the run) is admitted on the worker with its prompt variable
+  protected and each original value sent for redaction (`runs.admit` `sensitiveVars` and
+  `protectedValues`, protocol 2.11): encrypted there, and each value redacted on its own from
+  the worker's run views, events, logs and served artifact bodies. The worker's support is
+  checked again right before every admission; one that cannot take it is refused the step
+  before anything is sent. An artifact body sent back redacted is held to the size limit as
+  sent, and checked against the size and digest the worker reports for it (`artifacts.get`
+  `redacted`) (#363).
+- Plain-language permission rules can now be saved from the app as well as written in the config (#701): `permissions.saveJudgedRule` (protocol 2.12) adds one to `orca.permissions.json`, after every hand-written rule. A saved rule must name `read` or `search`, cannot match a command, and keeps its paths inside the workspace. A sidecar holding one is version 4, which earlier releases refuse rather than read the rule as a plain allow. As with config rules, nothing is allowed by it until a judge is configured, and then only one read or search at a time.
+- Delegate a workflow step to another ORCA daemon. An agent with
+  `type: orca-daemon`, a `profile` from the new `remotes:` list and a `workflow` runs each of
+  its steps as a run of that workflow on the remote daemon, over the same SSH tunnel as the
+  app's SSH profiles, with a credential the remote issued. `orca remote enroll <id>` pins the
+  remote's host keys and records its workspace and principal once; delegation goes only there.
+  Each step's remote run is admitted once, across dropped connections, step retries and
+  restarts of this daemon, and shows in that daemon's own run list.
+  Remote progress appears on the step, remote gates are asked on the parent and answered back,
+  cancelling the parent cancels the remote run (and never starts one), and the remote run's artifacts are brought back
+  to the step's deliverables. Refusals that a retry cannot fix fail the step with
+  `DELEGATION_REFUSED` and a reason.
+- A delegated step can name a git ref. An `orca-daemon` agent's `gitRef` (a
+  fully qualified branch or tag, `refs/heads/…` or `refs/tags/…`) is sent with each admission
+  (protocol 2.7, listed in `hello.admitFields`, optional `gitRef` on `runs.admit`). The remote
+  daemon admits only refs its administrator lists in `workspace.allowedRefs` (none by
+  default), checks the ref on its `fetchRemote` (default `origin`) with no prompts and a
+  deadline, fetches exactly the object it checked (refusing a ref that moved meanwhile) without
+  touching remote-tracking refs, and gives the run its own checkout of that commit (`git-worktree` with
+  `isolateRoots`), running no hook, fsmonitor command or filter driver. A remote that cannot
+  fails the step with `DELEGATION_REFUSED` and reason `git-ref`.
+- A delegated run records where it came from. A daemon that delegates a step
+  states its workspace id, the parent run and the step as the remote run's `origin`
+  (protocol 2.6: optional `origin` on `runs.admit`, canonical ids only, offered by the remote
+  in `hello.admitFields`); the remote shows it on the run. A remote that does not offer it is delegated to without it.
+- `orca remote enroll <id>` issues the remote's credential itself when none is
+  saved (or with `--issue`): after verifying the remote's host keys it runs the remote's ORCA
+  CLI over the same ssh (`auth issue delegate-<workspace id> --preset client`, scoped to the
+  workflows this config's agents delegate there), checks the credential, and saves it beside
+  the config, readable only by this user. Re-enrolling reuses it; `--issue` rotates it. A
+  rotation that fails part way leaves the previous enrollment working. Enrollment checks the
+  authority the credential was actually granted, and waits while delegations to the remote are
+  in progress. A credential it issued and no longer uses is revoked only on the daemon that
+  issued it (found there by its unique label); anything it cannot revoke yet is kept on a
+  pending list and retried.
+- Delegated steps respect the remote daemon's session cap. A delegating agent
+  (`type: orca-daemon`) never holds more sessions open to one remote than that remote's own
+  `limits.maxAgentSessions`, as its `hello` reports it; the rest wait with `step.waiting` on
+  `agent-slot` and a detail naming the remote. An uncapped remote stays unlimited.
+
+#### engine
+
+- workflow validation (and so activation and the editor) refuses a step that gives its agent a catalog MCP server whose secret reference is bound to a host other than the agent's, instead of the session failing when the step opens it. It names secrets by id only.
+- a dry run simulates one exact workflow definition, such as a draft, with
+  deterministic fixtures in place of agent turns and gate answers, and reports the choices made,
+  the branches never taken and the assumptions behind them (#183). No agent session, workspace,
+  secret, Request, work item or plugin effect takes part: planning, program and plugin nodes are
+  blocked and named, and the simulated definition can never be selected by a live launch. Its
+  runs are tagged `dryRun` in the event log, and nothing real can resume or recover them.
+  Starting one from the app comes next.
+- scoped MCP servers and skills for agent steps. Define them once in a
+  `capabilities` catalog in `orca.config.yaml`, then enable, disable or replace them at the
+  workspace, agent, workflow and node scopes. A workflow or node can only turn on what the
+  config permits for that agent (`available`). Unknown, duplicate, conflicting and
+  ambiguous references, and attempts to widen access, fail before the run starts and name
+  the field. The launch preview and the run's launch record list each step's servers and
+  skills with the scope that chose them, without commands or secrets. Legacy
+  `agents[].mcpServers` keep working unchanged and can now be narrowed per workflow or
+  step. Catalog servers and skills (with a content digest) resolve and preview, but are not
+  passed to agent sessions yet, so a step that selects one is refused.
+- foundations for secret references in agent and MCP server environments.
+  Declare where each credential lives in a `secrets` section of `orca.config.yaml` (an
+  environment variable or an absolute file path, bound to one host) and write
+  `{ secret: <id> }` in `env` instead of the value. The config is checked when it loads:
+  unknown secrets, unconfigured hosts and references to a secret bound to another host than
+  the agent's are refused, with no fallback to a value found elsewhere. An agent no longer
+  inherits an environment variable that a secret on its host is read from. Delivering a
+  value to a session needs a server-verified use check that arrives with the rest of #336;
+  until then a launch whose steps use a reference is refused before it starts, and a ping
+  does not start such an agent.
+- catalog MCP servers now reach agent sessions. A step that selects a server
+  from `capabilities.mcpServers` gets it only when the run's owner holds a current
+  credential with `capabilities.use` whose grant names that server, as defined now, on the
+  agent's host (`orca auth issue <principal> --mcp-server <id>@<host>`, or `'*'`; the owner
+  preset grants every server), and its command is found on that host. A grant naming a
+server covers it only when its command is an absolute, canonical path to an executable that
+only root or the agent's account can change; anything else needs `'*'`. The decision is
+asked again after a slot wait, right before the agent is given its servers, and before
+every prompt, so a revoked grant stops a waiting step and retires a pooled session. Otherwise the step is
+  refused before anything starts, naming the step and the server. ORCA never installs a
+  server and never tries another host. Skills are still refused until they can be delivered.
+- catalog skills now reach agent sessions. A step's selected skills travel in
+  its prompts as ACP `resource` blocks with their text inline, read on the daemon's machine
+  and hashed over exactly what is sent. They need the run owner's `capabilities` grant
+  (`orca auth issue <principal> --skill <id>` pins the content digest; `--skill '*'` and the owner
+  preset cover every skill, while `--mcp-server '*'` grants servers only) and an agent that accepts embedded context. Otherwise the step
+  is refused, never run without the skill.
+- a workflow can let the launcher choose which configured secret a step uses.
+  Declare a launch input of `type: secret` and map it to an agent environment variable with
+  the step's `secretEnv`. The launcher names the secret by id, and the id is taken from the
+  launch record, never from vars a step changes later. Each such step gets an agent process
+  of its own, which reads the secret on the agent's host at open under the run owner's grant
+  as it is then, so a revoked grant or a rotated value takes effect at the next step. The
+  value never enters the prompt, the model or the store. Unknown ids, secrets bound to another
+  host, and delegated steps are refused before the run starts.
+- optional caps on concurrent agent sessions: `limits.maxAgentSessions` for the
+  whole daemon, `agents[].maxSessions` for one agent and `hosts[].maxSessions` for one host.
+  Unlimited unless set. A step that would exceed a cap waits before it opens a session, shown
+  as blocked with the cap and its use (`waiting for an agent slot: 3 of 3 in use on host
+  box-b`) in the timeline and in `orca plan explain`; `hello` and `agents.list` report caps,
+  sessions open and queue depth.
+
+#### engine, cli
+
+- `orca recovery start <runId> [--checkpoint <stepRunId|nodeId>]` starts a checkpoint attempt of a failed run and follows it. The attempt is a new run, linked to its source (`run.checkpoint`, `reusedFrom` on each reused step), that reuses the recorded results, artifacts and vars up to the checkpoint and runs on from there. It uses the source's pinned workflow, recorded configuration, launch inputs and workspace. It goes through retry-safe admission, so `--idempotency-key` returns the same attempt instead of starting another. Only one attempt of a run can be unfinished at a time, and the source run's log is never changed. A refusal (`RECOVERY_BLOCKED`) gives the same reasons as the preview. An attempt whose admission was interrupted before it was created keeps the run's workspace until that admission is reconciled (which `orca recovery start` does) or `orca recovery retire <runId> <attemptRunId>` retires it.
+
+#### protocol
+
+- a `search` read method (protocol 2.2) that finds event text and artifact contents and answers with places: a run and the step an event belongs to, or a run, an artifact name and a version.
+- protocol 2.3 adds `outcome`, `workflowId`, `workflowVersion`, `createdFrom` and `createdTo` filters and an opt-in `operations` view to `runs.list` and `runs.get`: last sequence and activity, step counts, the lease owner, and host and usage facets that say `unavailable` rather than zero. A shared run follower keeps several runs current from one notification stream, dropping duplicates, healing gaps with a bounded snapshot re-read, and never letting an older snapshot overwrite a newer status.
+- protocol 2.8 adds history paging to `runs.list`: an optional `cursor` and a `nextCursor` on the result, a place in the list's order (creation time, then id) rather than a count, so paging back through history is not shifted by runs started meanwhile. Scoped callers page over the runs they can see.
+
+#### protocol, daemon
+
+- Protocol 2.5 adds recovery over the daemon. `runs.recovery` reads how a run could be recovered, `runs.reviewEffect` records a review of a step that may have acted and never finished, and `runs.recover` starts a checkpoint attempt through retry-safe admission and drives it, once per idempotency key. Run views now show `checkpoint` on a run and `reusedFrom`, `reusedChildren` and `effectReview` on a step.
+
+#### release
+
+- a signed prebuilt headless server, `orca-server-X.Y.Z-linux-x64.tar.xz` (bundled CLI, daemon and ACP facade, pinned Node runtime, shipped workflows and templates), with a SHA-256 manifest signed keylessly by the release workflow, from the 0.8 release line on. A final is published only with it; a release candidate gets it shortly after publication. `orca-release.py stage --bundle vX.Y.Z` (and `update --bundle`) verifies the signer and digest before unpacking and stages it with only Python 3 on the server.
+
+#### server updates
+
+- servers can update themselves from their ring on the update feed. Opt in with `autoUpdate` in `deployment.json` and `orca-release.py install-timer`. A systemd user timer stages each offered server bundle while work continues and activates it only when the server is idle (never outside quiet hours). It rolls back automatically if the new daemon fails before admission reopens, never rolls back once admission has reopened, never crosses a store format change, and keeps the last two releases. Operators can stop every server from activating anything, staged releases included, with the feed's servers' stop switch (**Server feed (stop or resume)**), or one server with an `auto-update.stop` file. A staged release is reused only when it was verified from the exact signed files the feed offers now, and the stop, quiet hours and the offer are checked again just before activation.
+
+#### store
+
+- `orca store sqlite convert` converts a workspace's file store into a SQLite store of
+  its own beside it (`.orca-sqlite`) and names it in the workspace's existing config, leaving the
+  file store exactly as it was. ORCA 0.7.0 and earlier refuse the new store, checked against the
+  released v0.7.0 and v0.6.0 in CI. One that was already running keeps the file store, and
+  `orca store format` reports anything it writes there afterwards. Refused on Windows (#947) and
+  for the desktop app's own workspaces; `orca store sqlite switch` (in place) stays refused (#339).
+- ORCA writers (the daemon and CLI commands, `orca store sqlite import` and
+  `restore`) now register while they have a store open, so a later change of who owns a store's
+  metadata can be refused while any of them is running, idle or not. A store recorded as running
+  on SQLite opens only the database it was bound to, and refuses a missing or replaced one
+  instead of starting empty. `orca store format` says whether a store's metadata is in files or
+  SQLite. `orca store sqlite switch` exists but is refused for now, changing nothing: ORCA 0.7.0
+  and earlier never read the store's format marker and do not register, so nothing can make sure
+  none of them is still running against the store (#339).
+
+#### update feed
+
+- a server channel for the signed server bundle, from the 0.8 release line on. It has the same rings (`internal`, `preview`, `stable`), rollouts, pause switch and watchdog as the desktop channel. New tokens can be limited to the server channel (`feed-token.js RING --server`). Publishing feeds a release's server bundle before its Windows installers, and a ring's desktops are never offered a version that its servers are not all on.
+
+### Changed
+
+Recovery refusals now say what to do. A checkpoint attempt refused over the daemon includes each reason's operator sentence in its message. Resume of a run whose recorded workflow version, configuration or launch inputs are gone or changed is refused before it starts, naming the reason, with the same error codes as before.
+
+#### agents
+
+- Writes to `orca.permissions.json` no longer take over a lock by its age (#701). Before, a writer that stopped for 30 seconds could lose its lock, resume, and overwrite a newer edit. If ORCA stops in the middle of a write, `orca.permissions.json.lock` now stays, and later writes are refused until you remove it after checking that nothing is writing. Reading the file is not affected.
+- A permission rule that allows a tool call now answers the agent with its one-time allow only. When an agent offers no one-time allow, the call is refused (logged as `allow:no-one-time-option`) instead of being answered with the agent's "always allow", which would have made the agent stop asking and kept a later expired or removed rule from ever being checked again. For the same reason a parked permission ask, and one forwarded to an upstream ACP client, now offers only the agent's one-time choices, as the live card already did.
+- ORCA's own file executor now follows the permission policy (#703). When an agent reads or writes through ORCA's ACP file callbacks, each call is decided just before the I/O: a denied path is refused even if the agent never asked, and a path the policy asks about is read or written only after a person allows that one operation once. The policy is checked again after the answer, so a deny saved meanwhile still wins. Agents' native tools are unchanged and still need an operating-system boundary.
+
+#### docs
+
+- the Codex IPC caveat is now stated where you opt Codex in to `nativeToolHook:
+  experimental`, before you enable it. The hook decides which commands run, not what an allowed
+  command connects to on the same machine. ORCA has not verified that Codex's sandbox isolates
+  those endpoints. Until now the caveat was stated only in the warning logged after the session
+  started.
+- the plain-language rule judge and Codex's experimental hook are now described
+  separately. Opting Codex in to `nativeToolHook: experimental` does not make the judge available
+  there: on the hook route a call ORCA would ask about is blocked, so no ask or judge advice is
+  shown, and in Codex's default adapter mode Codex's own review (not ORCA's judge) decides its
+  approval requests. ORCA has not verified the judge for Codex in this version.
+
+#### engine
+
+- A step's retry budget (`maxAttempts`, `completion.maxAttempts`) no longer repeats an attempt that may have acted outside ORCA. An agent step that already sent the agent a prompt fails instead of retrying, and waits for `orca recovery review`; a failure before the first prompt is still retried. A plugin node is retried only when its executor reports the attempt did nothing outside ORCA with `failed(code, message, details, true, "none")`, or permits a repeat with `"repeatable"` (which claims nothing about the effect, so the last attempt still waits for review).
+- An agent turn's record is synced to durable storage before its prompt is sent, so a crash or power loss cannot hide that a step already prompted its agent. A custom event store without `synchronizeEvent` refuses agent turns.
+
+#### engine, cli
+
+- A step that may have changed the workspace or external systems and never finished (a crash, a lost connection or a broken lease mid-step) is no longer run again on its own. `orca resume` and `orca run` refuse with `EFFECT_REVIEW_REQUIRED`, naming the step, before writing anything; `orca recovery review <runId> <stepRunId> --run-again|--abandon [--note text]` records your decision in the run's log, and resume then runs the step again, or the run ends cancelled. A step paused on purpose (an agent waiting on an answer) resumes as before. `orca recovery` blocks the options that would run an unreviewed step again, and its `--checkpoint` flag is now accepted.
+
+#### integrations
+
+- `custom:jev-eval` repeats an attempt whose request was already sent only when the node sets `repeatable: true`, and an attempt still failing when the budget is spent waits for review; failures before the request is sent are retried as before.
+
+#### store
+
+- Sharing one store between hosts or PID namespaces over a shared volume is
+  documented as unsupported (`docs/storage/file-locks.md`). A lock whose owner token
+  records a different hostname is never reclaimed, whatever its age: contenders wait and
+  fail with `STORE_LOCK_TIMEOUT`, and a test holds that in place. This does not detect
+  two hosts or containers that share a hostname, and does not make a shared store safe.
+
+### Fixed
+
+Following a run no longer re-reads it for a gap that is not there when agent output that was still being gathered arrives just after a snapshot.
+
+#### agents
+
+- On Linux, if ORCA stops in the middle of writing `orca.permissions.json`, the lock it leaves is now cleared automatically by the next write once the process that took it is no longer running in the same process namespace (#701). This applies only in a workspace private to your user (not writable by group or others). A writer that is only slow keeps its lock. Locks that cannot be attributed this way, locks in shared directories, and any lock on macOS or Windows still need removing by hand.
+- When an agent asks ORCA to read or write a file on the local machine, ORCA now
+  follows links in the path first. A link inside the workspace that leads outside it is
+  refused, even when its target does not exist yet. A link to another file in the workspace
+  is held to the rules for that file as well as the rules for the link (the stricter answer
+  wins), and the read or write goes to the file the link reaches. A workspace opened through
+  a linked directory still matches its own rules. Remote hosts are unchanged.
+  On the local machine the read or write is also tied to the file ORCA checked: if it is
+  replaced, turned into a link, or is not an ordinary file (a folder, a pipe, a device), the
+  operation is refused. On Linux a new file whose folder already exists is created only inside
+  the folder ORCA checked. Other new files (ones that need new folders, and any new file on
+  macOS and Windows) are created on a best-effort basis: each folder is checked just before ORCA
+  creates anything in it, but a change in that instant may go unnoticed, and if one is noticed
+  afterwards the outcome is recorded as unknown. Remote (SSH) hosts keep their earlier behavior.
+- An agent reading a file that does not exist through ORCA's ACP file callback now gets "Resource not found" instead of a generic internal error, so agents that check for a file by reading it (Gemini CLI among them) can create new files. Only a file the host positively reports as absent (a local open that finds nothing, or the SFTP server's own no-such-file status) is answered that way; a failed SSH connection or any other read error is still reported as an error. The answer comes only after the permission policy allows the read, so a refused path still reveals nothing about whether it exists.
+- ORCA's protected-path check now judges a write through a link whose target does not exist yet by where the link leads, judges a delete or rename by the directory entry itself, and treats a path it cannot resolve for any reason other than absence (a loop of links, no permission) as protected. Before, a link in the workspace pointing at ORCA's not-yet-created permission sidecar was taken as a new workspace file, so a default-allowed edit could create the sidecar (#706).
+- A Gemini CLI permission ask for an MCP tool names its server and tool only in
+  the call's `_meta`, which the agent writes and ORCA cannot verify. ORCA now treats that
+  as a claim: operator deny and ask rules written as `server: tool` apply to it (as do
+  rules on Gemini's own `tool(args)` title), but no allow rule, default or "always" grant
+  decides such a call. It is asked each time unless a rule denies it, so a grant can no
+  longer reach the same tool name on another server. An "always deny" for it is saved as
+  `server: tool`. Grants recorded earlier from Gemini's MCP titles stop allowing.
+  Matching by the claimed `server: tool` only ever adds a restriction: such a call is decided
+  by its own title and by the claim, and the stricter answer stands, so an ask matched by the
+  claim never shadows a deny the title meets.
+- With the experimental Codex tool hook on the pinned Codex (0.171.0 through its
+  ACP adapter 2.9.0, on Linux), a failure of ORCA's own hook program no longer lets the call
+  run. A crash, a kill, a hang past 25 seconds, a missing runtime, or an answer that is not
+  exactly ORCA's allow or block now blocks the call. The hook still runs under Codex's own
+  hook runner, which lets a call through if that runner fails. A session opens only after ORCA
+  has checked that this protection blocks on that install. Codex's support tier is unchanged.
+
+#### cli
+
+- `orca auth revoke <id>` and `orca auth rotate <id>` no longer fail with "Unknown option"
+  when the credential id starts with a dash. New credential ids never start with one, and an id
+  issued earlier that does is accepted as typed. In the rare case that such an id is exactly the
+  name of an `orca` option (for example `--expires-at`), put `--` before it:
+  `orca auth revoke -- <id>`.
+
+#### daemon
+
+- a delegated run whose git ref moved between admission and creation now fails at once. Before, it kept reconciling until the step timed out. The remote ends the admission with `GIT_REF_MOVED` (final under that key), and the delegating step fails with `DELEGATION_REFUSED`, reason `git-ref`.
+
+#### store
+
+- `orca store sqlite restore` into a store on SQLite now refuses a backup of
+  another store's database, or of one bound to no store, before anything is replaced (#339).
+- writing a very large batch of documents to a file-backed collection (tens of
+  thousands at once) no longer fails with "Maximum call stack size exceeded"; found by the
+  large-scale store benchmark (#341).
+
 ## 0.7.1 - 2026-11-22
 
 ### Store format
