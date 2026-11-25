@@ -259,8 +259,8 @@ describe.skipIf(ADAPTER === undefined || OTHER_RUNTIME === undefined)("installed
       // Anything the cancelled calls set off would have landed by now: look again.
       await new Promise((done) => setTimeout(done, 5_000));
       const later = await Promise.all(cancelled.map((got, i) => effectAgain(world, got, calls[i])));
-      expect(later).toEqual(["none", "none"]);
-      receipt.lifecycle.cancelled = cancelled.map((got, i) => ({ ...record(got), effectAfterWait: later[i] }));
+      expect(later.map((ref) => effectFrom(ref))).toEqual(["none", "none"]);
+      receipt.lifecycle.cancelled = cancelled.map((got, i) => ({ ...record(got), afterWait: later[i] }));
       receipt.checks.cancelledNoEffect = "pass";
 
       // A fresh session: the same calls ask again, run nothing unanswered, and run only on their own answer.
@@ -355,7 +355,7 @@ function record(got) {
   return rest;
 }
 
-/** A cancelled call's effect, recomputed from the same independent evidence after a wait. */
+/** A cancelled call's evidence taken again after a wait, for its effect to be recomputed from. */
 async function effectAgain(world, got, action) {
   const ref = got.detail.effectRef;
   if (ref.kind === "mcp") {
@@ -364,17 +364,17 @@ async function effectAgain(world, got, action) {
       .split("\n")
       .filter(Boolean)
       .map((l) => JSON.parse(l));
-    return effectFrom({
+    return {
       ...ref,
       loggedFor: lines.filter((l) => l.input?.orca706Call === ref.callRef).map((l) => l.nonce),
       unaccountedLines: lines.filter((l) => typeof l.input?.orca706Call !== "string").length,
-    });
+    };
   }
   if (ref.kind === "file") {
     const now = await readFile(action.path, "utf8").catch(() => undefined);
-    return effectFrom({ ...ref, after: now === undefined ? null : sha256(now).slice(0, 16) });
+    return { ...ref, after: now === undefined ? null : sha256(now).slice(0, 16) };
   }
-  return "indeterminate";
+  return { kind: "none-available" };
 }
 
 /**

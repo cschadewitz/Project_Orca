@@ -277,8 +277,12 @@ The Claude installed run (`enforcement-installed-claude-1026.test.js`) records t
   denies lands through Claude's own allow. `on` is refused. With `experimental`, the same
   write is denied and does not land.
 - **`cancelled`**: an MCP call and a write each ask, and the turn is cancelled while the ask
-  is pending. Neither has any effect, then or after a wait.
-- **`fresh`**: a new session asks again for each call. Unanswered, nothing runs; answered once,
+  is pending. Neither has any effect. Each call's evidence is taken again after a wait
+  (`afterWait`, the same call id or file), and its effect is recomputed from that, not from a
+  label.
+- **`fresh`**: a new session asks again for each call. Every ask records its ACP session and
+  is bound to its own call, and the fresh asks share one session that is not the cancelled
+  one. Unanswered, nothing runs; answered once,
   it runs. None of them is a cancelled call.
 - **`judged`** (`checks.judgedAction`): with the experimental command judge on, a command
   that a judged rule is about reaches the person carrying the judge's advisory verdict. It runs

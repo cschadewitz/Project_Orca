@@ -575,11 +575,11 @@ describe("the matrix checker refuses claims beyond the evidence", () => {
     /** Lifecycle evidence as the installed run records it: each effect re-derived from its reference. */
     const file = (after, written = "w") => ({ kind: "file", path: "p", before: null, after, written });
     const mcp = (loggedFor) => ({ kind: "mcp", callRef: "c1", loggedFor, answeredWith: null, unaccountedLines: 0 });
-    const call = (toolUseId, outcome, effectRef, answer) => ({
+    const call = (toolUseId, outcome, effectRef, answer, sessionId = "sess_1") => ({
       toolUseId,
       outcome,
       effectRef,
-      approvals: answer ? [{ toolCallId: toolUseId, answer }] : [],
+      approvals: answer ? [{ toolCallId: toolUseId, sessionId, answer }] : [],
     });
     const lifecycle = {
       optIn: {
@@ -587,8 +587,11 @@ describe("the matrix checker refuses claims beyond the evidence", () => {
         on: "refused",
         experimental: [call("toolu_e", "deny", file(null))],
       },
-      cancelled: [{ ...call("toolu_c", "ask", mcp([]), "pending"), effectAfterWait: "none" }],
-      fresh: [call("toolu_f1", "ask", mcp([]), "no-answer"), call("toolu_f2", "allow", mcp(["n"]), "allow_once")],
+      cancelled: [{ ...call("toolu_c", "ask", mcp([]), "pending"), afterWait: mcp([]) }],
+      fresh: [
+        call("toolu_f1", "ask", mcp([]), "no-answer", "sess_2"),
+        call("toolu_f2", "allow", mcp(["n"]), "allow_once", "sess_2"),
+      ],
       judged: [call("toolu_j1", "ask", mcp([]), "no-answer"), call("toolu_j2", "allow", mcp(["n"]), "allow_once")].map(
         (r) => ({
           ...r,
@@ -653,6 +656,7 @@ describe("the matrix checker refuses claims beyond the evidence", () => {
       ]);
       const carried = scopedReceipt();
       carried.lifecycle.fresh[1].toolUseId = "toolu_c";
+      carried.lifecycle.fresh[1].approvals[0].toolCallId = "toolu_c";
       expect(checkScoped(scoped(), carried)).toEqual([
         "agent claude: scoped: s.json: lifecycle.fresh: a call is not the fresh session's own",
       ]);
@@ -660,6 +664,32 @@ describe("the matrix checker refuses claims beyond the evidence", () => {
       noAsk.lifecycle.fresh[1].approvals = [];
       expect(checkScoped(scoped(), noAsk)).toEqual([
         "agent claude: scoped: s.json: lifecycle.fresh: needs calls asked again, both unanswered and answered once",
+      ]);
+      // The absence after the wait is its own evidence, recomputed, not a label.
+      const late = scopedReceipt();
+      late.lifecycle.cancelled[0].afterWait = mcp(["n"]);
+      expect(checkScoped(scoped(), late)).toEqual([
+        "agent claude: scoped: s.json: lifecycle.cancelled: toolu_c was not a pending ask without effect",
+      ]);
+      const labelled = scopedReceipt();
+      labelled.lifecycle.cancelled[0] = {
+        ...labelled.lifecycle.cancelled[0],
+        afterWait: undefined,
+        effectAfterWait: "none",
+      };
+      expect(checkScoped(scoped(), labelled)).toEqual([
+        "agent claude: scoped: s.json: lifecycle.cancelled: toolu_c was not a pending ask without effect",
+      ]);
+      // Each ask is bound to its own call, and the fresh session is not the cancelled one.
+      const misbound = scopedReceipt();
+      misbound.lifecycle.fresh[0].approvals[0].toolCallId = "toolu_other";
+      expect(checkScoped(scoped(), misbound)).toEqual([
+        "agent claude: scoped: s.json: lifecycle.fresh: an ask is not bound to its own call and session",
+      ]);
+      const sameSession = scopedReceipt();
+      for (const r of sameSession.lifecycle.fresh) r.approvals[0].sessionId = "sess_1";
+      expect(checkScoped(scoped(), sameSession)).toEqual([
+        "agent claude: scoped: s.json: lifecycle.fresh: the asks are not one new session's",
       ]);
       const hooked = scopedReceipt();
       hooked.lifecycle.optIn.default = [call("toolu_d", "deny", file(null))];
@@ -717,7 +747,7 @@ describe("the matrix checker refuses claims beyond the evidence", () => {
         "agent claude: scoped: s.json: lifecycle.judged: toolu_j1 ran on the judge's advice alone",
       ]);
       const unjudged = scopedReceipt({ checks: { ...allChecks, judgedAction: "pass" } });
-      unjudged.lifecycle.judged[1].approvals = [{ toolCallId: "toolu_j2", answer: "allow_once" }];
+      unjudged.lifecycle.judged[1].approvals = [{ toolCallId: "toolu_j2", sessionId: "sess_1", answer: "allow_once" }];
       expect(checkScoped(scoped({ judge: "verified" }), unjudged)).toEqual([
         "agent claude: scoped: s.json: lifecycle.judged: needs judged calls the person was asked about, unanswered and answered once",
       ]);

@@ -139,6 +139,8 @@ export function claudeConnected(env) {
           const approval = {
             toolCallId: req.toolCall.toolCallId,
             title: req.toolCall.title ?? "",
+            // The ACP session the ask came from, so a fresh session's asks are shown to be its own.
+            sessionId: req.sessionId,
             answer: "pending",
             // A judge's verdict shown with the ask (#701): only its fixed codes, never a criterion.
             ...(judged
@@ -295,6 +297,7 @@ export function claudeConnected(env) {
           refusal,
           approvals: c.approvals.map((a) => ({
             toolCallId: a.toolCallId,
+            sessionId: a.sessionId,
             answer: a.answer,
             ...(a.judged ? { judged: a.judged } : {}),
           })),
