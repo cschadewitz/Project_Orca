@@ -51,10 +51,16 @@ export function setupScripts(): string | undefined {
   return existsSync(join(dir, SETUP_SCRIPT)) ? dir : undefined;
 }
 
-/** Where the CLI keeps the host keys it pinned: one file per server, like the app's. */
-function pinsDir(): string {
+/**
+ * Where the CLI keeps the host keys it pinned for `id`: one file per server, like the app's.
+ * Until 0.10 a server pinned only under the folder from before the rename to Orrery keeps
+ * that file, so a re-run still verifies against it; a new server is pinned under the new one.
+ */
+function pinFile(id: string): string {
   const base = process.env.XDG_CONFIG_HOME || join(homedir(), ".config");
-  return join(base, "orca", "known_hosts");
+  const file = join(base, "orca", "known_hosts", id);
+  const legacy = join(base, "orca", "known_hosts", id); // rename-keep: pins from before the rename, read until 0.10
+  return existsSync(file) || !existsSync(legacy) ? file : legacy;
 }
 
 function port(value: unknown, flag: string): number | undefined {
@@ -115,7 +121,7 @@ export async function remoteCommand(
   const confirm = ctx.flags.confirm;
   if (confirm !== undefined && typeof confirm !== "string")
     throw new OrcaError("CONFIG_INVALID", "--confirm takes the code the first run printed");
-  const base = { profile, knownHostsFile: join(pinsDir(), profile.id) };
+  const base = { profile, knownHostsFile: pinFile(profile.id) };
   const make = deps.tunnel ?? ((options: ConstructorParameters<typeof SshTunnel>[0]) => new SshTunnel(options));
   const program = setupProgram(scripts);
 

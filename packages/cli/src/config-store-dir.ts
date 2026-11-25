@@ -16,7 +16,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { parse as parseYaml, parseDocument } from "yaml";
 import { OrcaError, parseOrcaConfig } from "@orca/core";
 import { CONFIG_FILE_LOCK, withFileLock } from "@orca/store";
-import { CONFIG_FILENAMES } from "./bootstrap.js";
+import { CONFIG_FILENAMES, LEGACY_CONFIG_FILENAMES } from "./bootstrap.js";
 
 /** What a config held when it was read: its bytes' hash. */
 export type ConfigRevision = string;
@@ -66,7 +66,7 @@ export async function writeConfigStoreDir(
  */
 export async function otherConfigs(file: string): Promise<string[]> {
   const present: string[] = [];
-  for (const name of CONFIG_FILENAMES) {
+  for (const name of new Set([...CONFIG_FILENAMES, ...LEGACY_CONFIG_FILENAMES])) {
     if (name === basename(file)) continue;
     try {
       await stat(join(dirname(file), name));
