@@ -352,8 +352,8 @@ describe("guarded launcher", () => {
 
 it("service templates pin one local daemon and one downstream tunnel with bounded restarts", () => {
   const base = "tools/deploy/private-mcp-service";
-  const daemon = readFileSync(join(base, "orca-daemon.service.template"), "utf8");
-  const tunnel = readFileSync(join(base, "orca-tunnel.service.template"), "utf8");
+  const daemon = readFileSync(join(base, "orca-daemon.service.template"), "utf8"); // rename-keep: the agent-01 packet keeps its unit names
+  const tunnel = readFileSync(join(base, "orca-tunnel.service.template"), "utf8"); // rename-keep: the agent-01 packet keeps its unit names
   const yaml = readFileSync(join(base, "tunnel-profile.yaml.template"), "utf8");
   for (const unit of [daemon, tunnel]) {
     expect(unit).toMatch(/Restart=on-failure/);
@@ -361,8 +361,8 @@ it("service templates pin one local daemon and one downstream tunnel with bounde
     expect(unit).toMatch(/TimeoutStopSec=30s/);
   }
   expect(daemon).toMatch(/serve --host 127\.0\.0\.1 --port 33871/);
-  expect(tunnel).toMatch(/Wants=orca-daemon\.service/);
-  expect(daemon).not.toMatch(/PartOf=orca-tunnel|Requires=orca-tunnel/);
+  expect(tunnel).toMatch(/Wants=orca-daemon\.service/); // rename-keep: the agent-01 packet keeps its unit names
+  expect(daemon).not.toMatch(/PartOf=orca-tunnel|Requires=orca-tunnel/); // rename-keep: the agent-01 packet keeps its unit names
   expect(yaml).toMatch(/api_key: file:/);
   expect(yaml).toMatch(/listen_addr: 127\.0\.0\.1:/);
   expect(yaml.match(/- channel: main/g)).toHaveLength(1);
@@ -386,10 +386,11 @@ linuxIt("service entry clears ambient tunnel and Node overrides before starting 
     NODE_PATH: dir,
     OPENAI_API_KEY: "secret-canary",
   };
-  for (const name of ["orca-daemon", "orca-tunnel"]) {
+  const units = ["orca-daemon", "orca-tunnel"]; // rename-keep: the agent-01 packet keeps its unit names
+  for (const name of units) {
     const template = readFileSync(`tools/deploy/private-mcp-service/${name}.service.template`, "utf8");
     const entry = template.split("\n").find((line) => line.startsWith("ExecStart="));
-    const prefix = entry.slice("ExecStart=".length).split(name === "orca-daemon" ? "@NODE@" : "@TUNNEL_CLIENT@")[0];
+    const prefix = entry.slice("ExecStart=".length).split(name === "orca-daemon" ? "@NODE@" : "@TUNNEL_CLIENT@")[0]; // rename-keep: the agent-01 packet keeps its unit names
     expect(prefix).toBe("/usr/bin/env -i HOME=@SERVICE_HOME@ PATH=@REVIEWED_PATH@ LANG=C TMPDIR=@TMPDIR@ ");
     const [binary, ...args] = prefix
       .trim()

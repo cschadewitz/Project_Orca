@@ -2,7 +2,16 @@
 // codemod does to it) re-derives exactly the digests make_fixture.py derives from it, a rerun
 // changes nothing, and any other digest that no longer matches is refused.
 import { createHash } from "node:crypto";
-import { appendFileSync, cpSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  cpSync,
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, expect, it } from "vitest";
@@ -16,7 +25,10 @@ let paths;
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "rename-post-codemod-"));
   cpSync(FIXTURE, dir, { recursive: true });
-  const app = readdirSync(dir).find((name) => name.endsWith(".app"));
+  // The codemod moves files, so a renamed tree may still hold the old .app's empty directories.
+  const app = readdirSync(dir).find(
+    (name) => name.endsWith(".app") && existsSync(join(dir, name, "Contents/Info.plist")),
+  );
   const resources = join(dir, app, "Contents/Resources");
   paths = {
     stub: join(resources, "daemon", readdirSync(join(resources, "daemon"))[0]),

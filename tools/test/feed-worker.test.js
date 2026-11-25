@@ -157,6 +157,7 @@ describe("payload files", () => {
   it("serves installers under either side of the Orrery rename, and no other name", async () => {
     // rename-keep-start: both names on purpose
     const e = env(RINGS, {
+      "0.7.0/ORCA-0.7.0-win-x64.exe": "0123456789",
       "0.7.0/Orrery-0.7.0-win-x64.exe": "renamed!!!",
       "0.7.0/Kepler-0.7.0-win-x64.exe": "other",
     });
