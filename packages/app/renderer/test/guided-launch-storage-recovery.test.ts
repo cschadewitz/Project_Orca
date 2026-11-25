@@ -68,7 +68,7 @@ function wire(lockOnSend: boolean) {
   const review: LaunchReview = {
     target,
     draftSequence: 1,
-    workflowId: "orca-beta-local-check",
+    workflowId: "orca-beta-local-check", // rename-keep: the first-run sample's id, kept so existing workspaces still match
     workflowVersion: "1",
     expectedWorkflowRevision: "revision",
     expectedConfigGeneration: "generation",
@@ -76,7 +76,7 @@ function wire(lockOnSend: boolean) {
     command: {
       mode: "direct",
       params: {
-        workflowId: "orca-beta-local-check",
+        workflowId: "orca-beta-local-check", // rename-keep: the first-run sample's id, kept so existing workspaces still match
         workflowVersion: "1",
         expectedWorkflowRevision: "revision",
         expectedConfigGeneration: "generation",

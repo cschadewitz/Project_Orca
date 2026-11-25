@@ -321,12 +321,12 @@ export function createPairTreePort(
       await copy(source, stage, signal);
       for (const name of await readdir(destination)) {
         check(signal);
-        if (name !== ".orca-update-window.json") await rm(join(destination, name), { recursive: true });
+        if (name !== ".orca-update-window.json") await rm(join(destination, name), { recursive: true }); // rename-keep: the update-window guard the release being updated from writes (protocol update-window.ts)
       }
       {
         for (const name of await readdir(stage)) {
           check(signal);
-          if (name === ".orca-update-window.json") continue;
+          if (name === ".orca-update-window.json") continue; // rename-keep: the update-window guard the release being updated from writes (protocol update-window.ts)
           await rename(join(stage, name), join(destination, name));
           await syncPairDirectory(destination);
         }

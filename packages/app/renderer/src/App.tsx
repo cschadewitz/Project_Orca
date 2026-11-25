@@ -208,7 +208,7 @@ export function App(): JSX.Element {
   }, []);
 
   /* Plan is the one surface that reports a link's object is not there (#170): a work item
-     the plan does not hold. The others do not say so yet (docs/reviews/2026-10-10-design-conformance.md). */
+     the plan does not hold. The others do not say so yet (docs/archive/reviews/2026-10-10-design-conformance.md). */
   const onPlanMissing = useCallback((id: string) => setNotice({ kind: "missing", type: "work item", id }), []);
 
   /* Held rather than written inline: Plan memoises its inspector on the callbacks it was

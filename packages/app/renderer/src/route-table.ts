@@ -38,6 +38,8 @@ import type { Crumb, CrumbType } from "./ui/index.js";
 
 /** The scheme, once. */
 export const ORCA_SCHEME = "orca:";
+/** The scheme before the rename, still opened as an alias of the current one until v0.10.0. */
+const LEGACY_SCHEME = "orca:"; // rename-keep: pre-rename URL scheme, read as an alias
 
 /** A step is addressed by node and attempt — `build.2` — because a step run id is opaque. */
 export interface StepAddress {
@@ -95,7 +97,8 @@ export function resolveRoute(url: string): Route | undefined {
   } catch {
     return undefined;
   }
-  if (parsed.protocol.toLowerCase() !== ORCA_SCHEME) return undefined;
+  const scheme = parsed.protocol.toLowerCase();
+  if (scheme !== ORCA_SCHEME && scheme !== LEGACY_SCHEME) return undefined;
 
   // The object *type* is the URL's host, which the parser has already lower-cased for us;
   // the id is the path, which it has left exactly as it was written.

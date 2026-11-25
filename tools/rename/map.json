@@ -27,6 +27,7 @@
     "tools/test/agent01-*.test.js",
     "tools/test/private-candidate-onboarding.test.js",
     "tools/guard-qualification/receipts/*.pre-rename",
+    "examples/beta-first-job/template/**",
     "packages/app/test/fixtures/store-v*/**"
   ],
   "binaryExtensions": [

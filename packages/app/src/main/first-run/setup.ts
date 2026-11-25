@@ -5,6 +5,7 @@ import {
   windowsRead,
   windowsWrite,
   windowsFile,
+  firstRunLayout,
 } from "@orca/protocol/first-run-fence";
 
 import { constants } from "node:fs";
@@ -22,7 +23,7 @@ import { inspectLocalTool } from "./agent-preflight.js";
 import { FirstRunRefusal, PRESERVED, failureReason } from "./refusal.js";
 import type { DaemonClient } from "../../client/daemon-client.js";
 import { appSpeaks } from "../../client/protocol-window.js";
-import { dirname, join, isAbsolute } from "node:path";
+import { basename, dirname, join, isAbsolute } from "node:path";
 import { z } from "zod";
 import type { FirstRunReview, FirstRunStatus } from "../../first-run-contract.js";
 import type { ConnectionCandidate } from "../connection-target.js";
@@ -91,6 +92,20 @@ export interface FirstRunDeps {
   };
 }
 const digest = (value: string) => createHash("sha256").update(value).digest("hex");
+
+/** The config file setup writes into a new app workspace, and the store directory it names. */
+export const FIRST_RUN_CONFIG: string = "orca.config.yaml";
+export const FIRST_RUN_STORE_DIR = ".orca";
+/**
+ * A workspace set up before the rename has its config under the old name, and its receipt names
+ * that file. It is read, never written, for v0.9.0 only.
+ */
+export const LEGACY_FIRST_RUN_CONFIG: string = "orca.config.yaml"; // rename-keep: the pre-rename config file in an existing workspace
+/** The config file name a receipt was written with: the new one, else the pre-rename one. */
+const configNameOf = (receipt: Receipt) =>
+  LEGACY_FIRST_RUN_CONFIG in receipt.files && !(FIRST_RUN_CONFIG in receipt.files)
+    ? LEGACY_FIRST_RUN_CONFIG
+    : FIRST_RUN_CONFIG;
 export class FirstRunSetup {
   private selection: Selection | undefined;
   private busy = false;
@@ -118,7 +133,7 @@ export class FirstRunSetup {
   async status(): Promise<FirstRunStatus> {
     if (this.selection) return { state: "review", review: this.selection.review };
     const receipt = await this.readReceipt();
-    if (receipt && !absent(join(receipt.workspace.path, ".orca-first-run-ownership"))) {
+    if (receipt && !absent(firstRunLayout(receipt.workspace.path).journal)) {
       try {
         // Before a pending same-boot request: after a restart that request can no longer be reconciled.
         const previous = previousBootAttempt(receipt.workspace.path);
@@ -194,7 +209,8 @@ export class FirstRunSetup {
       throw selectionFailure("The project or app workspace folder was replaced or moved since setup.");
     separateDirectories(project.path, workspace.path);
     await verifyRuntimeDirectories(workspace);
-    const expected = this.files(project.path);
+    const configName = configNameOf(receipt);
+    const expected = this.files(project.path, configName);
     if (JSON.stringify(Object.keys(receipt.files).sort()) !== JSON.stringify(Object.keys(expected).sort()))
       throw changedSetupFiles();
     // Each parent directory was exclusively created by this slice; symlink redirection is refused.
@@ -207,7 +223,7 @@ export class FirstRunSetup {
         if (info.dev !== workspace.dev || info.uid !== workspace.uid) throw changedSetupFiles();
         const actual = digest(windowsRead(path, 1024 * 1024));
         if (
-          name === "orca.config.yaml"
+          name === configName
             ? !allowChangedConfig && actual !== receipt.files[name]
             : actual !== digest(text) || receipt.files[name] !== digest(text)
         )
@@ -225,7 +241,7 @@ export class FirstRunSetup {
       )
         throw changedSetupFiles();
       const actual = digest(await readFile(path, "utf8"));
-      if (name === "orca.config.yaml") {
+      if (name === configName) {
         if (!allowChangedConfig && actual !== receipt.files[name]) throw changedSetupFiles();
       } else if (
         info.size !== Buffer.byteLength(text) ||
@@ -236,14 +252,15 @@ export class FirstRunSetup {
     }
   }
 
-  private files(project: string): Record<string, string> {
+  /** What setup writes, under `configName`; a new setup always uses {@link FIRST_RUN_CONFIG}. */
+  private files(project: string, configName = FIRST_RUN_CONFIG): Record<string, string> {
     return {
       ...FIRST_RUN_SAMPLE_FILES,
-      "orca.config.yaml":
+      [configName]:
         JSON.stringify(
           {
             version: 1,
-            storeDir: ".orca",
+            storeDir: FIRST_RUN_STORE_DIR,
             agents: [],
             roles: {},
             plugins: [],
@@ -411,7 +428,7 @@ export class FirstRunSetup {
           .withCapturedAuthentication()
           .call("config.get", {}, ConfigGetResultSchema, false);
       } else {
-        const path = join(receipt.workspace.path, "orca.config.yaml");
+        const path = join(receipt.workspace.path, configNameOf(receipt));
         const text = await readFile(path, "utf8");
         const revision = digest(text);
         // Review is read-only. The binding action acquires the fence and rechecks this exact revision.
@@ -429,15 +446,16 @@ export class FirstRunSetup {
       assertCurrent();
       const doc = snapshot.config;
       const config = FirstRunConfigSchema.parse(doc.parsed);
-      const diskHash = digest(await readFile(join(receipt.workspace.path, "orca.config.yaml"), "utf8"));
+      const configPath = join(receipt.workspace.path, configNameOf(receipt));
+      const diskHash = digest(await readFile(configPath, "utf8"));
       if (
         !doc.exists ||
-        doc.path !== join(receipt.workspace.path, "orca.config.yaml") ||
+        doc.path !== configPath ||
         doc.revision !== digest(doc.text) ||
         diskHash !== doc.revision ||
         !snapshot.generation ||
         snapshot.generation.savedRevision !== doc.revision ||
-        config.storeDir !== ".orca" ||
+        config.storeDir !== basename(firstRunLayout(receipt.workspace.path).store) ||
         config.workspace.provider !== "local" ||
         config.workspace.root !== receipt.project.path ||
         config.workspace.hostId !== "local" ||
@@ -506,15 +524,16 @@ export class FirstRunSetup {
       if (
         !current ||
         JSON.stringify(current) !== JSON.stringify(review.receipt) ||
-        digest(await readFile(join(current.workspace.path, "orca.config.yaml"), "utf8")) !== review.revision
+        digest(await readFile(join(current.workspace.path, configNameOf(current)), "utf8")) !== review.revision
       )
         throw changedConfiguration();
       review.boundary.check();
       assertCurrent();
       // Consume before the journal append. If receipt publication fails, uncertainty remains visible.
       this.configReview = undefined;
-      await review.boundary.rebind(current.files["orca.config.yaml"]!, review.revision);
-      const receipt = { ...current, files: { ...current.files, "orca.config.yaml": review.revision } };
+      const configName = configNameOf(current);
+      await review.boundary.rebind(current.files[configName]!, review.revision);
+      const receipt = { ...current, files: { ...current.files, [configName]: review.revision } };
       await this.verify(receipt);
       review.boundary.check();
       assertCurrent();
@@ -554,7 +573,7 @@ export class FirstRunSetup {
           !Number.isSafeInteger(candidate.expectedProcessId) ||
           candidate.expectedProcessId < 1 ||
           hello.processId !== candidate.expectedProcessId ||
-          hello.storeDir !== join(receipt.workspace.path, ".orca") ||
+          hello.storeDir !== firstRunLayout(receipt.workspace.path).store ||
           !hello.capabilities.includes("runs.control") ||
           !hello.capabilities.includes("runs.read") ||
           !hello.capabilities.includes("runs.subscribe")
