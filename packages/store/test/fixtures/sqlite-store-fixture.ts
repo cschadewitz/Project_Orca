@@ -92,7 +92,7 @@ export async function contents(dir: string): Promise<Record<string, string>> {
 export async function isMarker(path: string): Promise<boolean> {
   const info = await lstat(path).catch(() => undefined);
   if (!info) return false;
-  const file = info.isDirectory() ? join(path, "ORCA-SQLITE-STORE.json") : path;
+  const file = info.isDirectory() ? join(path, "ORCA-SQLITE-STORE.json") : path; // rename-keep: the fence marker name existing stores hold
   return (await readFile(file, "utf8").catch(() => "")) === LEGACY_FENCE_MARKER;
 }
 

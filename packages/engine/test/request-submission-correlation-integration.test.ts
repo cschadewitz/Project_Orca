@@ -47,7 +47,7 @@ it.each(["initial", "before-root", "after-root"])(
         payload: { requestAdmissionId: result.admissionId },
       });
       expect(created?.executionPayloadRef).toBeDefined();
-      expect((await peer.stores.execution.getInputs(recovered.runId))?.vars).not.toHaveProperty("__orcaAdmissionId");
+      expect((await peer.stores.execution.getInputs(recovered.runId))?.vars).not.toHaveProperty("__orcaAdmissionId"); // rename-keep: persisted name kept on purpose
     } finally {
       vi.restoreAllMocks();
       await rm(dir, { recursive: true, force: true });

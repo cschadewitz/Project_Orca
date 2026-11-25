@@ -82,7 +82,7 @@ type Material = z.infer<typeof MaterialSchema>;
  * so the refusal is then kept beside it, write-once under the material's id, and is read only
  * while that fence stands.
  */
-const REFUSED_WORKFLOW = "orca:refused-admission";
+const REFUSED_WORKFLOW = "orca:refused-admission"; // rename-keep: recorded in stored run inputs and compared on read
 const refusalId = (binding: { materialId: string }) => `${binding.materialId}-refused`;
 const RefusalSchema = z.strictObject({ code: z.literal("GIT_REF_MOVED"), message: z.string().min(1) });
 const unavailable = () => new OrcaError("RUN_STATE", "Direct admission is unavailable");

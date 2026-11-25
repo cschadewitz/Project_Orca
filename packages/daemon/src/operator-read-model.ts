@@ -4,6 +4,7 @@ import { isDeepStrictEqual } from "node:util";
 import {
   OrcaError,
   isOrcaError,
+  SUBMISSION_CORRELATION_VAR,
   systemClock,
   reduceRunSummary,
   validateWorkflowInputs,
@@ -353,7 +354,7 @@ export class OperatorReadModel {
       throw new OrcaError("WORKFLOW_NOT_FOUND", "Workflow is unavailable");
     const { validation, vars } = validateWorkflowInputs(definition, boundVars);
     if (params.purpose === "request")
-      for (const name of ["request", "__orcaAdmissionId"])
+      for (const name of ["request", SUBMISSION_CORRELATION_VAR])
         if (Object.hasOwn(params.vars, name))
           validation.errors.push({ path: `vars.${name}`, message: "is supplied by Request submission" });
     // Guided choices are declared configuration reads. Dynamic ACP model discovery remains

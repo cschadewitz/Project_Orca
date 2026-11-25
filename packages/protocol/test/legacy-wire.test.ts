@@ -44,3 +44,27 @@ describe("the version field renamed on the wire", () => {
     expect(HelloResultSchema.safeParse(hello).success).toBe(false);
   });
 });
+
+describe("a first-run workspace the app set up before the rename", () => {
+  it("is recognised under its old names and read under them; a new one under the current names", async () => {
+    const { mkdtempSync, mkdirSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { firstRunLayout, holdsFirstRunOwnership } = await import("../src/first-run-fence.js");
+    const legacy = mkdtempSync(join(tmpdir(), "first-run-legacy-"));
+    mkdirSync(join(legacy, ".orca-first-run-ownership")); // rename-keep: the old journal is the fixture
+    expect(holdsFirstRunOwnership(legacy)).toBe(true);
+    expect(firstRunLayout(legacy)).toEqual({
+      journal: join(legacy, ".orca-first-run-ownership"), // rename-keep: the old journal is the fixture
+      anchor: join(legacy, ".orca-first-run-ownership.json"), // rename-keep: the old anchor is the fixture
+      store: join(legacy, ".orca"), // rename-keep: the old store is the fixture
+      config: join(legacy, "orca.config.yaml"), // rename-keep: the old config is the fixture
+    });
+    const current = mkdtempSync(join(tmpdir(), "first-run-current-"));
+    expect(holdsFirstRunOwnership(current)).toBe(false);
+    mkdirSync(join(current, ".orca-first-run-ownership"));
+    expect(holdsFirstRunOwnership(current)).toBe(true);
+    expect(firstRunLayout(current).store).toBe(join(current, ".orca"));
+    expect(firstRunLayout(current).config).toBe(join(current, "orca.config.yaml"));
+  });
+});

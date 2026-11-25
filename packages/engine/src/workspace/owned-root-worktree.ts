@@ -149,7 +149,7 @@ export class OwnedRootWorktree {
     await git(repo, "check-ref-format", `refs/heads/${branch}`);
     const commonDir = await git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir");
     await noSymlinks(commonDir);
-    const receipts = join(commonDir, "orca-root-workspaces");
+    const receipts = join(commonDir, "orca-root-workspaces"); // rename-keep: receipts of worktrees made before the rename
     await noSymlinks(receipts);
     return { repo, root, path, branch, commonDir, receipts, receiptPath: join(receipts, `${runId}.json`) };
   }

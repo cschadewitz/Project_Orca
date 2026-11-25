@@ -491,7 +491,7 @@ async function keyFor(dir: string, create: boolean): Promise<Buffer> {
 
 /** Bind ciphertext to its record identity, while permitting a complete backup to move directories. */
 const associatedData = (dir: string, name: string) =>
-  Buffer.from(`orca:protected-execution:v1:${basename(dir)}:${name}`);
+  Buffer.from(`orca:protected-execution:v1:${basename(dir)}:${name}`); // rename-keep: AEAD associated data of stored ciphertext
 
 function decodeRecord(dir: string, name: string, bytes: Buffer, key: Buffer): unknown {
   const envelope = EnvelopeSchema.parse(JSON.parse(bytes.toString("utf8")));

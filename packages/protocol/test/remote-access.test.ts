@@ -113,7 +113,7 @@ describe("tunnel arguments", () => {
         "StrictHostKeyChecking=accept-new",
         `UserKnownHostsFile=${quoted}`,
         `GlobalKnownHostsFile=${quoted}`,
-        "HostKeyAlias=orca-lab",
+        "HostKeyAlias=orca-lab", // rename-keep: the ssh alias existing pins use
         "CheckHostIP=no",
         "UpdateHostKeys=no",
         "ProxyCommand=none",
@@ -131,7 +131,7 @@ describe("tunnel arguments", () => {
     expect(args[args.indexOf("-W") + 1]).toBe("127.0.0.1:6722");
     expect(args[args.indexOf("-i") + 1]).toBe("/k/100%%");
     expect(args.slice(-2)).toEqual(["--", "casey@lab.example"]);
-    writeFileSync(pins, "orca-lab ssh-ed25519 AAAA\n");
+    writeFileSync(pins, "orca-lab ssh-ed25519 AAAA\n"); // rename-keep: the ssh alias existing pins use
     expect(options(hopArgs(tunnelHops(profile(), pins).daemon))).toContain("StrictHostKeyChecking=yes");
   });
   it("chains a jump host as its own pinned ssh, then reaches the server through a private port", () => {
@@ -142,14 +142,14 @@ describe("tunnel arguments", () => {
         target: "j@bastion",
         port: 2022,
         knownHostsFile: `${pins}.jump`,
-        hostKeyAlias: "orca-lab-jump",
+        hostKeyAlias: "orca-lab-jump", // rename-keep: the ssh alias existing pins use
         forward: "127.0.0.1:41999:lab.example:2200",
       }),
       daemon: expect.objectContaining({
         target: "casey@127.0.0.1",
         port: 41999,
         knownHostsFile: pins,
-        hostKeyAlias: "orca-lab",
+        hostKeyAlias: "orca-lab", // rename-keep: the ssh alias existing pins use
         stdio: "127.0.0.1:6722",
       }),
     });
@@ -427,7 +427,7 @@ describe("SshTunnel with a fake ssh", () => {
       if (n === 1) {
         expect(args).toContain("StrictHostKeyChecking=accept-new");
         // ssh's accept-new writes the key; the tunnel records the enrollment once authenticated.
-        writeFileSync(pins, "orca-lab ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6\n");
+        writeFileSync(pins, "orca-lab ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6\n"); // rename-keep: the ssh alias existing pins use
       } else expect(args).toContain("StrictHostKeyChecking=yes");
       ssh.say(authed);
     });
@@ -458,7 +458,7 @@ describe("SshTunnel with a fake ssh", () => {
       () => mkdirSync(pins),
     ]) {
       forgetPin(pins);
-      writeFileSync(pins, "orca-lab ssh-ed25519 AAAA\n");
+      writeFileSync(pins, "orca-lab ssh-ed25519 AAAA\n"); // rename-keep: the ssh alias existing pins use
       markPinEnrolled(pins);
       rmSync(pins, { recursive: true, force: true });
       damage();
@@ -596,7 +596,7 @@ describe("commands on the server (#875)", () => {
   /** A pin file holding a key, as an earlier connect left it. */
   const pinned = (name = "lab.known_hosts") => {
     const pins = join(dir(), name);
-    writeFileSync(pins, "orca-lab ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6\n");
+    writeFileSync(pins, "orca-lab ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6\n"); // rename-keep: the ssh alias existing pins use
     return pins;
   };
 
@@ -612,7 +612,7 @@ describe("commands on the server (#875)", () => {
     ]);
     expect(args.slice(0, 2)).toEqual(["-F", "none"]);
     expect(args).not.toContain("-W");
-    expect(args).toContain("HostKeyAlias=orca-lab");
+    expect(args).toContain("HostKeyAlias=orca-lab"); // rename-keep: the ssh alias existing pins use
     expect(args.slice(-8)).toEqual([
       "--",
       "casey@lab.example",
@@ -647,7 +647,7 @@ describe("commands on the server (#875)", () => {
     await tunnel.open();
     expect(tunnel.pinnedKeys).toBe(keys);
     // The live pin now vouches for another key: what the tunnel carries does not change.
-    writeFileSync(pins, "orca-lab ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5\n");
+    writeFileSync(pins, "orca-lab ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5\n"); // rename-keep: the ssh alias existing pins use
     tunnel.connect();
     await until(() => spawned.length === 2);
     await expect(tunnel.exec(["orca", "auth", "list"])).resolves.toMatchObject({ code: 0 });
@@ -936,7 +936,7 @@ describe("following one command on the server (#879)", () => {
   it("runs only through the pins an open tunnel sealed, as its own ssh, stopped with the tunnel", async () => {
     const { tunnel, spawned } = fakeTunnel((ssh, n, args) => {
       if (n === 1) {
-        writeFileSync(pins, "orca-lab ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6\n");
+        writeFileSync(pins, "orca-lab ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6\n"); // rename-keep: the ssh alias existing pins use
         ssh.say(authed);
         return;
       }
