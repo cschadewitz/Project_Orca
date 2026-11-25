@@ -65,6 +65,14 @@ const ELECTRON_RUNTIME = {
   ],
   win: ["resources.pak", "icudtl.dat", "v8_context_snapshot.bin", "ffmpeg.dll", "locales/en-US.pak"],
 };
+// What the candidate's build-daemon.js puts in `resources/daemon/`, sorted, by the source's
+// layout (`daemonLayout` in readSource): the daemon alone before #980, and Claude's tool-call
+// hook (#704) beside it from #980 on. Nothing else, so a stray file is still a refusal.
+const BUNDLED_DAEMON_FILES = {
+  "daemon-only": ["orca-daemon.mjs"],
+  "daemon-and-claude-hook": ["claude-pre-tool-hook.mjs", "orca-daemon.mjs"],
+};
+const HOOK_ENTRY_SOURCE = "packages/agents/src/bin/claude-pre-tool-hook.ts";
 const WINDOWS_ADDONS = [
   "diagnostics_clock.node",
   "diagnostics_storage.node",
@@ -139,6 +147,7 @@ export function readSource(
     "--",
     "package.json",
     "packages/app",
+    HOOK_ENTRY_SOURCE,
     "packages/design/fonts",
   ]);
   if (dirty.trim()) fail("source_modified", "uncommitted changes under the compared paths");
@@ -155,7 +164,30 @@ export function readSource(
     csp: contentSecurityPolicy(read("packages/app/renderer/index.html").toString("utf8")),
     fonts,
     appRoot: join(root, "packages/app"),
+    daemonLayout: daemonLayout(
+      read("packages/app/scripts/build-daemon.js").toString("utf8"),
+      lstatSync(join(root, HOOK_ENTRY_SOURCE), { throwIfNoEntry: false })?.isFile() === true,
+    ),
   };
+}
+
+/**
+ * What the candidate's checked-in build rule puts beside the daemon. A build-daemon.js that
+ * never names the hook builds the daemon alone (before #980). One that bundles the hook entry
+ * to `claude-pre-tool-hook.mjs` beside it, with that entry in the source, builds both. Anything
+ * in between (the hook named but not both of those, or its entry missing) is refused rather
+ * than guessed.
+ */
+export function daemonLayout(buildScript, hookEntryPresent) {
+  if (!buildScript.includes("claude-pre-tool-hook")) return "daemon-only";
+  const bundles =
+    buildScript.includes('"../../agents/dist/bin/claude-pre-tool-hook.js"') &&
+    buildScript.includes('"claude-pre-tool-hook.mjs"');
+  if (bundles && hookEntryPresent) return "daemon-and-claude-hook";
+  fail(
+    "source_daemon_layout_ambiguous",
+    hookEntryPresent ? "build-daemon.js names the hook without bundling it" : `${HOOK_ENTRY_SOURCE} is missing`,
+  );
 }
 
 export function contentSecurityPolicy(html) {
@@ -187,12 +219,37 @@ export function classify(name, version) {
   fail("artifact_unrecognized", name);
 }
 
-/** The version esbuild substitutes into the CLI (`packages/app/scripts/build-daemon.js`). */
+/**
+ * The version esbuild substitutes into the CLI (`packages/app/scripts/build-daemon.js`). Since
+ * #896 it lands in `readOrcaVersion()` (`packages/cli/src/version.ts`); before that, in a
+ * top-level `ORCA_VERSION`. Exactly one stamp, in either form.
+ */
 export function daemonVersion(bytes) {
   const text = bytes.toString("utf8");
-  const stamps = [...text.matchAll(/\bvar ORCA_VERSION = true \? "([^"\\]+)" :/g)];
+  const stamps = [
+    ...text.matchAll(/\b(?:var ORCA_VERSION = |function readOrcaVersion\(\) \{\s*return )true \? "([^"\\]+)" :/g),
+  ];
   if (stamps.length !== 1) fail("daemon_version_unstamped", `${stamps.length} version stamps`);
   return stamps[0][1];
+}
+
+/**
+ * A structural check of Claude's tool-call hook (#704) beside the daemon: a node script whose
+ * bundle names the hook entry module exactly once, and that carries no daemon version stamp, so
+ * it is not a second copy of the daemon. esbuild writes the entry's comment for an unminified
+ * bundle relative to its working directory: `// ../agents/dist/bin/claude-pre-tool-hook.js`
+ * from `packages/app` (the release build, `pnpm --filter @orca/app run build:daemon`), or
+ * `// packages/agents/dist/bin/claude-pre-tool-hook.js` from the repository root. Either form
+ * counts, and exactly one such line in all. It does not verify the hook's behaviour or bind its
+ * contents to that entry; like everything here, it is not provenance.
+ */
+export function claudeHook(bytes) {
+  const text = bytes.toString("utf8");
+  const entries = text.match(/^\/\/ (?:packages|\.\.)\/agents\/dist\/bin\/claude-pre-tool-hook\.js$/gm) ?? [];
+  if (!text.startsWith("#!/usr/bin/env node\n") || entries.length !== 1)
+    fail("bundled_hook_unrecognized", `${entries.length} hook entry modules`);
+  if (/\b(?:var ORCA_VERSION = |function readOrcaVersion\(\) \{)/.test(text))
+    fail("bundled_hook_unrecognized", "carries a daemon version stamp");
 }
 
 /** A packed ASAR body, or a refusal: an absent entry or a non-file has no bytes to check. */
@@ -379,10 +436,19 @@ function inspectTree(entries, { platform, arch }, source, version, scratch) {
   }
   const daemonEntries = [...byName.keys()].filter((name) => name.startsWith(`${prefix}resources/daemon/`));
   const daemon = file("resources/daemon/orca-daemon.mjs");
-  if (!daemon || daemonEntries.length !== 1) fail("bundled_daemon_layout", daemonEntries.join(", ") || "absent");
+  const expectedDaemon = BUNDLED_DAEMON_FILES[source.daemonLayout].map((name) => `${prefix}resources/daemon/${name}`);
+  if (
+    !expectedDaemon.every((name) => byName.get(name)?.kind === "file") ||
+    JSON.stringify([...daemonEntries].sort()) !== JSON.stringify(expectedDaemon)
+  )
+    fail("bundled_daemon_layout", `${source.daemonLayout}: ${daemonEntries.join(", ") || "absent"}`);
   const stamped = daemonVersion(daemon.body);
   if (stamped !== version) fail("bundled_daemon_version_mismatch", stamped);
   checks.push("bundled-daemon:resources/daemon/orca-daemon.mjs", "bundled-daemon-version");
+  if (source.daemonLayout === "daemon-and-claude-hook") {
+    claudeHook(file("resources/daemon/claude-pre-tool-hook.mjs").body);
+    checks.push("bundled-hook-structure:resources/daemon/claude-pre-tool-hook.mjs");
+  }
   const nativeEntries = [...byName.keys()].filter((name) => name.startsWith(`${prefix}resources/native/`));
   let nativeManifest;
   if (platform === "linux") {
