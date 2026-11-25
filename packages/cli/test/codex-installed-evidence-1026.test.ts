@@ -496,9 +496,11 @@ describe.skipIf(ADAPTER === undefined)("installed-session evidence for Codex's h
   const hookRecord = (lines: HookTelemetryLine[]) =>
     lines.map((l) => ({ tool: l.tool, title: l.title ?? null, decision: l.decision, rule: l.rule ?? null }));
 
-  it("shell-cancel: an allowed command cancelled while it runs leaves no later effect", async () => {
-    // The command marks that it started, waits, then would write its result. The turn is
-    // cancelled once the start mark is seen; the result must never appear, even after the wait.
+  it("shell-cancel: no late completion marker after an allowed command's turn is cancelled", async () => {
+    // The command marks that it started, waits, then would write a completion marker. The turn
+    // is cancelled once the start mark is seen; the completion marker must not appear, even
+    // after the wait. That is all this shows: not that the run had no other effect. The start
+    // mark is expected, and any other change is recorded as observed (`leftBehind`).
     const cmd = "echo started > started.txt; sleep 4; echo done > done.txt";
     const rule = {
       match: { kind: "execute", titlePattern: "^echo started > started\\.txt; sleep 4; echo done > done\\.txt$" },
@@ -561,7 +563,8 @@ describe.skipIf(ADAPTER === undefined)("installed-session evidence for Codex's h
       orca: { configured: "allow", hookDecisions: hookRecord(hookLines) },
       native: { mode, approvalsAnsweredByOrca: native, approvalsAnsweredAsThePerson: personAsked },
       effect: {
-        expected: "started.txt only; done.txt never, after waiting past the command's own sleep",
+        expected:
+          "no late completion marker (done.txt) observed after the cancel, waiting past the command's own sleep; not proof of no effects: started.txt is expected and other changes are recorded in leftBehind",
         started,
         cancelled,
         finished,
@@ -605,10 +608,15 @@ describe.skipIf(ADAPTER === undefined)("installed-session evidence for Codex's h
     const changed = changes(between, after);
     const outputs = model.outputs.slice(outputsBefore);
     const decisions = second.hookLines.map((l) => l.decision);
+    const firstDecisions = first.hookLines.map((l) => ({ title: l.title ?? null, decision: l.decision }));
+    // Whether the first session's call had its effect: recorded, never required or implied.
+    const firstEffectObserved = "restart.txt" in between;
     const refusal = outputs.find((o) => o.includes("Denied by ORCA"));
     const nativeRefused = second.native.some((n) => !/allow/.test(n.decision)) || second.personAsked.length > 0;
 
     const failures: string[] = [];
+    if (firstDecisions.some((d) => d.decision !== "allow"))
+      failures.push(`the first session's hook decided ${firstDecisions.map((d) => d.decision).join(", ")}, not allow`);
     if (Object.keys(changed).length > 0) failures.push("the second session's call had an effect under a deny");
     if (decisions.some((d) => d !== "deny"))
       failures.push(`the second session's hook decided ${decisions.join(", ")}, not deny`);
@@ -617,15 +625,22 @@ describe.skipIf(ADAPTER === undefined)("installed-session evidence for Codex's h
       unverified.push("the second session's hook did not record exactly one decision");
     if (refusal === undefined) unverified.push("Codex did not report ORCA's refusal in the second session");
     if (nativeRefused) unverified.push("a native refusal could also account for the absence of an effect");
+    // What the second session alone establishes: a verified deny in a fresh session.
+    const freshDeny = failures.length > 0 ? "failed" : unverified.length > 0 ? "unverified" : "verified";
+    // The allow-to-deny transition also needs the first session's allow, for exactly this call.
+    if (!first.recorded || firstDecisions.length !== 1 || firstDecisions[0]!.title !== cmd)
+      unverified.push("the first session's hook did not record exactly one allow for this exact call");
     const status = failures.length > 0 ? "failed" : unverified.length > 0 ? "unverified" : "verified";
     results.push({
       id: "restart-fresh-decision",
       action: `shell: ${cmd}, allowed in one session, then the same call in a fresh session started with a deny`,
       rule: { first: { match, decision: "allow" }, second: { match, decision: "deny" } },
+      // `status` is the allow-to-deny transition; `freshDeny` is the second session alone.
       status,
+      freshDeny,
       reasons: failures.length > 0 ? failures : unverified,
       orca: {
-        first: { hookDecisions: hookRecord(first.hookLines) },
+        first: { configured: "allow", hookDecisions: hookRecord(first.hookLines) },
         second: {
           configured: "deny",
           hookDecisions: hookRecord(second.hookLines),
@@ -637,7 +652,13 @@ describe.skipIf(ADAPTER === undefined)("installed-session evidence for Codex's h
         first: { approvalsAnsweredByOrca: first.native, approvalsAnsweredAsThePerson: first.personAsked },
         second: { approvalsAnsweredByOrca: second.native, approvalsAnsweredAsThePerson: second.personAsked },
       },
-      effect: { expected: "no change in the second session", between, after, changed },
+      effect: {
+        expected: "no change in the second session; the first session's effect is recorded, not required",
+        firstEffectObserved,
+        between,
+        after,
+        changed,
+      },
       toolOutput: outputs,
     });
     expect(failures).toEqual([]);
