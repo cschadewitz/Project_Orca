@@ -49,6 +49,7 @@ import {
   openAcpSession,
   withProviderGuards,
   permissionPolicyPath,
+  permissionPolicyPaths,
   type AgentSession,
   type CodexExecGateAdmission,
   type HostIpcInventory,
@@ -124,6 +125,16 @@ import {
 } from "./plugin-release.js";
 
 export const CONFIG_FILENAMES = ["orca.config.yaml", "orca.config.yml", "orca.config.json"];
+/**
+ * The same names from before the rename to Orrery. Discovery takes one when a directory has
+ * none of `CONFIG_FILENAMES`, with a warning, until 0.10; nothing writes them. Until the
+ * codemod runs they equal `CONFIG_FILENAMES`, and `findConfig` reads each name once.
+ */
+export const LEGACY_CONFIG_FILENAMES = [
+  "orca.config.yaml", // rename-keep: pre-rename config name, read until 0.10
+  "orca.config.yml", // rename-keep: pre-rename config name, read until 0.10
+  "orca.config.json", // rename-keep: pre-rename config name, read until 0.10
+];
 
 export interface BootstrapOptions {
   /** Trusted composition supplies an independently approved closed-bundle release pin; never read from config/RPC/env. */
@@ -198,18 +209,24 @@ export interface OrcaApp {
   storeStatus?: StoreStatus | undefined;
 }
 
-export async function findConfig(cwd: string): Promise<string | undefined> {
+export async function findConfig(
+  cwd: string,
+  warn: (message: string) => void = (message) => void process.stderr.write(`${message}\n`),
+): Promise<string | undefined> {
   let dir = resolve(cwd);
   for (;;) {
-    for (const name of CONFIG_FILENAMES) {
+    for (const name of new Set([...CONFIG_FILENAMES, ...LEGACY_CONFIG_FILENAMES])) {
       const p = join(dir, name);
       if (
         await stat(p).then(
           (s) => s.isFile(),
           () => false,
         )
-      )
+      ) {
+        if (!CONFIG_FILENAMES.includes(name))
+          warn(`warning: reading ${p}; rename it to ${CONFIG_FILENAMES[0]} (the old name is read until 0.10)`);
         return p;
+      }
     }
     const parent = dirname(dir);
     if (parent === dir) return undefined;
@@ -520,8 +537,8 @@ export interface OrcaFileLayout {
  *
  * Read-only to an agent: every config filename ORCA would load from `configDir` — not just the
  * one there now, since an agent that could create `orca.config.yaml` beside a project with
- * none would choose the next start's policy — the file actually loaded, the permission
- * sidecar, and the store — all of it but `work/` and `program/`, where the shipped `ai-sdlc`
+ * none would choose the next start's policy, and until 0.10 the names from before the rename
+ * too — the file actually loaded, the permission sidecar under either name, and the store — all of it but `work/` and `program/`, where the shipped `ai-sdlc`
  * and `program` workflows have agents write their deliverables (`.orca/work/…`,
  * `.orca/program/…` from the workspace, which is the store when the workspace is the config
  * directory). Not even readable: `auth/`, where `orca serve` keeps the local owner token, and
@@ -535,9 +552,9 @@ export function orcaProtectedPaths(layout: OrcaFileLayout): ProtectedPaths {
   const storeDir = resolve(configDir, layout.storeDir);
   return {
     readOnly: [
-      ...CONFIG_FILENAMES.map((name) => join(configDir, name)),
+      ...[...new Set([...CONFIG_FILENAMES, ...LEGACY_CONFIG_FILENAMES])].map((name) => join(configDir, name)),
       ...(layout.configFile ? [resolve(layout.configFile)] : []),
-      permissionPolicyPath(configDir),
+      ...permissionPolicyPaths(configDir),
       storeDir,
     ],
     noAccess: [

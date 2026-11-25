@@ -46,7 +46,7 @@ const protectedPaths: ProtectedPaths = {
 let oc: OpenCodeSource;
 let profile: AgentSpec;
 const isolated = JSON.parse(readFileSync(new URL("opencode.isolated.json", packet), "utf8")) as Record<string, unknown>;
-const profileText = readFileSync(new URL("orca.opencode.example.yaml", packet), "utf8");
+const profileText = readFileSync(new URL("orca.opencode.example.yaml", packet), "utf8"); // rename-keep: docs/preparation is not renamed, so the file keeps its name
 
 beforeAll(async () => {
   oc = await loadOpenCodeSource();
