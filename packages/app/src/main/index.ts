@@ -18,6 +18,8 @@
  * set, which is what `pnpm --filter @orca/app dev` does to point it at the Vite dev
  * server for hot reload (scripts/dev.js).
  */
+// First, before any module that reads the environment: adopt the pre-rename variable names.
+import "./legacy-env.js";
 import { callScopedPermission } from "../client/scoped-permission-client.js";
 import type { ScopedPermissionMethod } from "@orca/protocol";
 import { z } from "zod";
