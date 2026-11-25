@@ -6,11 +6,11 @@
 // environment). Extra arguments go to ESLint after the ".". ESLint rejects a bad value.
 //
 // Each thread builds its own typed-lint TypeScript program, about 3 GiB of memory here, so
-// the thread count is bounded by the memory the process may use (its cgroup limit, or the
-// machine's): a runner whose limit cannot hold the requested threads had ESLint killed
-// mid-run with no output at all.
+// the thread count is bounded by the memory the process may use (its own OS limit, or the
+// machine's). A runner that needs a lower count than this computes (for example one whose
+// effective limit is set on an ancestor the process cannot see) sets ESLINT_CONCURRENCY to
+// that number itself.
 import { spawn } from "node:child_process";
-import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { availableParallelism, totalmem } from "node:os";
 import { dirname, resolve } from "node:path";
@@ -22,17 +22,15 @@ export const THREAD_BYTES = 3 * GIB;
 /** Left for the main thread, the shell and the runner itself. */
 export const RESERVE_BYTES = 1 * GIB;
 
-/** The memory this process may use: its cgroup's limit (v2, then v1) when lower than the machine's. */
-export function memoryLimit(read = (path) => readFileSync(path, "utf8"), machine = totalmem()) {
-  for (const path of ["/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/memory/memory.limit_in_bytes"]) {
-    try {
-      const value = Number(read(path).trim());
-      if (Number.isSafeInteger(value) && value > 0) return Math.min(value, machine);
-    } catch {
-      // Not this cgroup version, or not Linux.
-    }
-  }
-  return machine;
+/**
+ * The memory this process may use: the OS limit on this process (Node's
+ * process.constrainedMemory(), which reads the process's own cgroup, not the hierarchy's
+ * root) when it is known and below the machine's memory, else the machine's memory.
+ */
+export function memoryLimit(constrained = process.constrainedMemory?.(), machine = totalmem()) {
+  // 0, undefined or an "unlimited" value at or above the machine's memory: no usable limit.
+  const limited = typeof constrained === "number" && constrained > 0 && constrained < machine;
+  return limited ? { bytes: constrained, source: "process limit" } : { bytes: machine, source: "machine memory" };
 }
 
 /**
@@ -41,18 +39,17 @@ export function memoryLimit(read = (path) => readFileSync(path, "utf8"), machine
  * goes to ESLint unchanged, which rejects it.
  */
 export function chooseConcurrency(requested, { cores = availableParallelism(), memory = memoryLimit() } = {}) {
+  const { bytes, source } = memory;
   const value = requested?.trim() || "off";
   let threads;
   if (value === "auto") threads = Math.max(1, Math.floor(cores / 2));
   else if (/^[1-9][0-9]*$/.test(value)) threads = Number(value);
   else return { concurrency: value };
-  const fits = Math.max(1, Math.floor((memory - RESERVE_BYTES) / THREAD_BYTES));
+  const fits = Math.max(1, Math.floor((bytes - RESERVE_BYTES) / THREAD_BYTES));
   const used = Math.min(threads, fits);
   const concurrency = used > 1 ? String(used) : "off";
-  const note =
-    used < threads
-      ? `lint: ESLINT_CONCURRENCY=${value} asks for ${threads} threads, but ${(memory / GIB).toFixed(1)} GiB of memory fits ${fits}; using ${concurrency}`
-      : undefined;
+  // Always said when threads are requested, so a run's log shows the limit and the choice.
+  const note = `lint: ESLINT_CONCURRENCY=${value} asks for ${threads} thread(s); ${(bytes / GIB).toFixed(1)} GiB (${source}) fits ${fits}; using --concurrency ${concurrency}`;
   return { concurrency, note };
 }
 
