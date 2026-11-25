@@ -148,7 +148,7 @@ carry a sanitized `details.contextRecoveryReason`: `missing-session-id`,
 `load-unsupported`, `load-failed` or `load-timeout`. Provider error text and stderr
 are omitted from these load-failure errors. A successful load still establishes
 only protocol success, not expected native checkpoint identity or context completeness.
-See [#357 investigation and remaining contract](preparation/agent-context-recovery-357/README.md).
+See [#357 investigation and remaining contract](archive/preparation/agent-context-recovery-357/README.md).
 
 Default engine restart behavior remains fresh; automatic persisted session
 selection and durable approval continuation are not implemented by this option.

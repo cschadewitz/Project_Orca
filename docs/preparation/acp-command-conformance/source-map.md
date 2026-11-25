@@ -95,5 +95,5 @@ preparation head over that baseline.
 
 These are owning-seam findings for #327/#237, with native forwarding/fidelity
 belonging to the bridge. No production fix is included. Keep them separate from
-the earlier [capability research](../../research/tool-call-safety/current-state.md)
+the earlier [capability research](../../archive/research/tool-call-safety/current-state.md)
 and [live lifetime contract](../../live-input-continuity.md).

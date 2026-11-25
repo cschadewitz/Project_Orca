@@ -4,12 +4,12 @@ Reconciled on **2026-10-25** against main
 `c693e0456a7d28dc1600afab1c9f9c863f2f93b6`. Root version/release history is
 **0.6.0**; main's wire protocol is **2.0**, store epoch **`operator-journals-v4`**.
 A source version is not a deployment identity or a native release verdict.
-See the [25 October integration checkpoint](reviews/2026-10-25-integration-checkpoint.md),
-[earlier dated audit](reviews/2026-10-07-living-docs.md),
+See the [25 October integration checkpoint](archive/reviews/2026-10-25-integration-checkpoint.md),
+[earlier dated audit](archive/reviews/2026-10-07-living-docs.md),
 [release history](../CHANGELOG.md) and pending [release fragments](../changelog.d/README.md).
 
-The [2026-09-29 historical review](../Current_State/README.md) and
-[1 October reconciliation](../Current_State/addenda/2026-10-01-main-reconciliation.md)
+The [2026-09-29 historical review](archive/Current_State/README.md) and
+[1 October reconciliation](archive/Current_State/addenda/2026-10-01-main-reconciliation.md)
 remain preserved. Their planned/shipped classifications describe their original pins.
 The tables here supersede those classifications for current main without changing history.
 
@@ -25,14 +25,14 @@ passing reference suite does not complete every acceptance criterion on its issu
 | Authenticated HTTP/WS, operation/resource filtering, target identity and draft isolation | [Security](daemon-security.md), [connections](daemon-connection.md), merged #368/#382/#397/#404/#607 | #328 is closed for its agreed scope. Remote listeners still require explicit credentials and trusted TLS; loopback is not identity. Source authorization does not certify every deployment or future secret-reference/editor criterion. |
 | Typed launch input preflight and immutable workflow identities; builtin custom-node validation | [Workflow inputs](workflow-inputs.md), [builtin validation](builtin-node-validation.md), merged #364/#370/#371 | Same-version changed content is refused for new launches; historical generation/digest restoration fails closed. Plugin metadata/prompt contracts are separate work. |
 | Save/apply separation, configuration generations and redacted launch provenance | [Generations](configuration-generations.md), merged #384/#397 | Reloadable roles/defaults/assets affect new work; agents/hosts/providers require restart. Sidecars are reread per permission ask. Executable plugins such as JEV are bootstrap-bound (#394–#396). |
-| Structured Config collections/review, guided Request/direct launch and template/pack authoring | [Structured form](../packages/app/renderer/src/config/structured-form/README.md), [mounted launch](../packages/app/renderer/src/guided-launch/README.md), [M21 Windows receipt](implementation/m21-windows-acceptance.md), merged [#607](https://github.com/cschadewitz/Project_Orca/pull/607) | #333/#334/#355 are closed for supported source/Windows acceptance. Prepared-local launch and exact captured choices do not establish real-agent, signed arm64 or physical first-run acceptance. |
+| Structured Config collections/review, guided Request/direct launch and template/pack authoring | [Structured form](../packages/app/renderer/src/config/structured-form/README.md), [mounted launch](../packages/app/renderer/src/guided-launch/README.md), [M21 Windows receipt](archive/implementation/m21-windows-acceptance.md), merged [#607](https://github.com/cschadewitz/Project_Orca/pull/607) | #333/#334/#355 are closed for supported source/Windows acceptance. Prepared-local launch and exact captured choices do not establish real-agent, signed arm64 or physical first-run acceptance. |
 | Shared Request/direct admission and durable retry receipts | [Submission](request-submission.md), [retry](admission-retry.md), merged #381/#413/#415/#466/#468/#524/#549/#607 | #331 is closed for its agreed supported-client contract. Acceptance remains distinct from execution attachment and delivery; source and cross-client receipts do not certify every native/keychain/provider combination. |
 | Durable gates and owner-local live permission callbacks | [Live input](live-input-continuity.md), merged #383/#397 | Live replies require the original owner/boot/session/turn/invocation and current authority. Expired callbacks are not durable gates or cross-process sessions. |
 | Protected explicit human revisions and continuation | [Revision input](revision-input.md), [operator integration](runtime-operator-integration.md), merged #412/#415/#434/#448/#500 | Ordinary approval rationale stays out of prompts. Delivery ambiguity and current-authority/lease refusals remain explicit; no generic automatic resume is implied. |
 | Inbound MCP reads/preflight plus production mutation/receipt composition | [MCP operator](mcp-operator.md), [reference acceptance](mcp-operator-production-acceptance.md), merged #414/#415/#425/#431/#434/#465/#607 | Generic actual-Cal #393 is closed; #327/#392 retain broader owner handoffs. #594 exact-command and transferred live-callback lifetime proof remain mandatory before Mac beta. Scope can omit Request/plan/config operations; no owner credential is inferred. |
-| Fenced leases, claims, per-file locks and protected history | [Ownership](v0.5.2-ownership-compatibility.md), [protected storage](protected-execution-storage.md), [orchestrator](../packages/engine/src/orchestrator.ts) | Plan queues are instance-local and multi-record changes are not atomic. Bounded persistence/retry benchmarks do not prove arbitrary scale/crash interleavings. |
+| Fenced leases, claims, per-file locks and protected history | [Ownership](archive/v0.5.2-ownership-compatibility.md), [protected storage](protected-execution-storage.md), [orchestrator](../packages/engine/src/orchestrator.ts) | Plan queues are instance-local and multi-record changes are not atomic. Bounded persistence/retry benchmarks do not prove arbitrary scale/crash interleavings. |
 | Opt-in owned root worktrees | [Root isolation](root-worktree-isolation.md), merged #462 | Built-in local Linux host/provider only; uncertain provisioning retains evidence and refuses automatic recreation. Shared Git metadata is not a hostile-user sandbox. |
-| Windows NSIS / managed Debian updates and held Mac update/recovery composition | [Updating](UPDATING.md), [Mac native provider composition](implementation/mac-native-provider-composition.md), [held integration](implementation/app-held-nonmac-verification.md), merged [#607](https://github.com/cschadewitz/Project_Orca/pull/607) | Mac production activation is held pending trusted catalog/policy/installed-manifest inputs and signed N/N+1 acceptance. Installed/signing/backup/rollback proof is candidate/platform-specific. Maintenance admission never installs packages by RPC. |
+| Windows NSIS / managed Debian updates and held Mac update/recovery composition | [Updating](UPDATING.md), [Mac native provider composition](archive/implementation/mac-native-provider-composition.md), [held integration](archive/implementation/app-held-nonmac-verification.md), merged [#607](https://github.com/cschadewitz/Project_Orca/pull/607) | Mac production activation is held pending trusted catalog/policy/installed-manifest inputs and signed N/N+1 acceptance. Installed/signing/backup/rollback proof is candidate/platform-specific. Maintenance admission never installs packages by RPC. |
 | Advisory daemon-host resources and bounded authorized composition seams | [Resources](host-resources.md), [access proposal](host-resource-access-policy.md), merged #495/#503/#504 | Normal CLI deployment does not mount an injected collector/summary source or grant host telemetry. Preview fixtures do not prove live CPU/RAM/load, fleet scheduling or remote worker telemetry. |
 | Several machines: SSH profiles, one-step server setup, watching several daemons, step delegation to remote daemons with their session caps | [Running across machines](MULTI-MACHINE.md), [connections](daemon-connection.md), [delegation](WORKFLOWS.md#delegating-steps-to-another-daemon), merged #902/#917/#919/#925/#926/#941/#952/#957/#959; CI: two daemons over loopback ssh and in separate containers (#885) | Text artifacts only; no code sync beyond an allowed `gitRef`; Windows parents enroll with a hand-saved credential. No placement across interchangeable workers (#343), host registry (#342) or budgets (#346). Container CI is not acceptance on real machines. |
 | Independent maintenance MCP contract | [Maintenance](maintenance-mcp.md), merged #485 | Refusal-only preparation; no activated host collector, access, restart or management authority. |
@@ -47,7 +47,7 @@ explicitly agreed blockers remain authoritative.
 | --- | --- | --- |
 | **M10 — Operate ORCA safely through Cal** | Production adapter, supported cross-client retry and generic actual-Cal #393 acceptance; #328/#331 closed | #327/#392 retain their broader handoffs; #594 exact-command and live-callback lifetime evidence remains mandatory before Mac beta. #597/#598/#600/#601 retain explicit separate deferrals, not passes. New homelab work needs current CPU/RAM/load evidence; run counts are not capacity. |
 | **M21 — Configure and launch from the app** | Structured collections/review, mounted Request/direct launch, template/pack authoring and protected restart recovery integrated by #607; #333/#334/#355 closed | Reuse supported Windows/source receipts rather than replan missing UI. Real-agent/manual accessibility and physical Mac evidence remain separately owned. Optional inactive #486 is not a blanket prerequisite. |
-| **M22 — Pre-Mac preparation** | Implemented setup/saved-config binding, ownership reconciliation, delivery validation, updater/recovery composition and disabled diagnostics producers | #385–#389 retain delivery/trust/guide and other owner handoffs; #416/#469 non-Mac obligations and mandatory #594 remain. Use the [current readiness ledger](preparation/native-mac-beta-readiness/readiness.md); M22 preparation is distinct from M25 live acceptance. |
+| **M22 — Pre-Mac preparation** | Implemented setup/saved-config binding, ownership reconciliation, delivery validation, updater/recovery composition and disabled diagnostics producers | #385–#389 retain delivery/trust/guide and other owner handoffs; #416/#469 non-Mac obligations and mandatory #594 remain. Use the [current readiness ledger](archive/preparation/native-mac-beta-readiness/readiness.md); M22 preparation is distinct from M25 live acceptance. |
 | **M25 — Live Apple Silicon acceptance** | Consumes implemented M21/M22 source and candidate-bound preparation | #602 signed private delivery and actual installed arm64/bundled-daemon execution; #603 exact signed N/N+1, natural drain and coherent protected-state restore; #604 native diagnostics; #390 unassisted physical journey. All remain unpassed. Canvas authoring, fleet management and Docker are not blanket beta blockers. |
 
 The Mac/default bundle identity is `com.schadewitz.orca`, Apple Team `Q2FP9UY5T4`;
@@ -62,7 +62,7 @@ Manual diagnostics #416/#469 retain settled default-off persistent explicit opt-
 same-boot/up-to-24-hour recovery. [#438](https://github.com/cschadewitz/Project_Orca/pull/438)
 reconciles those decisions; merged #470/#607 implement recovery, Save/export and
 closed producers while production capture stays disabled. There is no in-app report
-viewer. [C15 run 5](preparation/crash-recovery/windows-c15-readiness-run5.md), merged
+viewer. [C15 run 5](archive/preparation/crash-recovery/windows-c15-readiness-run5.md), merged
 in [#663](https://github.com/cschadewitz/Project_Orca/pull/663), passes the unchanged
 memory budgets for hosted synthetic Windows x64 failure/stall comparisons. Earlier
 failures stay historical; this does not pass renderer Layout/combined-memory,
@@ -100,7 +100,7 @@ A realized risk records state; it does not create a follow-up Request. The histo
 review records the risk-assessor prompt's overpromise; executable prompts are outside
 this prose-only scope. An agent's own tools can still write ORCA's files when the
 config directory is its workspace (ADR 0009), external-writer push observation is
-incomplete, and multi-record recovery requires separate evidence. The [historical verification queue](../Current_State/roadmap/future-verification.md)
+incomplete, and multi-record recovery requires separate evidence. The [historical verification queue](archive/Current_State/roadmap/future-verification.md)
 retains the fault/scale/deployment questions rather than treating them as reproduced
 current failures or closed by a docs pass. JEV provider work, plugin restoration
 and contributor tooling retain their existing follow-up owners.
@@ -113,5 +113,5 @@ remains failed after an owner publishes a correction; #502 does not establish
 ORCA's autonomous one-shot approval/delivery route. #520's green source CI does not
 remove its consumer-local artifact comparison blocker or prove live default-branch
 activation. #517's retained production timeout and #513's native/package gaps remain
-separate from merged #514. The [dated review](reviews/2026-10-07-living-docs.md)
+separate from merged #514. The [dated review](archive/reviews/2026-10-07-living-docs.md)
 links these facts to their reported pins without polling or launching work.

@@ -12,7 +12,7 @@ and [Pi proposal and challenge](pi-patch-proposal.md) left open, plus the Codex 
 [#713 matrix](README.md), and turns each into a small contract a maintainer could accept or reject.
 It does not repeat the provider survey or the merged adversarial tests, and it does not change
 #594's acceptance scope or take over its native/bridge evidence obligations
-([#594 contract](../../implementation/594-command-evidence-v1.md)).
+([#594 contract](../../archive/implementation/594-command-evidence-v1.md)).
 
 ## Evidence and pins
 

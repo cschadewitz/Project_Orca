@@ -576,7 +576,7 @@ and writes. Per-principal draft ownership and its security acceptance belong to
 and the raw-configuration migration to
 [#336](https://github.com/cschadewitz/Project_Orca/issues/336), under the scope
 transfer approved on 9 October; they are not #328 criteria. The
-[9 October bounded contract/evidence review](implementation/m10-security-contract-closure.md)
+[9 October bounded contract/evidence review](archive/implementation/m10-security-contract-closure.md)
 maps that split.
 
 | `scopedPermissions.review` | `permissions.grant` | Injected owner review; also requires inputs.answer. |

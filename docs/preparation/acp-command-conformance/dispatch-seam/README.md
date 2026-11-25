@@ -2,7 +2,7 @@
 
 This is a source-correspondent proposal against codex-acp **2.2.2**, commit
 `202e66e63343ec4f5a5e35ab590251d813d129ca`. It extends the
-[v1 contract/reference](../../../implementation/594-command-evidence-v1.md)
+[v1 contract/reference](../../../archive/implementation/594-command-evidence-v1.md)
 from PR676 head `4771d2bc1ff096a5c610d37e3e2aff6c551ae0e2`.
 PR676 merged into main at `30113b4e2c055cad8570bcf1e080364cbf342ce5`.
 A fresh GitHub comparison confirmed its reviewed head is main's merge base,

@@ -15,7 +15,7 @@ ACP is not the wire evidence. Current direct CLI negotiation rejects missing ins
 methods despite a claimed capability, and the MCP SDK contract refuses an absent
 `revise_input` alias before argument diagnostics or a backend mutation. Supported MCP
 revision composition is implemented; ACP revision remains unsupported. See the
-[pinned acceptance map](implementation/m10-security-contract-closure.md) for source
+[pinned acceptance map](archive/implementation/m10-security-contract-closure.md) for source
 test execution and native applicability limits.
 
 This is the feature handoff against preparation commit

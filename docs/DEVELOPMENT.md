@@ -92,7 +92,7 @@ changed documents. `.prettierignore` excludes Markdown and frozen `Current_State
 a Prettier success does not validate prose. Check UTF-8, LF, final newline,
 trailing whitespace and balanced fences separately. Keep dated recipes and their
 source pins distinct from current instructions. The
-[7 October audit](reviews/2026-10-07-living-docs.md) records the broader inventory
+[7 October audit](archive/reviews/2026-10-07-living-docs.md) records the broader inventory
 and checks used for the current reconciliation.
 
 Run runtime checks when executable docs, templates or behavior change, or when a

@@ -2,7 +2,7 @@
 
 Reconciled against main `dcccd2bb849ae26c7fe0fb202431f11a6ab909c1` on
 7 October 2026. This describes source behavior. See the
-[capability ledger](ROADMAP.md) and [evidence map](reviews/2026-10-07-living-docs.md)
+[capability ledger](ROADMAP.md) and [evidence map](archive/reviews/2026-10-07-living-docs.md)
 for deployment, actual-client and native acceptance limits.
 
 ## Goals
@@ -397,7 +397,7 @@ The keeper also stops local execution at the last successful heartbeat's deadlin
 when renewals error or hang. Parked input acceptance and cancellation use this same
 ownership boundary and reread the durable log under it. The backward-readable lease
 fence and legacy-writer refusals are documented in
-[ownership compatibility](v0.5.2-ownership-compatibility.md).
+[ownership compatibility](archive/v0.5.2-ownership-compatibility.md).
 
 Fresh continuation intent validates its exact parked boundary and decision before
 publishing a retry claim or binding a continuation ID. A lookup miss first releases

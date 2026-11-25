@@ -14,14 +14,14 @@ No runtime, app, adapter, permission, manifest, CI or release behavior changes h
 
 Build on completed #402/#403 preparation on this baseline:
 
-- [Candidate artifact contract](../native-mac-delivery/artifact-contract.md): candidate
+- [Candidate artifact contract](../../archive/preparation/native-mac-delivery/artifact-contract.md): candidate
   identity, trusted download, signature/notary/staple and architecture verification.
-- [Fixture contracts](../native-mac-testing/fixture-contracts.md): disposable
+- [Fixture contracts](../../archive/preparation/native-mac-testing/fixture-contracts.md): disposable
   `Sample α`, independent `Other β` sentinel, exact output and current-run provenance.
-- [Harness design](../native-mac-testing/harness-design.md): isolated account/profile,
+- [Harness design](../../archive/preparation/native-mac-testing/harness-design.md): isolated account/profile,
   owned processes and production bootstrap, evidence limits and cleanup.
-- [Manual checklist](../native-mac-testing/manual-checklist.md) and
-  [evidence template](../native-mac-testing/evidence-template.md): retain their
+- [Manual checklist](../../archive/preparation/native-mac-testing/manual-checklist.md) and
+  [evidence template](../../archive/preparation/native-mac-testing/evidence-template.md): retain their
   install/lifecycle/authentication/physical-hardware tests and identity fields.
 
 This adds `beta-first-job-v1`, a coding-bug scenario alongside the proposed

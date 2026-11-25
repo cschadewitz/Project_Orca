@@ -20,7 +20,7 @@ integration works yet — it is groundwork (see `docs/INTEGRATIONS.md`).
 
 For an observing developer, start with the [documentation index](docs/README.md),
 [architecture](docs/ARCHITECTURE.md) and [capability ledger](docs/ROADMAP.md).
-The [25 October integration checkpoint](docs/reviews/2026-10-25-integration-checkpoint.md)
+The [25 October integration checkpoint](docs/archive/reviews/2026-10-25-integration-checkpoint.md)
 records the current source pin, evidence classes and remaining acceptance. Reading
 these needs no provider credential or running environment. Repository access is for insight;
 it does not require a collaborator to install ORCA or make code changes.
@@ -186,7 +186,7 @@ composed producers and local Save/export, with production capture disabled. Sign
 Apple Silicon delivery, installed N-to-N+1 recovery and unassisted physical journeys
 remain unpassed. Exact-command approval #594 is still unsupported and mandatory before
 Mac beta; merged offline contracts/prototypes do not supply installed-provider or
-actual-Cal proof. See the [checkpoint](docs/reviews/2026-10-25-integration-checkpoint.md)
+actual-Cal proof. See the [checkpoint](docs/archive/reviews/2026-10-25-integration-checkpoint.md)
 for verified PRs, CI and owner decisions still pending.
-The [historical architecture review](Current_State/README.md) preserves an earlier snapshot;
-its [dated reconciliation](Current_State/addenda/2026-10-01-main-reconciliation.md) maps the findings to current code.
+The [historical architecture review](docs/archive/Current_State/README.md) preserves an earlier snapshot;
+its [dated reconciliation](docs/archive/Current_State/addenda/2026-10-01-main-reconciliation.md) maps the findings to current code.
