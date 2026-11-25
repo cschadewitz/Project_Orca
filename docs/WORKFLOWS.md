@@ -514,7 +514,8 @@ when it opens, new or loaded, and again before each prompt, and refuses its own 
 switch it away (#1190). The Claude ACP adapter would otherwise start it in `auto`, where
 Claude Code settles calls itself and they never reach ORCA's policy. Manual is not a
 guarantee that every call reaches ORCA: Claude's own rules still settle calls, and the mode
-is not watched during a turn. That guarantee is the native hook's.
+is not watched during a turn. Nor is it the native hook's assurance, which covers the calls
+the hook covers (see `docs/agent-hook-coverage.md`), not every call.
 
 An agent that is the Claude ACP adapter can also narrow what Claude Code loads and where its
 commands run (#1134):
@@ -531,15 +532,19 @@ agents:
 
 - `settingSources` picks which of Claude Code's own settings files it reads: `user`,
   `project` (the checkout's `.claude/settings.json`, and CLAUDE.md) and `local`
-  (`.claude/settings.local.json`). Leave it out for all three, as before; `[]` reads none. A
+  (`.claude/settings.local.json`). Leave it out for all three, as before; `[]` reads none of
+  the three. Managed (administrator) policy settings are not one of them: they still load and
+  still take precedence over everything else, ORCA's settings included. A
   checkout left out can no longer add rules, hooks or MCP servers ORCA did not choose. The
   adapter still reads the checkout's starting mode itself, which ORCA's Manual pin overrides,
   and leaving out `project` or `local` also turns bypass mode off.
 - `sandbox: on` runs Claude Code's Bash commands in its sandbox (bubblewrap and socat on
   Linux, Seatbelt on macOS). The session fails to start if the sandbox cannot, no command may
-  ask to leave it, ORCA's private paths and its whole store are kept from sandboxed commands
-  (an agent's output reaches the store's work area through Claude's file tools, which ORCA's
-  permission checks govern), and a sandboxed command is still asked about like any other. It
+  ask to leave it, and a sandboxed command is still asked about like any other. Sandboxed
+  commands cannot write ORCA's read-only files or anywhere in its store, and cannot read or
+  write its private paths (credentials, private execution and diagnostics); they can still
+  *read* the store's ordinary state and ORCA's config. An agent's output reaches the store's
+  work area through Claude's file tools, which ORCA's permission checks govern. It
   needs `settingSources: []`: Claude Code merges sandbox exceptions from every settings file it
   loads, so a user file's `allowWrite` or `Edit(...)` allow rules would widen it.
 
