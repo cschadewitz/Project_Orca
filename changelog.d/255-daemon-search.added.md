@@ -1,3 +1,0 @@
-- **protocol:** a `search` read method (protocol 2.2) that finds event text and artifact contents and answers with places: a run and the step an event belongs to, or a run, an artifact name and a version.
-- **daemon:** `search` reads the runs the caller may see, newest first, within a hit limit and a deadline. Only text artifacts are read, secrets are redacted before matching, and artifact hits need `artifacts.read`.
-- **app:** the command palette searches event text and artifact contents through the daemon, and each hit opens its run, step or artifact. Against a daemon without `search` the palette keeps searching names only.
