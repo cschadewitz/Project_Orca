@@ -184,7 +184,7 @@ try {
   const sample = (await runs())[0];
   check(
     "exactly-one-harmless-sample-admitted",
-    sample.workflowId === "orca-beta-local-check" && sample.status === "succeeded",
+    sample.workflowId === "orca-beta-local-check" && sample.status === "succeeded", // rename-keep: the first-run sample's id, kept so existing workspaces still match
   );
   result.runId = sample.id ?? sample.runId;
   const child = spawn(

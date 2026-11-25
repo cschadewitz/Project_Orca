@@ -1,4 +1,7 @@
 /** Immutable JEV-free first-run sample and #420 task/instruction/result bindings. No provider is configured. */
+// rename-keep-start: the sample's id and bytes stay as first-run setup wrote them into existing
+// workspaces. verifyFirstRunSampleAssets and the guided launch compare those files and their
+// revision byte for byte, so a renamed sample would refuse every existing first-run workspace.
 export const FIRST_RUN_SAMPLE_ID = "orca-beta-local-check" as const;
 export const FIRST_RUN_SAMPLE_VERSION = "1" as const;
 export const FIRST_RUN_SAMPLE_REVISION =
@@ -29,6 +32,7 @@ export const FIRST_RUN_SAMPLE_FILES = {
   "first-run/result.json":
     '{\n  "id": "orca-beta-local-check-result",\n  "version": "1",\n  "kind": "agent-free-local-check",\n  "terminalStatus": "succeeded",\n  "terminalNode": "end",\n  "terminalMessage": "Harmless local sample completed. No agent was started and no project files were changed.",\n  "requiredEvidence": [\n    "actual run ID",\n    "workflow ID/version/revision",\n    "selected workspace and instance identity",\n    "terminal succeeded status"\n  ],\n  "codingFixProven": false,\n  "realAgentProven": false\n}\n',
 } as const;
+// rename-keep-end
 export const FIRST_RUN_SAMPLE = {
   id: FIRST_RUN_SAMPLE_ID,
   version: FIRST_RUN_SAMPLE_VERSION,

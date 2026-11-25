@@ -64,7 +64,7 @@ it("requires explicit directory review, create and connect actions, and labels t
   expect(f.firstRun.connect).not.toHaveBeenCalled();
   await act(async () => fireEvent.click(screen.getByRole("button", { name: "Choose project and empty workspace" })));
   expect(screen.getByLabelText("Selected directories").textContent).toContain("Project/Sample α");
-  expect(screen.getByText(/orca-beta-local-check/)).toBeTruthy();
+  expect(screen.getByText(/orca-beta-local-check/)).toBeTruthy(); // rename-keep: the first-run sample's id, kept so existing workspaces still match
 
   expect(f.firstRun.prepare).not.toHaveBeenCalled();
   await act(async () => fireEvent.click(screen.getByRole("button", { name: "Create reviewed sample files" })));

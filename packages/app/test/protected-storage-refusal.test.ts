@@ -54,7 +54,7 @@ function fixture(storage: { available: boolean; backend?: string }) {
   };
   const scope = { target: "bundled:/workspace", workspaceId: target.workspaceId, principalId: "local" };
   const params = {
-    workflowId: "orca-beta-local-check",
+    workflowId: "orca-beta-local-check", // rename-keep: the first-run sample's id, kept so existing workspaces still match
     workflowVersion: "1",
     expectedWorkflowRevision: "revision",
     expectedConfigGeneration: "generation",
@@ -63,7 +63,7 @@ function fixture(storage: { available: boolean; backend?: string }) {
   const review: LaunchReview = {
     target,
     draftSequence: 1,
-    workflowId: "orca-beta-local-check",
+    workflowId: "orca-beta-local-check", // rename-keep: the first-run sample's id, kept so existing workspaces still match
     workflowVersion: "1",
     expectedWorkflowRevision: "revision",
     expectedConfigGeneration: "generation",

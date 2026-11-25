@@ -103,8 +103,13 @@ keeps setup plus the existing consented diagnostics path reachable.
 
 ## Exact harmless sample and remaining acceptance
 
+<!-- rename-keep-start: the sample keeps its id through the rename so existing workspaces still match -->
+
 Workflow: `orca-beta-local-check`, version `1`, normalized production revision
 `sha256:31027c78fb1ea553caf218b8366e7ea08d6a141efce5cb53b32e781fd7390567`.
+
+<!-- rename-keep-end -->
+
 `src/first-run-sample.ts` is the immutable packaged source for workflow and exact
 `task.json`, `instruction.md`, `result.json` assets. The workflow metadata binds
 all three asset SHA-256 identities and the accepted #420 shipping/test/README/reference
