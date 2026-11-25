@@ -50,7 +50,11 @@ const version = z
   .regex(/^[0-9A-Za-z.+-]+$/);
 export const UpdateHandoffSchema = z.strictObject({
   version: z.literal(1),
-  kind: z.literal("orca-update-handoff"), // rename-keep: written by the release being updated from
+  /** Written under the current name; the old name is what the release being updated from wrote. */
+  kind: z.enum([
+    "orca-update-handoff",
+    "orca-update-handoff", // rename-keep: written by a release from before the rename, read until 0.10
+  ]),
   /** The journal claim this handoff passes ownership from: the stopped daemon's, or a retry's. */
   reservationId: z.uuid(),
   claimHash: digest,
