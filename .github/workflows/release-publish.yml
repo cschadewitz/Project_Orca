@@ -276,9 +276,12 @@ jobs:
       - name: Format
         run: pnpm run format:check
 
+      # Single-threaded whatever the runner's ESLINT_CONCURRENCY says: each ESLint thread
+      # builds its own typed-lint program, and a release check is worth more than its speed.
       - name: Lint
         env:
           NODE_OPTIONS: --max-old-space-size=4096
+          ESLINT_CONCURRENCY: "off"
         run: pnpm run lint
 
       # Before the tests: production MCP acceptance launches the emitted daemon and MCP entry

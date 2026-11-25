@@ -112,7 +112,7 @@ loopback destinations; and the only credential a job holds is its `GITHUB_TOKEN`
 untrusted-by-default code.
 
 In this repository `ci.yml`'s `check` job selects the `tyler` label on its own. The Linux jobs of `app-smoke.yml` and `desktop.yml` (manual runs and release calls),
-and `release-publish.yml`'s `verify` job ("verify the merge commit", the release's test work, with a read-only token and `ci.yml`'s worker cap and pnpm cache choice for the runner it gets),
+and `release-publish.yml`'s `verify` job ("verify the merge commit", the release's test work, with a read-only token, `ci.yml`'s worker cap and pnpm cache choice for the runner it gets, and single-threaded lint whatever the runner's `ESLINT_CONCURRENCY` says),
 use it too when the health endpoint reports at least one idle runner, and GitHub-hosted
 `ubuntu-24.04` otherwise; [`tools/linux-runner.js`](../tools/linux-runner.js) makes that
 choice once per run, and `CI_FORCE_HOSTED` applies to it as well. On the hosted fallback a step installs xvfb if it is missing and loads an
