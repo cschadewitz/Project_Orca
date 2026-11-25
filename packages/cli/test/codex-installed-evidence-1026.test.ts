@@ -4,15 +4,29 @@
  * daemon's own session factory opens (`nativeToolHook: experimental`), against a scripted stand-in
  * for the model, so no account, key or spend is involved.
  *
- * Four cases, each in its own disposable workspace and session: a harmless shell command and a
- * harmless patch, each once allowed and once denied by a configured rule. For each:
+ * Codex runs with its native protections as a session gets them: the adapter's default mode and
+ * Codex's own sandbox and approval settings, none of them set or relaxed here. Any native
+ * approval Codex asks for stays in the flow: it reaches ORCA as it would in use, and when it
+ * reaches the person, the test answers as the person (once, for this call only).
  *
- * - **the effect is observed apart from the hook and from ORCA**: the workspace's whole tree
- *   (every path and its bytes' digest) before and after, so an allowed action shows exactly its
- *   change and a denied one shows none;
- * - **the call reached Codex's tool path**: the tool output Codex handed back to the model for it,
- *   which for a denied call carries ORCA's refusal as Codex reports it. A denial with no such
- *   output would be a call never made, not a call refused, and fails the case.
+ * Four cases, each in its own disposable workspace and session: a harmless shell command and a
+ * harmless patch, each once allowed and once denied by a configured ORCA rule. Each case records
+ * three things apart:
+ *
+ * - **ORCA's decision**: what ORCA's hook answered for the call, from the hook's tool-call
+ *   record (#1000), with Codex's own report of an ORCA refusal beside it;
+ * - **the native decision**: the session's mode, and every native approval request with how it
+ *   was answered and by whom;
+ * - **the observed effect**: the workspace's whole tree (every path and its bytes' digest) before
+ *   and after, taken apart from the hook, ORCA and Codex.
+ *
+ * A case is `verified` only when those agree: ORCA decided as configured, the effect is exactly the
+ * expected change (or none, when denied), and for a denial no native refusal could have caused
+ * the absence of an effect. A case that cannot establish ORCA's decision under the native
+ * safeguards (no hook record, a native refusal, a sandbox that kept an allowed call from running)
+ * is `unverified`, with the reason, and does not fail the run. Only evidence that contradicts the
+ * expected outcome (an effect after a denial, an unexpected change, ORCA deciding otherwise than
+ * configured) is `failed`, and fails it.
  *
  * It writes one JSON record with the exact ORCA build, adapter, Codex, platform and settings the
  * cases ran with, to `ORCA_ENFORCEMENT_RECEIPT_DIR` when set. **It is evidence, not a tier or a
@@ -31,10 +45,17 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promis
 import { createRequire } from "node:module";
 import { arch, platform, release, tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { AgentSpecSchema, silentLogger } from "@orca/core";
-import { CODEX_HOOK_VERIFIED_PAIRS, LocalHost, openAcpSession, type OpenSessionOptions } from "@orca/agents";
+import { AgentSpecSchema, silentLogger, type HookTelemetryLine } from "@orca/core";
+import {
+  CODEX_HOOK_VERIFIED_PAIRS,
+  LocalHost,
+  openAcpSession,
+  type OpenSessionOptions,
+  type PermissionRuleRecord,
+} from "@orca/agents";
 import { childBundle } from "@orca/testing/child-bundle";
 import { makeSessionFactory } from "../src/bootstrap.js";
 import { modelStandIn, patch, script, shell, type ModelStandIn, type Step } from "./codex-model-stand-in.js";
@@ -47,18 +68,26 @@ const RECORD = "codex-installed-evidence.json";
 /** The settings every case runs with, recorded as they are passed. */
 const SETTINGS = {
   nativeToolHook: "experimental",
-  // The adapter takes sandbox and approvals from its session mode: full access leaves whether a
-  // call runs to ORCA's hook alone, so an effect or its absence is the hook's doing.
-  adapterMode: "agent-full-access",
-  codex: { sandbox_mode: "danger-full-access", approval_policy: "never", model: "gpt-5.5 (scripted stand-in)" },
+  // Neither is set: the adapter's own default mode, and with it Codex's sandbox and approval
+  // policy. The mode each session reports is recorded per case.
+  adapterMode: "adapter default (INITIAL_AGENT_MODE not set)",
+  codex: {
+    sandbox_mode: "not set (from the adapter's mode)",
+    approval_policy: "not set (from the adapter's mode)",
+    model: "gpt-5.5 (scripted stand-in)",
+  },
+  // Only so that ORCA's decision is recorded apart from Codex's output; diagnostic, decides nothing.
+  diagnostics: { toolCalls: "keep" },
 } as const;
+
+/** The adapter's mode that turns Codex's sandbox and approvals off; a case must not run in it. */
+const FULL_ACCESS_MODE = "agent-full-access";
 
 /** What these cases do not cover, and why; recorded so nothing reads as more than it is. */
 const NOT_COVERED = [
   "MCP tool calls (follow-up PR)",
   "cancellation of a pending call, and a fresh session after it (follow-up PR)",
   "the experimental judge (tracked separately)",
-  "Codex's own sandbox and approvals (off in this configuration, so that the hook alone decides)",
   "known limitation, documented, not re-created here: Codex lets a call through when its hook runner fails after the startup probe",
   "known limitation, documented, not re-created here: text typed into a running command (write_stdin) is never hooked",
   "known limitation, documented, not re-created here: an ORCA ask blocks the call (Codex cannot pause for a person)",
@@ -132,6 +161,8 @@ function changes(before: Record<string, string>, after: Record<string, string>) 
   return out;
 }
 
+const sameJson = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+
 function git(...args: string[]): string | null {
   try {
     return execFileSync("git", args, { cwd: REPO_ROOT, encoding: "utf8" }).trim();
@@ -162,16 +193,27 @@ describe.skipIf(ADAPTER === undefined)("installed-session evidence for Codex's h
   });
 
   /** One disposable workspace, config directory and Codex home, and a session the factory opens. */
-  const open = async (id: string, rule: unknown) => {
+  const open = async (id: string, rule: unknown, allow: boolean) => {
     const base = join(root, id);
     const configDir = join(base, "config");
     const workspace = join(base, "work");
     const codexHome = join(base, "codex-home");
     for (const dir of [configDir, workspace, codexHome]) await mkdir(dir, { recursive: true });
-    const asks: string[] = [];
+    // A native approval that reaches the person is answered as the person would for this
+    // harmless call: once, for this call only; allowed in an allow case, refused in a deny case.
+    const personAsked: { title: string; answer: string | undefined }[] = [];
     const askPermission: OpenSessionOptions["askPermission"] = async (req) => {
-      asks.push(req.toolCall.title ?? "");
-      return req.options.find((o) => o.kind === "reject_once")?.optionId;
+      const kind = allow ? "allow_once" : "reject_once";
+      const answer = req.options.find((o) => o.kind === kind)?.optionId;
+      personAsked.push({ title: req.toolCall.title ?? "", answer: answer === undefined ? undefined : kind });
+      return answer;
+    };
+    // Every native approval request ORCA answered, by its policy or by the person.
+    // (Its file and MCP requests carry an `fs:` or `mcp:` prefix and are not approvals.)
+    const native: { title: string; decision: string; rule?: PermissionRuleRecord }[] = [];
+    const onPermission: OpenSessionOptions["onPermission"] = (info) => {
+      if (/^(fs|mcp):/.test(info.decision)) return;
+      native.push({ title: info.title, decision: info.decision, ...(info.rule ? { rule: info.rule } : {}) });
     };
     const agent = AgentSpecSchema.parse({
       id: "codex",
@@ -185,16 +227,14 @@ describe.skipIf(ADAPTER === undefined)("installed-session evidence for Codex's h
           model_providers: {
             standin: { name: "standin", base_url: model.url, wire_api: "responses", env_key: "ORCA_1026_KEY" },
           },
-          sandbox_mode: SETTINGS.codex.sandbox_mode,
-          approval_policy: SETTINGS.codex.approval_policy,
         }),
-        INITIAL_AGENT_MODE: SETTINGS.adapterMode,
         ORCA_1026_KEY: "sk-orca-1026-test",
         NO_PROXY: "127.0.0.1",
         no_proxy: "127.0.0.1",
       },
       permissions: { rules: [rule] },
       nativeToolHook: SETTINGS.nativeToolHook,
+      diagnostics: SETTINGS.diagnostics,
     });
     const session = await makeSessionFactory({ configDir, storeDir: ".orca" }, openAcpSession, {
       runtime: process.execPath,
@@ -204,19 +244,38 @@ describe.skipIf(ADAPTER === undefined)("installed-session evidence for Codex's h
       agent,
       cwd: workspace,
       askPermission,
+      onPermission,
       logger: silentLogger,
       handshakeTimeoutMs: 60_000,
     });
-    return { session, workspace, asks };
+    // ORCA's decisions, as the hook recorded them for this session.
+    const hookLines: HookTelemetryLine[] = [];
+    session.hookTelemetry?.attach(async (lines) => {
+      hookLines.push(...lines);
+    });
+    return { session, workspace, personAsked, native, hookLines, recorded: session.hookTelemetry !== undefined };
   };
 
   for (const c of CASES)
     it(`${c.id}: ${c.action}`, async () => {
-      const { session, workspace, asks } = await open(c.id, c.rule);
+      const allow = Object.keys(c.expect).length > 0;
+      const { session, workspace, personAsked, native, hookLines, recorded } = await open(c.id, c.rule, allow);
+      // The mode the adapter reports for the session, with its own description of it.
+      const modeOption = session.configOptions.find((o) => o.category === "mode");
+      const mode = modeOption?.currentValue ?? null;
+      const modeChoices =
+        modeOption?.type === "select" ? modeOption.options.flatMap((o) => ("options" in o ? o.options : [o])) : [];
+      const modeDescribed = modeChoices.find((o) => o.value === mode);
       const before = await tree(workspace);
       const outputsBefore = model.outputs.length;
       try {
         await session.prompt(script(c.step));
+        // The hook hands its record to a detached writer after answering, so it can land a
+        // little after the call: read the spool until it does, within the writer's deadline.
+        for (const until = Date.now() + 5_000; session.hookTelemetry && hookLines.length === 0 && Date.now() < until;) {
+          await session.hookTelemetry.drain();
+          if (hookLines.length === 0) await delay(100);
+        }
       } finally {
         await session.close();
       }
@@ -226,31 +285,63 @@ describe.skipIf(ADAPTER === undefined)("installed-session evidence for Codex's h
       const expected = Object.fromEntries(
         Object.entries(c.expect).map(([path, content]) => [path, [null, sha256(content)] as [null, string]]),
       );
-      const denied = Object.keys(c.expect).length === 0;
+      const orcaDecisions = hookLines.map((l) => l.decision);
       const refusal = outputs.find((o) => o.includes("Denied by ORCA"));
-      const passed =
-        JSON.stringify(changed) === JSON.stringify(expected) &&
-        outputs.length === 1 &&
-        (denied ? refusal !== undefined : refusal === undefined) &&
-        asks.length === 0;
+      // Any native approval answered other than with an allow.
+      const nativeRefused =
+        native.some((n) => !/allow/.test(n.decision)) || personAsked.some((a) => a.answer !== "allow_once");
+
+      const effect = Object.keys(changed).length === 0 ? "none" : sameJson(changed, expected) ? "expected" : "other";
+      const failures: string[] = [];
+      if (!allow && effect !== "none") failures.push("an effect was observed after ORCA was configured to deny");
+      if (effect === "other") failures.push("the workspace changed other than expected");
+      if (orcaDecisions.some((d) => d !== (allow ? "allow" : "deny")))
+        failures.push(`ORCA's hook decided ${orcaDecisions.join(", ")}, not ${allow ? "allow" : "deny"}`);
+      if (allow && refusal !== undefined) failures.push("Codex reported an ORCA refusal for an allowed call");
+
+      const unverified: string[] = [];
+      if (!recorded || orcaDecisions.length === 0) unverified.push("ORCA's hook left no record of its decision");
+      else if (orcaDecisions.length !== 1)
+        unverified.push(`ORCA's hook recorded ${orcaDecisions.length} decisions, not one`);
+      if (outputs.length !== 1) unverified.push(`Codex returned ${outputs.length} tool outputs, not one`);
+      if (!allow && refusal === undefined) unverified.push("Codex did not report ORCA's refusal for the call");
+      if (!allow && nativeRefused) unverified.push("a native refusal could also account for the absence of an effect");
+      if (allow && effect === "none")
+        unverified.push(
+          "ORCA allowed the call, but it had no effect under the native safeguards (native refusal or sandbox)",
+        );
+
+      const status = failures.length > 0 ? "failed" : unverified.length > 0 ? "unverified" : "verified";
       results.push({
         id: c.id,
         action: c.action,
         rule: c.rule,
-        expected: denied ? "no effect" : "exactly this change",
-        workspace: { before, after, changed },
+        status,
+        reasons: failures.length > 0 ? failures : unverified,
+        orca: {
+          configured: allow ? "allow" : "deny",
+          hookDecisions: hookLines.map((l) => ({
+            tool: l.tool,
+            kind: l.kind ?? null,
+            title: l.title ?? null,
+            decision: l.decision,
+            rule: l.rule ?? null,
+          })),
+          refusalReportedByCodex: refusal !== undefined,
+        },
+        native: {
+          mode,
+          modeName: modeDescribed?.name ?? null,
+          modeDescription: modeDescribed?.description ?? null,
+          approvalsAnsweredByOrca: native,
+          approvalsAnsweredAsThePerson: personAsked,
+        },
+        effect: { expected: allow ? "exactly this change" : "no effect", observed: effect, before, after, changed },
         toolOutput: outputs,
-        orcaRefusalReported: refusal !== undefined,
-        humanAsks: asks,
-        passed,
       });
-      // Exactly the expected change, or none; the call made once; ORCA's refusal reported only
-      // when denied; and nobody asked.
-      expect(changed).toEqual(expected);
-      expect(outputs).toHaveLength(1);
-      if (denied) expect(refusal).toBeDefined();
-      else expect(refusal).toBeUndefined();
-      expect(asks).toEqual([]);
+      // The session ran with Codex's native protections, and nothing contradicts the expected outcome.
+      expect(mode).not.toBe(FULL_ACCESS_MODE);
+      expect(failures).toEqual([]);
     }, 180_000);
 
   it("records the exact build, agent, platform and settings beside the cases", async () => {
@@ -288,11 +379,15 @@ describe.skipIf(ADAPTER === undefined)("installed-session evidence for Codex's h
       },
       platform: { os: platform(), arch: arch(), kernel: release() },
       settings: SETTINGS,
+      summary: {
+        verified: results.filter((r) => r["status"] === "verified").map((r) => r["id"]),
+        unverified: results.filter((r) => r["status"] === "unverified").map((r) => r["id"]),
+      },
       cases: results,
       notCovered: NOT_COVERED,
     };
     expect(record.agent.codexImageSha256).not.toBeNull();
-    expect(results.every((r) => r["passed"] === true)).toBe(true);
+    expect(results.some((r) => r["status"] === "failed")).toBe(false);
     if (RECEIPT_DIR) {
       await mkdir(RECEIPT_DIR, { recursive: true });
       await writeFile(join(RECEIPT_DIR, RECORD), JSON.stringify(record, null, 2) + "\n");
