@@ -10,10 +10,11 @@
  * `verifier-test` (which the checker always refuses) and with one asserted case marked failed.
  * No agent or guard is weakened to make it. Each is signed in its own attestation, the test one
  * staged apart (`stage-receipts.js`), with its Sigstore bundle beside it. With the agent's row
- * promoted to B and pinned to the receipt as record-receipts.js pins it, the checker, verifying
+ * promoted to B and pinned to the receipt as record-receipts.js pins it (a scoped claim on its
+ * route moved to the receipt with it, as the proposal will move it), the checker, verifying
  * attestations for real, must:
  *
- * - accept the qualifying receipt;
+ * - accept the qualifying receipt, for the tier and for the row's scoped claim, if it has one;
  * - refuse the test receipt, for its failed case and its scope;
  * - refuse a copy of the qualifying receipt with one byte changed, for its attestation.
  *
