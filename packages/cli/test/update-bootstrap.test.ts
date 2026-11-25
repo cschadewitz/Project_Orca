@@ -11,6 +11,7 @@ import { DaemonClient } from "../../app/src/client/daemon-client.js";
 import { LocalDaemonToken } from "../../app/src/client/auth.js";
 import { randomUUID } from "node:crypto";
 import { fenceBoot, fenceDirectory, fenceHash, fenceWrite, acquireFirstRunFence } from "@orca/protocol/first-run-fence";
+import { fencePorts, selectFenceDirectory } from "../../protocol/test/fixtures/fence-ports.js";
 
 const roots: string[] = [],
   children: ChildProcess[] = [],
@@ -37,6 +38,11 @@ async function fixture(beforeProvision?: (layout: FixtureLayout) => Promise<void
       control = join(base, "recovery");
     await mkdir(workspace, { mode: 0o700 });
     await mkdir(control, { mode: 0o700 });
+    // Fenced roots get identities whose slots lie outside kernel autobind (#807, #819, #1084),
+    // so only the contention a test injects can refuse them. The workspace also holds the
+    // first-run fence's port (#1088).
+    await selectFenceDirectory(workspace, [], { updateWindow: true, firstRun: true });
+    await selectFenceDirectory(control);
     await mkdir(join(workspace, ".orca"), { mode: 0o700 });
     await writeFile(join(workspace, "orca.config.yaml"), "storeDir: .orca\n", { mode: 0o600 });
     const layout = { base, workspace, control };
@@ -56,17 +62,7 @@ async function fixture(beforeProvision?: (layout: FixtureLayout) => Promise<void
   }
 }
 /** Only for real contention injection: the cross-process fence itself keeps its fixed ports. */
-function fixtureSlots(root: string): number[] {
-  const start =
-    20000 +
-    (Number.parseInt(
-      fenceHash(JSON.stringify(["orca-update-window-v1", fenceBoot().kernelDomain, fenceDirectory(root)])).slice(0, 8), // rename-keep: the hash domain update-window.ts keeps
-      16,
-    ) %
-      5000) *
-      8;
-  return Array.from({ length: 8 }, (_, slot) => start + slot);
-}
+const fixtureSlots = (root: string): number[] => fencePorts(fenceDirectory(root));
 async function occupy(port: number) {
   const server = createServer();
   listeners.push(server);

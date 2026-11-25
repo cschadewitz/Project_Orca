@@ -17,7 +17,7 @@ import { PosixFixtureNativeAdapter } from "../src/main/diagnostics/native-adapte
 import { nodeRecoveryFiles } from "../src/main/diagnostics/recovery-files.js";
 import type { NativeStorageBackend } from "../src/main/diagnostics/native-storage.js";
 import { SyntheticKeys } from "./recovery-preparation/implementation-fixture.js";
-import { copyToFenceDirectory, fencePorts, selectFenceDirectory } from "./fixtures/fence-ports.js";
+import { copyToFenceDirectory, fencePorts, selectFenceDirectory } from "../../protocol/test/fixtures/fence-ports.js";
 
 const GUARD = ".orca-update-window.json"; // rename-keep: mirrors protocol's update-window guard, which keeps its pre-rename name
 const bases: string[] = [];

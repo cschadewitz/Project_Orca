@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { cp, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { afterEach, expect, it } from "vitest";
+import { copyToFenceDirectory, selectFenceDirectory } from "./fixtures/fence-ports.js";
 import {
   ClosedUpdateWindow,
   enterConfiguredUpdateWriters,
@@ -25,14 +26,26 @@ afterEach(async () => {
   for (const close of closers.splice(0).reverse()) await close();
   for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
 });
+/**
+ * A directory the update window fences, with an inode whose real fence slots lie outside the
+ * kernel's autobind range under `path` and every alias it is later fenced under (#807, #819,
+ * #1084). Otherwise any worker's outgoing loopback socket could hold one of its slots.
+ */
+async function fenced(path: string, aliases: readonly string[] = []) {
+  await mkdir(path, { mode: 0o700 });
+  await selectFenceDirectory(path, aliases);
+}
+/** A fenced copy of `source` at `path`, as a new inode clear of autobind, likewise. */
+const fencedCopy = (source: string, path: string, aliases: readonly string[] = []) =>
+  copyToFenceDirectory(source, path, (from, to) => cp(from, to, { recursive: true }), aliases);
 async function fixture(count = 1) {
   for (let attempt = 0; ; attempt++) {
     const base = await mkdtemp(join(process.cwd(), "orca-update-window-"));
     roots.push(base);
     const control = join(base, "control"),
       data = Array.from({ length: count }, (_, i) => join(base, "data-" + i));
-    await mkdir(control, { mode: 0o700 });
-    for (const root of data) await mkdir(root, { mode: 0o700 });
+    await fenced(control);
+    for (const root of data) await fenced(root);
     try {
       await provisionUpdateWindow(control, data);
     } catch (error) {
@@ -57,7 +70,7 @@ it("enrolls new managed roots before producers while retaining the existing app 
   const f = await fixture(),
     app = await writer(f.data[0]!);
   const next = join(f.base, "new-config");
-  await mkdir(next, { mode: 0o700 });
+  await fenced(next);
   const original = await readFile(join(f.data[0]!, ".orca-update-window.json")); // rename-keep: persisted name kept on purpose
   const enrolled = await enrollUpdateWindowRoots(f.control, [next, join(next, "future-store")]);
   expect(enrolled.roots.map((root) => root.path)).toEqual([f.data[0]!, next].sort());
@@ -76,7 +89,7 @@ it("enrolls new managed roots before producers while retaining the existing app 
 it("refuses enrollment into a closed namespace or a broader overlapping root without publication", async () => {
   const f = await fixture(),
     next = join(f.base, "new-config");
-  await mkdir(next, { mode: 0o700 });
+  await fenced(next);
   const original = await readFile(join(f.control, "window.json"));
   await expect(enrollUpdateWindowRoots(f.control, [f.base])).rejects.toThrow();
   expect(await readFile(join(f.control, "window.json"))).toEqual(original);
@@ -88,7 +101,7 @@ it("torn added-root enrollment refuses ordinary work and preserves the original 
   const f = await fixture(),
     app = await writer(f.data[0]!),
     next = join(f.base, "new-config");
-  await mkdir(next, { mode: 0o700 });
+  await fenced(next);
   const original = await readFile(join(f.data[0]!, ".orca-update-window.json")); // rename-keep: persisted name kept on purpose
   await expect(
     enrollUpdateWindowRoots(f.control, [next], {
@@ -203,7 +216,7 @@ it("refuses lost control identity, replaced roots and unsafe/torn state", async 
   f.window.closeAdmission("a".repeat(64));
   await f.window.capture();
   await rename(f.control, f.control + "-old");
-  await mkdir(f.control, { mode: 0o700 });
+  await fenced(f.control);
   expect(f.window.check()).toBe(false);
   await expect(enterUpdateWriter(f.data[0]!)).rejects.toThrow();
   await expect(provisionUpdateWindow(f.control, f.data)).rejects.toThrow();
@@ -285,7 +298,7 @@ const GUARD = ".orca-update-window.json"; // rename-keep: persisted name kept on
 async function recreate(path: string) {
   const before = path + "-before";
   await rename(path, before);
-  await cp(before, path, { recursive: true });
+  await fencedCopy(before, path);
   await rm(before, { recursive: true });
 }
 /** A home holding the control namespace, the app root and one enrolled workspace. */
@@ -294,8 +307,11 @@ async function home() {
     const base = await mkdtemp(join(process.cwd(), "orca-update-home-"));
     roots.push(base);
     const at = (dir: string) => ({ control: join(dir, "control"), app: join(dir, "app"), ws: join(dir, "ws") });
-    const paths = at(join(base, "home"));
-    for (const path of [join(base, "home"), ...Object.values(paths)]) await mkdir(path, { mode: 0o700 });
+    const paths = at(join(base, "home")),
+      moved = at(join(base, "moved"));
+    await mkdir(join(base, "home"), { mode: 0o700 });
+    // Each is fenced again under its moved path once home is renamed.
+    for (const [name, path] of Object.entries(paths)) await fenced(path, [moved[name as keyof typeof moved]]);
     try {
       await provisionUpdateWindow(paths.control, [paths.app]);
       await enrollUpdateWindowRoots(paths.control, [paths.ws]);
@@ -304,7 +320,7 @@ async function home() {
       if ((error as NodeJS.ErrnoException).code !== "EADDRINUSE" || attempt >= 4) throw error;
       continue;
     }
-    return { base, ...paths, moved: at(join(base, "moved")) };
+    return { base, ...paths, moved };
   }
 }
 const enrolledPaths = (control: string) => inspectUpdateWindowRoots(control).roots.map((root) => root.path);
@@ -373,7 +389,7 @@ it.each([
   for (let attempt = 0; ; attempt++) {
     const f = await fixture(),
       next = join(f.base, "next");
-    await mkdir(next, { mode: 0o700 });
+    await fenced(next);
     const original = await readFile(join(f.control, "enrolled.json"));
     const lostAcknowledgement = new Error("Lost acknowledgement");
     let calls = 0;
@@ -420,7 +436,7 @@ it("keeps refusing while an attempt is recorded, a writer holds a slot, or the o
   await expect(reanchorUpdateWindow(f.control, [f.data[0]!])).rejects.toThrow();
   await lease.close();
   // A copy of the namespace never takes over the original's roots.
-  await cp(f.control, f.control + "-copy", { recursive: true });
+  await fencedCopy(f.control, f.control + "-copy");
   await expect(reanchorUpdateWindow(f.control + "-copy", [f.data[0]!])).rejects.toThrow();
   f.window.closeAdmission("a".repeat(64));
   const published = await readFile(join(f.control, "window.json"));
@@ -437,8 +453,8 @@ it.each(["missing", "torn"])(
     const f = await fixture();
     const copy = f.control + "-copy";
     const copiedApp = f.data[0]! + "-copy";
-    await cp(f.control, copy, { recursive: true });
-    await cp(f.data[0]!, copiedApp, { recursive: true });
+    await fencedCopy(f.control, copy);
+    await fencedCopy(f.data[0]!, copiedApp);
     if (enrollment === "missing") await rm(join(copy, "enrolled.json"));
     else await writeFile(join(copy, "enrolled.json"), "{", { mode: 0o600 });
     // The copied open record must not reopen roots whose original closed after the copy.
@@ -473,7 +489,7 @@ it("a person may reset only a lost or unreadable window, and provisioning then s
   expect(updateWindowResettable(f.control, [data])).toBe(false);
   await f.window.detach();
   await rm(f.control, { recursive: true });
-  await mkdir(f.control, { mode: 0o700 });
+  await fenced(f.control);
   await expect(provisionUpdateWindow(f.control, [data])).rejects.toThrow();
   expect(updateWindowResettable(f.control, [data])).toBe(true);
   await resetUpdateWindow(f.control, [data]);
