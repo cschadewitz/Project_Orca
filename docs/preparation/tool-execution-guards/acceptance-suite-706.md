@@ -239,8 +239,8 @@ only its own agent's row and adds its own path adapter.
 A row may carry a narrower claim than a tier in its own field, `scoped`. It never goes in
 `tier`: the checker refuses any value there but `none`, `A`, `B` and `C`, and a scoped claim
 leaves the base tier as it is. The field is absent by default. Nothing renders it as a badge.
-It is checked only so that a claim written in it holds, and no badge shows until a reviewed
-change says so.
+It is checked only so that a claim written in it holds; no badge shows, and no claim is
+accepted, until a reviewed change enables it (below).
 
 When present, `check-support-matrix.js` (`scopedProblems`) requires:
 
@@ -260,6 +260,16 @@ B also needs `checks.cancelledNoEffect` and `checks.freshSessionFreshDecision`. 
 that a normally pending request that is cancelled has no independently observed effect, and
 that a fresh session needs a fresh decision rather than inheriting the cancelled request's
 authorization. Without them, B stays off.
+
+No check is taken on its word. Each one stands on the receipt's `lifecycle` evidence
+(`optIn`, `cancelled`, `fresh`, `judged`), and `lifecycleEvidenceProblems` re-derives every
+call's effect from its `effectRef`, evidence that neither ORCA nor the agent writes. A receipt
+with the labels but not the observations qualifies nothing.
+
+**Scoped claims are disabled.** `SCOPED_ENABLED` is empty, so the checker refuses any populated
+`scoped` field, the way `PROMOTABLE_TIERS` refuses a promoted tier. A separate, reviewed change
+enables a specific route and level, together with that route's eligibility requirements. One
+example: a known fail-open path where fail-closed is required keeps the route ineligible.
 
 Hook timeout and startup failure are listed under `unverified`. They are not run with live
 fault fixtures. `--release` checks a scoped claim's build for staleness the same way it checks

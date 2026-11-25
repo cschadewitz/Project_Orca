@@ -13,6 +13,8 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import {
   PROMOTABLE_TIERS,
   PROMOTION_DISABLED,
+  SCOPED_DISABLED,
+  SCOPED_ENABLED,
   UNVERIFIED,
   REPO_ROOT,
   casesFor,
@@ -181,6 +183,7 @@ describe("the matrix checker refuses claims beyond the evidence", () => {
     assertions = inventoryFor(paths),
     verify = attested,
     promotable = ["A", "B", "C"],
+    scopedEnabled = ["acp-ask:A", "acp-ask:B"],
   ) =>
     checkSupportMatrix(
       { ...matrix, agents: [{ ...agent, receipts: Object.keys(files) }], paths },
@@ -190,6 +193,7 @@ describe("the matrix checker refuses claims beyond the evidence", () => {
       assertions,
       verify,
       promotable,
+      scopedEnabled,
     );
   /** The receipt as a run against the requirements under test would have written it. */
   const current = (r, agent, paths, assertions) => {
@@ -568,10 +572,59 @@ describe("the matrix checker refuses claims beyond the evidence", () => {
       cancelledNoEffect: "pass",
       freshSessionFreshDecision: "pass",
     };
-    const scopedReceipt = (extra = {}) => receipt({ agentSettings: settings, checks: allChecks, ...extra });
+    /** Lifecycle evidence as the installed run records it: each effect re-derived from its reference. */
+    const file = (after, written = "w") => ({ kind: "file", path: "p", before: null, after, written });
+    const mcp = (loggedFor) => ({ kind: "mcp", callRef: "c1", loggedFor, answeredWith: null, unaccountedLines: 0 });
+    const call = (toolUseId, outcome, effectRef, answer) => ({
+      toolUseId,
+      outcome,
+      effectRef,
+      approvals: answer ? [{ toolCallId: toolUseId, answer }] : [],
+    });
+    const lifecycle = {
+      optIn: {
+        default: [call("toolu_d", "allow", file("w"))],
+        on: "refused",
+        experimental: [call("toolu_e", "deny", file(null))],
+      },
+      cancelled: [{ ...call("toolu_c", "ask", mcp([]), "pending"), effectAfterWait: "none" }],
+      fresh: [call("toolu_f1", "ask", mcp([]), "no-answer"), call("toolu_f2", "allow", mcp(["n"]), "allow_once")],
+      judged: [call("toolu_j1", "ask", mcp([]), "no-answer"), call("toolu_j2", "allow", mcp(["n"]), "allow_once")].map(
+        (r) => ({
+          ...r,
+          approvals: r.approvals.map((a) => ({ ...a, judged: { verdict: "covered", advisory: true } })),
+        }),
+      ),
+    };
+    const scopedReceipt = (extra = {}) =>
+      receipt({ agentSettings: settings, checks: allChecks, lifecycle: structuredClone(lifecycle), ...extra });
     // The base tier stays none: a scoped claim needs no promotion and changes no tier.
     const checkScoped = (s, r = scopedReceipt(), verify = attested) =>
       check(claude({ scoped: s }), { "s.json": r }, testPaths, inventoryFor(testPaths), verify, PROMOTABLE_TIERS);
+
+    it("is disabled in the production checker, whatever the receipt says", () => {
+      expect(SCOPED_ENABLED).toEqual([]);
+      // Pass labels with no observations behind them, through the production defaults.
+      const labelsOnly = scopedReceipt({ lifecycle: undefined });
+      const production = checkSupportMatrix(
+        { ...matrix, agents: [{ ...claude({ scoped: scoped() }), receipts: [] }], paths: testPaths },
+        catalogue,
+        (p) => p === "s.json",
+        (p) => current(p === "s.json" ? labelsOnly : undefined, claude(), testPaths, inventoryFor(testPaths)),
+        inventoryFor(testPaths),
+      );
+      expect(production[0]).toBe(`agent claude: scoped: ${SCOPED_DISABLED}`);
+      expect(production).toContain(`agent claude: scoped: s.json: ${UNVERIFIED}`);
+      expect(production).toContain("agent claude: scoped: s.json: lifecycle.cancelled: no cancelled call");
+      // Even enabled and attested, the labels alone qualify nothing.
+      expect(checkScoped(scoped(), labelsOnly)).toEqual([
+        "agent claude: scoped: s.json: lifecycle.optIn: without the field, the denied write did not take effect (a hook was in force)",
+        "agent claude: scoped: s.json: lifecycle.optIn: nativeToolHook: on was not refused",
+        "agent claude: scoped: s.json: lifecycle.optIn: with experimental, the write was not denied without effect",
+        "agent claude: scoped: s.json: lifecycle.cancelled: no cancelled call",
+        "agent claude: scoped: s.json: lifecycle.fresh: needs calls asked again, both unanswered and answered once",
+      ]);
+    });
 
     it("is never a value of the tier", () => {
       expect(check(claude({ tier: "B*" }))).toEqual(["agent claude: unknown tier B*"]);
@@ -590,6 +643,29 @@ describe("the matrix checker refuses claims beyond the evidence", () => {
       // A covers what it names, and needs neither.
       const covers = acpCases.slice(0, 3);
       expect(checkScoped(scoped({ level: "A", covers }), scopedReceipt({ checks: rest }))).toEqual([]);
+    });
+
+    it("takes no check on its word: each stands on its lifecycle evidence", () => {
+      const ran = scopedReceipt();
+      ran.lifecycle.cancelled[0].effectRef = mcp(["n"]);
+      expect(checkScoped(scoped(), ran)).toEqual([
+        "agent claude: scoped: s.json: lifecycle.cancelled: toolu_c was not a pending ask without effect",
+      ]);
+      const carried = scopedReceipt();
+      carried.lifecycle.fresh[1].toolUseId = "toolu_c";
+      expect(checkScoped(scoped(), carried)).toEqual([
+        "agent claude: scoped: s.json: lifecycle.fresh: a call is not the fresh session's own",
+      ]);
+      const noAsk = scopedReceipt();
+      noAsk.lifecycle.fresh[1].approvals = [];
+      expect(checkScoped(scoped(), noAsk)).toEqual([
+        "agent claude: scoped: s.json: lifecycle.fresh: needs calls asked again, both unanswered and answered once",
+      ]);
+      const hooked = scopedReceipt();
+      hooked.lifecycle.optIn.default = [call("toolu_d", "deny", file(null))];
+      expect(checkScoped(scoped({ level: "A" }), hooked)).toEqual([
+        "agent claude: scoped: s.json: lifecycle.optIn: without the field, the denied write did not take effect (a hook was in force)",
+      ]);
     });
 
     it("needs the opt-in journey at every level", () => {
@@ -634,6 +710,17 @@ describe("the matrix checker refuses claims beyond the evidence", () => {
       expect(
         checkScoped(scoped({ judge: "verified" }), scopedReceipt({ checks: { ...allChecks, judgedAction: "pass" } })),
       ).toEqual([]);
+      // Advice that ran a call nobody answered, or an ask without the judge's advice, is not one.
+      const alone = scopedReceipt({ checks: { ...allChecks, judgedAction: "pass" } });
+      alone.lifecycle.judged[0].effectRef = mcp(["n"]);
+      expect(checkScoped(scoped({ judge: "verified" }), alone)).toEqual([
+        "agent claude: scoped: s.json: lifecycle.judged: toolu_j1 ran on the judge's advice alone",
+      ]);
+      const unjudged = scopedReceipt({ checks: { ...allChecks, judgedAction: "pass" } });
+      unjudged.lifecycle.judged[1].approvals = [{ toolCallId: "toolu_j2", answer: "allow_once" }];
+      expect(checkScoped(scoped({ judge: "verified" }), unjudged)).toEqual([
+        "agent claude: scoped: s.json: lifecycle.judged: needs judged calls the person was asked about, unanswered and answered once",
+      ]);
     });
 
     it("lists what stays off and what it does not verify", () => {

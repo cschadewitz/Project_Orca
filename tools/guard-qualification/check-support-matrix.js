@@ -45,6 +45,15 @@ export const PROMOTION_DISABLED =
  * Nothing renders it as a badge; this only checks that a claim written in it holds.
  */
 export const SCOPED_LEVELS = ["A", "B"];
+/**
+ * The `route:level` scopes a row may claim: none yet. Like tier promotion, a populated `scoped`
+ * claim is refused until a separate, reviewed change enables a specific route and level, once
+ * that route's eligibility requirements (for example, no known fail-open path where fail-closed
+ * is required) are applied to it.
+ */
+export const SCOPED_ENABLED = [];
+export const SCOPED_DISABLED =
+  "scoped claims are disabled until a reviewed change enables this route and level (#1026)";
 /** Installed checks every scoped claim needs: the opt-in is off by default and explicit. */
 export const SCOPED_CHECKS = ["optInDefaultOff"];
 /**
@@ -484,6 +493,7 @@ export function checkSupportMatrix(
   assertions = loadAssertions(),
   verifyReceipt = () => [UNVERIFIED],
   promotable = PROMOTABLE_TIERS,
+  scopedEnabled = SCOPED_ENABLED,
 ) {
   const problems = [];
   const ids = new Set(catalogue.cases.map((c) => c.id));
@@ -596,6 +606,8 @@ export function checkSupportMatrix(
       problems.push(
         `${at}: notAsserted must name exactly its routes' installed diagnostics (${diagnostics.join(",") || "none"})`,
       );
+    if (agent.scoped !== undefined && !scopedEnabled.includes(`${agent.scoped?.route}:${agent.scoped?.level}`))
+      problems.push(`${at}: scoped: ${SCOPED_DISABLED}`);
     if (agent.scoped !== undefined)
       problems.push(
         ...scopedProblems(matrix, catalogue, assertions, agent, paths, exists, readReceipt, verifyReceipt).map(
@@ -793,12 +805,100 @@ export function scopedProblems(
         ? []
         : ["agentSettings are not the scoped settings"]),
       ...checks.filter((c) => receipt?.checks?.[c] !== "pass").map((c) => `needs checks.${c} passing`),
+      ...lifecycleEvidenceProblems(
+        receipt,
+        checks.filter((c) => c in LIFECYCLE_EVIDENCE),
+      ),
     ];
     if (why.length === 0) return problems;
     refused.push(...why.map((p) => `${file}: ${p}`));
   }
   // One receipt that backs every part of the claim is enough; otherwise say why each falls short.
   return [...problems, ...refused];
+}
+
+/** The receipt's `lifecycle` evidence each scoped check stands on. */
+const LIFECYCLE_EVIDENCE = {
+  optInDefaultOff: "optIn",
+  cancelledNoEffect: "cancelled",
+  freshSessionFreshDecision: "fresh",
+  judgedAction: "judged",
+};
+
+/**
+ * Why a receipt's `lifecycle` evidence does not show the `checks` it claims. A check's "pass" is
+ * not taken on its word: each call's effect is recomputed from its `effectRef`
+ * (`connected/evidence.js`), evidence that neither ORCA nor the agent writes.
+ *
+ * - `optInDefaultOff`: with the field left out, a write ORCA's rule denies took effect (no hook
+ *   was installed); `on` was refused; with `experimental`, the same kind of write was denied and
+ *   had no effect.
+ * - `cancelledNoEffect`: every cancelled call was asked about, never answered, and had no
+ *   effect, then or after a wait.
+ * - `freshSessionFreshDecision`: in the new session, calls with no answer had no effect, calls
+ *   answered once took effect, each on its own ask, and none is a cancelled call.
+ * - `judgedAction`: every judged call reached the person with the judge's advisory verdict;
+ *   unanswered it had no effect, answered once it took effect. The judge allowed nothing itself.
+ */
+export function lifecycleEvidenceProblems(receipt, checks = Object.keys(LIFECYCLE_EVIDENCE)) {
+  const problems = [];
+  const life = receipt?.lifecycle ?? {};
+  const effect = (r) => (r?.effectRef ? effectFrom(r.effectRef) : "indeterminate");
+  const answers = (r) => (r?.approvals ?? []).map((a) => a.answer);
+  const list = (v) => (Array.isArray(v) ? v : []);
+  if (checks.includes("optInDefaultOff")) {
+    const o = life.optIn ?? {};
+    if (list(o.default).length === 0 || list(o.default).some((r) => effect(r) !== "observed"))
+      problems.push("lifecycle.optIn: without the field, the denied write did not take effect (a hook was in force)");
+    if (o.on !== "refused") problems.push("lifecycle.optIn: nativeToolHook: on was not refused");
+    if (
+      list(o.experimental).length === 0 ||
+      list(o.experimental).some((r) => r.outcome !== "deny" || effect(r) !== "none")
+    )
+      problems.push("lifecycle.optIn: with experimental, the write was not denied without effect");
+  }
+  const cancelled = list(life.cancelled);
+  if (checks.includes("cancelledNoEffect")) {
+    if (cancelled.length === 0) problems.push("lifecycle.cancelled: no cancelled call");
+    for (const r of cancelled)
+      if (
+        r.outcome !== "ask" ||
+        answers(r).length === 0 ||
+        answers(r).some((a) => a !== "pending") ||
+        effect(r) !== "none" ||
+        r.effectAfterWait !== "none"
+      )
+        problems.push(`lifecycle.cancelled: ${r.toolUseId ?? "a call"} was not a pending ask without effect`);
+  }
+  if (checks.includes("judgedAction")) {
+    const judged = list(life.judged);
+    const advised = (r) =>
+      (r.approvals ?? []).length > 0 &&
+      r.approvals.every((a) => a.judged?.advisory === true && typeof a.judged?.verdict === "string");
+    const unanswered = judged.filter((r) => advised(r) && answers(r).every((a) => a === "no-answer"));
+    const once = judged.filter((r) => advised(r) && answers(r).every((a) => a === "allow_once"));
+    if (unanswered.length === 0 || once.length === 0 || unanswered.length + once.length !== judged.length)
+      problems.push("lifecycle.judged: needs judged calls the person was asked about, unanswered and answered once");
+    for (const r of unanswered)
+      if (effect(r) !== "none") problems.push(`lifecycle.judged: ${r.toolUseId} ran on the judge's advice alone`);
+    for (const r of once)
+      if (effect(r) !== "observed") problems.push(`lifecycle.judged: ${r.toolUseId} did not run on its answer`);
+  }
+  if (checks.includes("freshSessionFreshDecision")) {
+    const fresh = list(life.fresh);
+    const before = new Set(cancelled.map((r) => r.toolUseId));
+    const unanswered = fresh.filter((r) => answers(r).length > 0 && answers(r).every((a) => a === "no-answer"));
+    const once = fresh.filter((r) => answers(r).length > 0 && answers(r).every((a) => a === "allow_once"));
+    if (unanswered.length === 0 || once.length === 0 || unanswered.length + once.length !== fresh.length)
+      problems.push("lifecycle.fresh: needs calls asked again, both unanswered and answered once");
+    for (const r of unanswered)
+      if (effect(r) !== "none") problems.push(`lifecycle.fresh: ${r.toolUseId} ran without an answer`);
+    for (const r of once)
+      if (effect(r) !== "observed") problems.push(`lifecycle.fresh: ${r.toolUseId} did not run on its answer`);
+    if (fresh.some((r) => !r.toolUseId || before.has(r.toolUseId)))
+      problems.push("lifecycle.fresh: a call is not the fresh session's own");
+  }
+  return problems;
 }
 
 /**
