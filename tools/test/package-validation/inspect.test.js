@@ -823,6 +823,16 @@ describe("what sits beside the daemon follows the candidate's build rule (#704, 
     expect(daemonLayout("await build({ outfile });", false)).toBe("daemon-only");
   });
 
+  it("accepts the hook entry named from packages/app or from the repository root, exactly once", () => {
+    const at = (hookBody) => only(win, windowsArchive(VERSION, "x64", source, { hookBody }));
+    for (const agents of ["../agents", "packages/agents"])
+      expect(at(claudeHookBody(agents)).status).toBe("consistent");
+    const both = Buffer.concat([claudeHookBody("../agents"), claudeHookBody("packages/agents")]);
+    expect(refusal(at(both), win)).toMatch(/bundled_hook_unrecognized: 2 hook entry modules/);
+    for (const agents of ["../../agents", "agents", "../packages/agents"])
+      expect(refusal(at(claudeHookBody(agents)), win)).toMatch(/bundled_hook_unrecognized: 0 hook entry modules/);
+  });
+
   it("refuses a hook that is structurally not the hook entry's bundle, or is a copy of the daemon", () => {
     const other = windowsArchive(VERSION, "x64", source, {
       hookBody: Buffer.from("#!/usr/bin/env node\nexport {};\n"),

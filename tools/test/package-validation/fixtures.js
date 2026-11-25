@@ -190,10 +190,14 @@ export const daemon = (version) =>
 export const legacyDaemon = (version) =>
   text(`// synthetic daemon\nvar ORCA_VERSION = true ? "${version}" : fallback();\nexport {};\n`);
 
-/** Claude's tool-call hook as build-daemon.js bundles it beside the daemon (#704). */
-export const claudeHookBody = () =>
+/**
+ * Claude's tool-call hook as build-daemon.js bundles it beside the daemon (#704). esbuild names
+ * modules relative to its working directory: `packages/app` (`../agents`) for the packaged
+ * builds, the repository root (`packages/agents`) otherwise.
+ */
+export const claudeHookBody = (agents = "../agents") =>
   text(
-    "#!/usr/bin/env node\nimport { createRequire as __createRequire } from 'node:module';\n\n// packages/agents/dist/bin/claude-pre-tool-hook.js\nexport {};\n",
+    `#!/usr/bin/env node\nimport { createRequire as __createRequire } from 'node:module';\n\n// ${agents}/dist/bin/claude-pre-tool-hook.js\nexport {};\n`,
   );
 
 const TAR_MAGIC = { posix: "ustar\x0000", gnu: "ustar  \x00", v7: "\0\0\0\0\0\0\0\0" };
