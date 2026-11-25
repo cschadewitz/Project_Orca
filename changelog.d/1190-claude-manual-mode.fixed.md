@@ -1,0 +1,1 @@
+- **agents:** Claude sessions run in Manual mode. The Claude ACP adapter started them in its `auto` mode, where Claude Code settled calls itself: a session without ORCA's hook ran commands ORCA's policy denied without asking ORCA. ORCA now switches every Claude session to `default` at open, refuses switching it out, and pins it again before each prompt.

@@ -541,4 +541,115 @@ rl.on("line", (line) => {
       await session.close();
     }
   }, 120_000);
+
+  /* ------------------------------ Claude's permission mode ------------------------------ */
+
+  /** A session the factory opens for the agent without ORCA's hook. */
+  const unhookedSession = (permissions: unknown): Promise<AgentSession> =>
+    makeSessionFactory(
+      { configDir, storeDir: ".orca" },
+      openAcpSession,
+    )({
+      host: new LocalHost({ id: "local", type: "local" }),
+      agent: AgentSpecSchema.parse({ ...agent(permissions), nativeToolHook: undefined }),
+      cwd: workspace,
+      askPermission,
+      logger: silentLogger,
+      handshakeTimeoutMs: 60_000,
+    });
+
+  const modeOf = (session: AgentSession) => session.configOptions.find((o) => o.id === "mode")?.currentValue;
+
+  it("starts Claude in auto mode when ORCA does not pin it, where a call ORCA denies runs without asking", async () => {
+    // Pinned so a change in the adapter's default is noticed: this is what ORCA's pin answers.
+    asks.length = 0;
+    await writeFile(join(claudeConfig, "settings.json"), "{}", "utf8");
+    const session = await openAcpSession({
+      host: new LocalHost({ id: "local", type: "local" }),
+      agent: AgentSpecSchema.parse({ ...agent({ default: "deny", rules: [] }), nativeToolHook: undefined }),
+      cwd: workspace,
+      askPermission,
+      logger: silentLogger,
+      handshakeTimeoutMs: 60_000,
+    });
+    try {
+      expect(modeOf(session)).toBe("auto");
+      await session.prompt(CALL);
+      expect(await marks()).toBe(1);
+      expect(asks).toEqual([]);
+    } finally {
+      await session.close();
+    }
+  }, 120_000);
+
+  it("runs every Claude session in Manual mode, so a call goes to ORCA's policy", async () => {
+    asks.length = 0;
+    await writeFile(join(claudeConfig, "settings.json"), "{}", "utf8");
+    // Denied by ORCA's policy: not run, and nobody asked.
+    let session = await unhookedSession({ default: "deny", rules: [] });
+    try {
+      expect(modeOf(session)).toBe("default");
+      await session.prompt(CALL);
+      expect(await marks()).toBe(0);
+      expect(asks).toEqual([]);
+      // ORCA does not switch it out of Manual.
+      await expect(session.setConfigOption("mode", "auto")).rejects.toMatchObject({ code: "NOT_SUPPORTED" });
+      await expect(session.setConfigOption("mode", "bypassPermissions")).rejects.toMatchObject({
+        code: "NOT_SUPPORTED",
+      });
+      expect(modeOf(session)).toBe("default");
+    } finally {
+      await session.close();
+    }
+    // Asked about under ORCA's default policy: the ask reaches ORCA's human channel, is refused,
+    // and nothing runs.
+    session = await unhookedSession(undefined);
+    try {
+      await session.prompt(CALL);
+      expect(asks).toEqual([COMMAND]);
+      expect(await marks()).toBe(0);
+    } finally {
+      await session.close();
+    }
+    // Allowed by an ORCA rule: runs without asking.
+    asks.length = 0;
+    session = await unhookedSession({
+      rules: [{ match: { kind: "execute", titlePattern: "^echo orca-704" }, decision: "allow" }],
+    });
+    try {
+      await session.prompt(CALL);
+      expect(await marks()).toBe(1);
+      expect(asks).toEqual([]);
+    } finally {
+      await session.close();
+    }
+  }, 240_000);
+
+  it("pins a checkout's own starting mode back to Manual", async () => {
+    asks.length = 0;
+    await writeFile(join(claudeConfig, "settings.json"), "{}", "utf8");
+    await mkdir(join(workspace, ".claude"));
+    await writeFile(
+      join(workspace, ".claude", "settings.json"),
+      JSON.stringify({ permissions: { defaultMode: "acceptEdits" } }),
+      "utf8",
+    );
+    const session = await unhookedSession({ default: "deny", rules: [] });
+    try {
+      expect(modeOf(session)).toBe("default");
+      await session.prompt(CALL);
+      expect(await marks()).toBe(0);
+    } finally {
+      await session.close();
+    }
+  }, 120_000);
+
+  it("pins a hooked Claude session to Manual too", async () => {
+    const session = await factorySession();
+    try {
+      expect(modeOf(session)).toBe("default");
+    } finally {
+      await session.close();
+    }
+  }, 120_000);
 });
