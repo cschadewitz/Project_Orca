@@ -381,8 +381,13 @@ jobs:
           '
           # The package's own identity, and no claim on the screen reader's.
           test "$(dpkg-deb -f "$deb" Package)" = orca-desktop
-          for field in Conflicts Breaks Replaces Provides Pre-Depends; do
+          for field in Breaks Provides Pre-Depends; do
             test -z "$(dpkg-deb -f "$deb" "$field")"
+          done
+          # Replaces and Conflicts name only the package before the rename (or nothing, before #1091).
+          for field in Conflicts Replaces; do
+            value=$(dpkg-deb -f "$deb" "$field")
+            test -z "$value" || test "$value" = orca-desktop # rename-keep: the package name up to v0.8
           done
           if dpkg-deb -c "$deb" | awk '{ print $NF }' | grep -E '^\./usr/bin/orca$|/orca\.desktop$|apparmor\.d/orca$|^\./usr/share/mime/'; then
             echo "::error::the .deb ships a path the screen reader or the MIME database owns"; exit 1

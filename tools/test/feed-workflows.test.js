@@ -31,7 +31,9 @@ describe("desktop feed workflows", () => {
   it("gates both feed workflows on the bucket variable, main and the feed environment", () => {
     for (const name of ["feed-publish.yml", "feed-promote.yml"]) {
       const text = read(name);
-      expect(text).toContain("if: github.ref == 'refs/heads/main' && vars.ORCA_FEED_BUCKET != ''");
+      expect(text).toContain(
+        "if: github.ref == 'refs/heads/main' && (vars.ORRERY_FEED_BUCKET || vars.ORCA_FEED_BUCKET) != ''",
+      );
       expect(text).toContain("environment: desktop-feed");
     }
     expect(read("feed-promote.yml")).toContain("group: release-publication");
@@ -47,7 +49,7 @@ describe("desktop feed workflows", () => {
     // Halting (percent 0) is how a bad rollout is stopped, so it still runs while paused.
     expect(promote).toContain('if [ "$PAUSE" = "true" ] && [ "$PERCENT" != "0" ]; then');
     for (const name of ["feed-publish.yml", "feed-promote.yml"])
-      expect(read(name)).toContain("PAUSE: ${{ vars.ORCA_FEED_PAUSE }}");
+      expect(read(name)).toContain("PAUSE: ${{ vars.ORRERY_FEED_PAUSE || vars.ORCA_FEED_PAUSE }}");
   });
 
   it("serves x64, and arm64 only with verified acceptance, matching the published release", () => {
@@ -78,12 +80,14 @@ describe("automatic feed dispatch", () => {
     expect(auto).toContain("types: [published]");
     expect(auto).toMatch(/cron: "41 7 \* \* \*"/);
     expect(auto).not.toContain("workflow_run");
-    expect(auto).toContain("if: vars.ORCA_FEED_AUTO == 'true' && vars.ORCA_FEED_BUCKET != ''");
+    expect(auto).toContain(
+      "if: (vars.ORRERY_FEED_AUTO || vars.ORCA_FEED_AUTO) == 'true' && (vars.ORRERY_FEED_BUCKET || vars.ORCA_FEED_BUCKET) != ''",
+    );
     expect(auto).not.toMatch(/^concurrency:/m);
   });
 
   it("dispatches nothing while the feed is paused", () => {
-    expect(auto).toContain("if: vars.ORCA_FEED_PAUSE == 'true'");
+    expect(auto).toContain("if: (vars.ORRERY_FEED_PAUSE || vars.ORCA_FEED_PAUSE) == 'true'");
     expect(auto.match(/if: steps\.pause\.outcome == 'skipped'/g)).toHaveLength(2);
   });
 
@@ -107,7 +111,9 @@ describe("server bundle channel workflows (#877)", () => {
     const wf = workflow("feed-publish.yml");
     const { server, publish } = wf.jobs;
     expect(publish.needs).toBe("server");
-    expect(server.if).toBe("github.ref == 'refs/heads/main' && vars.ORCA_FEED_BUCKET != ''");
+    expect(server.if).toBe(
+      "github.ref == 'refs/heads/main' && (vars.ORRERY_FEED_BUCKET || vars.ORCA_FEED_BUCKET) != ''",
+    );
     expect(server.environment).toBe("desktop-feed");
     const names = server.steps.map((s) => s.name ?? s.uses);
     expect(names[0]).toBe("Refuse while the feed is paused");
@@ -146,7 +152,7 @@ describe("server bundle channel workflows (#877)", () => {
     expect(wf.concurrency).toEqual({ group: "release-publication", "cancel-in-progress": false });
     expect(wf.permissions).toEqual({ contents: "read" });
     const { switch: job } = wf.jobs;
-    expect(job.if).toBe("github.ref == 'refs/heads/main' && vars.ORCA_FEED_BUCKET != ''");
+    expect(job.if).toBe("github.ref == 'refs/heads/main' && (vars.ORRERY_FEED_BUCKET || vars.ORCA_FEED_BUCKET) != ''");
     expect(job.environment).toBe("desktop-feed");
     const guard = job.steps[0];
     expect(guard.name).toBe("Refuse to resume while the feed is paused");
@@ -171,7 +177,7 @@ describe("server bundle channel workflows (#877)", () => {
     const check = watch.steps.find((s) => s.name === "Check every ring and architecture");
     expect(check.env).toMatchObject({
       FEED_RINGS: "${{ needs.rings.outputs.rings }}",
-      FEED_COMMISSIONED: "${{ vars.ORCA_FEED_BUCKET != '' }}",
+      FEED_COMMISSIONED: "${{ (vars.ORRERY_FEED_BUCKET || vars.ORCA_FEED_BUCKET) != '' }}",
     });
     expect(JSON.stringify(watch)).not.toMatch(/ORCA_FEED_(READER_)?(ACCESS_KEY|SECRET)/);
   });

@@ -7,6 +7,7 @@ import { access, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, writeFil
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { loadMap, renameText } from "../rename/lib.mjs";
 import {
   FIRST_RUN_SAMPLE,
   FIRST_RUN_SAMPLE_FILES,
@@ -15,6 +16,11 @@ import {
 import { FirstRunSetup } from "../../packages/app/src/main/first-run/setup.js";
 
 const root = new URL("../../", import.meta.url);
+// The pages describe the candidate as it was named before the Orrery rename, and the codemod
+// leaves them (and this test) as they are. Where they meet the live source, both sides are
+// compared as renamed, so a name matches whether or not the source has been renamed yet.
+const MAP = loadMap();
+const renamed = (value) => renameText(MAP, value).text;
 const dir = new URL("docs/preparation/private-candidate-windows-linux/", root);
 const pages = readdirSync(dir)
   .filter((name) => name.endsWith(".md"))
@@ -172,21 +178,21 @@ const QUOTED = [
 ];
 
 it("quotes only UI strings that the current source renders", () => {
-  const docs = flat(pages.map(text).join("\n"));
+  const docs = flat(renamed(pages.map(text).join("\n")));
   for (const [path, strings] of QUOTED) {
-    const code = flat(source(path)).toLowerCase();
-    for (const value of strings) {
+    const code = flat(renamed(source(path))).toLowerCase();
+    for (const value of strings.map(renamed)) {
       expect(code, `${value} in ${path}`).toContain(flat(value).toLowerCase());
       expect(docs.toLowerCase(), `${value} quoted in the pages`).toContain(flat(value).toLowerCase());
     }
   }
-  const sample = text("first-success-sample.md");
+  const sample = renamed(text("first-success-sample.md"));
   for (const value of [
     FIRST_RUN_SAMPLE.id,
     FIRST_RUN_SAMPLE.revision,
     `${FIRST_RUN_SAMPLE.id} / ${FIRST_RUN_SAMPLE.version} / ${FIRST_RUN_SAMPLE.revision}`,
   ])
-    expect(sample).toContain(value);
+    expect(sample).toContain(renamed(value));
   const semantics = JSON.parse(source("packages/design/semantics.json"));
   const words = [
     semantics.runStatus.succeeded,
@@ -431,10 +437,13 @@ describe.skipIf(process.platform === "win32" || typeof process.getuid !== "funct
       const prepared = await setup.prepare(review.review.id, current);
       expect(prepared).toEqual({ state: "prepared", project, workspace, sample: FIRST_RUN_SAMPLE });
       expect(prepareConnection).not.toHaveBeenCalled();
-      expect((await readdir(workspace)).sort()).toEqual(["first-run", "orca.config.yaml"]);
+      const written = (await readdir(workspace)).sort();
+      const config = written.find((name) => name.endsWith(".config.yaml"));
+      expect(renamed(config)).toBe(renamed("orca.config.yaml"));
+      expect(written).toEqual(["first-run", config].sort());
       const assets = (await readdir(join(workspace, "first-run"))).sort();
       expect(assets).toEqual(["instruction.md", "result.json", "task.json", "workflow.yaml"]);
-      let bytes = (await stat(join(workspace, "orca.config.yaml"))).size;
+      let bytes = (await stat(join(workspace, config))).size;
       for (const name of assets) bytes += (await stat(join(workspace, "first-run", name))).size;
       // "about 5.5 KB in total" in the sample's resource table.
       expect(bytes).toBeGreaterThan(5_000);

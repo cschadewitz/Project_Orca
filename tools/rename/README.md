@@ -18,6 +18,7 @@ Because the mechanical layer is regenerated, `main` stays open and its new code 
 | --- | --- |
 | `map.json` | The naming map: ordered rules, keep patterns, excluded paths. The only place a name is decided. |
 | `codemod.mjs` | Applies the map. Dry run by default; `--apply` rewrites and `git mv`s; `--only <path>` limits it. Idempotent. |
+| `post-codemod.mjs` | Run right after `--apply`. Re-derives the digests committed files pin over bytes the rename changes (the native Mac fixture; the guard receipts' pre-rename bytes and renamed qualification profiles), exactly as their generators document, and fails if any other digest no longer matches. Idempotent. |
 | `audit.mjs` | Lists every ORCA name the codemod left, exits 1 if any. Run after `--apply`. |
 | `allowlist.json` | Leftovers that are right, each with a reason, for files that cannot hold a comment. |
 | `convert-branch.sh` | After cutover, moves a branch that was still open onto the new names. |
@@ -28,7 +29,7 @@ Because the mechanical layer is regenerated, `main` stays open and its new code 
 ```sh
 node tools/rename/codemod.mjs --only packages/core    # what would change
 # in a scratch worktree, never on your branch:
-node tools/rename/codemod.mjs --apply && node tools/rename/audit.mjs && pnpm run typecheck && pnpm test
+node tools/rename/codemod.mjs --apply && node tools/rename/post-codemod.mjs && node tools/rename/audit.mjs && pnpm run typecheck && pnpm test
 ```
 
 When the result is wrong, fix it on your branch with one of these, never by committing codemod output:

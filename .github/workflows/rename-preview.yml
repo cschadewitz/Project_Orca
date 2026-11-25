@@ -49,6 +49,8 @@ jobs:
         run: |
           node tools/rename/codemod.mjs --apply | tail -n 1
           node tools/rename/codemod.mjs | tail -n 1
+          # Digests pinned over renamed bytes, re-derived as their generators document.
+          node tools/rename/post-codemod.mjs
 
       # Every check below runs once the rename is applied and installed, whatever an earlier
       # check said: a red audit must not hide what typecheck, build and test say about the same

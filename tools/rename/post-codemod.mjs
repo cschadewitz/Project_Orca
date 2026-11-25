@@ -46,12 +46,16 @@ function replaceOnce(path, from, to) {
 }
 
 export function nativeMacFixture(root = at("tools/deploy/tests/native-mac/fixtures/valid")) {
-  const apps = readdirSync(root).filter((name) => name.endsWith(".app"));
+  // The codemod moves files, not directories: the old .app stays behind as empty directories.
+  const apps = readdirSync(root).filter(
+    (name) => name.endsWith(".app") && existsSync(join(root, name, "Contents/Info.plist")),
+  );
   if (apps.length !== 1) refuse(`${relative(ROOT, root)}: expected one .app, found ${apps.join(", ") || "none"}`);
   const resources = join(root, apps[0], "Contents/Resources");
   const stubs = readdirSync(join(resources, "daemon")).filter((name) => name.endsWith("-daemon.mjs.txt"));
   const builds = readdirSync(resources).filter((name) => name.endsWith("-build.json"));
-  if (stubs.length !== 1 || builds.length !== 1) refuse(`${relative(ROOT, resources)}: expected one daemon stub and one build identity`);
+  if (stubs.length !== 1 || builds.length !== 1)
+    refuse(`${relative(ROOT, resources)}: expected one daemon stub and one build identity`);
   const stub = join(resources, "daemon", stubs[0]);
   const build = join(resources, builds[0]);
   const delivery = join(root, "delivery");
@@ -69,7 +73,8 @@ export function nativeMacFixture(root = at("tools/deploy/tests/native-mac/fixtur
   let manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
   if (JSON.stringify(manifest.identity) !== JSON.stringify(JSON.parse(identityBytes)))
     refuse("native-mac-artifact.json's identity is not the build identity");
-  if (manifest.identitySha256 !== sha(identityBytes)) replaceOnce(manifestPath, manifest.identitySha256, sha(identityBytes));
+  if (manifest.identitySha256 !== sha(identityBytes))
+    replaceOnce(manifestPath, manifest.identitySha256, sha(identityBytes));
   manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
   // Every artifact and evidence digest is of bytes the rename does not touch: they must still hold.
   for (const record of [...manifest.artifacts, ...manifest.evidence]) {
@@ -85,7 +90,8 @@ export function nativeMacFixture(root = at("tools/deploy/tests/native-mac/fixtur
     if (!match) refuse(`SHA256SUMS: unreadable line ${line}`);
     const actual = sha(readFileSync(join(delivery, match[2])));
     if (actual === match[1]) return line;
-    if (match[2] !== "native-mac-artifact.json") refuse(`SHA256SUMS: ${match[2]} no longer matches, and the rename does not explain it`);
+    if (match[2] !== "native-mac-artifact.json")
+      refuse(`SHA256SUMS: ${match[2]} no longer matches, and the rename does not explain it`);
     return `${actual}  ${match[2]}`;
   });
   if (next.join("\n") !== lines.join("\n")) {
@@ -99,11 +105,21 @@ export function nativeMacFixture(root = at("tools/deploy/tests/native-mac/fixtur
     execFileSync("python3", ["-B", at("tools/deploy/tests/native-mac/make_fixture.py"), out], { stdio: "pipe" });
     execFileSync(
       "python3",
-      ["-B", at("tools/deploy/native-mac-verify.py"), "--mode", "fixture", "--fixture-app", join(out, apps[0]), join(out, "delivery")],
+      [
+        "-B",
+        at("tools/deploy/native-mac-verify.py"),
+        "--mode",
+        "fixture",
+        "--fixture-app",
+        join(out, apps[0]),
+        join(out, "delivery"),
+      ],
       { stdio: "pipe" },
     );
   } catch (error) {
-    refuse(`the native Mac fixture validator refuses the re-derived fixture: ${String(error.stderr ?? error.message).trim()}`);
+    refuse(
+      `the native Mac fixture validator refuses the re-derived fixture: ${String(error.stderr ?? error.message).trim()}`,
+    );
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
@@ -116,7 +132,9 @@ export async function enforcementReceipts(base = "HEAD") {
   const checker = await import(pathToFileURL(at(dir, "check-support-matrix.js")).href);
   const map = loadMap();
   // Receipts: keep the attested bytes beside each one the codemod rewrote, and check the rewrite.
-  for (const name of readdirSync(at(dir, "receipts")).filter((n) => n.endsWith(".json") && !n.endsWith(".sigstore.json"))) {
+  for (const name of readdirSync(at(dir, "receipts")).filter(
+    (n) => n.endsWith(".json") && !n.endsWith(".sigstore.json"),
+  )) {
     const path = `${dir}/receipts/${name}`;
     let before;
     try {
@@ -171,8 +189,8 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   try {
     nativeMacFixture();
     await enforcementReceipts(base);
-    for (const line of changed) console.log(`re-derived ${line}`);
-    console.log(`post-codemod: ${changed.length} re-derived, everything else still matches`);
+    for (const line of changed) process.stdout.write(`re-derived ${line}\n`);
+    process.stdout.write(`post-codemod: ${changed.length} re-derived, everything else still matches\n`);
   } catch (error) {
     console.error(`post-codemod: ${error.message}`);
     process.exit(1);

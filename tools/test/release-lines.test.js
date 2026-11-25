@@ -796,7 +796,7 @@ describe("the patch path through the workflows", () => {
     expect(resolve).toMatch(/holds minor\/major work/);
     // The App token, when configured, is what lets CI and the guard run on that pull request.
     expect(prepare[0].uses).toMatch(/^actions\/create-github-app-token@[0-9a-f]{40}$/);
-    expect(prepare[0].if).toBe("${{ vars.ORCA_RELEASE_APP_ID != '' }}");
+    expect(prepare[0].if).toBe("${{ (vars.ORRERY_RELEASE_APP_ID || vars.ORCA_RELEASE_APP_ID) != '' }}");
   });
 
   it("records a line release on main only once it is published, through main's review", () => {

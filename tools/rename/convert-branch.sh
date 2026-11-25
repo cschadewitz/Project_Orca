@@ -4,7 +4,8 @@
 #   tools/rename/convert-branch.sh <branch> [<pre-rename-main-commit>]
 #
 # 1. merges the last pre-rename main into the branch (so only the branch's own work differs),
-# 2. runs the same codemod over the branch and commits it,
+# 2. runs the same codemod over the branch, re-derives the digests it changes (post-codemod.mjs)
+#    and commits it,
 # 3. merges today's (renamed) main.
 # Both sides then carry the identical mechanical transform, so step 3 conflicts only where the
 # branch and main really disagree. The pre-rename commit defaults to the tag `pre-orrery`,
@@ -29,6 +30,8 @@ git show origin/main:tools/rename/map.json > "$tmp/map.json"
 for f in lib.mjs codemod.mjs; do git show "origin/main:tools/rename/$f" > "$tmp/$f"; done
 node "$tmp/codemod.mjs" --apply
 rm -rf "$tmp"
+# Digests pinned over renamed bytes (the branch has this since the pre-rename main it merged).
+node tools/rename/post-codemod.mjs
 git add -A
 git commit -m "rename: apply Orrery codemod to $branch" || echo "convert-branch: nothing to rename"
 

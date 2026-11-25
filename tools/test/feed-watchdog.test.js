@@ -264,18 +264,20 @@ describe("feed-watchdog.yml", () => {
     // Canary tokens are read only by reviewed main, from their own environment, which holds
     // no write credential.
     const [, rings, watch] = /\n {2}rings:\n([\s\S]*?)\n {2}watch:\n([\s\S]*)$/.exec(text);
-    expect(watch).toContain("if: always() && github.ref == 'refs/heads/main' && vars.ORCA_FEED_URL != ''");
+    expect(watch).toContain(
+      "if: always() && github.ref == 'refs/heads/main' && (vars.ORRERY_FEED_URL || vars.ORCA_FEED_URL) != ''",
+    );
     expect(watch).toContain("environment: feed-canary");
     expect(watch).toContain("needs: rings");
     expect(watch).not.toMatch(/desktop-feed|feed-reader|ORCA_FEED_(READER_)?(ACCESS_KEY|SECRET)/);
     expect(watch).toContain("FEED_CANARY_TOKENS: ${{ secrets.ORCA_FEED_CANARY_TOKENS }}");
     expect(watch).toContain("FEED_RINGS: ${{ needs.rings.outputs.rings }}");
-    expect(watch).toContain("FEED_COMMISSIONED: ${{ vars.ORCA_FEED_BUCKET != '' }}");
+    expect(watch).toContain("FEED_COMMISSIONED: ${{ (vars.ORRERY_FEED_BUCKET || vars.ORCA_FEED_BUCKET) != '' }}");
     expect(watch).toContain("run: node tools/deploy/feed-watchdog.js");
     // The live ring state is read by its own job, which holds the bucket credential and never a
     // canary token, and only reads.
     expect(rings).toContain(
-      "if: github.ref == 'refs/heads/main' && vars.ORCA_FEED_URL != '' && vars.ORCA_FEED_BUCKET != ''",
+      "if: github.ref == 'refs/heads/main' && (vars.ORRERY_FEED_URL || vars.ORCA_FEED_URL) != '' && (vars.ORRERY_FEED_BUCKET || vars.ORCA_FEED_BUCKET) != ''",
     );
     // A read-only key of its own, never the publishing key in desktop-feed.
     expect(rings).toContain("environment: feed-reader");
