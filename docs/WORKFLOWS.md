@@ -370,7 +370,8 @@ call whose working directory is outside the workspace is asked about (so, in Cod
 
 With the hook on, calls the agent used to run by its own allow rules follow ORCA's instead,
 so an unattended run may meet asks (or, in Codex, blocks) it did not before; give the agent
-`rules:` for them.
+`rules:` for them. Because a Codex ask is blocked, the hook does not bring the plain-language rule judge
+to Codex: see [plain-language-rules.md](plain-language-rules.md#codex).
 
 `nativeToolHook: experimental` is a promise that the agent's calls are checked, so ORCA opens the
 session only where it has tested the hook and **refuses it everywhere else**, rather than run

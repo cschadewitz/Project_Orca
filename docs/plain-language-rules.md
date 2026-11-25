@@ -72,6 +72,15 @@ The judge is off for a session until all five of these are in place. The Config 
 
 If any step is missing, sessions open without a judge and every ask goes to you.
 
+## Codex
+
+ORCA has not verified that the judge's decisions or advice reach you in a Codex session, and in this version you should not expect them to:
+
+- With Codex's experimental hook (`nativeToolHook: experimental`), a call ORCA would ask you about is blocked, because Codex cannot pause a call for a person from a hook. No ask is shown, so there is nothing for the judge's advice to go with.
+- In Codex's default adapter mode, Codex's own review decides its approval requests. That review is a separate model call, not ORCA's judge, and it does not hand the decision to ORCA's ask.
+
+Opting Codex in to the hook is not evidence that the judge is available for it. ORCA adds no other route and loosens no approval to fill this gap.
+
 ## Turning it off
 
 Set `review.plainRules.enabled: false`, or remove it. New runs get no judge and nothing is sent; a run already going keeps the settings it started with, and stops getting a judge for new sessions as soon as its settings no longer match the active configuration. To stop sends for good, also revoke every credential that carries the disclosure grant (`orca auth list`, then `orca auth revoke <credentialId>`). Issuing another credential without `--judge-disclosure` does not take the grant away from one that is still valid.

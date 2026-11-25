@@ -49,7 +49,7 @@ import { dirname, join, relative } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { AgentSpecSchema, silentLogger, type HookTelemetryLine } from "@orca/core";
+import { AgentSpecSchema, literalEnv, silentLogger, type HookTelemetryLine } from "@orca/core";
 import {
   CODEX_HOOK_VERIFIED_PAIRS,
   LocalHost,
@@ -91,7 +91,7 @@ const EXPECTED_MODE = "agent";
 
 /** What these cases do not cover, and why; recorded so nothing reads as more than it is. */
 const NOT_COVERED = [
-  "the experimental judge (tracked separately)",
+  "NOT VERIFIED for 0.8: an installed ORCA-judged Codex action. The hook route blocks on an ORCA ask, and Codex's default native review is separate from ORCA's judge and does not hand that decision to ORCA's human prompt. No other path is added and no approval is loosened to fill the gap; the hook opt-in shown here is not evidence that ORCA judge advice is available on this route.",
   "known limitation, documented, not re-created here: Codex lets a call through when its hook runner fails after the startup probe",
   "known limitation, documented, not re-created here: text typed into a running command (write_stdin) is never hooked",
   "known limitation, documented, not re-created here: an ORCA ask blocks the call (Codex cannot pause for a person)",
@@ -317,8 +317,64 @@ describe.skipIf(ADAPTER === undefined)("installed-session evidence for Codex's h
     await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   });
 
+  /**
+   * What ORCA's session factory handed the real opener (`openAcpSession`), per case: recorded by
+   * a test-only observer that then delegates, unchanged, to the real opener. This is the launch
+   * configuration itself, read at the boundary where the agent is started, not inferred from
+   * what the session reports afterwards. A case the factory refuses before starting anything has
+   * no entry.
+   */
+  interface Launch {
+    /** The agent's `nativeToolHook` as the opener received it (null when left out). */
+    nativeToolHook: string | null;
+    /** The `hooks` table of the `CODEX_CONFIG` Codex is started with (null when it has none). */
+    codexHooks: unknown;
+    /** Whether the opener was given the hook's admission (`sessionMeta`), which checks it is in force. */
+    hookAdmission: boolean;
+  }
+  const launches = new Map<string, Launch[]>();
+  const observedOpener =
+    (id: string): typeof openAcpSession =>
+    (options) => {
+      // The environment Codex is started with: ORCA's, the agent's own, then the factory's (LocalHost).
+      const codexConfig =
+        options.env?.["CODEX_CONFIG"] ?? literalEnv(options.agent.env)["CODEX_CONFIG"] ?? process.env["CODEX_CONFIG"];
+      const parsed = codexConfig === undefined ? {} : (JSON.parse(codexConfig) as Record<string, unknown>);
+      launches.get(id)!.push({
+        nativeToolHook: options.agent.nativeToolHook ?? null,
+        codexHooks: parsed["hooks"] ?? null,
+        hookAdmission: options.sessionMeta !== undefined,
+      });
+      return openAcpSession(options);
+    };
+
+  /** Whether a launch's Codex hooks are exactly ORCA's one pre-tool hook, trusted, running this build's hook program. */
+  const orcaHookIn = (launch: Launch | undefined): boolean => {
+    const hooks = launch?.codexHooks as
+      | { PreToolUse?: { matcher?: unknown; hooks?: { type?: unknown; command?: unknown }[] }[]; state?: object }
+      | null
+      | undefined;
+    const groups = hooks?.PreToolUse;
+    if (!Array.isArray(groups) || groups.length !== 1 || groups[0]!.matcher !== "*") return false;
+    const handlers = groups[0]!.hooks;
+    if (!Array.isArray(handlers) || handlers.length !== 1) return false;
+    const [h] = handlers;
+    return (
+      h!.type === "command" &&
+      typeof h!.command === "string" &&
+      h!.command.includes(hookScript) &&
+      Object.keys(hooks?.state ?? {}).length === 1
+    );
+  };
+
   /** One disposable workspace, config directory and Codex home, and a session the factory opens. */
-  const open = async (id: string, rule: unknown, extra?: Case["codex"]) => {
+  const open = async (
+    id: string,
+    rule: unknown,
+    extra?: Case["codex"],
+    /** The agent's `nativeToolHook`: `experimental` unless the case sets `on`, or leaves it out. */
+    hook: "on" | "experimental" | "left out" = SETTINGS.nativeToolHook,
+  ) => {
     const base = join(root, id);
     const configDir = join(base, "config");
     const workspace = join(base, "work");
@@ -359,10 +415,12 @@ describe.skipIf(ADAPTER === undefined)("installed-session evidence for Codex's h
         no_proxy: "127.0.0.1",
       },
       permissions: { rules: [rule] },
-      nativeToolHook: SETTINGS.nativeToolHook,
-      diagnostics: SETTINGS.diagnostics,
+      ...(hook === "left out" ? {} : { nativeToolHook: hook }),
+      // The hook's record is all the diagnostics give; without a hook they record nothing.
+      ...(hook === "experimental" ? { diagnostics: SETTINGS.diagnostics } : {}),
     });
-    const session = await makeSessionFactory({ configDir, storeDir: ".orca" }, openAcpSession, {
+    launches.set(id, []);
+    const session = await makeSessionFactory({ configDir, storeDir: ".orca" }, observedOpener(id), {
       runtime: process.execPath,
       script: hookScript,
     })({
@@ -664,8 +722,183 @@ describe.skipIf(ADAPTER === undefined)("installed-session evidence for Codex's h
     expect(failures).toEqual([]);
   }, 180_000);
 
+  // The opt-in journey: the same harmless call under the same ORCA deny rule, with the hook
+  // omitted, `on`, and `experimental`. Each is a fresh session in its own workspace.
+  const optInCmd = (file: string) => `echo orca-1026 > ${file}`;
+  const optInRule = (file: string) => ({
+    match: { kind: "execute", titlePattern: `^echo orca-1026 > ${file.replace(".", "\\.")}$` },
+    decision: "deny",
+  });
+
+  it("optin-omitted: without nativeToolHook no hook is installed, so ORCA's deny rule does not stop the call", async () => {
+    const file = "optin-omitted.txt";
+    const rule = optInRule(file);
+    const { session, workspace, personAsked, native, hookLines } = await open(
+      "optin-omitted",
+      rule,
+      undefined,
+      "left out",
+    );
+    const mode = modeOf(session);
+    const before = await tree(workspace);
+    const outputsBefore = model.outputs.length;
+    const launch = launches.get("optin-omitted") ?? [];
+    try {
+      expect(mode).toBe(EXPECTED_MODE);
+      await session.prompt(script(shell(optInCmd(file))));
+    } finally {
+      await session.close();
+    }
+    const after = await tree(workspace);
+    const changed = changes(before, after);
+    const outputs = model.outputs.slice(outputsBefore);
+    const refusal = outputs.find((o) => o.includes("Denied by ORCA"));
+    const ran = sameJson(changed, { [file]: [null, sha256("orca-1026\n")] });
+
+    const failures: string[] = [];
+    // The launch configuration itself, as the real opener received it.
+    if (launch.length !== 1) failures.push(`the opener was called ${launch.length} times, not once`);
+    else {
+      if (launch[0]!.nativeToolHook !== null) failures.push("the opener received a nativeToolHook setting");
+      if (launch[0]!.codexHooks !== null) failures.push("Codex was started with hooks in its CODEX_CONFIG");
+      if (launch[0]!.hookAdmission) failures.push("the opener was given the hook's admission");
+    }
+    if (refusal !== undefined) failures.push("Codex reported an ORCA refusal with the hook omitted");
+    if (hookLines.length > 0) failures.push("a hook decision was recorded with the hook omitted");
+    if (Object.keys(changed).length > 0 && !ran) failures.push("the workspace changed other than expected");
+    const unverified: string[] = [];
+    if (!ran)
+      unverified.push(
+        "the call had no effect under the native safeguards, so the absence of ORCA's hook is not shown by an effect",
+      );
+    const status = failures.length > 0 ? "failed" : unverified.length > 0 ? "unverified" : "verified";
+    results.push({
+      id: "optin-omitted",
+      action: `shell: ${optInCmd(file)}, nativeToolHook omitted, ORCA rule deny`,
+      rule,
+      status,
+      reasons: failures.length > 0 ? failures : unverified,
+      orca: { nativeToolHook: null, configured: "deny", launch, refusalReportedByCodex: refusal !== undefined },
+      native: { mode, approvalsAnsweredByOrca: native, approvalsAnsweredAsThePerson: personAsked },
+      effect: {
+        expected: "the call runs: ORCA's deny is not enforced without the hook",
+        observed: ran,
+        before,
+        after,
+        changed,
+      },
+      toolOutput: outputs,
+    });
+    expect(failures).toEqual([]);
+  }, 180_000);
+
+  it("optin-on: nativeToolHook: on is refused before Codex starts", async () => {
+    const file = "optin-on.txt";
+    const rule = optInRule(file);
+    const base = join(root, "optin-on");
+    const outputsBefore = model.outputs.length;
+    let refusedWith: string | undefined;
+    try {
+      const opened = await open("optin-on", rule, undefined, "on");
+      await opened.session.close();
+    } catch (error) {
+      refusedWith = error instanceof Error ? error.message : String(error);
+    }
+    // The factory must refuse before it calls the opener, so nothing is launched at all.
+    const launch = launches.get("optin-on");
+    // Supporting: Codex writes into its home as soon as it starts; an empty home means it never did.
+    const codexHome = await readdir(join(base, "codex-home"));
+    const workspace = await tree(join(base, "work"));
+    const failures: string[] = [];
+    if (refusedWith === undefined) failures.push("the session opened");
+    else if (!/nativeToolHook: on/.test(refusedWith)) failures.push("refused, but not for nativeToolHook: on");
+    if (launch === undefined) failures.push("the open did not reach ORCA's session factory");
+    else if (launch.length > 0) failures.push("the factory called the opener before refusing");
+    if (codexHome.length > 0) failures.push("Codex started before the refusal");
+    if (Object.keys(workspace).length > 0) failures.push("the workspace changed");
+    if (model.outputs.length !== outputsBefore) failures.push("the model was reached");
+    results.push({
+      id: "optin-on",
+      action: "open a session with nativeToolHook: on",
+      rule,
+      status: failures.length > 0 ? "failed" : "verified",
+      reasons: failures,
+      orca: { nativeToolHook: "on", refusedWith: refusedWith ?? null, openerCalls: launch?.length ?? null },
+      effect: {
+        expected: "refused before the opener is called; supporting: empty Codex home and workspace",
+        codexHome,
+        workspace,
+      },
+    });
+    expect(failures).toEqual([]);
+  }, 180_000);
+
+  it("optin-experimental: nativeToolHook: experimental installs the hook, and ORCA's deny holds", async () => {
+    const file = "optin-experimental.txt";
+    const rule = optInRule(file);
+    const { session, workspace, personAsked, native, hookLines, recorded } = await open("optin-experimental", rule);
+    const mode = modeOf(session);
+    const before = await tree(workspace);
+    const outputsBefore = model.outputs.length;
+    const launch = launches.get("optin-experimental") ?? [];
+    try {
+      expect(mode).toBe(EXPECTED_MODE);
+      await session.prompt(script(shell(optInCmd(file))));
+      await settle(session, hookLines, 1);
+    } finally {
+      await session.close();
+    }
+    const after = await tree(workspace);
+    const changed = changes(before, after);
+    const outputs = model.outputs.slice(outputsBefore);
+    const decisions = hookLines.map((l) => l.decision);
+    const refusal = outputs.find((o) => o.includes("Denied by ORCA"));
+    const nativeRefused = native.some((n) => !/allow/.test(n.decision)) || personAsked.length > 0;
+    const failures: string[] = [];
+    // The launch configuration itself, as the real opener received it.
+    if (launch.length !== 1) failures.push(`the opener was called ${launch.length} times, not once`);
+    else {
+      if (launch[0]!.nativeToolHook !== "experimental")
+        failures.push("the opener did not receive nativeToolHook: experimental");
+      if (!orcaHookIn(launch[0])) failures.push("Codex was not started with exactly ORCA's pre-tool hook");
+      if (!launch[0]!.hookAdmission) failures.push("the opener was not given the hook's admission");
+    }
+    if (Object.keys(changed).length > 0) failures.push("an effect was observed after ORCA was configured to deny");
+    if (decisions.some((d) => d !== "deny")) failures.push(`ORCA's hook decided ${decisions.join(", ")}, not deny`);
+    const unverified: string[] = [];
+    if (!recorded || decisions.length !== 1) unverified.push("ORCA's hook did not record exactly one decision");
+    if (refusal === undefined) unverified.push("Codex did not report ORCA's refusal for the call");
+    if (nativeRefused) unverified.push("a native refusal could also account for the absence of an effect");
+    const status = failures.length > 0 ? "failed" : unverified.length > 0 ? "unverified" : "verified";
+    results.push({
+      id: "optin-experimental",
+      action: `shell: ${optInCmd(file)}, nativeToolHook: experimental, ORCA rule deny`,
+      rule,
+      status,
+      reasons: failures.length > 0 ? failures : unverified,
+      orca: {
+        nativeToolHook: "experimental",
+        configured: "deny",
+        launch,
+        hookDecisions: hookRecord(hookLines),
+        refusalReportedByCodex: refusal !== undefined,
+      },
+      native: { mode, approvalsAnsweredByOrca: native, approvalsAnsweredAsThePerson: personAsked },
+      effect: { expected: "no effect", before, after, changed },
+      toolOutput: outputs,
+    });
+    expect(failures).toEqual([]);
+  }, 180_000);
+
   it("records the exact build, agent, platform and settings beside the cases", async () => {
-    expect(results.map((r) => r["id"])).toEqual([...CASES.map((c) => c.id), "shell-cancel", "restart-fresh-decision"]);
+    expect(results.map((r) => r["id"])).toEqual([
+      ...CASES.map((c) => c.id),
+      "shell-cancel",
+      "restart-fresh-decision",
+      "optin-omitted",
+      "optin-on",
+      "optin-experimental",
+    ]);
     const adapterDir = dirname(dirname(ADAPTER!));
     const adapterPkg = JSON.parse(await readFile(join(adapterDir, "package.json"), "utf8")) as {
       name: string;
