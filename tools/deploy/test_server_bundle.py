@@ -333,16 +333,22 @@ class ServerBundleTests(unittest.TestCase):
         (out / f"{product}-server-0.8.0-linux-x64.manifest.json.sigstore.json").write_text("{}")
         return out
 
-    def test_bridge_accepts_a_bundle_signed_by_the_renamed_repository(self):
-        log = self.accepting("cschadewitz/Orrery")
-        self.assertEqual(self.deployment.stage_bundle(str(self.files)).name, "v0.8.0")
-        calls = log.read_text().splitlines()
-        self.assertEqual(len(calls), 2)
-        self.assertIn("--certificate-identity https://github.com/cschadewitz/Project_Orca/.github/workflows/"
-                      "release-server-bundle.yml@refs/heads/main", calls[0])
-        self.assertIn("--certificate-identity https://github.com/cschadewitz/Orrery/.github/workflows/"
-                      "release-server-bundle.yml@refs/heads/main", calls[1])
-        self.assertIn("--certificate-github-workflow-repository cschadewitz/Orrery ", calls[1])
+    def test_bridge_accepts_a_bundle_signed_by_either_repository(self):
+        self.assertEqual(set(release.BUNDLE_REPOSITORIES), {"cschadewitz/Project_Orca", "cschadewitz/Orrery"})
+        self.assertEqual(release.BUNDLE_REPOSITORIES[0], release.BUNDLE_REPOSITORY)
+        for index, repository in enumerate(release.BUNDLE_REPOSITORIES):
+            with self.subTest(repository=repository):
+                shutil.rmtree(self.deployment.root / "releases" / "v0.8.0", ignore_errors=True)
+                log = self.accepting(repository)
+                log.unlink(missing_ok=True)
+                self.assertEqual(self.deployment.stage_bundle(str(self.files)).name, "v0.8.0")
+                calls = log.read_text().splitlines()
+                # Each repository is tried with its own exact identity, in order, until one verifies.
+                self.assertEqual(len(calls), index + 1)
+                for call, tried in zip(calls, release.BUNDLE_REPOSITORIES):
+                    self.assertIn(f"--certificate-identity https://github.com/{tried}/.github/workflows/"
+                                  "release-server-bundle.yml@refs/heads/main", call)
+                    self.assertIn(f"--certificate-github-workflow-repository {tried} ", call)
 
     def test_bridge_still_refuses_any_other_repository(self):
         log = self.accepting("someone/Orrery")
@@ -371,7 +377,7 @@ class ServerBundleTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "unexpected runtime or entry"):
             self.deployment.stage_bundle(str(out))
 
-    def test_bridge_fetches_from_the_renamed_repository_when_the_old_one_has_no_release(self):
+    def test_bridge_fetches_from_the_other_repository_when_the_first_has_no_release(self):
         self.files = self.renamed_bundle()
         fetched = self.fetch_fixture("RECORD")
         fixture = release.download
@@ -379,15 +385,14 @@ class ServerBundleTests(unittest.TestCase):
 
         def download(url, target, limit, accept=None):
             asked.append(url)
-            if url.startswith("https://api.github.com/repos/cschadewitz/Project_Orca/"):
+            if url.startswith(f"https://api.github.com/repos/{release.BUNDLE_REPOSITORIES[0]}/"):
                 raise release.urllib.error.HTTPError(url, 404, "Not Found", {}, None)
             return fixture(url, target, limit, accept)
-        self.accepting("cschadewitz/Orrery")
+        self.accepting(release.BUNDLE_REPOSITORIES[1])
         with patch.object(release, "download", download):
             self.assertEqual(self.deployment.stage_bundle("v0.8.0").name, "v0.8.0")
         self.assertEqual([url for url in asked if url.startswith("https://api.github.com/")],
-                         ["https://api.github.com/repos/cschadewitz/Project_Orca/releases/tags/v0.8.0",
-                          "https://api.github.com/repos/cschadewitz/Orrery/releases/tags/v0.8.0"])
+                         [f"https://api.github.com/repos/{r}/releases/tags/v0.8.0" for r in release.BUNDLE_REPOSITORIES])
         self.assertEqual(sorted(fetched), sorted(p.name for p in self.files.iterdir()))
 
     def test_bridge_sets_the_daemon_environment_under_both_prefixes(self):
