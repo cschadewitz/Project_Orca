@@ -432,7 +432,7 @@ jobs:
     needs: [check, publish]
     # Off unless ORCA_RELEASE_AUTO_SIGN is `true`. Dispatching does not bypass the signing
     # environment's own protection rules: those apply to the signed run either way.
-    if: ${{ !inputs.dry_run && !contains(needs.check.outputs.version, '-') && vars.ORCA_RELEASE_AUTO_SIGN == 'true' }}
+    if: ${{ !inputs.dry_run && !contains(needs.check.outputs.version, '-') && (vars.ORRERY_RELEASE_AUTO_SIGN || vars.ORCA_RELEASE_AUTO_SIGN) == 'true' }}
     runs-on: ubuntu-24.04
     permissions:
       actions: write

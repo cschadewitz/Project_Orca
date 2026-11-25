@@ -41,7 +41,7 @@ concurrency:
 jobs:
   rings:
     name: read the live ring state
-    if: github.ref == 'refs/heads/main' && vars.ORCA_FEED_URL != '' && vars.ORCA_FEED_BUCKET != ''
+    if: github.ref == 'refs/heads/main' && (vars.ORRERY_FEED_URL || vars.ORCA_FEED_URL) != '' && (vars.ORRERY_FEED_BUCKET || vars.ORCA_FEED_BUCKET) != ''
     runs-on: ubuntu-24.04
     environment: feed-reader
     timeout-minutes: 5
@@ -63,8 +63,8 @@ jobs:
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.ORCA_FEED_READER_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.ORCA_FEED_READER_SECRET_ACCESS_KEY }}
-          FEED_ACCOUNT_ID: ${{ vars.ORCA_FEED_ACCOUNT_ID }}
-          FEED_BUCKET: ${{ vars.ORCA_FEED_BUCKET }}
+          FEED_ACCOUNT_ID: ${{ vars.ORRERY_FEED_ACCOUNT_ID || vars.ORCA_FEED_ACCOUNT_ID }}
+          FEED_BUCKET: ${{ vars.ORRERY_FEED_BUCKET || vars.ORCA_FEED_BUCKET }}
         run: |
           set -euo pipefail
           bash tools/deploy/feed-r2.sh read-rings "$RUNNER_TEMP/rings.json"
@@ -76,7 +76,7 @@ jobs:
     needs: rings
     # Runs when the ring state was read, or the feed is off (no bucket, nothing to read). A failed
     # read while the feed is on still runs the check, which then fails for the missing state.
-    if: always() && github.ref == 'refs/heads/main' && vars.ORCA_FEED_URL != ''
+    if: always() && github.ref == 'refs/heads/main' && (vars.ORRERY_FEED_URL || vars.ORCA_FEED_URL) != ''
     runs-on: ubuntu-24.04
     environment: feed-canary
     timeout-minutes: 15
@@ -93,9 +93,9 @@ jobs:
 
       - name: Check every ring and architecture
         env:
-          FEED_URL: ${{ vars.ORCA_FEED_URL }}
+          FEED_URL: ${{ vars.ORRERY_FEED_URL || vars.ORCA_FEED_URL }}
           FEED_CANARY_TOKENS: ${{ secrets.ORCA_FEED_CANARY_TOKENS }}
           FEED_RINGS: ${{ needs.rings.outputs.rings }}
-          FEED_COMMISSIONED: ${{ vars.ORCA_FEED_BUCKET != '' }}
+          FEED_COMMISSIONED: ${{ (vars.ORRERY_FEED_BUCKET || vars.ORCA_FEED_BUCKET) != '' }}
           GITHUB_TOKEN: ${{ github.token }}
         run: node tools/deploy/feed-watchdog.js

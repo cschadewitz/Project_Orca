@@ -51,10 +51,10 @@ jobs:
     steps:
       - name: Release bot token (optional)
         id: app
-        if: ${{ vars.ORCA_RELEASE_APP_ID != '' }}
+        if: ${{ (vars.ORRERY_RELEASE_APP_ID || vars.ORCA_RELEASE_APP_ID) != '' }}
         uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
         with:
-          app-id: ${{ vars.ORCA_RELEASE_APP_ID }}
+          app-id: ${{ vars.ORRERY_RELEASE_APP_ID || vars.ORCA_RELEASE_APP_ID }}
           private-key: ${{ secrets.ORCA_RELEASE_APP_PRIVATE_KEY }}
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

@@ -68,13 +68,13 @@ env:
 jobs:
   server:
     name: publish the ${{ inputs.version }} server bundle to internal servers
-    if: github.ref == 'refs/heads/main' && vars.ORCA_FEED_BUCKET != ''
+    if: github.ref == 'refs/heads/main' && (vars.ORRERY_FEED_BUCKET || vars.ORCA_FEED_BUCKET) != ''
     runs-on: ubuntu-24.04
     environment: desktop-feed
     steps:
       - name: Refuse while the feed is paused
         env:
-          PAUSE: ${{ vars.ORCA_FEED_PAUSE }}
+          PAUSE: ${{ vars.ORRERY_FEED_PAUSE || vars.ORCA_FEED_PAUSE }}
         run: |
           if [ "$PAUSE" = "true" ]; then
             echo "::error::the feed is paused (ORCA_FEED_PAUSE); nothing is published. See docs/UPDATING.md, \"Pulling a bad build\"."
@@ -122,8 +122,8 @@ jobs:
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.ORCA_FEED_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.ORCA_FEED_SECRET_ACCESS_KEY }}
-          FEED_ACCOUNT_ID: ${{ vars.ORCA_FEED_ACCOUNT_ID }}
-          FEED_BUCKET: ${{ vars.ORCA_FEED_BUCKET }}
+          FEED_ACCOUNT_ID: ${{ vars.ORRERY_FEED_ACCOUNT_ID || vars.ORCA_FEED_ACCOUNT_ID }}
+          FEED_BUCKET: ${{ vars.ORRERY_FEED_BUCKET || vars.ORCA_FEED_BUCKET }}
           VERSION: ${{ inputs.version }}
         run: |
           bash tools/deploy/feed-r2.sh probe
@@ -133,7 +133,7 @@ jobs:
     name: publish ${{ inputs.version }} to the internal ring
     # After the server job: internal's servers hold the version before its desktops are offered it.
     needs: server
-    if: github.ref == 'refs/heads/main' && vars.ORCA_FEED_BUCKET != ''
+    if: github.ref == 'refs/heads/main' && (vars.ORRERY_FEED_BUCKET || vars.ORCA_FEED_BUCKET) != ''
     runs-on: windows-latest
     environment: desktop-feed
     defaults:
@@ -144,7 +144,7 @@ jobs:
       # `true` (docs/UPDATING.md, "Pulling a bad build").
       - name: Refuse while the feed is paused
         env:
-          PAUSE: ${{ vars.ORCA_FEED_PAUSE }}
+          PAUSE: ${{ vars.ORRERY_FEED_PAUSE || vars.ORCA_FEED_PAUSE }}
         run: |
           if [ "$PAUSE" = "true" ]; then
             echo "::error::the feed is paused (ORCA_FEED_PAUSE); nothing is published. See docs/UPDATING.md, \"Pulling a bad build\"."
@@ -226,7 +226,7 @@ jobs:
       - name: Verify signatures, timestamps and publisher
         shell: pwsh
         env:
-          EXPECTED: ${{ vars.ORCA_FEED_PUBLISHER_CN }}
+          EXPECTED: ${{ vars.ORRERY_FEED_PUBLISHER_CN || vars.ORCA_FEED_PUBLISHER_CN }}
           VERSION: ${{ inputs.version }}
           ARCHES: ${{ steps.arches.outputs.arches }}
         run: |
@@ -279,8 +279,8 @@ jobs:
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.ORCA_FEED_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.ORCA_FEED_SECRET_ACCESS_KEY }}
-          FEED_ACCOUNT_ID: ${{ vars.ORCA_FEED_ACCOUNT_ID }}
-          FEED_BUCKET: ${{ vars.ORCA_FEED_BUCKET }}
+          FEED_ACCOUNT_ID: ${{ vars.ORRERY_FEED_ACCOUNT_ID || vars.ORCA_FEED_ACCOUNT_ID }}
+          FEED_BUCKET: ${{ vars.ORRERY_FEED_BUCKET || vars.ORCA_FEED_BUCKET }}
           VERSION: ${{ inputs.version }}
           ARCHES: ${{ steps.arches.outputs.arches }}
         # Prove R2 still honours conditional writes before relying on them.

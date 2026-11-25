@@ -30,13 +30,13 @@ permissions:
 jobs:
   switch:
     name: ${{ inputs.action }} servers
-    if: github.ref == 'refs/heads/main' && vars.ORCA_FEED_BUCKET != ''
+    if: github.ref == 'refs/heads/main' && (vars.ORRERY_FEED_BUCKET || vars.ORCA_FEED_BUCKET) != ''
     runs-on: ubuntu-24.04
     environment: desktop-feed
     steps:
       - name: Refuse to resume while the feed is paused
         env:
-          PAUSE: ${{ vars.ORCA_FEED_PAUSE }}
+          PAUSE: ${{ vars.ORRERY_FEED_PAUSE || vars.ORCA_FEED_PAUSE }}
           ACTION: ${{ inputs.action }}
         run: |
           if [ "$PAUSE" = "true" ] && [ "$ACTION" = "resume" ]; then
@@ -57,8 +57,8 @@ jobs:
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.ORCA_FEED_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.ORCA_FEED_SECRET_ACCESS_KEY }}
-          FEED_ACCOUNT_ID: ${{ vars.ORCA_FEED_ACCOUNT_ID }}
-          FEED_BUCKET: ${{ vars.ORCA_FEED_BUCKET }}
+          FEED_ACCOUNT_ID: ${{ vars.ORRERY_FEED_ACCOUNT_ID || vars.ORCA_FEED_ACCOUNT_ID }}
+          FEED_BUCKET: ${{ vars.ORRERY_FEED_BUCKET || vars.ORCA_FEED_BUCKET }}
           ACTION: ${{ inputs.action }}
         run: |
           bash tools/deploy/feed-r2.sh probe

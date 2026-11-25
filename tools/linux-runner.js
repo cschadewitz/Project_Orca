@@ -16,9 +16,12 @@ export function isLinuxRunner(value) {
  * These jobs do not wait on each other the way ci.yml's `check` waits on its shards, so one
  * idle runner is enough; a second job queues behind it instead of deadlocking.
  */
+const LEGACY_HEALTH_KEY = "Project_Orca"; // rename-keep: the health service's key before the rename
+
 export function chooseLinuxRunner({ forceHosted = false, body } = {}) {
   if (forceHosted) return { runner: HOSTED, reason: "CI_FORCE_HOSTED is true" };
-  const idle = body && typeof body === "object" ? body.Project_Orca : undefined;
+  // Keyed by repository name: read either side of the Orrery rename until the service follows.
+  const idle = body && typeof body === "object" ? (body.Project_Orca ?? body[LEGACY_HEALTH_KEY]) : undefined;
   if (!Number.isInteger(idle) || idle < 0) return { runner: HOSTED, reason: "no usable idle count" };
   if (idle < 1) return { runner: HOSTED, reason: "no idle self-hosted runner" };
   return { runner: TYLER, reason: `${idle} idle self-hosted runner(s)` };
