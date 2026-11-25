@@ -295,6 +295,25 @@ describe("the caveat", () => {
       /^1 potential host communication endpoint observed .*: unix-socket \/run\/s0\. .* The check was incomplete: TCP: \/proc\/net\/tcp6 could not be read \(EACCES\)\.$/,
     );
   });
+
+  it("names each kind it found as it was found, a socket and a named pipe alike", () => {
+    expect(
+      hostIpcCaveat({
+        endpoints: [
+          { kind: "unix-socket", name: "/run/user/1000/listening.sock" },
+          { kind: "named-pipe", name: "/run/user/1000/pipe" },
+        ],
+        pipesSearched: ["/run/user/1000", "/tmp"],
+        incomplete: [],
+      }),
+    ).toBe(
+      "2 potential host communication endpoints observed from the ORCA daemon at startup; sandbox reachability " +
+        "was not tested: unix-socket /run/user/1000/listening.sock, named-pipe /run/user/1000/pipe. A command " +
+        "Codex runs may be able to use them without a tool call ORCA's hook sees. This is an inventory, not " +
+        "isolation: it can miss inherited connections and endpoints made later. " +
+        scope,
+    );
+  });
 });
 
 /**
@@ -362,7 +381,6 @@ describe.skipIf(process.platform !== "linux")("on this machine", () => {
     expect(
       inventory.incomplete.filter((entry) => !entry.startsWith("unix sockets") && !entry.startsWith("TCP")),
     ).toEqual([]);
-    expect(hostIpcCaveat(inventory)).toContain(`unix-socket ${socket}`);
   });
 
   it("names a missing home as a directory it could not list", async () => {
