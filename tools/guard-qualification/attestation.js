@@ -117,16 +117,19 @@ function runGh(args, cwd) {
 }
 
 /**
- * Whether the code and requirements a receipt certified are still those at HEAD. A tier is
- * certified for one build; the release gate (`--release`) refuses a promoted row whose build
- * differs from HEAD in anything but:
+ * Whether the code and requirements a receipt certified are still those at HEAD. A receipt pins
+ * one exact build, but the release need not be that commit: the release gate (`--release`)
+ * accepts a descendant of it whose certified inputs are unchanged, and refuses a promoted row,
+ * or a scoped claim, whose build differs from HEAD in anything but:
  *
  * - documentation, changelog fragments and the receipts themselves (`EXEMPT`);
  * - a `package.json`'s `version` field, which a release commit bumps (every other field,
  *   scripts and dependencies included, must be unchanged);
- * - in the support matrix, a row's `tier`, `pin` and `receipts`: the promotion and the pointer
- *   to its evidence. The routes, cases, exclusions and requirements the receipts were judged
- *   against must be unchanged.
+ * - in the support matrix, a row's `tier`, `pin`, `receipts` and `scoped`: the promotion or the
+ *   scoped claim and the pointer to its evidence, which can only be written after the build
+ *   they pin. The claim itself is still checked against its receipts (`scopedProblems`). The
+ *   routes, route paths and their eligibility (`knownFailOpen`, `recoveryUnverified`), cases,
+ *   exclusions and requirements the receipts were judged against must be unchanged.
  *
  * Everything else, workflows and build and packaging configuration included, counts.
  */
@@ -167,10 +170,19 @@ export function staleProblems(repoRoot, build, run = runGit) {
 }
 
 const withoutVersion = (pkg) => (pkg && typeof pkg === "object" ? { ...pkg, version: undefined } : pkg);
-/** The matrix less what a promotion may change: each row's tier, pin and receipts. */
+/** The matrix less what recording a certification may change: each row's tier, pin, receipts and scoped claim. */
 const requirements = (m) =>
   m && Array.isArray(m.agents)
-    ? { ...m, agents: m.agents.map((a) => ({ ...a, tier: undefined, pin: undefined, receipts: undefined })) }
+    ? {
+        ...m,
+        agents: m.agents.map((a) => ({
+          ...a,
+          tier: undefined,
+          pin: undefined,
+          receipts: undefined,
+          scoped: undefined,
+        })),
+      }
     : m;
 const sameJson = (a, b) => a !== undefined && b !== undefined && JSON.stringify(a) === JSON.stringify(b);
 

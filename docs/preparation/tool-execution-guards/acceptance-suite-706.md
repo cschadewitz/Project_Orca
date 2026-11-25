@@ -281,9 +281,12 @@ also meet its route's eligibility requirements in the committed matrix
   start. Live fault fixtures for them were removed, so B stays off.
 
 Enabling a scope awards nothing by itself. The committed matrix carries no `scoped` claim. A
-row holds one only after an attested installed receipt on the exact build it pins is
-recorded, and that build must be the release's (`releaseProblems`). Nothing renders it as a
-badge until that is reviewed.
+row holds one only after an attested installed receipt is recorded. The receipt pins one exact
+build. The release need not be that commit: the release gate (`--release`, `releaseProblems`)
+accepts a descendant of it whose certified inputs are unchanged. Permitted changes are docs,
+receipts, a `package.json` version, and in the matrix the row's `tier`, `pin`, `receipts` and
+`scoped` (the claim can only be written after the build it pins). Route requirements,
+eligibility (`knownFailOpen`, `recoveryUnverified`), cases and covered source must be unchanged. Nothing renders it as a badge until that is reviewed.
 
 The Claude installed run (`enforcement-installed-claude-1026.test.js`) records that evidence:
 
