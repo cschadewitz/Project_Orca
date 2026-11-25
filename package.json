@@ -34,6 +34,7 @@
     "design:fonts": "node tools/font-build/build-fonts.js",
     "orca": "tsx packages/cli/src/main.ts",
     "demo": "tsx packages/cli/src/main.ts demo",
+    "demo:seed": "node tools/demo-seed/build.mjs && node tools/demo-seed/dist/orca-demo-seed/seed.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit && pnpm --filter @orca/app run typecheck:renderer"
   },
   "devDependencies": {
