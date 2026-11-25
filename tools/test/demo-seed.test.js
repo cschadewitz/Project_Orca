@@ -30,6 +30,8 @@ function workspace() {
 /** A daemon that answers from `handlers` (method -> result or function) and records each call. */
 async function fakeDaemon(handlers, respond) {
   const calls = [];
+  // A Map, so a method name from the request can only find a handler the test gave it.
+  const table = new Map(Object.entries(handlers));
   const server = createServer((req, res) => {
     let body = "";
     req.on("data", (chunk) => (body += chunk));
@@ -37,7 +39,7 @@ async function fakeDaemon(handlers, respond) {
       if (respond?.(req, res)) return;
       const message = JSON.parse(body);
       calls.push({ method: message.method, params: message.params, auth: req.headers.authorization });
-      const handler = handlers[message.method];
+      const handler = table.get(message.method);
       const result = typeof handler === "function" ? handler(message.params, calls) : (handler ?? {});
       res.setHeader("content-type", "application/json");
       res.end(JSON.stringify({ kind: "response", id: message.id, ok: true, result }));
