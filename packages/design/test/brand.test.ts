@@ -25,14 +25,14 @@ const value = (name: string, theme: Theme) => {
 };
 
 const files = readdirSync(brand).filter((f) => f.endsWith(".svg"));
-// The mask that cuts the waterline behind the brackets is drawn in pure black and white.
+// A mask, if a mark ever needs one, is drawn in pure black and white.
 const maskColours = new Set(["#fff", "#000"]);
 
 describe("brand files", () => {
   test("the mark and the icon exist in both themes", () => {
     for (const kind of ["mark", "icon"])
       for (const theme of ["light", "dark"])
-        assert.ok(files.includes(`orca-${kind}-${theme}.svg`), `missing orca-${kind}-${theme}.svg`);
+        assert.ok(files.includes(`orrery-${kind}-${theme}.svg`), `missing orrery-${kind}-${theme}.svg`);
   });
 
   for (const file of files) {
