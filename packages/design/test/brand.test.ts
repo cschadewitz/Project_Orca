@@ -35,6 +35,15 @@ describe("brand files", () => {
         assert.ok(files.includes(`orrery-${kind}-${theme}.svg`), `missing orrery-${kind}-${theme}.svg`);
   });
 
+  test("the small-size icon (16 and 24 px) exists in both themes, on both grids", () => {
+    for (const theme of ["light", "dark"])
+      for (const grid of ["", "-macos"])
+        assert.ok(
+          files.includes(`orrery-icon-${theme}-small${grid}.svg`),
+          `missing orrery-icon-${theme}-small${grid}.svg`,
+        );
+  });
+
   for (const file of files) {
     test(`${file} uses only its theme's tokens`, () => {
       const theme: Theme = file.includes("-dark") ? "dark" : "light";

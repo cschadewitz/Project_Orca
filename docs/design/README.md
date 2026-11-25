@@ -274,6 +274,7 @@ packages/design/brand/
   orrery-icon-light.svg          the app icon: the mark at 92% on a rounded surface-base tile
   orrery-icon-dark.svg           the same tile in the dark theme
   orrery-icon-*-macos.svg        the tile on the macOS icon grid (824 of 1024, transparent margin)
+  orrery-icon-*-small*.svg       the small-size drawing for 16 and 24 px, on both grids
 packages/app/build/
   icon.png, icon.ico, icon.icns   what electron-builder packages, rendered from the light SVGs
 ```
@@ -287,9 +288,12 @@ packages/app/build/
   (16–256) and `.icns` (16–1024) from the SVG when the SVG changes, and commit both together.
   Each size is rendered straight from the SVG (resvg, `@resvg/resvg-js`), never scaled down from
   a bigger bitmap, then packed into the `.ico` and `.icns` with Pillow.
-- At 16px a ring is under a pixel wide and renders grey, the inner ring runs into the centre
-  and the inner planet is lost: what stays is a dark dot in a grey ring with the teal planet
-  at its lower left. A heavier small-size drawing would be a design change to this mark.
+- Small sizes have their own drawing. At 16px the full mark's rings are under a pixel wide and
+  render grey, and the inner ring runs into the centre. The small drawing keeps one orbit,
+  drawn at 6.5 units (1.5px at 16), the sun and the teal planet, and drops the inner orbit and
+  its planet. `icon.ico` uses it for 16 and 24, `icon.icns` for its 16 and 32 @1x entries
+  (`icp4`, `icp5`, from the macOS-grid version); every other size is the full mark. Pillow
+  writes no `icp4`/`icp5`, so the `.icns` is assembled entry by entry, each a PNG.
 - No wordmark is drawn: where the name sits beside the mark it is set in IBM Plex Sans
   SemiBold, as `Orrery`, at the mark's optical height.
 
