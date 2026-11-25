@@ -8,9 +8,10 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { NOT_ESTABLISHED, classify, daemonVersion, inspect } from "../../package-validation/inspect.js";
+import { NOT_ESTABLISHED, classify, daemonLayout, daemonVersion, inspect } from "../../package-validation/inspect.js";
 import {
   FONTS,
+  HOOK_BUILD_RULE,
   appAsar,
   appImage,
   blockmap,
@@ -752,55 +753,83 @@ describe("daemon version stamp", () => {
   });
 });
 
-describe("the bundled Claude hook (#704)", () => {
+describe("what sits beside the daemon follows the candidate's build rule (#704, #980)", () => {
   const win = `ORCA-${VERSION}-win-x64.zip`;
   const linux = `ORCA-${VERSION}-linux-x64.tar.gz`;
-  const only = (name, bytes) => run({ [name]: bytes }, { only: [name], allowPartial: true });
+  const only = (name, bytes, options = {}) => run({ [name]: bytes }, { only: [name], allowPartial: true, ...options });
+  const sourceOf = (options) => {
+    const made = makeSource(VERSION, options);
+    cleanup.push(made.root);
+    return made;
+  };
+  const commitAll = (made, message) => {
+    const git = (...args) =>
+      execFileSync("git", ["-c", "user.name=fixture", "-c", "user.email=fixture@invalid", ...args], {
+        cwd: made.root,
+        encoding: "utf8",
+      });
+    git("add", "-A");
+    git("commit", "-q", "-m", message);
+    return git("rev-parse", "HEAD").trim();
+  };
 
-  it("is required beside the daemon, and nothing else is allowed there", () => {
-    expect(only(win, windowsArchive(VERSION, "x64", source)).artifacts[0].status).toBe("consistent");
-    expect(only(linux, linuxArchive(VERSION, "x64")).artifacts[0].checks).toContain(
-      "bundled-hook:resources/daemon/claude-pre-tool-hook.mjs",
-    );
-    const extra = only(
-      win,
-      windowsArchive(VERSION, "x64", source, { extra: [{ name: "resources/daemon/other.mjs", body: "x" }] }),
-    );
-    expect(refusal(extra, win)).toMatch(/bundled_daemon_layout/);
-  });
-
-  it("refuses a package without it", () => {
+  it("requires the hook beside the daemon for a hook-bundling build, and nothing else", () => {
+    const report = only(win, windowsArchive(VERSION, "x64", source));
+    expect(report.artifacts[0].status).toBe("consistent");
+    expect(report.artifacts[0].checks).toContain("bundled-hook-structure:resources/daemon/claude-pre-tool-hook.mjs");
+    expect(only(linux, linuxArchive(VERSION, "x64")).artifacts[0].status).toBe("consistent");
     const missing = windowsArchive(VERSION, "x64", source, { hookBody: null });
-    expect(refusal(only(win, missing), win)).toMatch(/bundled_daemon_layout/);
+    expect(refusal(only(win, missing), win)).toMatch(/bundled_daemon_layout: daemon-and-claude-hook/);
+    const stray = windowsArchive(VERSION, "x64", source, {
+      extra: [{ name: "resources/daemon/other.mjs", body: "x" }],
+    });
+    expect(refusal(only(win, stray), win)).toMatch(/bundled_daemon_layout/);
   });
 
-  it("refuses a hook that is not the hook entry's bundle, or is a copy of the daemon", () => {
+  it("accepts exactly the daemon-only layout, with the earlier stamp, for a pre-hook build", () => {
+    const legacy = sourceOf({ hook: false });
+    const at = { commit: legacy.commit, sourceRoot: legacy.root };
+    const zip = (options) =>
+      windowsArchive(VERSION, "x64", legacy, { daemonBody: legacyDaemon(VERSION), hookBody: null, ...options });
+    const tar = (options) =>
+      linuxArchive(VERSION, "x64", { daemonBody: legacyDaemon(VERSION), hookBody: null, ...options });
+    for (const [name, bytes] of [
+      [win, zip()],
+      [linux, tar()],
+    ]) {
+      const report = only(name, bytes, at);
+      expect(report.artifacts[0].status).toBe("consistent");
+      expect(report.artifacts[0].checks).not.toContain(
+        "bundled-hook-structure:resources/daemon/claude-pre-tool-hook.mjs",
+      );
+    }
+    // A hook the pre-hook build would not have made is a layout refusal, not a pass.
+    expect(refusal(only(win, zip({ hookBody: claudeHookBody() }), at), win)).toMatch(
+      /bundled_daemon_layout: daemon-only/,
+    );
+  });
+
+  it("refuses a source whose build rule is ambiguous", () => {
+    const noEntry = sourceOf({ hook: false });
+    noEntry.write("packages/app/scripts/build-daemon.js", HOOK_BUILD_RULE);
+    const commit = commitAll(noEntry, "rule without entry");
+    expect(() => only(win, windowsArchive(VERSION, "x64", source), { commit, sourceRoot: noEntry.root })).toThrow(
+      /source_daemon_layout_ambiguous: packages\/agents\/src\/bin\/claude-pre-tool-hook.ts is missing/,
+    );
+    expect(() => daemonLayout("// mentions claude-pre-tool-hook only", true)).toThrow(
+      /source_daemon_layout_ambiguous: build-daemon.js names the hook without bundling it/,
+    );
+    expect(daemonLayout(HOOK_BUILD_RULE, true)).toBe("daemon-and-claude-hook");
+    expect(daemonLayout("await build({ outfile });", false)).toBe("daemon-only");
+  });
+
+  it("refuses a hook that is structurally not the hook entry's bundle, or is a copy of the daemon", () => {
     const other = windowsArchive(VERSION, "x64", source, {
       hookBody: Buffer.from("#!/usr/bin/env node\nexport {};\n"),
     });
     expect(refusal(only(win, other), win)).toMatch(/bundled_hook_unrecognized: 0 hook entry modules/);
-    const copy = linuxArchive(VERSION, "x64", {
-      hookBody: Buffer.concat([claudeHookBody(), daemon(VERSION)]),
-    });
+    const copy = linuxArchive(VERSION, "x64", { hookBody: Buffer.concat([claudeHookBody(), daemon(VERSION)]) });
     expect(refusal(only(linux, copy), linux)).toMatch(/bundled_hook_unrecognized: carries a daemon version stamp/);
-  });
-
-  it("refuses when the source checkout has no hook entry for it", () => {
-    const bare = makeSource(VERSION);
-    cleanup.push(bare.root);
-    const git = (...args) =>
-      execFileSync("git", ["-c", "user.name=fixture", "-c", "user.email=fixture@invalid", ...args], {
-        cwd: bare.root,
-        encoding: "utf8",
-      });
-    git("rm", "-q", "packages/agents/src/bin/claude-pre-tool-hook.ts");
-    git("commit", "-q", "-m", "no hook");
-    const commit = git("rev-parse", "HEAD").trim();
-    const report = run(
-      { [win]: windowsArchive(VERSION, "x64", source) },
-      { only: [win], allowPartial: true, commit, sourceRoot: bare.root },
-    );
-    expect(refusal(report, win)).toMatch(/the source has no Claude hook entry/);
   });
 });
 

@@ -32,8 +32,17 @@ const WINDOWS_NATIVE_SOURCES = [
 const html = (csp = CSP, extra = "") =>
   `<!doctype html>\n<html lang="en">\n  <head>\n    <meta\n      http-equiv="Content-Security-Policy"\n      content="${csp}"\n    />\n${extra}    <script type="module" src="./assets/index.js"></script>\n  </head>\n  <body class="orca"><div id="root"></div></body>\n</html>\n`;
 
+/** build-daemon.js's hook step, as the inspector reads it. */
+export const HOOK_BUILD_RULE = [
+  "await build({",
+  '  entryPoints: [fileURLToPath(new URL("../../agents/dist/bin/claude-pre-tool-hook.js", import.meta.url))],',
+  '  outfile: join(dirname(outfile), "claude-pre-tool-hook.mjs"),',
+  "});",
+  "",
+].join("\n");
+
 /** A git checkout shaped like the parts of the repository the inspector compares against. */
-export function makeSource(version) {
+export function makeSource(version, { hook = true } = {}) {
   const root = mkdtempSync(join(tmpdir(), "orca-package-validation-source-"));
   const write = (path, body) => {
     mkdirSync(dirname(join(root, path)), { recursive: true });
@@ -50,11 +59,11 @@ export function makeSource(version) {
     }) + "\n",
   );
   write("packages/app/renderer/index.html", html());
-  write("packages/agents/src/bin/claude-pre-tool-hook.ts", "// synthetic hook entry\n");
-  write(
-    "packages/app/scripts/build-daemon.js",
-    'await build({ entryPoints: [fileURLToPath(new URL("../../agents/dist/bin/claude-pre-tool-hook.js", import.meta.url))] });\n',
-  );
+  // The build rule that decides what sits beside the daemon: with the hook from #980 on.
+  if (hook) {
+    write("packages/agents/src/bin/claude-pre-tool-hook.ts", "// synthetic hook entry\n");
+    write("packages/app/scripts/build-daemon.js", HOOK_BUILD_RULE);
+  } else write("packages/app/scripts/build-daemon.js", "await build({ outfile });\n");
   for (const [name, body] of Object.entries(FONTS)) write(`packages/design/fonts/${name}`, body);
   for (const name of WINDOWS_NATIVE_SOURCES)
     write(`packages/app/native/diagnostics/${name}`, `/* synthetic ${name} */\n`);
