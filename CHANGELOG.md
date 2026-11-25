@@ -29,6 +29,27 @@ Pending entries live in [`changelog.d/`](changelog.d/), one file per entry; prep
 release renders them into a dated section below. Run `node tools/release.js notes --unreleased`
 to read them as they stand.
 
+## 0.8.0-rc.2 - 2026-11-25
+
+### Store format
+
+No change.
+
+### Fixed
+
+#### app
+
+- setting up or checking a server over SSH from Windows no longer times out. The
+  setup program is now sent to the server; before, ssh was given no input at all.
+- the SSH profile editor in the connection dialog lays out at normal window sizes,
+  and the dialog scrolls instead of hiding Save.
+
+#### deploy
+
+- a server set up with "Set up as ORCA server" now starts. Its new config lists
+  no workflows until you declare agents for them: the release's own workflows need agents
+  for their roles, and the daemon refused to start without them.
+
 ## 0.8.0-rc.1 - 2026-11-25
 
 ### Store format
