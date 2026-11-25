@@ -176,6 +176,27 @@ it("never hands a write token to the ref under test (#863)", () => {
   // Required for a release; a rehearsal of a ref that predates it reports not applicable.
   expect(file.jobs["app-verification"].with.upgrade_launch_required).toBe("${{ !inputs.dry_run }}");
 
+  // Release verification runs on Tyler's runners when one is idle, picked with the workflow
+  // revision's tooling, and with ci.yml's worker cap and pnpm cache for the runner it gets.
+  // A rehearsal stays hosted, without the health endpoint.
+  const runner = file.jobs.runner;
+  expect(runner.if).toBe(file.jobs.check.if);
+  expect(runner.steps[0].with).toEqual({ "sparse-checkout": "tools", "persist-credentials": false });
+  expect(runner.steps[1]).toEqual({
+    id: "pick",
+    env: {
+      FORCE_HOSTED: "${{ inputs.dry_run && 'true' || vars.CI_FORCE_HOSTED }}",
+      HEALTH_URL: "${{ !inputs.dry_run && secrets.CI_RUNNER_HEALTH_URL || '' }}",
+    },
+    run: "node tools/linux-runner.js",
+  });
+  expect(file.jobs.check.needs).toBe("runner");
+  expect(file.jobs.check["runs-on"]).toBe("${{ fromJSON(needs.runner.outputs.runner) }}");
+  expect(file.jobs.check.env.WORKERS_CAP).toBe("${{ contains(needs.runner.outputs.runner, 'tyler') && '20' || '2' }}");
+  expect(release.find((s) => s.uses?.startsWith("actions/setup-node@")).with.cache).toBe(
+    "${{ !contains(needs.runner.outputs.runner, 'tyler') && 'pnpm' || '' }}",
+  );
+
   // Desktop picks runners and its matrix with the workflow revision's tooling, not the ref's.
   const desktop = workflow("desktop.yml");
   expect(desktop.on.workflow_call.inputs.hosted_only).toMatchObject({ type: "boolean", default: false });

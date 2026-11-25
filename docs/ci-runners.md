@@ -111,7 +111,8 @@ loopback destinations; and the only credential a job holds is its `GITHUB_TOKEN`
 (install, build and test steps) runs on these machines, so treat them as running
 untrusted-by-default code.
 
-In this repository `ci.yml`'s `check` job selects the `tyler` label on its own. The Linux jobs of `app-smoke.yml` and `desktop.yml` (manual runs and release calls)
+In this repository `ci.yml`'s `check` job selects the `tyler` label on its own. The Linux jobs of `app-smoke.yml` and `desktop.yml` (manual runs and release calls),
+and `release-publish.yml`'s `check` job ("verify the merge commit", which holds only a read token and uses `ci.yml`'s worker cap and pnpm cache choice for the runner it gets),
 use it too when the health endpoint reports at least one idle runner, and GitHub-hosted
 `ubuntu-24.04` otherwise; [`tools/linux-runner.js`](../tools/linux-runner.js) makes that
 choice once per run, and `CI_FORCE_HOSTED` applies to it as well. On the hosted fallback a step installs xvfb if it is missing and loads an
@@ -123,6 +124,7 @@ profile is otherwise unconfined, so it is a scoped exception, not a sandbox for 
 It is also no boundary against the job's own code: the executable sits in the
 runner-writable workspace and the job user has passwordless sudo on these VMs. The step
 runs only on GitHub-hosted runners, never on a self-hosted one. Every other job runs on GitHub-hosted runners, including
-`release-prepare.yml`, `release-publish.yml`'s own jobs, `changelog.yml` and
-`codeql.yml`, which hold write tokens or deploy keys. `tyler` is the only self-hosted
+`release-prepare.yml`, `release-publish.yml`'s other jobs, `changelog.yml` and
+`codeql.yml`, which hold write tokens or deploy keys. A release rehearsal (`dry_run`) keeps
+its `check` on GitHub-hosted runners too, since its ref may be any branch. `tyler` is the only self-hosted
 label; a new workflow that targets it takes on the same assumptions.

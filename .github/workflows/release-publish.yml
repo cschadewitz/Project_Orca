@@ -35,7 +35,7 @@
 #
 # The rehearsed ref is untrusted, so it never meets a write token. The workflow's token is
 # read-only; every job that runs the ref's code (check, and the desktop and app-smoke calls)
-# checks out without persisted credentials, both calls pick runners with this workflow
+# checks out without persisted credentials, check and both calls pick runners with this workflow
 # revision's tooling, and a rehearsal runs GitHub-hosted only, without the runner health
 # endpoint. A rehearsal writes nothing: its last job, `rehearsal`, checks out this workflow's
 # own revision (which must be the default branch), runs only that revision's tooling, and
@@ -68,8 +68,37 @@ permissions:
   contents: read
 
 jobs:
+  # Chooses where `check` runs: Tyler's self-hosted runners when one is idle, GitHub-hosted
+  # otherwise (tools/linux-runner.js, as app-smoke and desktop pick). The token `check` holds
+  # is read-only, so it fits the self-hosted runners' assumptions (docs/ci-runners.md). A
+  # rehearsal's ref may be any branch: it stays hosted and never sees the health endpoint.
+  # Set the repository variable CI_FORCE_HOSTED to `true` to skip the self-hosted runners.
+  runner:
+    name: pick Linux runner
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.merged && contains(github.event.pull_request.labels.*.name, 'release'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    outputs:
+      runner: ${{ steps.pick.outputs.runner }}
+    steps:
+      # The workflow's own commit, not inputs.ref: the code that picks a runner is never the
+      # code being released.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: tools
+          persist-credentials: false
+
+      - id: pick
+        env:
+          FORCE_HOSTED: ${{ inputs.dry_run && 'true' || vars.CI_FORCE_HOSTED }}
+          HEALTH_URL: ${{ !inputs.dry_run && secrets.CI_RUNNER_HEALTH_URL || '' }}
+        run: node tools/linux-runner.js
+
   check:
     name: verify the merge commit
+    needs: runner
     # checks: read, for the release line check's result on a release pull request's head.
     permissions:
       contents: read
@@ -77,7 +106,11 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event.pull_request.merged && contains(github.event.pull_request.labels.*.name, 'release'))
-    runs-on: ubuntu-24.04
+    runs-on: ${{ fromJSON(needs.runner.outputs.runner) }}
+    env:
+      # ci.yml's worker cap and pnpm cache for the picked runner (docs/ci-runners.md): 20
+      # workers and no Actions cache on the self-hosted runners, 2 and `cache: pnpm` hosted.
+      WORKERS_CAP: ${{ contains(needs.runner.outputs.runner, 'tyler') && '20' || '2' }}
     outputs:
       version: ${{ steps.version.outputs.version }}
       sha: ${{ steps.sha.outputs.sha }}
@@ -153,7 +186,7 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
-          cache: pnpm
+          cache: ${{ !contains(needs.runner.outputs.runner, 'tyler') && 'pnpm' || '' }}
 
       # From here to the compiled smoke this is ci.yml's full path, in its order and with its
       # environment: the release PR never ran CI, so this is the only verification the tagged
