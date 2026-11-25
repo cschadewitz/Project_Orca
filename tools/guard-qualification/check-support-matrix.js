@@ -817,6 +817,18 @@ export function scopedProblems(
   return [...problems, ...refused];
 }
 
+/**
+ * Whether a call's evidence after a wait (`afterWait`) is about the same target as its first:
+ * the same kind, and the same call id, file or command. Its effect is recomputed, not trusted.
+ */
+function sameTarget(first, later) {
+  if (!first || !later || first.kind !== later.kind) return false;
+  if (first.kind === "mcp") return first.callRef === later.callRef;
+  if (first.kind === "file") return first.path === later.path && first.before === later.before;
+  if (first.kind === "shell") return first.command === later.command;
+  return false;
+}
+
 /** The receipt's `lifecycle` evidence each scoped check stands on. */
 const LIFECYCLE_EVIDENCE = {
   optInDefaultOff: "optIn",
@@ -833,10 +845,13 @@ const LIFECYCLE_EVIDENCE = {
  * - `optInDefaultOff`: with the field left out, a write ORCA's rule denies took effect (no hook
  *   was installed); `on` was refused; with `experimental`, the same kind of write was denied and
  *   had no effect.
- * - `cancelledNoEffect`: every cancelled call was asked about, never answered, and had no
- *   effect, then or after a wait.
- * - `freshSessionFreshDecision`: in the new session, calls with no answer had no effect, calls
- *   answered once took effect, each on its own ask, and none is a cancelled call.
+ * - `cancelledNoEffect`: every cancelled call was asked about in one session, never answered,
+ *   and had no effect; its evidence taken again after a wait (`afterWait`, the same target)
+ *   shows none either.
+ * - `freshSessionFreshDecision`: in one new session, not the cancelled asks' one, calls with no
+ *   answer had no effect, calls answered once took effect, each on its own ask, and none is a
+ *   cancelled call.
+ * Every ask is bound to its call (`toolCallId` is the call's `toolUseId`) and to its session.
  * - `judgedAction`: every judged call reached the person with the judge's advisory verdict;
  *   unanswered it had no effect, answered once it took effect. The judge allowed nothing itself.
  */
@@ -846,6 +861,19 @@ export function lifecycleEvidenceProblems(receipt, checks = Object.keys(LIFECYCL
   const effect = (r) => (r?.effectRef ? effectFrom(r.effectRef) : "indeterminate");
   const answers = (r) => (r?.approvals ?? []).map((a) => a.answer);
   const list = (v) => (Array.isArray(v) ? v : []);
+  // Each ask is bound to its own call and to the session it was asked in.
+  const bound = (r) =>
+    (r?.approvals ?? []).every(
+      (a) => a.toolCallId === r.toolUseId && typeof a.sessionId === "string" && a.sessionId !== "",
+    );
+  const sessions = (rs) => new Set(rs.flatMap((r) => (r.approvals ?? []).map((a) => a.sessionId)));
+  for (const [name, rs] of [
+    ["cancelled", list(life.cancelled)],
+    ["fresh", list(life.fresh)],
+    ["judged", list(life.judged)],
+  ])
+    if (rs.some((r) => !r?.toolUseId || !bound(r)))
+      problems.push(`lifecycle.${name}: an ask is not bound to its own call and session`);
   if (checks.includes("optInDefaultOff")) {
     const o = life.optIn ?? {};
     if (list(o.default).length === 0 || list(o.default).some((r) => effect(r) !== "observed"))
@@ -866,9 +894,12 @@ export function lifecycleEvidenceProblems(receipt, checks = Object.keys(LIFECYCL
         answers(r).length === 0 ||
         answers(r).some((a) => a !== "pending") ||
         effect(r) !== "none" ||
-        r.effectAfterWait !== "none"
+        !sameTarget(r.effectRef, r.afterWait) ||
+        effectFrom(r.afterWait) !== "none"
       )
         problems.push(`lifecycle.cancelled: ${r.toolUseId ?? "a call"} was not a pending ask without effect`);
+    if (cancelled.length > 0 && sessions(cancelled).size !== 1)
+      problems.push("lifecycle.cancelled: the cancelled asks are not one session's");
   }
   if (checks.includes("judgedAction")) {
     const judged = list(life.judged);
@@ -897,6 +928,10 @@ export function lifecycleEvidenceProblems(receipt, checks = Object.keys(LIFECYCL
       if (effect(r) !== "observed") problems.push(`lifecycle.fresh: ${r.toolUseId} did not run on its answer`);
     if (fresh.some((r) => !r.toolUseId || before.has(r.toolUseId)))
       problems.push("lifecycle.fresh: a call is not the fresh session's own");
+    const old = sessions(cancelled);
+    const now = sessions(fresh);
+    if (fresh.length > 0 && (now.size !== 1 || [...now].some((id) => old.has(id))))
+      problems.push("lifecycle.fresh: the asks are not one new session's");
   }
   return problems;
 }

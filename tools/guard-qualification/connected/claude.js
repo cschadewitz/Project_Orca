@@ -61,8 +61,12 @@ export function claudeConnected(env) {
     id: "claude-connected",
     capabilities: ["answerer", "agent-turn", "mcp-grant-allows"],
 
-    /** The agent as ORCA's config would declare it for this world. */
-    agent(world, extraEnv = {}) {
+    /**
+     * The agent as ORCA's config would declare it for this world: with the hook opted in
+     * (`nativeToolHook: experimental`) unless `nativeToolHook` says otherwise, and with the
+     * field left out when it is null, as a config that never mentions it.
+     */
+    agent(world, extraEnv = {}, nativeToolHook = "experimental") {
       return AgentSpecSchema.parse({
         id: world.agentId,
         command: process.execPath,
@@ -85,12 +89,12 @@ export function claudeConnected(env) {
           env: { ORCA_706_MCP_LOG: logs(world).mcp },
         })),
         permissions: world.configured,
-        nativeToolHook: "experimental",
+        ...(nativeToolHook === null ? {} : { nativeToolHook }),
       });
     },
 
     /** Open a session the daemon's way. The world's `configured` is read now, as at session open. */
-    async openSession(world, { askPermission, extraEnv, host } = {}) {
+    async openSession(world, { askPermission, extraEnv, host, nativeToolHook, judge } = {}) {
       const claudeConfig = join(world.root, "claude-config");
       await mkdir(claudeConfig, { recursive: true });
       await writeFile(join(claudeConfig, "settings.json"), JSON.stringify(CLAUDE_SETTINGS));
@@ -114,11 +118,13 @@ export function claudeConnected(env) {
         script: env.hookScript,
       })({
         host: host ?? new LocalHost({ id: "local", type: "local" }),
-        agent: path.agent(world, extraEnv),
+        agent: path.agent(world, extraEnv, nativeToolHook),
         cwd: world.workspace,
         askPermission: askPermission ?? (async () => undefined),
         logger: silentLogger,
         handshakeTimeoutMs: 60_000,
+        // A judge prepared for this session (#701), as the daemon's judged factory hands it over.
+        ...(judge ?? {}),
       });
     },
 
@@ -126,11 +132,27 @@ export function claudeConnected(env) {
       if (world.connected) return world.connected;
       const state = { approvals: [], answer: undefined };
       const session = await path.openSession(world, {
-        askPermission: async (req) => {
+        // A world opts in like every case unless it says otherwise (null: a config without the field).
+        nativeToolHook: world.nativeToolHook,
+        judge: world.judge,
+        askPermission: async (req, _invocation, judged) => {
           const approval = {
             toolCallId: req.toolCall.toolCallId,
             title: req.toolCall.title ?? "",
+            // The ACP session the ask came from, so a fresh session's asks are shown to be its own.
+            sessionId: req.sessionId,
             answer: "pending",
+            // A judge's verdict shown with the ask (#701): only its fixed codes, never a criterion.
+            ...(judged
+              ? {
+                  judged: {
+                    verdict: judged.verdict,
+                    kind: judged.kind ?? null,
+                    advisory: judged.advisory === true,
+                    reasonCode: judged.reasonCode ?? null,
+                  },
+                }
+              : {}),
           };
           state.approvals.push(approval);
           world.asked.push(approval.title);
@@ -240,7 +262,12 @@ export function claudeConnected(env) {
       const shellBefore = (await lines(logs(world).shell)).length;
       const mcpBefore = (await lines(logs(world).mcp)).length;
       if (opts.noAnswerer) state.answer = () => undefined;
-      else if (opts.onAsk) state.answer = opts.onAsk;
+      // The person sees the ask with the calls this turn was made of: the tool and its exact
+      // input, so a simulated answer can be bound to the one fixture it is for.
+      else if (opts.onAsk) {
+        const turnCalls = prepared.map((p) => ({ name: p.name, input: structuredClone(p.input) }));
+        state.answer = (req) => opts.onAsk(req, turnCalls);
+      }
       let seen;
       try {
         seen = await path.turn(
@@ -273,7 +300,12 @@ export function claudeConnected(env) {
           orcaDecision: unobserved ? "unobserved" : "observed",
           ...(unobserved ? { unobservedBecause: unobserved } : {}),
           refusal,
-          approvals: c.approvals.map((a) => ({ toolCallId: a.toolCallId, answer: a.answer })),
+          approvals: c.approvals.map((a) => ({
+            toolCallId: a.toolCallId,
+            sessionId: a.sessionId,
+            answer: a.answer,
+            ...(a.judged ? { judged: a.judged } : {}),
+          })),
           effect,
           effectRef,
           ...(p.primed ? { primingRead: p.primed } : {}),
@@ -426,6 +458,11 @@ async function readToken(world, file, callRef) {
 }
 
 const digest = (text) => createHash("sha256").update(text).digest("hex").slice(0, 16);
-const bytes = (file) => readFile(file, "utf8").catch(() => undefined);
+/** A file's text, or undefined when it does not exist. Any other read failure is not an absence: it throws. */
+const bytes = (file) =>
+  readFile(file, "utf8").catch((e) => {
+    if (e?.code === "ENOENT") return undefined;
+    throw e;
+  });
 const lines = async (file) => ((await bytes(file)) ?? "").split("\n").filter(Boolean);
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));

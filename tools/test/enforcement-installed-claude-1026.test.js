@@ -6,6 +6,20 @@
  *
  * - `checks.connects`: the factory admits a session and a workspace write takes effect.
  * - `uncoveredRoutes`: every route the Claude row lists as unsupported, shown refused here.
+ * - `checks.optInDefaultOff`: a config that never mentions the hook gets none (Claude's own
+ *   allow lets a write ORCA's rule denies land), `on` is refused, and only the explicit
+ *   `nativeToolHook: experimental` installs it (the same write is denied and has no effect).
+ *   The receipt's `agentSettings` are the ORCA settings every case ran under.
+ * - `checks.cancelledNoEffect`: a normally pending ask whose turn is cancelled has no effect,
+ *   shown again after a wait, for an MCP call and a file write.
+ * - `checks.freshSessionFreshDecision`: a new session for the same calls asks again and runs
+ *   nothing unanswered; the write runs on a one-time answer bound to exactly it. An MCP call
+ *   asks twice on this route (hook, then relay), so its positive case is left unverified.
+ * - `checks.judgedAction`: with the experimental command judge on (ORCA's own judge, prepared
+ *   against a provider stand-in), a command a judged rule is about carries the judge's advice
+ *   to the person, still asks, runs nothing unanswered and runs on their one-time answer,
+ *   whichever verdict the judge gave.
+ *   Their per-call evidence is kept under `lifecycle`.
  * - `cases`: every case the `claude-native-hook` route can run. Each case the B claim asserts
  *   runs live (`connected/claude.js`), with each call's independent evidence and ORCA's
  *   decision observed. The ones the matrix lists under the route's `installed.diagnostic`
@@ -19,8 +33,10 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { CLAUDE_HOOK_VERIFIED_PAIRS } from "@orca/agents";
@@ -30,6 +46,7 @@ import {
   casesFor,
   assertedCases,
   installedCaseProblems,
+  lifecycleEvidenceProblems,
   programEvidenceProblems,
   loadAssertions,
   loadCatalogue,
@@ -41,7 +58,9 @@ import { SCENARIOS } from "../guard-qualification/scenarios.js";
 import { createWorld } from "../guard-qualification/world.js";
 import { modelStandIn } from "../guard-qualification/connected/model-stand-in.js";
 import { claudeConnected } from "../guard-qualification/connected/claude.js";
-import { claudeHookProgram } from "../guard-qualification/installed/claude-hook-program.js";
+import { claudeHookProgram, installedPreToolHook } from "../guard-qualification/installed/claude-hook-program.js";
+import { effectFrom } from "../guard-qualification/connected/evidence.js";
+import { judgeStandIn } from "../guard-qualification/connected/judge-stand-in.js";
 
 const ADAPTER = process.env["ORCA_CLAUDE_ADAPTER"];
 const OTHER_RUNTIME = process.env["ORCA_CLAUDE_OTHER_RUNTIME"];
@@ -111,11 +130,96 @@ describe("the installed run and the matrix agree", () => {
   });
 });
 
+describe("the after-wait observer takes only a verified absence as no effect", () => {
+  const world = { root: "/nonexistent-orca-706" };
+  const mcpGot = { detail: { effectRef: { kind: "mcp", callRef: "c1", loggedFor: [], unaccountedLines: 0 } } };
+  const fileGot = (before) => ({
+    detail: { effectRef: { kind: "file", path: "p", before, after: null, written: "w" } },
+  });
+
+  it("an MCP log it cannot read, or that is gone, is no evidence of absence", async () => {
+    for (const read of [async () => ({ failed: "EACCES" }), async () => ({ missing: true })])
+      expect(effectFrom(await effectAgain(world, mcpGot, {}, read))).toBe("indeterminate");
+    expect(effectFrom(await effectAgain(world, mcpGot, {}, async () => ({ text: "" })))).toBe("none");
+  });
+
+  it("a target file it cannot read is no evidence; one missing as before is", async () => {
+    expect(effectFrom(await effectAgain(world, fileGot(null), { path: "p" }, async () => ({ failed: "EACCES" })))).toBe(
+      "indeterminate",
+    );
+    expect(effectFrom(await effectAgain(world, fileGot(null), { path: "p" }, async () => ({ missing: true })))).toBe(
+      "none",
+    );
+    expect(effectFrom(await effectAgain(world, fileGot("abc"), { path: "p" }, async () => ({ missing: true })))).toBe(
+      "indeterminate",
+    );
+  });
+
+  it("reads a real unreadable file as a failure and a real missing one as missing", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orca-706-observe-"));
+    try {
+      expect(await observe(join(dir, "nope"))).toEqual({ missing: true });
+      // A directory cannot be read as a file: a failed observation, not an absence.
+      expect(await observe(dir)).toEqual({ failed: "EISDIR" });
+      if (process.getuid?.() !== 0) {
+        const locked = join(dir, "locked");
+        await writeFile(locked, "x");
+        await chmod(locked, 0o000);
+        expect(await observe(locked)).toEqual({ failed: "EACCES" });
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("the simulated person allows only the one expected fixture", () => {
+  const req = (over = {}) => ({
+    sessionId: "s1",
+    toolCall: { name: "Bash", rawInput: { command: "touch /w/a" } },
+    options: [
+      { optionId: "once", kind: "allow_once" },
+      { optionId: "always", kind: "allow_always" },
+    ],
+    ...over,
+  });
+  const turn = [{ name: "Bash", input: { command: "touch /w/a" } }];
+
+  it("answers the exact call once, in its session, with the one-time option", async () => {
+    const allow = allowOnlyFixture("s1");
+    expect(await allow(req(), turn)).toBe("once");
+    expect(await allow(req(), turn)).toBeUndefined();
+  });
+
+  it("refuses another session, input, tool, turn shape or an ambiguous offer", async () => {
+    const cases = [
+      [req({ sessionId: "s2" }), turn],
+      [req({ toolCall: { name: "Bash", rawInput: { command: "rm -rf /w" } } }), turn],
+      [req({ toolCall: { name: "Write", rawInput: { command: "touch /w/a" } } }), turn],
+      [req(), [...turn, ...turn]],
+      [req(), undefined],
+      [req({ toolCall: undefined }), turn],
+      [
+        req({
+          options: [
+            { optionId: "a", kind: "allow_once" },
+            { optionId: "b", kind: "allow_once" },
+          ],
+        }),
+        turn,
+      ],
+      [req({ options: [{ optionId: "always", kind: "allow_always" }] }), turn],
+    ];
+    for (const [r, t] of cases) expect(await allowOnlyFixture("s1")(r, t)).toBeUndefined();
+    expect(await allowOnlyFixture(undefined)(req(), turn)).toBeUndefined();
+  });
+});
+
 describe.skipIf(ADAPTER === undefined || OTHER_RUNTIME === undefined)("installed: claude (#1026)", () => {
   let model;
   let live;
   let hookProgram;
-  const receipt = { route: ROUTE, cases: [], uncoveredRoutes: [], checks: {} };
+  const receipt = { route: ROUTE, cases: [], uncoveredRoutes: [], checks: {}, lifecycle: {} };
 
   beforeAll(async () => {
     model = await modelStandIn();
@@ -177,6 +281,148 @@ describe.skipIf(ADAPTER === undefined || OTHER_RUNTIME === undefined)("installed
     );
   }
 
+  it("opt-in: off by default, and on only with nativeToolHook: experimental", async () => {
+    const denyEdits = { rules: [{ match: { kind: "edit" }, decision: "deny" }] };
+    const off = await realWorld();
+    try {
+      off.configured = denyEdits;
+      off.nativeToolHook = null;
+      expect(live.agent(off, {}, null).nativeToolHook, "a config without the field").toBeUndefined();
+      const got = await live.decide(off, { tool: "write", path: join(off.workspace, "default.md") });
+      // No hook was installed, so Claude's own allow ran the write ORCA's rule denies.
+      expect(off.installedMeta, "no hook settings were handed to the agent").toBeUndefined();
+      expect(got.detail.effect, JSON.stringify(got.detail)).toBe("observed");
+      receipt.lifecycle.optIn = { default: [record(got)] };
+    } finally {
+      await off.dispose();
+    }
+    const on = await realWorld();
+    try {
+      await expect(live.openSession(on, { nativeToolHook: "on" })).rejects.toMatchObject({ code: "NOT_SUPPORTED" });
+      receipt.lifecycle.optIn.on = "refused";
+    } finally {
+      await on.dispose();
+    }
+    const opted = await realWorld();
+    try {
+      opted.configured = denyEdits;
+      const got = await live.decide(opted, { tool: "write", path: join(opted.workspace, "opted.md") });
+      expect(() => installedPreToolHook(opted.installedMeta)).not.toThrow();
+      expect(got.outcome, JSON.stringify(got.detail)).toBe("deny");
+      expect(got.detail.effect).toBe("none");
+      receipt.lifecycle.optIn.experimental = [record(got)];
+      receipt.agentSettings = { nativeToolHook: live.agent(opted).nativeToolHook };
+    } finally {
+      await opted.dispose();
+    }
+    expect(receipt.agentSettings).toEqual({ nativeToolHook: "experimental" });
+    receipt.checks.optInDefaultOff = "pass";
+  }, 300_000);
+
+  it("cancellation: a pending ask whose turn is cancelled has no effect, and a fresh session decides afresh", async () => {
+    const world = await realWorld();
+    try {
+      // The MCP recorder's log exists before the calls, so later a missing log is a failed
+      // observation, not an absence of calls.
+      await writeFile(join(world.root, "mcp-calls.jsonl"), "", { flag: "a" });
+      // Edits ask (MCP calls ask by default), so both calls wait on a person.
+      world.configured = { rules: [{ match: { kind: "edit" }, decision: "ask" }] };
+      const calls = [
+        { tool: "mcp", server: "github", name: "create_issue" },
+        { tool: "write", path: join(world.workspace, "cancelled.md") },
+      ];
+      const cancelled = [];
+      for (const action of calls) {
+        const turn = new AbortController();
+        const got = await live.decide(world, action, {
+          expect: ["ask"],
+          signal: turn.signal,
+          // The ask reached ORCA's human channel; the turn is cancelled and nobody answers.
+          onAsk: () => {
+            turn.abort();
+            return new Promise(() => {});
+          },
+        });
+        expect(got.outcome, JSON.stringify(got.detail)).toBe("ask");
+        expect(got.detail.approvals.map((a) => a.answer)).toEqual(["pending"]);
+        cancelled.push(got);
+      }
+      // Anything the cancelled calls set off would have landed by now: look again.
+      await new Promise((done) => setTimeout(done, 5_000));
+      const later = await Promise.all(cancelled.map((got, i) => effectAgain(world, got, calls[i])));
+      expect(later.map((ref) => effectFrom(ref))).toEqual(["none", "none"]);
+      receipt.lifecycle.cancelled = cancelled.map((got, i) => ({ ...record(got), afterWait: later[i] }));
+      receipt.checks.cancelledNoEffect = "pass";
+
+      // A fresh session: the same calls ask again, run nothing unanswered, and run only on their own answer.
+      await world.connected.session.close();
+      world.connected = undefined;
+      const fresh = [];
+      for (const action of calls) {
+        const unanswered = await live.decide(world, action, { expect: ["ask"], noAnswerer: true });
+        expect(unanswered.outcome, JSON.stringify(unanswered.detail)).toBe("ask");
+        fresh.push(record(unanswered));
+        // An MCP call asks twice on this route (the hook, then ORCA's relay), so one bound
+        // answer cannot run it; its positive case stays unverified rather than answering more.
+        if (action.tool === "mcp") continue;
+        const session = unanswered.detail.approvals[0]?.sessionId;
+        const once = await live.decide(world, action, { expect: ["allow"], onAsk: allowOnlyFixture(session) });
+        expect(once.outcome, JSON.stringify(once.detail)).toBe("allow");
+        expect(once.detail.approvals.map((a) => a.sessionId)).toEqual([session]);
+        expect(once.detail.approvals.map((a) => a.answer)).toEqual(["allow_once"]);
+        fresh.push(record(once));
+      }
+      const before = new Set(cancelled.map((got) => got.detail.toolUseId));
+      expect(fresh.filter((r) => before.has(r.toolUseId))).toEqual([]);
+      receipt.lifecycle.fresh = fresh;
+      receipt.lifecycle.unverified = [
+        "fresh session: an MCP call's one-time allow (the hook and ORCA's relay each ask, so one bound answer does not run it)",
+      ];
+      receipt.checks.freshSessionFreshDecision = "pass";
+    } finally {
+      await world.dispose();
+    }
+  }, 300_000);
+
+  it("judged command: the judge advises, the person is still asked, and only their answer runs it", async () => {
+    const judge = await judgeStandIn();
+    const world = await realWorld();
+    try {
+      world.judge = await judge.prepare(world.agentId, ["command"]);
+      world.configured = {
+        rules: [{ match: { kind: "execute" }, judge: { criterion: "Creating an empty marker file is fine." } }],
+      };
+      const judged = [];
+      for (const verdict of ["covered", "not-covered"]) {
+        judge.state.verdict = verdict;
+        const command = `touch ${join(world.workspace, `judged-${verdict}.txt`)}`;
+        const asked = judge.state.requests.length;
+        const unanswered = await live.decide(world, { tool: "shell", command }, { expect: ["ask"], noAnswerer: true });
+        const session = unanswered.detail.approvals[0]?.sessionId;
+        const answered = await live.decide(
+          world,
+          { tool: "shell", command },
+          { expect: ["allow"], onAsk: allowOnlyFixture(session) },
+        );
+        expect(unanswered.outcome, JSON.stringify(unanswered.detail)).toBe("ask");
+        expect(answered.outcome, JSON.stringify(answered.detail)).toBe("allow");
+        for (const got of [unanswered, answered])
+          expect(got.detail.approvals.map((a) => a.judged)).toEqual([
+            expect.objectContaining({ verdict, kind: "command", advisory: true }),
+          ]);
+        // The judge was asked about each call, and the person still answered it.
+        expect(judge.state.requests.length - asked).toBe(2);
+        judged.push(record(unanswered), record(answered));
+      }
+      receipt.lifecycle.judged = judged;
+      receipt.judge = { provider: "anthropic (stand-in)", classes: ["command"], requests: judge.state.requests.length };
+      receipt.checks.judgedAction = "pass";
+    } finally {
+      await world.dispose();
+      await judge.close();
+    }
+  }, 300_000);
+
   it("binds the receipt to what ran: the adapter, the runtime image and the hook program", async () => {
     receipt.inputs = await inputsOf(hookProgram);
     receipt.installedSettings = hookProgram.settings();
@@ -196,11 +442,87 @@ describe.skipIf(ADAPTER === undefined || OTHER_RUNTIME === undefined)("installed
     // The diagnostics hold too, though they count toward no tier.
     expect(programEvidenceProblems({ ...receipt, route: ROUTE }, Object.keys(program), loadAssertions())).toEqual([]);
     expect(receipt.inputs.profile).toBe(qualificationProfile(matrix, catalogue, loadAssertions(), row, route));
+    // The opt-in and lifecycle checks hold on their own evidence, as the matrix checker re-derives it.
+    expect(lifecycleEvidenceProblems(receipt)).toEqual([]);
     expect(model.log.errors, "the model stand-in answered every request").toEqual([]);
   });
 });
 
 const sha256 = (data) => createHash("sha256").update(data).digest("hex");
+
+/**
+ * A simulated person's one-time allow, bound to one expected fixture (#1026 review): only for
+ * an ask in `sessionId`, for a turn of exactly one call, whose tool name and raw input are that
+ * call's exactly, and only once. Anything missing, unexpected or ambiguous gets no answer, so
+ * nothing runs on it. Native policy is not changed.
+ */
+function allowOnlyFixture(sessionId) {
+  let used = false;
+  return async (req, turnCalls) => {
+    const [want] = turnCalls ?? [];
+    const options = (req.options ?? []).filter((o) => o.kind === "allow_once");
+    const exact =
+      !used &&
+      typeof sessionId === "string" &&
+      req.sessionId === sessionId &&
+      turnCalls?.length === 1 &&
+      req.toolCall?.name === want.name &&
+      isDeepStrictEqual(req.toolCall?.rawInput, want.input) &&
+      options.length === 1;
+    if (!exact) return undefined;
+    used = true;
+    return options[0].optionId;
+  };
+}
+
+/** One call's record as the receipt keeps it: what the runner observed, without the result text. */
+function record(got) {
+  const { result: _result, ...rest } = got.detail;
+  return rest;
+}
+
+/**
+ * What an observer read: the file's text, a missing file, or a failure to read it. Only a missing
+ * file is ever taken as an absence, and only where absence is expected.
+ */
+export async function observe(file) {
+  try {
+    return { text: await readFile(file, "utf8") };
+  } catch (e) {
+    return e?.code === "ENOENT" ? { missing: true } : { failed: String(e?.code ?? "error") };
+  }
+}
+
+/**
+ * A cancelled call's evidence taken again after a wait, for its effect to be recomputed from.
+ * An observer that could not read its evidence gives `unobservable`, which shows no absence
+ * (`effectFrom` makes it indeterminate). The MCP log exists before the calls, so a missing log
+ * is unobservable too. A missing target file is an absence only if it was missing before.
+ */
+export async function effectAgain(world, got, action, read = observe) {
+  const ref = got.detail.effectRef;
+  if (ref.kind === "mcp") {
+    const seen = await read(join(world.root, "mcp-calls.jsonl"));
+    if (seen.text === undefined) return { kind: "unobservable", of: "mcp", why: seen.failed ?? "log missing" };
+    const lines = seen.text
+      .split("\n")
+      .filter(Boolean)
+      .map((l) => JSON.parse(l));
+    return {
+      ...ref,
+      loggedFor: lines.filter((l) => l.input?.orca706Call === ref.callRef).map((l) => l.nonce),
+      unaccountedLines: lines.filter((l) => typeof l.input?.orca706Call !== "string").length,
+    };
+  }
+  if (ref.kind === "file") {
+    const seen = await read(action.path);
+    if (seen.failed) return { kind: "unobservable", of: "file", why: seen.failed };
+    if (seen.missing)
+      return ref.before === null ? { ...ref, after: null } : { kind: "unobservable", of: "file", why: "target gone" };
+    return { ...ref, after: sha256(seen.text).slice(0, 16) };
+  }
+  return { kind: "none-available" };
+}
 
 /**
  * What this run installed and ran: the adapter as its lockfile pins it, the Claude Code image
@@ -253,7 +575,10 @@ async function writeReceipt(receipt) {
         node: process.version,
         inputs: receipt.inputs,
         installedSettings: receipt.installedSettings,
+        agentSettings: receipt.agentSettings,
         checks: receipt.checks,
+        lifecycle: receipt.lifecycle,
+        judge: receipt.judge,
         uncoveredRoutes: receipt.uncoveredRoutes,
         cases: receipt.cases,
         program,
