@@ -62,3 +62,27 @@ describe("recording receipts", () => {
     );
   });
 });
+
+describe("the recorded files pass the repository's format check", () => {
+  it("leaves signed receipts and their bundles as signed, and formats the matrix", async () => {
+    const prettier = await import("prettier");
+    const { join } = await import("node:path");
+    const { readFileSync } = await import("node:fs");
+    const { REPO_ROOT } = await import("../guard-qualification/check-support-matrix.js");
+    const ignorePath = join(REPO_ROOT, ".prettierignore");
+    for (const f of [file, `${file}.sigstore.json`])
+      expect((await prettier.getFileInfo(join(REPO_ROOT, f), { ignorePath })).ignored, f).toBe(true);
+    const at = join(REPO_ROOT, "tools/guard-qualification/support-matrix.json");
+    expect((await prettier.getFileInfo(at, { ignorePath })).ignored).toBe(false);
+    // What the propose job writes before formatting is not what the check accepts, so the job formats it.
+    const workflow = readFileSync(join(REPO_ROOT, ".github/workflows/guard-receipts.yml"), "utf8");
+    const record = workflow.indexOf("node tools/guard-qualification/record-receipts.js");
+    const format = workflow.indexOf("prettier --write tools/guard-qualification/support-matrix.json");
+    const add = workflow.indexOf(
+      "git add tools/guard-qualification/receipts tools/guard-qualification/support-matrix.json",
+    );
+    expect(record).toBeGreaterThan(0);
+    expect(format).toBeGreaterThan(record);
+    expect(add).toBeGreaterThan(format);
+  });
+});
