@@ -39,8 +39,10 @@ async function fixture(beforeProvision?: (layout: FixtureLayout) => Promise<void
     await mkdir(workspace, { mode: 0o700 });
     await mkdir(control, { mode: 0o700 });
     // Fenced roots get identities whose slots lie outside kernel autobind (#807, #819, #1084),
-    // so only the contention a test injects can refuse them.
-    for (const path of [workspace, control]) await selectFenceDirectory(path);
+    // so only the contention a test injects can refuse them. The workspace also holds the
+    // first-run fence's port (#1088).
+    await selectFenceDirectory(workspace, [], { updateWindow: true, firstRun: true });
+    await selectFenceDirectory(control);
     await mkdir(join(workspace, ".orca"), { mode: 0o700 });
     await writeFile(join(workspace, "orca.config.yaml"), "storeDir: .orca\n", { mode: 0o600 });
     const layout = { base, workspace, control };

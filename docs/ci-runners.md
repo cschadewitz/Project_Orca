@@ -111,7 +111,8 @@ loopback destinations; and the only credential a job holds is its `GITHUB_TOKEN`
 (install, build and test steps) runs on these machines, so treat them as running
 untrusted-by-default code.
 
-In this repository `ci.yml`'s `check` job selects the `tyler` label on its own. The Linux jobs of `app-smoke.yml` and `desktop.yml` (manual runs and release calls)
+In this repository `ci.yml`'s `check` job selects the `tyler` label on its own. The Linux jobs of `app-smoke.yml` and `desktop.yml` (manual runs and release calls),
+and `release-publish.yml`'s `verify` job ("verify the merge commit", the release's test work, with a read-only token, `ci.yml`'s worker cap and pnpm cache choice for the runner it gets, and single-threaded lint whatever the runner's `ESLINT_CONCURRENCY` says),
 use it too when the health endpoint reports at least one idle runner, and GitHub-hosted
 `ubuntu-24.04` otherwise; [`tools/linux-runner.js`](../tools/linux-runner.js) makes that
 choice once per run, and `CI_FORCE_HOSTED` applies to it as well. On the hosted fallback a step installs xvfb if it is missing and loads an
@@ -123,6 +124,13 @@ profile is otherwise unconfined, so it is a scoped exception, not a sandbox for 
 It is also no boundary against the job's own code: the executable sits in the
 runner-writable workspace and the job user has passwordless sudo on these VMs. The step
 runs only on GitHub-hosted runners, never on a self-hosted one. Every other job runs on GitHub-hosted runners, including
-`release-prepare.yml`, `release-publish.yml`'s own jobs, `changelog.yml` and
-`codeql.yml`, which hold write tokens or deploy keys. `tyler` is the only self-hosted
+`release-prepare.yml`, `release-publish.yml`'s other jobs, `changelog.yml` and
+`codeql.yml`, which hold write tokens or deploy keys. In `release-publish.yml` the release's
+identity and authorization (the exact commit, its lane and review, and the version) come only
+from the GitHub-hosted `check` job, and every job that writes or dispatches takes them from
+there; `verify` only passes or fails the commit `check` pinned. Its runner picker gets the
+health endpoint only for a real release dispatched from the default branch or a merged release
+pull request, so a rehearsal (`dry_run`), whose ref may be any branch, stays GitHub-hosted. A rehearsal also restores and saves no Actions caches (pnpm store, Electron downloads) in
+`verify`, `desktop.yml` or `app-smoke.yml` (their `caches` input), because it runs its ref's
+install scripts in the default branch's cache scope, where trusted runs would restore them. `tyler` is the only self-hosted
 label; a new workflow that targets it takes on the same assumptions.

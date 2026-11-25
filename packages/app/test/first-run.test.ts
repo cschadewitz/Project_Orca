@@ -11,6 +11,7 @@ import { FirstRunSetup, type FirstRunDeps } from "../src/main/first-run/setup.js
 import { ownedDirectory } from "../src/main/first-run/directories.js";
 import { syntheticFirstRunWriter } from "./fixtures/synthetic-first-run-writer.js";
 import { FirstRunOwnershipRefusal } from "../src/main/first-run/ownership.js";
+import { selectFenceDirectory } from "../../protocol/test/fixtures/fence-ports.js";
 
 const dirs: string[] = [];
 afterEach(async () => {
@@ -24,6 +25,8 @@ async function rig() {
     project = join(root, "Sample α project"),
     workspace = join(root, "App β workspace");
   for (const path of [home, project, workspace]) await mkdir(path);
+  // Its first-run fence port lies outside kernel autobind (#1088).
+  await selectFenceDirectory(workspace, [], { firstRun: true });
   const git = (...args: string[]) =>
     execFileSync("git", ["-C", project, ...args], { encoding: "utf8", stdio: "pipe" }).trim();
   git("init", "-b", "prepared");

@@ -7,7 +7,9 @@ import { expect, it } from "vitest";
 const { parse } = createRequire(new URL("../../packages/cli/package.json", import.meta.url))("yaml");
 const workflow = (name) => parse(readFileSync(new URL(`../../.github/workflows/${name}`, import.meta.url), "utf8"));
 
-const release = workflow("release-publish.yml").jobs.check.steps;
+// The release's checks: hosted identity and authorization (`check`), then the test work (`verify`).
+const publishJobs = workflow("release-publish.yml").jobs;
+const release = [...publishJobs.check.steps, ...publishJobs.verify.steps];
 const ci = workflow("ci.yml").jobs.check.steps;
 const RETRY = "Retry admission acceptance (CLI and ACP)";
 const position = (steps, run) => steps.findIndex((step) => step.run === run);
@@ -31,7 +33,11 @@ it("requires production MCP acceptance rather than letting it skip", () => {
 it("runs every static check ci.yml's full path runs", () => {
   for (const run of ["pnpm run typecheck", "pnpm run design:check", "pnpm run format:check", "pnpm run lint"])
     expect(position(release, run), run).toBeGreaterThan(-1);
-  expect(release[position(release, "pnpm run lint")].env).toEqual(ci[position(ci, "pnpm run lint")].env);
+  // ci.yml's lint settings, single-threaded whatever the runner asks for.
+  expect(release[position(release, "pnpm run lint")].env).toEqual({
+    ...ci[position(ci, "pnpm run lint")].env,
+    ESLINT_CONCURRENCY: "off",
+  });
 });
 
 it("bounds workers and runs the no-skip retry acceptance exactly as ci.yml does", () => {
@@ -64,7 +70,7 @@ it("rehearses a release on dry_run without tagging, publishing or feeding anythi
   expect(file.jobs.publish.if).toBe("${{ !inputs.dry_run }}");
   const rehearsal = file.jobs.rehearsal;
   expect(rehearsal.if).toBe("${{ inputs.dry_run }}");
-  expect(rehearsal.needs).toEqual(["check", "desktop", "app-verification"]);
+  expect(rehearsal.needs).toEqual(["check", "verify", "desktop", "app-verification"]);
   // It checks the assets and creates no release or draft, so there is nothing to clean up.
   expect(rehearsal.permissions).toBeUndefined(); // the workflow's read-only token
   expect(rehearsal.steps.map((s) => s.name ?? s.uses.split("@")[0])).toEqual([
@@ -158,7 +164,9 @@ it("never hands a write token to the ref under test (#863)", () => {
           ? { actions: "write" }
           : name === "check"
             ? { contents: "read", checks: "read" }
-            : null;
+            : name === "verify"
+              ? { contents: "read" }
+              : null;
     expect(job.permissions ?? null, name).toEqual(expected);
     for (const step of job.steps.filter((s) => s.uses?.startsWith("actions/checkout@")))
       expect(step.with["persist-credentials"], name).toBe(false);
@@ -175,6 +183,38 @@ it("never hands a write token to the ref under test (#863)", () => {
   }
   // Required for a release; a rehearsal of a ref that predates it reports not applicable.
   expect(file.jobs["app-verification"].with.upgrade_launch_required).toBe("${{ !inputs.dry_run }}");
+
+  // Release verification runs on Tyler's runners when one is idle, picked with the workflow
+  // revision's tooling after `check` authorized the commit, and with ci.yml's worker cap and
+  // pnpm cache for the runner it gets. Only a trusted source (a real release dispatched from
+  // the default branch, or a merged release pull request) gets the health endpoint.
+  const trusted =
+    "(github.event_name == 'workflow_dispatch' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && !inputs.dry_run) || (github.event_name == 'pull_request' && github.event.pull_request.merged)";
+  const runner = file.jobs.runner;
+  expect(runner.needs).toBe("check");
+  expect(runner["runs-on"]).toBe("ubuntu-24.04");
+  expect(runner.steps[0].with).toEqual({ "sparse-checkout": "tools", "persist-credentials": false });
+  expect(runner.steps[1]).toEqual({
+    id: "pick",
+    env: {
+      FORCE_HOSTED: `\${{ !(${trusted}) && 'true' || vars.CI_FORCE_HOSTED }}`,
+      HEALTH_URL: `\${{ (${trusted}) && secrets.CI_RUNNER_HEALTH_URL || '' }}`,
+    },
+    run: "node tools/linux-runner.js",
+  });
+  const verify = file.jobs.verify;
+  expect(verify.needs).toEqual(["check", "runner"]);
+  expect(verify["runs-on"]).toBe("${{ fromJSON(needs.runner.outputs.runner) }}");
+  expect(verify.env.WORKERS_CAP).toBe("${{ contains(needs.runner.outputs.runner, 'tyler') && '20' || '2' }}");
+  expect(verify.steps.find((s) => s.uses?.startsWith("actions/setup-node@")).with.cache).toBe(
+    "${{ !inputs.dry_run && !contains(needs.runner.outputs.runner, 'tyler') && 'pnpm' || '' }}",
+  );
+  // The same trusted ref `check` checked out, then held to the commit `check` pinned.
+  expect(verify.steps[0].with.ref).toBe(
+    file.jobs.check.steps.find((s) => s.uses?.startsWith("actions/checkout@")).with.ref,
+  );
+  expect(verify.steps[1].env).toEqual({ SHA: "${{ needs.check.outputs.sha }}" });
+  expect(verify.steps[1].run).toContain('"$(git rev-parse HEAD)" != "$SHA"');
 
   // Desktop picks runners and its matrix with the workflow revision's tooling, not the ref's.
   const desktop = workflow("desktop.yml");
@@ -468,4 +508,81 @@ it("starts the server bundle with the 0.8 line in the dispatch and in release-at
   expect(dispatch).toContain(`SERVER_FROM=${from}`);
   expect(dispatch.indexOf("SERVER_FROM=")).toBeLessThan(dispatch.indexOf("gh workflow run"));
   expect(dispatch).toContain('"${VERSION%%-*}" | sort -V | head -n1)" != "$SERVER_FROM"');
+});
+
+it("takes the release's identity only from the hosted check, never from the self-hosted verification", () => {
+  const file = workflow("release-publish.yml");
+  const hosted = (job) => job["runs-on"] === "ubuntu-24.04";
+  // `check` decides what is released and whether it may be: hosted, and it runs none of the
+  // ref's code (no install, no build, no test).
+  const check = file.jobs.check;
+  expect(hosted(check)).toBe(true);
+  expect(Object.keys(check.outputs).sort()).toEqual(["sha", "version"]);
+  for (const step of check.steps) {
+    expect(step.uses?.startsWith("pnpm/") ?? false, step.name).toBe(false);
+    expect(step.run ?? "", step.name).not.toMatch(/\bpnpm\b|npm (ci|install|run)/);
+  }
+  // `verify` only passes or fails: no outputs, and nothing reads any.
+  expect(file.jobs.verify.outputs).toBeUndefined();
+  const text = readFileSync(new URL("../../.github/workflows/release-publish.yml", import.meta.url), "utf8");
+  expect(text).not.toMatch(/needs\.verify\./);
+  // The picked runner is read by `verify` alone.
+  for (const [name, job] of Object.entries(file.jobs))
+    if (name !== "verify") expect(JSON.stringify(job), name).not.toContain("needs.runner.outputs");
+  // Every job that writes or dispatches is hosted, waits for `verify` (directly, or through
+  // `publish`), and takes the commit and version from `check` alone.
+  const writers = ["publish", "sign", "server-bundle", "record-line-release"];
+  for (const name of [...writers, "rehearsal"]) {
+    const job = file.jobs[name];
+    expect(hosted(job), name).toBe(true);
+    const needs = [job.needs].flat();
+    expect(needs.includes("verify") || needs.includes("publish"), name).toBe(true);
+    const refs = JSON.stringify(job).match(/needs\.[a-z-]+\.outputs\.[a-z_]+/g) ?? [];
+    for (const ref of refs) expect(ref, name).toMatch(/^needs\.check\.outputs\.(sha|version)$/);
+  }
+  expect(file.jobs.publish.needs).toEqual(["check", "verify", "desktop", "app-verification"]);
+  // The builds take the same hosted identity.
+  for (const call of ["desktop", "app-verification"]) {
+    // Inputs come from `check`; they start only once `verify` has passed.
+    expect(file.jobs[call].needs, call).toEqual(["check", "verify"]);
+    expect(file.jobs[call].with.ref, call).toBe("${{ needs.check.outputs.sha }}");
+  }
+  expect(file.jobs.desktop.with.version).toBe("${{ needs.check.outputs.version }}");
+});
+
+it("restores and saves no Actions cache while rehearsing an arbitrary ref, in any job it reaches", () => {
+  // A rehearsal runs its ref's install scripts in the default branch's cache scope, where a
+  // saved cache would later be restored by trusted runs. Real releases keep their caches.
+  const file = workflow("release-publish.yml");
+  expect(file.jobs.verify.steps.find((s) => s.uses?.startsWith("actions/setup-node@")).with.cache).toMatch(
+    /^\$\{\{ !inputs\.dry_run && /,
+  );
+  const callees = { desktop: "desktop.yml", "app-verification": "app-smoke.yml" };
+  for (const [call, name] of Object.entries(callees)) {
+    expect(file.jobs[call].with.caches, call).toBe("${{ inputs.dry_run != true }}");
+    const callee = workflow(name);
+    expect(callee.on.workflow_call.inputs.caches, name).toMatchObject({ type: "boolean", default: true });
+    let setups = 0;
+    for (const [job, { steps = [] }] of Object.entries(callee.jobs))
+      for (const step of steps) {
+        if (step.uses?.startsWith("actions/setup-node@") && step.with?.cache !== undefined) {
+          setups++;
+          expect(step.with.cache, `${name} ${job}`).toBe("${{ inputs.caches != false && 'pnpm' || '' }}");
+        }
+        if (/^actions\/cache(\/(restore|save))?@/.test(step.uses ?? ""))
+          expect(step.if, `${name} ${job} ${step.name}`).toBe("${{ inputs.caches != false }}");
+      }
+    expect(setups, name).toBeGreaterThan(0);
+  }
+  // An empty `cache` lets setup-node detect npm from the checked-out package.json and cache it,
+  // so every setup-node in verify and both callees turns that off explicitly.
+  const setupsIn = (jobs) =>
+    Object.values(jobs).flatMap(({ steps = [] }) => steps.filter((s) => s.uses?.startsWith("actions/setup-node@")));
+  const all = [
+    ...setupsIn({ verify: file.jobs.verify }),
+    ...setupsIn(workflow("desktop.yml").jobs),
+    ...setupsIn(workflow("app-smoke.yml").jobs),
+  ];
+  expect(all.length).toBeGreaterThanOrEqual(6);
+  for (const step of all) expect(step.with["package-manager-cache"]).toBe(false);
 });
