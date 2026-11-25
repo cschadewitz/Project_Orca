@@ -47,7 +47,7 @@ describe("operator integration compatibility boundary", () => {
       ok: false,
       error: {
         code: "NOT_SUPPORTED",
-        message: "client speaks protocol 1.10, daemon speaks 2.12",
+        message: "client speaks protocol 1.10, daemon speaks 2.13",
         details: { client: previousProtocol, daemon: PROTOCOL_VERSION },
       },
     });
@@ -63,7 +63,7 @@ describe("operator integration compatibility boundary", () => {
     });
     const machine = new ConnectionMachine({ hello: async () => oldHello, onChange: () => {}, quietMs: 0 });
     machine.acceptHello(oldHello);
-    expect(machine.current).toMatchObject({ state: "mismatch", versions: { app: "2.12", daemon: "1.10" } });
+    expect(machine.current).toMatchObject({ state: "mismatch", versions: { app: "2.13", daemon: "1.10" } });
     expect(isCompatible(PROTOCOL_VERSION, previousProtocol)).toBe(false);
   });
 });
