@@ -85,6 +85,12 @@ replaces the hook, which runs before them.
 
 ### The IPC caveat
 
+The standing caveat, stated before you opt in, is in
+[WORKFLOWS.md](WORKFLOWS.md#calls-the-agent-does-not-ask-about). In short, the hook decides
+which commands run, not what an allowed command connects to, and ORCA has not verified that
+Codex's sandbox isolates host communication endpoints. This section describes the startup
+warning.
+
 Once an opted-in Codex session is admitted, ORCA logs a warning naming **potential** host
 communication endpoints. They are **observed from the ORCA daemon at startup**, and **sandbox
 reachability is not tested**: every read and permission check runs in the daemon, not inside
