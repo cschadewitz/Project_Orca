@@ -63,6 +63,72 @@ describe("recording receipts", () => {
   });
 });
 
+describe("a scoped claim on the receipt's route", () => {
+  const claim = {
+    level: "A",
+    route: "claude-native-hook",
+    pin: {
+      agentVersion: "2.1.330",
+      adapterVersion: "0.109.1",
+      host: "linux-x64",
+      build: "f".repeat(40),
+      artifacts: { ...artifacts, hookProgramSha256: "d".repeat(64) },
+    },
+    settings: { nativeToolHook: "experimental" },
+    covers: ["L01"],
+    excludes: { A04: "A live agent cannot make this call from another working directory." },
+    stillOff: ["something"],
+    unverified: ["something else"],
+    judge: "unverified",
+    receipts: [file],
+  };
+  const row = (scoped) => ({
+    agents: [{ id: "claude", tier: "none", pin: claim.pin, receipts: [file], scoped }],
+  });
+
+  it("moves to the new build and hook program with the receipt, in the same edit, and changes nothing else", () => {
+    const next = recordReceipts(row(claim), [{ file, receipt }], () => receipt);
+    const pin = { agentVersion: "2.1.330", adapterVersion: "0.109.1", host: "linux-x64", build, artifacts };
+    expect(next.agents[0].pin).toEqual(pin);
+    expect(next.agents[0].scoped).toEqual({ ...claim, pin, receipts: [file] });
+    // The input is left as it was.
+    expect(claim.pin.build).toBe("f".repeat(40));
+  });
+
+  it("lists only the new receipt, whatever the claim listed before", () => {
+    const next = recordReceipts(row({ ...claim, receipts: ["old.json"] }), [{ file, receipt }], () => receipt);
+    expect(next.agents[0].scoped.receipts).toEqual([file]);
+  });
+
+  it("is refused, not moved, when the receipt is for another agent, adapter, host or runtime", () => {
+    for (const [changed, why] of [
+      [{ agentVersion: "2.1.331" }, "agentVersion"],
+      [
+        {
+          adapterVersion: "0.110.0",
+          inputs: { ...receipt.inputs, adapter: { version: "0.110.0", integrity: "sha512-abc" } },
+        },
+        "adapterVersion",
+      ],
+      [{ host: "linux-arm64" }, "host"],
+      [
+        { inputs: { ...receipt.inputs, adapter: { version: "0.109.1", integrity: "sha512-other" } } },
+        "adapterIntegrity",
+      ],
+      [{ inputs: { ...receipt.inputs, runtime: { sha256: "e".repeat(64) } } }, "runtimeSha256"],
+    ])
+      expect(() => recordReceipts(row(claim), [{ file, receipt: { ...receipt, ...changed } }], () => receipt)).toThrow(
+        new RegExp(`scoped claim on claude-native-hook pins another ${why}\\b.*re-scope it in a reviewed change`),
+      );
+  });
+
+  it("is left alone by a receipt for another route", () => {
+    const other = { ...claim, route: "acp-ask" };
+    const next = recordReceipts(row(other), [{ file, receipt }], () => receipt);
+    expect(next.agents[0].scoped).toEqual(other);
+  });
+});
+
 describe("the recorded files pass the repository's format check", () => {
   it("leaves signed receipts and their bundles as signed, and formats the matrix", async () => {
     const prettier = await import("prettier");

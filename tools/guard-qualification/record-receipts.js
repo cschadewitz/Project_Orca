@@ -9,6 +9,13 @@
  * and, from an installed receipt, the digests of the artifacts it ran (`pin.artifacts`). A
  * row's receipts must all share one pin, so receipts of one agent from another build are dropped.
  *
+ * A row's scoped claim (`scoped`) on the receipt's route moves with it, in the same edit: its
+ * pin becomes the receipt's and its receipts the receipt, so the claim never points at a build
+ * or a file the row no longer holds. Only the ORCA build may move a claim: the build and the
+ * hook program ORCA built from it. A receipt for another agent version, adapter, host, adapter
+ * package or agent runtime than the claim pins is refused here; re-scoping is a reviewed edit.
+ * Nothing else in the claim changes, and the checker then judges it against the new receipt.
+ *
  * Tiers are not changed here: a promotion is a reviewed edit in the pull request this opens,
  * and the checker refuses it unless the receipts hold it.
  */
@@ -44,9 +51,30 @@ export function recordReceipts(matrix, receipts, read = (f) => JSON.parse(readFi
       : [];
     row.pin = pin;
     row.receipts = [...kept.filter((f) => f !== file), file].sort();
+    if (row.scoped?.route === receipt.route && receipt.kind === "installed") {
+      const moved = CLAIM_FOLLOWS_BUILD.filter(
+        ([, of]) => JSON.stringify(of(row.scoped.pin ?? {})) !== JSON.stringify(of(pin)),
+      ).map(([key]) => key);
+      if (moved.length > 0)
+        throw new Error(
+          `${file}: the scoped claim on ${receipt.route} pins another ${moved.join(", ")}; ` +
+            "only a new ORCA build moves a claim, so re-scope it in a reviewed change",
+        );
+      row.scoped.pin = structuredClone(pin);
+      row.scoped.receipts = [file];
+    }
   }
   return next;
 }
+
+/** What a scoped claim's pin must keep when a receipt moves it: everything but the ORCA build. */
+const CLAIM_FOLLOWS_BUILD = [
+  ["agentVersion", (p) => p.agentVersion],
+  ["adapterVersion", (p) => p.adapterVersion],
+  ["host", (p) => p.host],
+  ["adapterIntegrity", (p) => p.artifacts?.adapterIntegrity],
+  ["runtimeSha256", (p) => p.artifacts?.runtimeSha256],
+];
 
 if (process.argv[1] && resolve(process.argv[1]) === resolve(new URL(import.meta.url).pathname)) {
   const matrixFile = join(REPO_ROOT, "tools/guard-qualification/support-matrix.json");

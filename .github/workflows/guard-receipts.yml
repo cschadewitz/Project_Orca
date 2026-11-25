@@ -11,7 +11,8 @@
 # run's receipt and refuse a benign verifier test receipt (signed apart) and a byte-tampered
 # copy. With `propose` too, the `propose` job, which can write but not attest, verifies what it
 # received again, pins each agent's row (record-receipts.js), and opens a pull request from a
-# new branch.
+# new branch. A row's scoped claim on the same route moves to the new receipt in that same edit
+# (record-receipts.js), and the end-to-end check holds the claim to this run's receipt too.
 #
 # This workflow is the one signer check-support-matrix.js accepts (attestation.js): a receipt
 # counts only when it was signed here, on a GitHub-hosted runner, from main or a release line,
@@ -344,11 +345,11 @@ jobs:
             new+=("tools/guard-qualification/receipts/$f")
           done
           node tools/guard-qualification/record-receipts.js "${new[@]}"
-          # Receipts no row lists any more go, with their bundles.
+          # Receipts no row or scoped claim lists any more go, with their bundles.
           node -e '
             const fs = require("node:fs");
             const m = JSON.parse(fs.readFileSync("tools/guard-qualification/support-matrix.json", "utf8"));
-            const listed = new Set(m.agents.flatMap((a) => a.receipts ?? []));
+            const listed = new Set(m.agents.flatMap((a) => [...(a.receipts ?? []), ...(a.scoped?.receipts ?? [])]));
             for (const f of fs.readdirSync("tools/guard-qualification/receipts")) {
               const p = `tools/guard-qualification/receipts/${f}`;
               const receipt = p.endsWith(".sigstore.json") ? p.slice(0, -".sigstore.json".length) : p;
