@@ -187,10 +187,10 @@ export function grantCovers(
  */
 /** The request schemas a disclosure grant may name: `PLAIN_RULE_REQUEST_SCHEMAS` in `@orca/agents`. */
 export const JUDGE_DISCLOSURE_REQUEST_SCHEMAS = [
-  "orca-plain-rule-request/v1",
-  "orca-plain-rule-request/edit/v1",
-  "orca-plain-rule-request/mcp/v1",
-  "orca-plain-rule-request/command/v1",
+  "orca-plain-rule-request/v1", // rename-keep: judge wire format named in issued disclosure grants and hashed into the provider version
+  "orca-plain-rule-request/edit/v1", // rename-keep: judge wire format named in issued disclosure grants and hashed into the provider version
+  "orca-plain-rule-request/mcp/v1", // rename-keep: judge wire format named in issued disclosure grants and hashed into the provider version
+  "orca-plain-rule-request/command/v1", // rename-keep: judge wire format named in issued disclosure grants and hashed into the provider version
 ] as const;
 
 export const DisclosureGrantSchema = z.array(

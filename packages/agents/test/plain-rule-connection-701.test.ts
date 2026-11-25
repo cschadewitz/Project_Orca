@@ -208,7 +208,7 @@ describe("#701 plain-rule judge from config", () => {
         purpose: "review-judge",
         destination,
         providerVersion: expect.stringMatching(/^plain-rule-provider\/v1:sha256:/) as unknown,
-        requestSchema: "orca-plain-rule-request/v1",
+        requestSchema: "orca-plain-rule-request/v1", // rename-keep: the judge's wire format keeps its pre-rename name
       },
     ]);
     await made.judge(input, signal());

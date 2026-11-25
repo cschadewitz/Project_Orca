@@ -47,7 +47,7 @@ describe("#701 judge disclosure grants", () => {
     expect(query).toMatchObject({
       purpose: "review-judge",
       destination: config.destination,
-      requestSchema: "orca-plain-rule-request/v1",
+      requestSchema: "orca-plain-rule-request/v1", // rename-keep: the judge's wire format keeps its pre-rename name
     });
     expect(query.providerVersion).toMatch(/^plain-rule-provider\/v1:sha256:[0-9a-f]{64}$/);
     // A different provider or model is a different disclosure.

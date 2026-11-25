@@ -143,7 +143,9 @@ describe("findConfig", () => {
     expect(await findConfig(dir, (m) => warnings.push(m))).toBe(legacy);
     const renamed = !CONFIG_FILENAMES.includes(LEGACY_CONFIG_FILENAMES[0]!);
     expect(warnings).toEqual(
-      renamed ? [`warning: reading ${legacy}; rename it to ${CONFIG_FILENAMES[0]} (the old name is read until 0.10)`] : [],
+      renamed
+        ? [`warning: reading ${legacy}; rename it to ${CONFIG_FILENAMES[0]} (the old name is read until 0.10)`]
+        : [],
     );
     // The current name wins wherever both are present, and is read without a warning.
     await writeFile(join(dir, CONFIG_FILENAMES[0]!), "version: 1\n", "utf8");
@@ -154,6 +156,17 @@ describe("findConfig", () => {
 });
 
 describe("loadConfig", () => {
+  it("opens a store kept under its name from before the rename, moved to the current one when it can be", async () => {
+    const dir = await temp();
+    await writeFile(join(dir, CONFIG_FILENAMES[0]!), "version: 1\n", "utf8");
+    const legacy = join(dir, ".orca"); // rename-keep: a store from before the rename
+    await mkdir(join(legacy, "runs"), { recursive: true });
+    await writeFile(join(legacy, "runs", "run_old.jsonl"), "");
+    const { config, configDir } = await loadConfig(dir);
+    const storeDir = resolve(configDir, config.storeDir);
+    expect(await readdir(join(storeDir, "runs"))).toEqual(["run_old.jsonl"]);
+  });
+
   it("reads YAML and JSON, and reports the config directory", async () => {
     const dir = await temp();
     await writeFile(join(dir, "orca.config.yaml"), "version: 1\nstoreDir: .state\n", "utf8");
