@@ -52,6 +52,7 @@ import { executableMatchesPackage, LinuxPackageRestart, readInstalledDebVersion 
 import { basename, dirname, join } from "node:path";
 import { readFileSync, statSync } from "node:fs";
 import { windowIcon } from "./window-icon.js";
+import { carryLegacyUserData } from "./legacy-user-data.js";
 import { revealWhenReady } from "./window-reveal.js";
 import { fileURLToPath } from "node:url";
 import {
@@ -92,6 +93,17 @@ import { StoreSwitchRestart, takeStoreSwitchRequest, writeStoreSwitchRequest } f
 import { storeRoot, Workspace } from "./workspace.js";
 import { Fleet, alertScope, labelAlerts, type FleetTarget, type FocusedMachine } from "./fleet.js";
 import { MAX_WATCHED_PROFILES } from "../preferences/schema.js";
+
+// Before anything reads or writes the settings folder: a packaged app's first launch under
+// the new name brings the saved preferences and remote profiles over from the old folder.
+// A failure leaves the new folder as it is and the app starts with defaults.
+if (app.isPackaged) {
+  try {
+    carryLegacyUserData(app.getPath("userData"));
+  } catch (error) {
+    console.error(`settings from the previous app name were not copied: ${(error as Error).message}`);
+  }
+}
 
 // Mount synchronously before producers. Selected workspace/configuration roots are
 // enrolled before their first producer; replacement activation remains held below.
