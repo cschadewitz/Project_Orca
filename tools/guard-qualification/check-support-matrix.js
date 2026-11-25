@@ -26,6 +26,14 @@ import { attestationProblems, staleProblems } from "./attestation.js";
 import { effectFrom } from "./connected/evidence.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
+
+/**
+ * Profiles that are the same requirements before and after the Orrery rename: the rename changed
+ * the product name in their prose and formats, nothing they require. Written once, at the cutover,
+ * by tools/rename/post-codemod.mjs (renamed profile -> the profile a receipt recorded), so a receipt
+ * from before the rename still holds. Empty before the cutover; v0.10.0 drops it with re-run receipts.
+ */
+export const RENAMED_PROFILES = JSON.parse(readFileSync(join(here, "renamed-profiles.json"), "utf8"));
 export const REPO_ROOT = resolve(here, "..", "..");
 const TIERS = ["none", "A", "B", "C"];
 /**
@@ -423,7 +431,7 @@ export function installedInputProblems(receipt, agent, profile) {
   )
     return ["needs inputs: the adapter's integrity, the runtime and hook program digests, and the profile"];
   const problems = [];
-  if (profile !== undefined && inputs.profile !== profile)
+  if (profile !== undefined && inputs.profile !== profile && inputs.profile !== RENAMED_PROFILES[profile])
     problems.push("ran against other requirements than the matrix states now (profile differs)");
   const pinned = agent.pin?.artifacts ?? {};
   for (const [name, value] of Object.entries(artifactsOf(receipt)))
@@ -450,7 +458,7 @@ export function qualificationProfile(matrix, catalogue, assertions, agent, route
   const live = routePath.installed?.live;
   const ids = casesFor(routePath, catalogue);
   const profile = {
-    format: "orca-qualification-profile/1",
+    format: "orca-qualification-profile/1", // rename-keep: a digest domain; receipts record digests made with it
     route: routePath,
     live: matrix.paths.find((p) => p.id === live) ?? null,
     cases: catalogue.cases.filter((c) => ids.includes(c.id)),

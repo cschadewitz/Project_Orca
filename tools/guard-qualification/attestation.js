@@ -13,8 +13,9 @@
  * the unit tests: they inject a verifier instead.
  */
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { loadMap, renameText } from "../rename/lib.mjs";
 
 export const REPOSITORY = "cschadewitz/Project_Orca";
 /** The only workflow whose signature makes a receipt count. */
@@ -33,6 +34,23 @@ export const RECEIPT_REFS = [/^refs\/heads\/main$/, /^refs\/heads\/release\/\d+\
 export const bundlePathFor = (receiptPath) => `${receiptPath}.sigstore.json`;
 
 /**
+ * The Orrery rename rewrote the committed receipts' text (tools/rename/codemod.mjs), but their
+ * signatures are over the bytes as attested. tools/rename/post-codemod.mjs keeps those bytes beside
+ * each receipt it changed; the attestation is verified on them, and the receipt counts only when
+ * it is exactly their rename. For one release: v0.10.0 drops this with re-run receipts.
+ */
+export const preRenamePathFor = (receiptPath) => `${receiptPath}.pre-rename`;
+
+function attestedSubject(repoRoot, receiptPath) {
+  const original = preRenamePathFor(receiptPath);
+  if (!existsSync(join(repoRoot, original))) return { path: receiptPath };
+  const renamed = renameText(loadMap(), readFileSync(join(repoRoot, original), "utf8")).text;
+  if (renamed !== readFileSync(join(repoRoot, receiptPath), "utf8"))
+    return { problem: `${receiptPath} is not the rename of its attested ${original}` };
+  return { path: original };
+}
+
+/**
  * Why the receipt at `receiptPath` (repository-relative) is not bound to a trusted run. Empty
  * when `gh attestation verify` accepts its committed bundle under every constraint above.
  * `run` is injectable for tests; it receives gh's argument list and returns its stdout or throws.
@@ -43,6 +61,8 @@ export function attestationProblems(repoRoot, receiptPath, receipt, run = runGh)
   const bundle = bundlePathFor(receiptPath);
   if (!existsSync(join(repoRoot, bundle))) return [`no attestation bundle ${bundle}`];
   if (!/^[0-9a-f]{40}$/.test(receipt?.build ?? "")) return ["names no exact build to verify against"];
+  const subject = attestedSubject(repoRoot, receiptPath);
+  if (subject.problem) return [subject.problem];
   let out;
   let workflow;
   let refusal;
@@ -52,7 +72,7 @@ export function attestationProblems(repoRoot, receiptPath, receipt, run = runGh)
         [
           "attestation",
           "verify",
-          join(repoRoot, receiptPath),
+          join(repoRoot, subject.path),
           "--bundle",
           join(repoRoot, bundle),
           "--repo",

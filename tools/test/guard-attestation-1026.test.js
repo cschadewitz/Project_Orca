@@ -15,6 +15,7 @@ import {
   REPOSITORY,
   attestationProblems,
   bundlePathFor,
+  preRenamePathFor,
   staleProblems,
 } from "../guard-qualification/attestation.js";
 import { REPO_ROOT, releaseProblems } from "../guard-qualification/check-support-matrix.js";
@@ -89,6 +90,27 @@ describe("a receipt counts only when its attestation verifies", () => {
       expect(attestationProblems(repo(), file, receipt, gh(certificate({ buildSignerURI: signer })))[0]).toMatch(
         /^signed by/,
       );
+  });
+
+  it("verifies a receipt the rename rewrote on its attested bytes, and only when it is exactly their rename", () => {
+    // rename-keep-start: the receipt as attested before the rename
+    const original = JSON.stringify({ ...receipt, note: "ORCA ran this" });
+    const renamed = original.replace("ORCA ran", "Orrery ran").replace("orca-enforcement", "orrery-enforcement");
+    // rename-keep-end
+    const root = repo();
+    writeFileSync(join(root, file), renamed);
+    writeFileSync(join(root, preRenamePathFor(file)), original);
+    let seen;
+    const problems = attestationProblems(root, file, receipt, (args) => {
+      if (args[0] !== "--version") seen = args;
+      return gh(certificate())(args);
+    });
+    expect(problems).toEqual([]);
+    expect(seen[2]).toBe(join(root, preRenamePathFor(file)));
+    writeFileSync(join(root, file), renamed.replace("ran", "edited"));
+    expect(attestationProblems(root, file, receipt, gh(certificate()))).toEqual([
+      `${file} is not the rename of its attested ${preRenamePathFor(file)}`,
+    ]);
   });
 
   it("accepts a release line as well as main", () => {
