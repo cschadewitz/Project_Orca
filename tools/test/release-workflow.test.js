@@ -407,6 +407,13 @@ it("signs the server bundle only from main, in a job that runs none of the relea
   expect(staging).toContain("python:3.12-slim-bookworm");
   expect(staging).toContain("stage --bundle");
   expect(staging).toContain("for tool in gh git mise pnpm node; do");
+  // The staging user is a synthetic, named, non-root account added to the image's own account
+  // files, never the runner's, and the container checks that its uid resolves to it.
+  expect(staging).toContain('docker run --rm "$image" cat /etc/passwd > "$accounts/passwd"');
+  expect(staging).toContain('echo "orca-stage:x:$uid:$gid:ORCA staging:$srv:/usr/sbin/nologin" >> "$accounts/passwd"');
+  expect(staging).toContain('-v "$accounts/passwd:/etc/passwd:ro" -v "$accounts/group:/etc/group:ro"');
+  expect(staging).not.toContain("-v /etc/passwd");
+  expect(staging).toContain('if [ "$name" != orca-stage ] || [ "$(id -u)" = 0 ]; then');
 });
 
 it("pins the same signer identity in the workflow and the adapter (#876)", () => {

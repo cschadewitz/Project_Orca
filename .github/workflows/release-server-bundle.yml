@@ -229,9 +229,34 @@ jobs:
             cliConfig: ($root + "/orca.config.yaml"), daemonConfig: ($root + "/orca.config.yaml"),
             acpConfig: ($root + "/orca.config.yaml"), url: "http://127.0.0.1:6722", service: "orca.service",
             launchAudit: "all-cli-acp-and-daemon-launches-migrated"}' > "$srv/deployment.json"
+          # ORCA's local authority identifies the OS user by uid and name, and a server's service
+          # account always has a name. The staging user is a synthetic, non-root `orca-stage`
+          # with this job's uid and gid, added to copies of the image's own account files and
+          # mounted read-only; nothing comes from the runner's account database.
+          image=python:3.12-slim-bookworm
+          uid=$(id -u)
+          gid=$(id -g)
+          [ "$uid" != 0 ] || { echo "::error::the staging user must not be root"; exit 1; }
+          accounts="$RUNNER_TEMP/accounts"
+          mkdir -p "$accounts"
+          docker run --rm "$image" cat /etc/passwd > "$accounts/passwd"
+          docker run --rm "$image" cat /etc/group > "$accounts/group"
+          if awk -F: -v id="$uid" '$3 == id { found = 1 } END { exit !found }' "$accounts/passwd"; then
+            echo "::error::uid $uid already has an account in $image"
+            exit 1
+          fi
+          echo "orca-stage:x:$uid:$gid:ORCA staging:$srv:/usr/sbin/nologin" >> "$accounts/passwd"
+          awk -F: -v id="$gid" '$3 == id { found = 1 } END { exit !found }' "$accounts/group" ||
+            echo "orca-stage:x:$gid:" >> "$accounts/group"
           # The image has Python 3 and util-linux; it has no gh, git, mise, pnpm or Node.
-          docker run --rm --user "$(id -u):$(id -g)" -e HOME="$srv" -v "$clean:$clean" -w "$srv" \
-            python:3.12-slim-bookworm sh -c '
+          docker run --rm --user "$uid:$gid" -e HOME="$srv" -v "$clean:$clean" -w "$srv" \
+            -v "$accounts/passwd:/etc/passwd:ro" -v "$accounts/group:/etc/group:ro" \
+            "$image" sh -c '
+              name=$(python3 -I -c "import os, pwd; print(pwd.getpwuid(os.getuid()).pw_name)")
+              if [ "$name" != orca-stage ] || [ "$(id -u)" = 0 ]; then
+                echo "staging runs as uid $(id -u) ($name), not the non-root orca-stage" >&2
+                exit 1
+              fi
               for tool in gh git mise pnpm node; do
                 if command -v "$tool" >/dev/null; then echo "clean host has $tool" >&2; exit 1; fi
               done
