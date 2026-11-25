@@ -95,8 +95,10 @@ OWNED_FILES = (("orca-release.py", 0o755), ("deployment.json", 0o600), ("orca", 
 GUIDANCE = ("Migrate it by hand first (docs/UPDATING.md, \"Debian: inventory before migration\"); "
             "this setup never takes over an installation it did not make.")
 # What an ORCA process or launcher looks like, as orca-release.py's own inventory reads it.
-ORCA_PROCESS = re.compile(r"(?:orca-daemon|packages/cli/(?:dist|src)/main\.|orca\s+(?:acp|run|program|serve))")
-ORCA_LAUNCHER = re.compile(rb"orca-release\.py|orca-daemon\.mjs|packages/cli/dist/main\.js|@orca/cli")
+# Either side of the Orrery rename (the v0.8.1 bridge): a release after it runs orrery-daemon.mjs.
+EITHER_NAME = "(?:orca|orrery)"  # rename-keep: both names are recognised for one release
+ORCA_PROCESS = re.compile(rf"(?:{EITHER_NAME}-daemon|packages/cli/(?:dist|src)/main\.|{EITHER_NAME}\s+(?:acp|run|program|serve))")
+ORCA_LAUNCHER = re.compile(rf"{EITHER_NAME}-release\.py|{EITHER_NAME}-daemon\.mjs|packages/cli/dist/main\.js|@{EITHER_NAME}/cli".encode())
 
 
 class Refused(Exception):

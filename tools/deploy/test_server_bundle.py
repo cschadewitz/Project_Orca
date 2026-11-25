@@ -9,9 +9,11 @@ import json
 import os
 from pathlib import Path
 import platform
+import shutil
 import sys
 import tarfile
 import tempfile
+import types
 import unittest
 from unittest.mock import patch
 
@@ -296,6 +298,119 @@ class ServerBundleTests(unittest.TestCase):
         meta = release.metadata(path)
         self.assertEqual(meta["node"], sys.executable)
         self.assertEqual(meta["entry"], str(path / "packages/cli/dist/main.js"))
+
+    # The Orrery rename bridge (v0.8.1): a release after the rename is signed by the renamed
+    # repository and named after the new product. Either is accepted, each exactly.
+    # rename-keep-start: these tests pin both names on purpose
+
+    def accepting(self, repository):
+        """A cosign stub that accepts only REPOSITORY's identity and logs every call."""
+        log = self.tmp / "cosign-calls.log"
+
+        def cosign(_self):
+            script = self.tmp / "cosign-bridge"
+            script.write_text(f"#!/bin/sh\nprintf '%s\\n' \"$*\" >> {log}\n"
+                              f"case \"$*\" in *'--certificate-github-workflow-repository {repository} '*) exit 0;; esac\n"
+                              "echo 'error: none of the expected identities matched' >&2\nexit 1\n")
+            script.chmod(0o755)
+            return script
+        patcher = patch.object(release.Deployment, "cosign", cosign)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return log
+
+    def renamed_bundle(self, product="orrery"):
+        """The bundle as the tree on PRODUCT's side of the rename builds it: PRODUCT-server-*."""
+        path = Path(__file__).with_name("server-bundle.py")
+        module = types.ModuleType("server_bundle_" + product)
+        module.__file__ = str(path)
+        source = path.read_text().replace("orrery-", "orca-").replace("orca-", product + "-")
+        exec(compile(source, str(path), "exec"), module.__dict__)
+        (self.tmp / "daemon" / f"{product}-daemon.mjs").write_text("// daemon\n")
+        out = self.tmp / product
+        module.assemble("0.8.0", SHA, self.tmp / "node-runtime" / "bin" / "node", self.tmp / "daemon", out,
+                        1700000000, "v24.1.0")
+        (out / f"{product}-server-0.8.0-linux-x64.manifest.json.sigstore.json").write_text("{}")
+        return out
+
+    def test_bridge_accepts_a_bundle_signed_by_the_renamed_repository(self):
+        log = self.accepting("cschadewitz/Orrery")
+        self.assertEqual(self.deployment.stage_bundle(str(self.files)).name, "v0.8.0")
+        calls = log.read_text().splitlines()
+        self.assertEqual(len(calls), 2)
+        self.assertIn("--certificate-identity https://github.com/cschadewitz/Project_Orca/.github/workflows/"
+                      "release-server-bundle.yml@refs/heads/main", calls[0])
+        self.assertIn("--certificate-identity https://github.com/cschadewitz/Orrery/.github/workflows/"
+                      "release-server-bundle.yml@refs/heads/main", calls[1])
+        self.assertIn("--certificate-github-workflow-repository cschadewitz/Orrery ", calls[1])
+
+    def test_bridge_still_refuses_any_other_repository(self):
+        log = self.accepting("someone/Orrery")
+        self.refused("Bundle signature refused")
+        self.assertEqual(len(log.read_text().splitlines()), len(release.BUNDLE_REPOSITORIES))
+
+    def test_bridge_stages_a_bundle_under_either_product_name(self):
+        self.accepting("cschadewitz/Orrery")
+        for product in ("orca", "orrery"):
+            with self.subTest(product=product):
+                shutil.rmtree(self.deployment.root / "releases" / "v0.8.0", ignore_errors=True)
+                self.validated.clear()
+                staged = self.deployment.stage_bundle(str(self.renamed_bundle(product)))
+                (stage, record, demo_release), = self.validated
+                self.assertEqual(record["entry"], f"{product}-daemon.mjs")
+                self.assertEqual(release.metadata(staged)["entry"], str(staged / f"{product}-daemon.mjs"))
+                self.assertEqual(record["bundle"]["archiveSha256"],
+                                 release.file_sha256(self.tmp / product / f"{product}-server-0.8.0-linux-x64.tar.xz"))
+
+    def test_bridge_refuses_a_bundle_that_mixes_the_names(self):
+        out = self.renamed_bundle()
+        path = out / "orrery-server-0.8.0-linux-x64.manifest.json"
+        manifest = json.loads(path.read_text())
+        manifest["entry"] = "orca-daemon.mjs"
+        path.write_text(json.dumps(manifest))
+        with self.assertRaisesRegex(RuntimeError, "unexpected runtime or entry"):
+            self.deployment.stage_bundle(str(out))
+
+    def test_bridge_fetches_from_the_renamed_repository_when_the_old_one_has_no_release(self):
+        self.files = self.renamed_bundle()
+        fetched = self.fetch_fixture("RECORD")
+        fixture = release.download
+        asked = []
+
+        def download(url, target, limit, accept=None):
+            asked.append(url)
+            if url.startswith("https://api.github.com/repos/cschadewitz/Project_Orca/"):
+                raise release.urllib.error.HTTPError(url, 404, "Not Found", {}, None)
+            return fixture(url, target, limit, accept)
+        self.accepting("cschadewitz/Orrery")
+        with patch.object(release, "download", download):
+            self.assertEqual(self.deployment.stage_bundle("v0.8.0").name, "v0.8.0")
+        self.assertEqual([url for url in asked if url.startswith("https://api.github.com/")],
+                         ["https://api.github.com/repos/cschadewitz/Project_Orca/releases/tags/v0.8.0",
+                          "https://api.github.com/repos/cschadewitz/Orrery/releases/tags/v0.8.0"])
+        self.assertEqual(sorted(fetched), sorted(p.name for p in self.files.iterdir()))
+
+    def test_bridge_sets_the_daemon_environment_under_both_prefixes(self):
+        env = release.both_env_names({"ORCA_RELEASE": "r", "ORRERY_ADMISSION_FILE": "a", "HOME": "h"},
+                                     ["ORCA_RELEASE", "ORRERY_ADMISSION_FILE", "ORCA_DEPLOYMENT_RING"])
+        self.assertEqual(env, {"ORCA_RELEASE": "r", "ORRERY_RELEASE": "r", "ORRERY_ADMISSION_FILE": "a",
+                               "ORCA_ADMISSION_FILE": "a", "HOME": "h"})
+
+    def test_bridge_reads_either_hello_version_field(self):
+        meta = {"version": "0.8.0", "compatibility": {"protocol": 3, "capabilities": []}}
+        for field in ("orcaVersion", "orreryVersion"):
+            release.verify_hello({field: "0.8.0", "protocol": 3, "methods": ["maintenance"]}, meta)
+        with self.assertRaisesRegex(RuntimeError, "Unexpected daemon version"):
+            release.verify_hello({"protocol": 3, "methods": ["maintenance"]}, meta)
+
+    def test_bridge_reads_a_server_channel_under_either_product_name(self):
+        for product in ("orca", "orrery"):
+            names = release.bundle_names("0.8.0", product)[1:]
+            lines = ["version: 0.8.0", "platform: linux-x64", "sourceSha: " + SHA]
+            for kind, name in zip(("archive", "manifest", "signature"), names):
+                lines += [f"{kind}: {name}", f"{kind}Sha256: " + "b" * 64, f"{kind}Size: 10"]
+            self.assertEqual(release.parse_server_channel("\n".join(lines) + "\n")["archive"], names[0])
+    # rename-keep-end
 
 
 class CosignPinTests(unittest.TestCase):
