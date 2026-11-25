@@ -17,6 +17,7 @@ import {
   blockmap,
   debPackage,
   claudeHookBody,
+  HOOK_ENTRY_COMMENTS,
   daemon,
   legacyDaemon,
   linuxArchive,
@@ -821,6 +822,21 @@ describe("what sits beside the daemon follows the candidate's build rule (#704, 
     );
     expect(daemonLayout(HOOK_BUILD_RULE, true)).toBe("daemon-and-claude-hook");
     expect(daemonLayout("await build({ outfile });", false)).toBe("daemon-only");
+  });
+
+  it("accepts the hook entry named from packages/app or from the repository root, once", () => {
+    for (const form of ["release", "root"]) {
+      const zip = windowsArchive(VERSION, "x64", source, { hookBody: claudeHookBody([HOOK_ENTRY_COMMENTS[form]]) });
+      expect(only(win, zip).artifacts[0].status).toBe("consistent");
+    }
+    const both = linuxArchive(VERSION, "x64", {
+      hookBody: claudeHookBody([HOOK_ENTRY_COMMENTS.release, HOOK_ENTRY_COMMENTS.root]),
+    });
+    expect(refusal(only(linux, both), linux)).toMatch(/bundled_hook_unrecognized: 2 hook entry modules/);
+    const twice = linuxArchive(VERSION, "x64", {
+      hookBody: claudeHookBody([HOOK_ENTRY_COMMENTS.release, HOOK_ENTRY_COMMENTS.release]),
+    });
+    expect(refusal(only(linux, twice), linux)).toMatch(/bundled_hook_unrecognized: 2 hook entry modules/);
   });
 
   it("refuses a hook that is structurally not the hook entry's bundle, or is a copy of the daemon", () => {
