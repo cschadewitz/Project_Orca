@@ -1,0 +1,3135 @@
+{
+  "format": "orca-enforcement-receipt/1",
+  "kind": "installed",
+  "agent": "claude",
+  "agentVersion": "2.1.330",
+  "adapterVersion": "0.109.1",
+  "host": "linux-x64",
+  "route": "claude-native-hook",
+  "build": "41b4a51f515747de173ea80631231bd48fae35f4",
+  "node": "v24.22.3",
+  "inputs": {
+    "adapter": {
+      "name": "@agentclientprotocol/claude-agent-acp",
+      "version": "0.109.1",
+      "integrity": "sha512-tGT3IH6ey3V7wvFRhxK+1XLYDC6FBUyIehvNBm06/as/HG2MWhC6r8hRffSpS7osnMjARZMfDeLyQB0Wjjm0uQ=="
+    },
+    "runtime": {
+      "version": "2.1.330",
+      "sha256": "f390eaa0814e6a1bff74cbb47acb74cb9c89d30ced809fe0af5af00c7bfe8ebb"
+    },
+    "hookProgram": {
+      "sha256": "cb7f5fdc807bf1e62bc0c560ce56dc81fadaf2552b87b89f14ee5faa469c7868"
+    },
+    "profile": "4783599c4b07d26ffd7369b2ad3883c7966f527919d0d3e7798e7a4d859376cc"
+  },
+  "installedSettings": {
+    "hooks": {
+      "SessionStart": [
+        {
+          "hooks": [
+            {
+              "type": "command",
+              "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
+              "args": [
+                "/tmp/orca-test-bundles-Ysvw7E/claude-pre-tool-hook-1026-installed/hook.mjs",
+                "--attest",
+                "/tmp/orca-706-RIz13x/config/.orca/private-execution/tool-hooks/9cf5471d-ed1e-4e1f-9b33-82de446a5160.json"
+              ],
+              "timeout": 10
+            }
+          ]
+        }
+      ],
+      "PreToolUse": [
+        {
+          "matcher": "*",
+          "hooks": [
+            {
+              "type": "command",
+              "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
+              "args": [
+                "/tmp/orca-test-bundles-Ysvw7E/claude-pre-tool-hook-1026-installed/hook.mjs",
+                "/tmp/orca-706-RIz13x/config/.orca/private-execution/tool-hooks/9cf5471d-ed1e-4e1f-9b33-82de446a5160.json"
+              ],
+              "timeout": 10,
+              "onFailure": "block"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "agentSettings": {
+    "nativeToolHook": "experimental"
+  },
+  "checks": {
+    "connects": "pass",
+    "optInDefaultOff": "pass",
+    "cancelledNoEffect": "pass",
+    "freshSessionFreshDecision": "pass",
+    "judgedAction": "pass",
+    "uncoveredRoutesRefused": "pass"
+  },
+  "lifecycle": {
+    "optIn": {
+      "default": [
+        {
+          "toolUseId": "toolu_165_0",
+          "expected": null,
+          "tool": "Write",
+          "outcome": "allow",
+          "orcaDecision": "observed",
+          "refusal": null,
+          "approvals": [],
+          "effect": "observed",
+          "effectRef": {
+            "kind": "file",
+            "path": "1c7514b85722317e",
+            "before": null,
+            "after": "3964064e09ea7ea7",
+            "written": "3964064e09ea7ea7"
+          }
+        }
+      ],
+      "on": "refused",
+      "experimental": [
+        {
+          "toolUseId": "toolu_168_0",
+          "expected": null,
+          "tool": "Write",
+          "outcome": "deny",
+          "orcaDecision": "observed",
+          "refusal": "orca-deny",
+          "approvals": [],
+          "effect": "none",
+          "effectRef": {
+            "kind": "file",
+            "path": "036a9ce98e7263ef",
+            "before": null,
+            "after": null,
+            "written": "3964064e09ea7ea7"
+          }
+        }
+      ]
+    },
+    "cancelled": [
+      {
+        "toolUseId": "toolu_171_0",
+        "expected": [
+          "ask"
+        ],
+        "tool": "mcp__github__create_issue",
+        "outcome": "ask",
+        "orcaDecision": "observed",
+        "refusal": "no-result",
+        "approvals": [
+          {
+            "toolCallId": "toolu_171_0",
+            "sessionId": "f1938935-c2a7-42a0-a96f-ebbc43c13c82",
+            "answer": "pending"
+          }
+        ],
+        "effect": "none",
+        "effectRef": {
+          "kind": "mcp",
+          "callRef": "c1",
+          "loggedFor": [],
+          "answeredWith": null,
+          "unaccountedLines": 0
+        },
+        "afterWait": {
+          "kind": "mcp",
+          "callRef": "c1",
+          "loggedFor": [],
+          "answeredWith": null,
+          "unaccountedLines": 0
+        }
+      },
+      {
+        "toolUseId": "toolu_172_0",
+        "expected": [
+          "ask"
+        ],
+        "tool": "Write",
+        "outcome": "ask",
+        "orcaDecision": "observed",
+        "refusal": "no-result",
+        "approvals": [
+          {
+            "toolCallId": "toolu_172_0",
+            "sessionId": "f1938935-c2a7-42a0-a96f-ebbc43c13c82",
+            "answer": "pending"
+          }
+        ],
+        "effect": "none",
+        "effectRef": {
+          "kind": "file",
+          "path": "2abfb613bf617fcb",
+          "before": null,
+          "after": null,
+          "written": "bb283c744018a0d6"
+        },
+        "afterWait": {
+          "kind": "file",
+          "path": "2abfb613bf617fcb",
+          "before": null,
+          "after": null,
+          "written": "bb283c744018a0d6"
+        }
+      }
+    ],
+    "fresh": [
+      {
+        "toolUseId": "toolu_175_0",
+        "expected": [
+          "ask"
+        ],
+        "tool": "mcp__github__create_issue",
+        "outcome": "ask",
+        "orcaDecision": "observed",
+        "refusal": "agent:Tool permission request failed: Error: Tool use aborted",
+        "approvals": [
+          {
+            "toolCallId": "toolu_175_0",
+            "sessionId": "0660092d-5884-44b5-8a22-bb49dcf6d167",
+            "answer": "no-answer"
+          }
+        ],
+        "effect": "none",
+        "effectRef": {
+          "kind": "mcp",
+          "callRef": "c3",
+          "loggedFor": [],
+          "answeredWith": null,
+          "unaccountedLines": 0
+        }
+      },
+      {
+        "toolUseId": "toolu_177_0",
+        "expected": [
+          "ask"
+        ],
+        "tool": "Write",
+        "outcome": "ask",
+        "orcaDecision": "observed",
+        "refusal": "agent:Tool permission request failed: Error: Tool use aborted",
+        "approvals": [
+          {
+            "toolCallId": "toolu_177_0",
+            "sessionId": "0660092d-5884-44b5-8a22-bb49dcf6d167",
+            "answer": "no-answer"
+          }
+        ],
+        "effect": "none",
+        "effectRef": {
+          "kind": "file",
+          "path": "2abfb613bf617fcb",
+          "before": null,
+          "after": null,
+          "written": "3752c4abc9632ca5"
+        }
+      },
+      {
+        "toolUseId": "toolu_180_0",
+        "expected": [
+          "allow"
+        ],
+        "tool": "Write",
+        "outcome": "allow",
+        "orcaDecision": "observed",
+        "refusal": null,
+        "approvals": [
+          {
+            "toolCallId": "toolu_180_0",
+            "sessionId": "0660092d-5884-44b5-8a22-bb49dcf6d167",
+            "answer": "allow_once"
+          }
+        ],
+        "effect": "observed",
+        "effectRef": {
+          "kind": "file",
+          "path": "2abfb613bf617fcb",
+          "before": null,
+          "after": "8e6ab11c25c52b05",
+          "written": "8e6ab11c25c52b05"
+        }
+      }
+    ],
+    "unverified": [
+      "fresh session: an MCP call's one-time allow (the hook and ORCA's relay each ask, so one bound answer does not run it)"
+    ],
+    "judged": [
+      {
+        "toolUseId": "toolu_184_0",
+        "expected": [
+          "ask"
+        ],
+        "tool": "Bash",
+        "outcome": "ask",
+        "orcaDecision": "observed",
+        "refusal": "agent:Tool permission request failed: Error: Tool use aborted",
+        "approvals": [
+          {
+            "toolCallId": "toolu_184_0",
+            "sessionId": "0a1545b7-4b76-4747-acd3-b3de8a3f3a3a",
+            "answer": "no-answer",
+            "judged": {
+              "verdict": "covered",
+              "kind": "command",
+              "advisory": true,
+              "reasonCode": "matches-criterion"
+            }
+          }
+        ],
+        "effect": "none",
+        "effectRef": {
+          "kind": "shell",
+          "command": "e1d389754ed53a4e",
+          "matching": 0,
+          "unaccountedLines": 0
+        }
+      },
+      {
+        "toolUseId": "toolu_186_0",
+        "expected": [
+          "allow"
+        ],
+        "tool": "Bash",
+        "outcome": "allow",
+        "orcaDecision": "observed",
+        "refusal": null,
+        "approvals": [
+          {
+            "toolCallId": "toolu_186_0",
+            "sessionId": "0a1545b7-4b76-4747-acd3-b3de8a3f3a3a",
+            "answer": "allow_once",
+            "judged": {
+              "verdict": "covered",
+              "kind": "command",
+              "advisory": true,
+              "reasonCode": "matches-criterion"
+            }
+          }
+        ],
+        "effect": "observed",
+        "effectRef": {
+          "kind": "shell",
+          "command": "e1d389754ed53a4e",
+          "matching": 1,
+          "unaccountedLines": 0
+        }
+      },
+      {
+        "toolUseId": "toolu_189_0",
+        "expected": [
+          "ask"
+        ],
+        "tool": "Bash",
+        "outcome": "ask",
+        "orcaDecision": "observed",
+        "refusal": "agent:Tool permission request failed: Error: Tool use aborted",
+        "approvals": [
+          {
+            "toolCallId": "toolu_189_0",
+            "sessionId": "0a1545b7-4b76-4747-acd3-b3de8a3f3a3a",
+            "answer": "no-answer",
+            "judged": {
+              "verdict": "not-covered",
+              "kind": "command",
+              "advisory": true,
+              "reasonCode": "outside-criterion"
+            }
+          }
+        ],
+        "effect": "none",
+        "effectRef": {
+          "kind": "shell",
+          "command": "65a973b48adce3b8",
+          "matching": 0,
+          "unaccountedLines": 0
+        }
+      },
+      {
+        "toolUseId": "toolu_192_0",
+        "expected": [
+          "allow"
+        ],
+        "tool": "Bash",
+        "outcome": "allow",
+        "orcaDecision": "observed",
+        "refusal": null,
+        "approvals": [
+          {
+            "toolCallId": "toolu_192_0",
+            "sessionId": "0a1545b7-4b76-4747-acd3-b3de8a3f3a3a",
+            "answer": "allow_once",
+            "judged": {
+              "verdict": "not-covered",
+              "kind": "command",
+              "advisory": true,
+              "reasonCode": "outside-criterion"
+            }
+          }
+        ],
+        "effect": "observed",
+        "effectRef": {
+          "kind": "shell",
+          "command": "65a973b48adce3b8",
+          "matching": 1,
+          "unaccountedLines": 0
+        }
+      }
+    ]
+  },
+  "judge": {
+    "provider": "anthropic (stand-in)",
+    "classes": [
+      "command"
+    ],
+    "requests": 4
+  },
+  "uncoveredRoutes": [
+    {
+      "route": "Remote sessions over SSH while the hook is on",
+      "result": "refused",
+      "how": "the session factory refuses a hooked session on an SSH host before any agent starts"
+    },
+    {
+      "route": "A Claude Code other than the pinned one",
+      "result": "refused",
+      "how": "a session whose adapter runs another Claude Code (CLAUDE_CODE_EXECUTABLE) is refused before any work"
+    },
+    {
+      "route": "Tool calls Claude makes without asking (remembered grants, its own allow rules)",
+      "result": "refused",
+      "how": "with Claude's own settings allowing every tool, a write ORCA's rule denies does not land"
+    }
+  ],
+  "cases": [
+    {
+      "id": "L01",
+      "contract": [
+        "C04"
+      ],
+      "via": "live",
+      "result": "pass",
+      "calls": [
+        {
+          "toolUseId": "toolu_9_0",
+          "expected": [
+            "allow"
+          ],
+          "tool": "mcp__github__create_issue",
+          "outcome": "allow",
+          "orcaDecision": "observed",
+          "refusal": null,
+          "approvals": [],
+          "effect": "observed",
+          "effectRef": {
+            "kind": "mcp",
+            "callRef": "c2",
+            "loggedFor": [
+              "b3bac4c482738ea7"
+            ],
+            "answeredWith": "b3bac4c482738ea7",
+            "unaccountedLines": 0
+          }
+        },
+        {
+          "toolUseId": "toolu_11_0",
+          "expected": [
+            "allow"
+          ],
+          "tool": "mcp__github__create_issue",
+          "outcome": "allow",
+          "orcaDecision": "observed",
+          "refusal": null,
+          "approvals": [],
+          "effect": "observed",
+          "effectRef": {
+            "kind": "mcp",
+            "callRef": "c3",
+            "loggedFor": [
+              "e81be1126e94d5fb"
+            ],
+            "answeredWith": "e81be1126e94d5fb",
+            "unaccountedLines": 0
+          }
+        },
+        {
+          "toolUseId": "toolu_14_0",
+          "expected": [
+            "allow"
+          ],
+          "tool": "mcp__github__create_issue",
+          "outcome": "allow",
+          "orcaDecision": "observed",
+          "refusal": null,
+          "approvals": [],
+          "effect": "observed",
+          "effectRef": {
+            "kind": "mcp",
+            "callRef": "c4",
+            "loggedFor": [
+              "919bee262a426f61"
+            ],
+            "answeredWith": "919bee262a426f61",
+            "unaccountedLines": 0
+          }
+        },
+        {
+          "toolUseId": "toolu_17_0",
+          "expected": [
+            "ask"
+          ],
+          "tool": "mcp__github__create_issue",
+          "outcome": "ask",
+          "orcaDecision": "observed",
+          "refusal": "agent:User refused permission to run tool",
+          "approvals": [
+            {
+              "toolCallId": "toolu_17_0",
+              "sessionId": "63fd013b-9a43-4323-ae10-eecffac0b875",
+              "answer": "reject_once"
+            }
+          ],
+          "effect": "none",
+          "effectRef": {
+            "kind": "mcp",
+            "callRef": "c5",
+            "loggedFor": [],
+            "answeredWith": null,
+            "unaccountedLines": 0
+          }
+        }
+      ]
+    },
+    {
+      "id": "L02",
+      "contract": [
+        "C04"
+      ],
+      "via": "live",
+      "result": "pass",
+      "calls": [
+        {
+          "toolUseId": "toolu_21_0",
+          "expected": [
+            "allow"
+          ],
+          "tool": "mcp__github__create_issue",
+          "outcome": "allow",
+          "orcaDecision": "observed",
+          "refusal": null,
+          "approvals": [],
+          "effect": "observed",
+          "effectRef": {
+            "kind": "mcp",
+            "callRef": "c2",
+            "loggedFor": [
+              "487d360edc38d1a6"
+            ],
+            "answeredWith": "487d360edc38d1a6",
+            "unaccountedLines": 0
+          }
+        },
+        {
+          "toolUseId": "toolu_23_0",
+          "expected": [
+            "allow"
+          ],
+          "tool": "mcp__github__create_issue",
+          "outcome": "allow",
+          "orcaDecision": "observed",
+          "refusal": null,
+          "approvals": [],
+          "effect": "observed",
+          "effectRef": {
+            "kind": "mcp",
+            "callRef": "c3",
+            "loggedFor": [
+              "aabe64fee7c1b3ca"
+            ],
+            "answeredWith": "aabe64fee7c1b3ca",
+            "unaccountedLines": 0
+          }
+        },
+        {
+          "toolUseId": "toolu_26_0",
+          "expected": [
+            "ask"
+          ],
+          "tool": "mcp__github__create_issue",
+          "outcome": "ask",
+          "orcaDecision": "observed",
+          "refusal": "agent:User refused permission to run tool",
+          "approvals": [
+            {
+              "toolCallId": "toolu_26_0",
+              "sessionId": "6ae05c33-9442-4358-abce-8923384b20f4",
+              "answer": "reject_once"
+            }
+          ],
+          "effect": "none",
+          "effectRef": {
+            "kind": "mcp",
+            "callRef": "c4",
+            "loggedFor": [],
+            "answeredWith": null,
+            "unaccountedLines": 0
+          }
+        }
+      ]
+    },
+    {
+      "id": "L03",
+      "contract": [
+        "C01"
+      ],
+      "via": "live",
+      "result": "pass",
+      "calls": [
+        {
+          "toolUseId": "toolu_30_0",
+          "expected": [
+            "allow"
+          ],
+          "tool": "Write",
+          "outcome": "allow",
+          "orcaDecision": "observed",
+          "refusal": null,
+          "approvals": [],
+          "effect": "observed",
+          "effectRef": {
+            "kind": "file",
+            "path": "1e1cf1e09efe8fbe",
+            "before": null,
+            "after": "3964064e09ea7ea7",
+            "written": "3964064e09ea7ea7"
+          }
+        },
+        {
+          "toolUseId": "toolu_35_0",
+          "expected": [
+            "deny"
+          ],
+          "tool": "Write",
+          "outcome": "deny",
+          "orcaDecision": "observed",
+          "refusal": "orca-deny",
+          "approvals": [],
+          "effect": "none",
+          "effectRef": {
+            "kind": "file",
+            "path": "1e1cf1e09efe8fbe",
+            "before": "3964064e09ea7ea7",
+            "after": "3964064e09ea7ea7",
+            "written": "93d7a887c1ee6fc6"
+          },
+          "primingRead": "allow"
+        },
+        {
+          "toolUseId": "toolu_38_0",
+          "expected": [
+            "allow"
+          ],
+          "tool": "Write",
+          "outcome": "allow",
+          "orcaDecision": "observed",
+          "refusal": null,
+          "approvals": [],
+          "effect": "observed",
+          "effectRef": {
+            "kind": "file",
+            "path": "d4be0cbd614a0188",
+            "before": null,
+            "after": "3752c4abc9632ca5",
+            "written": "3752c4abc9632ca5"
+          }
+        }
+      ]
+    },
+    {
+      "id": "L04",
+      "contract": [
+        "C04",
+        "C15"
+      ],
+      "via": "live",
+      "result": "pass",
+      "calls": [
+        {
+          "toolUseId": "toolu_42_0",
+          "expected": [
+            "allow"
+          ],
+          "tool": "mcp__github__create_issue",
+          "outcome": "allow",
+          "orcaDecision": "observed",
+          "refusal": null,
+          "approvals": [],
+          "effect": "observed",
+          "effectRef": {
+            "kind": "mcp",
+            "callRef": "c2",
+            "loggedFor": [
+              "ef543ab853f32bac"
+            ],
+            "answeredWith": "ef543ab853f32bac",
+            "unaccountedLines": 0
+          }
+        },
+        {
+          "toolUseId": "toolu_44_0",
+          "expected": [
+            "deny"
+          ],
+          "tool": "mcp__github__create_issue",
+          "outcome": "deny",
+          "orcaDecision": "observed",
+          "refusal": "orca-deny",
+          "approvals": [],
+          "effect": "none",
+          "effectRef": {
+            "kind": "mcp",
+            "callRef": "c3",
+            "loggedFor": [],
+            "answeredWith": null,
+            "unaccountedLines": 0
+          }
+        }
+      ]
+    },
+    {
+      "id": "L05",
+      "contract": [
+        "C14"
+      ],
+      "via": "live",
+      "result": "pass",
+      "calls": [
+        {
+          "toolUseId": "toolu_48_0",
+          "expected": [
+            "allow"
+          ],
+          "tool": "mcp__github__create_issue",
+          "outcome": "allow",
+          "orcaDecision": "observed",
+          "refusal": null,
+          "approvals": [],
+          "effect": "observed",
+          "effectRef": {
+            "kind": "mcp",
+            "callRef": "c2",
+            "loggedFor": [
+              "00a9eb7a0643526a"
+            ],
+            "answeredWith": "00a9eb7a0643526a",
+            "unaccountedLines": 0
+          }
+        },
+        {
+          "toolUseId": "toolu_48_1",
+          "expected": [
+            "allow"
+          ],
+          "tool": "mcp__github__create_issue",
+          "outcome": "allow",
+          "orcaDecision": "observed",
+          "refusal": null,
+          "approvals": [],
+          "effect": "observed",
+          "effectRef": {
+            "kind": "mcp",
+            "callRef": "c3",
+            "loggedFor": [
+              "bf2d5b72a5d7bc9d"
+            ],
+            "answeredWith": "bf2d5b72a5d7bc9d",
+            "unaccountedLines": 0
+          }
+        },
+        {
+          "toolUseId": "toolu_48_2",
+          "expected": [
+            "allow"
+          ],
+          "tool": "mcp__github__create_issue",
+          "outcome": "allow",
+          "orcaDecision": "observed",
+          "refusal": null,
+          "approvals": [],
+          "effect": "observed",
+          "effectRef": {
+            "kind": "mcp",
+            "callRef": "c4",
+            "loggedFor": [
+              "59cd2fec085027ea"
+            ],
+            "answeredWith": "59cd2fec085027ea",
+            "unaccountedLines": 0
+          }
+        },
+        {
+          "toolUseId": "toolu_48_3",
+          "expected": [
+            "allow"
+          ],
+          "tool": "mcp__github__create_issue",
+          "outcome": "allow",
+          "orcaDecision": "observed",
+          "refusal": null,
+          "approvals": [],
+          "effect": "observed",
+          "effectRef": {
+            "kind": "mcp",
+            "callRef": "c5",
+            "loggedFor": [
+              "440ec82494a1a4d9"
+            ],
+            "answeredWith": "440ec82494a1a4d9",
+            "unaccountedLines": 0
+          }
+        },
+        {
+          "toolUseId": "toolu_48_4",
+          "expected": [
+            "allow"
+          ],
+          "tool": "mcp__github__create_issue",
+          "outcome": "allow",
+          "orcaDecision": "observed",
+          "refusal": null,
+          "approvals": [],
+          "effect": "observed",
+          "effectRef": {
+            "kind": "mcp",
+            "callRef": "c6",
+            "loggedFor": [
+              "70e94fef8b1a2eae"
+            ],
+            "answeredWith": "70e94fef8b1a2eae",
+            "unaccountedLines": 0
+          }
+        },
+        {
+          "toolUseId": "toolu_48_5",
+          "expected": [
+            "allow"
+          ],
+          "tool": "mcp__github__create_issue",
+          "outcome": "allow",
+          "orcaDecision": "observed",
+          "refusal": null,
+          "approvals": [],
+          "effect": "observed",
+          "effectRef": {
+            "kind": "mcp",
+            "callRef": "c7",
+            "loggedFor": [
+              "f2291c64ca0077aa"
+            ],
+            "answeredWith": "f2291c64ca0077aa",
+            "unaccountedLines": 0
+          }
+        },
+        {
+          "toolUseId": "toolu_48_6",
+          "expected": [
+            "allow"
+          ],
+          "tool": "mcp__github__create_issue",
+          "outcome": "allow",
+          "orcaDecision": "observed",
+          "refusal": null,
+          "approvals": [],
+          "effect": "observed",
+          "effectRef": {
+            "kind": "mcp",
+            "callRef": "c8",
+            "loggedFor": [
+              "29fa2645035787ab"
+            ],
+            "answeredWith": "29fa2645035787ab",
+            "unaccountedLines": 0
+          }
+        },
+        {
+          "toolUseId": "toolu_48_7",
+          "expected": [
+            "allow"
+          ],
+          "tool": "mcp__github__create_issue",
+          "outcome": "allow",
+          "orcaDecision": "observed",
+          "refusal": null,
+          "approvals": [],
+          "effect": "observed",
+          "effectRef": {
+            "kind": "mcp",
+            "callRef": "c9",
+            "loggedFor": [
+              "4c45305af94c7741"
+            ],
+            "answeredWith": "4c45305af94c7741",
+            "unaccountedLines": 0
+          }
+        },
+        {
+          "toolUseId": "toolu_48_8",
+          "expected": [
+            "allow"
+          ],
+          "tool": "mcp__github__create_issue",
+          "outcome": "allow",
+          "orcaDecision": "observed",
+          "refusal": null,
+          "approvals": [],
+          "effect": "observed",
+          "effectRef": {
+            "kind": "mcp",
+            "callRef": "c10",
+            "loggedFor": [
+              "cbf50efd2ef95ee2"
+            ],
+            "answeredWith": "cbf50efd2ef95ee2",
+            "unaccountedLines": 0
+          }
+        },
+        {
+          "toolUseId": "toolu_48_9",
+          "expected": [
+            "allow"
+          ],
+          "tool": "mcp__github__create_issue",
+          "outcome": "allow",
+          "orcaDecision": "observed",
+          "refusal": null,
+          "approvals": [],
+          "effect": "observed",
+          "effectRef": {
+            "kind": "mcp",
+            "callRef": "c11",
+            "loggedFor": [
+              "e51bd8e309ee23db"
+            ],
+            "answeredWith": "e51bd8e309ee23db",
+            "unaccountedLines": 0
+          }
+        },
+        {
+          "toolUseId": "toolu_48_10",
+          "expected": [
+            "allow"
+          ],
+          "tool": "mcp__github__create_issue",
+          "outcome": "allow",
+          "orcaDecision": "observed",
+          "refusal": null,
+          "approvals": [],
+          "effect": "observed",
+          "effectRef": {
+            "kind": "mcp",
+            "callRef": "c12",
+            "loggedFor": [
+              "d0eeca6aa17b5ad6"
+            ],
+            "answeredWith": "d0eeca6aa17b5ad6",
+            "unaccountedLines": 0
+          }
+        },
+        {
+          "toolUseId": "toolu_48_11",
+          "expected": [
+            "allow"
+          ],
+          "tool": "mcp__github__create_issue",
+          "outcome": "allow",
+          "orcaDecision": "observed",
+          "refusal": null,
+          "approvals": [],
+          "effect": "observed",
+          "effectRef": {
+            "kind": "mcp",
+            "callRef": "c13",
+            "loggedFor": [
+              "532705dc45256041"
+            ],
+            "answeredWith": "532705dc45256041",
+            "unaccountedLines": 0
+          }
+        },
+        {
+          "toolUseId": "toolu_48_12",
+          "expected": [
+            "allow"
+          ],
+          "tool": "mcp__github__create_issue",
+          "outcome": "allow",
+          "orcaDecision": "observed",
+          "refusal": null,
+          "approvals": [],
+          "effect": "observed",
+          "effectRef": {
+            "kind": "mcp",
+            "callRef": "c14",
+            "loggedFor": [
+              "3984cfc923b03e4f"
+            ],
+            "answeredWith": "3984cfc923b03e4f",
+            "unaccountedLines": 0
+          }
+        },
+        {
+          "toolUseId": "toolu_48_13",
+          "expected": [
+            "allow"
+          ],
+          "tool": "mcp__github__create_issue",
+          "outcome": "allow",
+          "orcaDecision": "observed",
+          "refusal": null,
+          "approvals": [],
+          "effect": "observed",
+          "effectRef": {
+            "kind": "mcp",
+            "callRef": "c15",
+            "loggedFor": [
+              "7419b877e2fbb520"
+            ],
+            "answeredWith": "7419b877e2fbb520",
+            "unaccountedLines": 0
+          }
+        },
+        {
+          "toolUseId": "toolu_48_14",
+          "expected": [
+            "allow"
+          ],
+          "tool": "mcp__github__create_issue",
+          "outcome": "allow",
+          "orcaDecision": "observed",
+          "refusal": null,
+          "approvals": [],
+          "effect": "observed",
+          "effectRef": {
+            "kind": "mcp",
+            "callRef": "c16",
+            "loggedFor": [
+              "9dc4be016713a97b"
+            ],
+            "answeredWith": "9dc4be016713a97b",
+            "unaccountedLines": 0
+          }
+        },
+        {
+          "toolUseId": "toolu_48_15",
+          "expected": [
+            "allow"
+          ],
+          "tool": "mcp__github__create_issue",
+          "outcome": "allow",
+          "orcaDecision": "observed",
+          "refusal": null,
+          "approvals": [],
+          "effect": "observed",
+          "effectRef": {
+            "kind": "mcp",
+            "callRef": "c17",
+            "loggedFor": [
+              "49c6c2b5b9d90e39"
+            ],
+            "answeredWith": "49c6c2b5b9d90e39",
+            "unaccountedLines": 0
+          }
+        },
+        {
+          "toolUseId": "toolu_50_0",
+          "expected": [
+            "ask"
+          ],
+          "tool": "mcp__github__create_issue",
+          "outcome": "ask",
+          "orcaDecision": "observed",
+          "refusal": "agent:User refused permission to run tool",
+          "approvals": [
+            {
+              "toolCallId": "toolu_50_0",
+              "sessionId": "59d85479-38c9-439b-80d2-99225f55c73a",
+              "answer": "reject_once"
+            }
+          ],
+          "effect": "none",
+          "effectRef": {
+            "kind": "mcp",
+            "callRef": "c18",
+            "loggedFor": [],
+            "answeredWith": null,
+            "unaccountedLines": 0
+          }
+        },
+        {
+          "toolUseId": "toolu_50_1",
+          "expected": [
+            "ask"
+          ],
+          "tool": "mcp__github__create_issue",
+          "outcome": "ask",
+          "orcaDecision": "observed",
+          "refusal": "agent:User refused permission to run tool",
+          "approvals": [
+            {
+              "toolCallId": "toolu_50_1",
+              "sessionId": "59d85479-38c9-439b-80d2-99225f55c73a",
+              "answer": "reject_once"
+            }
+          ],
+          "effect": "none",
+          "effectRef": {
+            "kind": "mcp",
+            "callRef": "c19",
+            "loggedFor": [],
+            "answeredWith": null,
+            "unaccountedLines": 0
+          }
+        },
+        {
+          "toolUseId": "toolu_50_2",
+          "expected": [
+            "ask"
+          ],
+          "tool": "mcp__github__create_issue",
+          "outcome": "ask",
+          "orcaDecision": "observed",
+          "refusal": "agent:User refused permission to run tool",
+          "approvals": [
+            {
+              "toolCallId": "toolu_50_2",
+              "sessionId": "59d85479-38c9-439b-80d2-99225f55c73a",
+              "answer": "reject_once"
+            }
+          ],
+          "effect": "none",
+          "effectRef": {
+            "kind": "mcp",
+            "callRef": "c20",
+            "loggedFor": [],
+            "answeredWith": null,
+            "unaccountedLines": 0
+          }
+        },
+        {
+          "toolUseId": "toolu_50_3",
+          "expected": [
+            "ask"
+          ],
+          "tool": "mcp__github__create_issue",
+          "outcome": "ask",
+          "orcaDecision": "observed",
+          "refusal": "agent:User refused permission to run tool",
+          "approvals": [
+            {
+              "toolCallId": "toolu_50_3",
+              "sessionId": "59d85479-38c9-439b-80d2-99225f55c73a",
+              "answer": "reject_once"
+            }
+          ],
+          "effect": "none",
+          "effectRef": {
+            "kind": "mcp",
+            "callRef": "c21",
+            "loggedFor": [],
+            "answeredWith": null,
+            "unaccountedLines": 0
+          }
+        },
+        {
+          "toolUseId": "toolu_50_4",
+          "expected": [
+            "ask"
+          ],
+          "tool": "mcp__github__create_issue",
+          "outcome": "ask",
+          "orcaDecision": "observed",
+          "refusal": "agent:User refused permission to run tool",
+          "approvals": [
+            {
+              "toolCallId": "toolu_50_4",
+              "sessionId": "59d85479-38c9-439b-80d2-99225f55c73a",
+              "answer": "reject_once"
+            }
+          ],
+          "effect": "none",
+          "effectRef": {
+            "kind": "mcp",
+            "callRef": "c22",
+            "loggedFor": [],
+            "answeredWith": null,
+            "unaccountedLines": 0
+          }
+        },
+        {
+          "toolUseId": "toolu_50_5",
+          "expected": [
+            "ask"
+          ],
+          "tool": "mcp__github__create_issue",
+          "outcome": "ask",
+          "orcaDecision": "observed",
+          "refusal": "agent:User refused permission to run tool",
+          "approvals": [
+            {
+              "toolCallId": "toolu_50_5",
+              "sessionId": "59d85479-38c9-439b-80d2-99225f55c73a",
+              "answer": "reject_once"
+            }
+          ],
+          "effect": "none",
+          "effectRef": {
+            "kind": "mcp",
+            "callRef": "c23",
+            "loggedFor": [],
+            "answeredWith": null,
+            "unaccountedLines": 0
+          }
+        },
+        {
+          "toolUseId": "toolu_50_6",
+          "expected": [
+            "ask"
+          ],
+          "tool": "mcp__github__create_issue",
+          "outcome": "ask",
+          "orcaDecision": "observed",
+          "refusal": "agent:User refused permission to run tool",
+          "approvals": [
+            {
+              "toolCallId": "toolu_50_6",
+              "sessionId": "59d85479-38c9-439b-80d2-99225f55c73a",
+              "answer": "reject_once"
+            }
+          ],
+          "effect": "none",
+          "effectRef": {
+            "kind": "mcp",
+            "callRef": "c24",
+            "loggedFor": [],
+            "answeredWith": null,
+            "unaccountedLines": 0
+          }
+        },
+        {
+          "toolUseId": "toolu_50_7",
+          "expected": [
+            "ask"
+          ],
+          "tool": "mcp__github__create_issue",
+          "outcome": "ask",
+          "orcaDecision": "observed",
+          "refusal": "agent:User refused permission to run tool",
+          "approvals": [
+            {
+              "toolCallId": "toolu_50_7",
+              "sessionId": "59d85479-38c9-439b-80d2-99225f55c73a",
+              "answer": "reject_once"
+            }
+          ],
+          "effect": "none",
+          "effectRef": {
+            "kind": "mcp",
+            "callRef": "c25",
+            "loggedFor": [],
+            "answeredWith": null,
+            "unaccountedLines": 0
+          }
+        },
+        {
+          "toolUseId": "toolu_50_8",
+          "expected": [
+            "ask"
+          ],
+          "tool": "mcp__github__create_issue",
+          "outcome": "ask",
+          "orcaDecision": "observed",
+          "refusal": "agent:User refused permission to run tool",
+          "approvals": [
+            {
+              "toolCallId": "toolu_50_8",
+              "sessionId": "59d85479-38c9-439b-80d2-99225f55c73a",
+              "answer": "reject_once"
+            }
+          ],
+          "effect": "none",
+          "effectRef": {
+            "kind": "mcp",
+            "callRef": "c26",
+            "loggedFor": [],
+            "answeredWith": null,
+            "unaccountedLines": 0
+          }
+        },
+        {
+          "toolUseId": "toolu_50_9",
+          "expected": [
+            "ask"
+          ],
+          "tool": "mcp__github__create_issue",
+          "outcome": "ask",
+          "orcaDecision": "observed",
+          "refusal": "agent:User refused permission to run tool",
+          "approvals": [
+            {
+              "toolCallId": "toolu_50_9",
+              "sessionId": "59d85479-38c9-439b-80d2-99225f55c73a",
+              "answer": "reject_once"
+            }
+          ],
+          "effect": "none",
+          "effectRef": {
+            "kind": "mcp",
+            "callRef": "c27",
+            "loggedFor": [],
+            "answeredWith": null,
+            "unaccountedLines": 0
+          }
+        },
+        {
+          "toolUseId": "toolu_50_10",
+          "expected": [
+            "ask"
+          ],
+          "tool": "mcp__github__create_issue",
+          "outcome": "ask",
+          "orcaDecision": "observed",
+          "refusal": "agent:User refused permission to run tool",
+          "approvals": [
+            {
+              "toolCallId": "toolu_50_10",
+              "sessionId": "59d85479-38c9-439b-80d2-99225f55c73a",
+              "answer": "reject_once"
+            }
+          ],
+          "effect": "none",
+          "effectRef": {
+            "kind": "mcp",
+            "callRef": "c28",
+            "loggedFor": [],
+            "answeredWith": null,
+            "unaccountedLines": 0
+          }
+        },
+        {
+          "toolUseId": "toolu_50_11",
+          "expected": [
+            "ask"
+          ],
+          "tool": "mcp__github__create_issue",
+          "outcome": "ask",
+          "orcaDecision": "observed",
+          "refusal": "agent:User refused permission to run tool",
+          "approvals": [
+            {
+              "toolCallId": "toolu_50_11",
+              "sessionId": "59d85479-38c9-439b-80d2-99225f55c73a",
+              "answer": "reject_once"
+            }
+          ],
+          "effect": "none",
+          "effectRef": {
+            "kind": "mcp",
+            "callRef": "c29",
+            "loggedFor": [],
+            "answeredWith": null,
+            "unaccountedLines": 0
+          }
+        },
+        {
+          "toolUseId": "toolu_50_12",
+          "expected": [
+            "ask"
+          ],
+          "tool": "mcp__github__create_issue",
+          "outcome": "ask",
+          "orcaDecision": "observed",
+          "refusal": "agent:User refused permission to run tool",
+          "approvals": [
+            {
+              "toolCallId": "toolu_50_12",
+              "sessionId": "59d85479-38c9-439b-80d2-99225f55c73a",
+              "answer": "reject_once"
+            }
+          ],
+          "effect": "none",
+          "effectRef": {
+            "kind": "mcp",
+            "callRef": "c30",
+            "loggedFor": [],
+            "answeredWith": null,
+            "unaccountedLines": 0
+          }
+        },
+        {
+          "toolUseId": "toolu_50_13",
+          "expected": [
+            "ask"
+          ],
+          "tool": "mcp__github__create_issue",
+          "outcome": "ask",
+          "orcaDecision": "observed",
+          "refusal": "agent:User refused permission to run tool",
+          "approvals": [
+            {
+              "toolCallId": "toolu_50_13",
+              "sessionId": "59d85479-38c9-439b-80d2-99225f55c73a",
+              "answer": "reject_once"
+            }
+          ],
+          "effect": "none",
+          "effectRef": {
+            "kind": "mcp",
+            "callRef": "c31",
+            "loggedFor": [],
+            "answeredWith": null,
+            "unaccountedLines": 0
+          }
+        },
+        {
+          "toolUseId": "toolu_50_14",
+          "expected": [
+            "ask"
+          ],
+          "tool": "mcp__github__create_issue",
+          "outcome": "ask",
+          "orcaDecision": "observed",
+          "refusal": "agent:User refused permission to run tool",
+          "approvals": [
+            {
+              "toolCallId": "toolu_50_14",
+              "sessionId": "59d85479-38c9-439b-80d2-99225f55c73a",
+              "answer": "reject_once"
+            }
+          ],
+          "effect": "none",
+          "effectRef": {
+            "kind": "mcp",
+            "callRef": "c32",
+            "loggedFor": [],
+            "answeredWith": null,
+            "unaccountedLines": 0
+          }
+        },
+        {
+          "toolUseId": "toolu_50_15",
+          "expected": [
+            "ask"
+          ],
+          "tool": "mcp__github__create_issue",
+          "outcome": "ask",
+          "orcaDecision": "observed",
+          "refusal": "agent:User refused permission to run tool",
+          "approvals": [
+            {
+              "toolCallId": "toolu_50_15",
+              "sessionId": "59d85479-38c9-439b-80d2-99225f55c73a",
+              "answer": "reject_once"
+            }
+          ],
+          "effect": "none",
+          "effectRef": {
+            "kind": "mcp",
+            "callRef": "c33",
+            "loggedFor": [],
+            "answeredWith": null,
+            "unaccountedLines": 0
+          }
+        }
+      ]
+    },
+    {
+      "id": "L06",
+      "contract": [
+        "C06"
+      ],
+      "via": "live",
+      "result": "pass",
+      "calls": [
+        {
+          "toolUseId": "toolu_54_0",
+          "expected": [
+            "allow"
+          ],
+          "tool": "mcp__github__create_issue",
+          "outcome": "allow",
+          "orcaDecision": "observed",
+          "refusal": null,
+          "approvals": [],
+          "effect": "observed",
+          "effectRef": {
+            "kind": "mcp",
+            "callRef": "c2",
+            "loggedFor": [
+              "271fd6e1ec2b6317"
+            ],
+            "answeredWith": "271fd6e1ec2b6317",
+            "unaccountedLines": 0
+          }
+        },
+        {
+          "toolUseId": "toolu_56_0",
+          "expected": [
+            "ask"
+          ],
+          "tool": "mcp__github__create_issue",
+          "outcome": "ask",
+          "orcaDecision": "observed",
+          "refusal": "agent:User refused permission to run tool",
+          "approvals": [
+            {
+              "toolCallId": "toolu_56_0",
+              "sessionId": "79426473-d361-4dcd-8f7d-a99e48a8c14f",
+              "answer": "reject_once"
+            }
+          ],
+          "effect": "none",
+          "effectRef": {
+            "kind": "mcp",
+            "callRef": "c3",
+            "loggedFor": [],
+            "answeredWith": null,
+            "unaccountedLines": 0
+          }
+        },
+        {
+          "toolUseId": "toolu_59_0",
+          "expected": [
+            "deny"
+          ],
+          "tool": "mcp__slack__post",
+          "outcome": "deny",
+          "orcaDecision": "observed",
+          "refusal": "orca-deny",
+          "approvals": [],
+          "effect": "none",
+          "effectRef": {
+            "kind": "mcp",
+            "callRef": "c4",
+            "loggedFor": [],
+            "answeredWith": null,
+            "unaccountedLines": 0
+          }
+        },
+        {
+          "toolUseId": "toolu_62_0",
+          "expected": [
+            "ask"
+          ],
+          "tool": "Write",
+          "outcome": "ask",
+          "orcaDecision": "observed",
+          "refusal": "agent:User refused permission to run tool",
+          "approvals": [
+            {
+              "toolCallId": "toolu_62_0",
+              "sessionId": "79426473-d361-4dcd-8f7d-a99e48a8c14f",
+              "answer": "reject_once"
+            }
+          ],
+          "effect": "none",
+          "effectRef": {
+            "kind": "file",
+            "path": "59b9f59371f7558b",
+            "before": null,
+            "after": null,
+            "written": "8e6ab11c25c52b05"
+          }
+        }
+      ]
+    },
+    {
+      "id": "L07",
+      "contract": [
+        "C06"
+      ],
+      "via": "live",
+      "result": "pass",
+      "calls": [
+        {
+          "toolUseId": "toolu_66_0",
+          "expected": [
+            "allow"
+          ],
+          "tool": "mcp__github__create_issue",
+          "outcome": "allow",
+          "orcaDecision": "observed",
+          "refusal": null,
+          "approvals": [],
+          "effect": "observed",
+          "effectRef": {
+            "kind": "mcp",
+            "callRef": "c2",
+            "loggedFor": [
+              "822334fd5041d5b3"
+            ],
+            "answeredWith": "822334fd5041d5b3",
+            "unaccountedLines": 0
+          }
+        },
+        {
+          "toolUseId": "toolu_68_0",
+          "expected": [
+            "ask"
+          ],
+          "tool": "mcp__github__create_issue",
+          "outcome": "ask",
+          "orcaDecision": "observed",
+          "refusal": "agent:User refused permission to run tool",
+          "approvals": [
+            {
+              "toolCallId": "toolu_68_0",
+              "sessionId": "4082f98c-c67c-4b32-bdc9-a36cf0bbc291",
+              "answer": "reject_once"
+            }
+          ],
+          "effect": "none",
+          "effectRef": {
+            "kind": "mcp",
+            "callRef": "c3",
+            "loggedFor": [],
+            "answeredWith": null,
+            "unaccountedLines": 0
+          }
+        }
+      ]
+    },
+    {
+      "id": "F01",
+      "contract": [
+        "C09"
+      ],
+      "via": "program",
+      "result": "pass",
+      "calls": [
+        {
+          "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
+          "args": "installed",
+          "input": {
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "bytes": 0
+          },
+          "exitCode": 2,
+          "stdout": "",
+          "stderr": "Blocked by ORCA: ORCA could not check this call (tool call input is not JSON).\n",
+          "outcome": "block"
+        },
+        {
+          "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
+          "args": "installed",
+          "input": {
+            "sha256": "7ccfa1fbf3940e6f0c0375d87c0f9235a50514e14cb427bdfaf5077987b26ccf",
+            "bytes": 8
+          },
+          "exitCode": 2,
+          "stdout": "",
+          "stderr": "Blocked by ORCA: ORCA could not check this call (tool call input is not JSON).\n",
+          "outcome": "block"
+        },
+        {
+          "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
+          "args": "installed",
+          "input": {
+            "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+            "bytes": 2
+          },
+          "exitCode": 2,
+          "stdout": "",
+          "stderr": "Blocked by ORCA: ORCA could not check this call (tool call input is not a JSON object).\n",
+          "outcome": "block"
+        },
+        {
+          "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
+          "args": "installed",
+          "input": {
+            "sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+            "bytes": 4
+          },
+          "exitCode": 2,
+          "stdout": "",
+          "stderr": "Blocked by ORCA: ORCA could not check this call (tool call input is not a JSON object).\n",
+          "outcome": "block"
+        },
+        {
+          "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
+          "args": "installed",
+          "input": {
+            "sha256": "90230fde6b22454a6b2b44b4530435d5ca9df5b88fc3117c3e06b617808dc690",
+            "bytes": 163
+          },
+          "exitCode": 2,
+          "stdout": "",
+          "stderr": "Blocked by ORCA: ORCA could not check this call (not a PreToolUse event).\n",
+          "outcome": "block"
+        },
+        {
+          "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
+          "args": "installed",
+          "input": {
+            "sha256": "ddbcbc247539ad21eadd7940cf4bf249c26a5128f6271c2dcc061acdb3eeab76",
+            "bytes": 143
+          },
+          "exitCode": 2,
+          "stdout": "",
+          "stderr": "Blocked by ORCA: ORCA could not check this call (tool call has no tool_name).\n",
+          "outcome": "block"
+        },
+        {
+          "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
+          "args": "installed",
+          "input": {
+            "sha256": "6dacb928b2ccbd6c3077d278e27aa78b309c7c8dcbf1dc3ed79dc3e4db1c4e65",
+            "bytes": 157
+          },
+          "exitCode": 2,
+          "stdout": "",
+          "stderr": "Blocked by ORCA: ORCA could not check this call (tool call has no tool_name).\n",
+          "outcome": "block"
+        },
+        {
+          "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
+          "args": "installed",
+          "input": {
+            "sha256": "ca5e8c972e13f7ee31020e3b4adafad0672376dc5d343fe88c857668b17d411a",
+            "bytes": 121
+          },
+          "exitCode": 2,
+          "stdout": "",
+          "stderr": "Blocked by ORCA: ORCA could not check this call (tool call has no tool_input object).\n",
+          "outcome": "block"
+        },
+        {
+          "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
+          "args": "installed",
+          "input": {
+            "sha256": "131be8c6295feb92e33498c453472c0ef781dce768f4092052d5f21eb22f17bf",
+            "bytes": 149
+          },
+          "exitCode": 2,
+          "stdout": "",
+          "stderr": "Blocked by ORCA: ORCA could not check this call (tool call has no absolute cwd).\n",
+          "outcome": "block"
+        },
+        {
+          "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
+          "args": "installed",
+          "input": {
+            "sha256": "02389bf8edebc4503891fa55d9f31304d60c4d3859e3b307bc70f300e3c2a921",
+            "bytes": 128
+          },
+          "exitCode": 2,
+          "stdout": "",
+          "stderr": "Blocked by ORCA: ORCA could not check this call (tool call has no absolute cwd).\n",
+          "outcome": "block"
+        },
+        {
+          "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
+          "args": "installed",
+          "input": {
+            "sha256": "2584f8438a15650d81a9167988a655b48b65d9008ee19aaade13fc440b2bf1d0",
+            "bytes": 4194430
+          },
+          "exitCode": 2,
+          "stdout": "",
+          "stderr": "Blocked by ORCA: tool call is too large to check.\n",
+          "outcome": "block"
+        },
+        {
+          "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
+          "args": "installed",
+          "input": {
+            "sha256": "48f4751d878fe25bcf52c8a2bb349a0a27800813776239b32df8ca915f22e9ec",
+            "bytes": 162
+          },
+          "exitCode": 0,
+          "stdout": "",
+          "stderr": "",
+          "outcome": "allow"
+        }
+      ]
+    },
+    {
+      "id": "F02",
+      "contract": [
+        "C09"
+      ],
+      "via": "program",
+      "result": "pass",
+      "calls": [
+        {
+          "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
+          "args": "replaced",
+          "input": {
+            "sha256": "ec8a5530b6a70082cd5cea66c214efea85f075ad1b1d4523539ecc7904fdd69b",
+            "bytes": 162
+          },
+          "exitCode": 2,
+          "stdout": "",
+          "stderr": "Blocked by ORCA: ORCA could not check this call (hook context file is not JSON).\n",
+          "outcome": "block"
+        },
+        {
+          "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
+          "args": "replaced",
+          "input": {
+            "sha256": "ec8a5530b6a70082cd5cea66c214efea85f075ad1b1d4523539ecc7904fdd69b",
+            "bytes": 162
+          },
+          "exitCode": 2,
+          "stdout": "",
+          "stderr": "Blocked by ORCA: ORCA could not check this call (hook context must be a JSON object).\n",
+          "outcome": "block"
+        },
+        {
+          "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
+          "args": "replaced",
+          "input": {
+            "sha256": "ec8a5530b6a70082cd5cea66c214efea85f075ad1b1d4523539ecc7904fdd69b",
+            "bytes": 162
+          },
+          "exitCode": 2,
+          "stdout": "",
+          "stderr": "Blocked by ORCA: ORCA could not check this call (hook context version is not supported).\n",
+          "outcome": "block"
+        },
+        {
+          "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
+          "args": "replaced",
+          "input": {
+            "sha256": "ec8a5530b6a70082cd5cea66c214efea85f075ad1b1d4523539ecc7904fdd69b",
+            "bytes": 162
+          },
+          "exitCode": 2,
+          "stdout": "",
+          "stderr": "Blocked by ORCA: ORCA could not check this call (hook context has no agentId).\n",
+          "outcome": "block"
+        },
+        {
+          "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
+          "args": "replaced",
+          "input": {
+            "sha256": "ec8a5530b6a70082cd5cea66c214efea85f075ad1b1d4523539ecc7904fdd69b",
+            "bytes": 162
+          },
+          "exitCode": 2,
+          "stdout": "",
+          "stderr": "Blocked by ORCA: ORCA could not check this call (hook context workspaceCwd must be an absolute path).\n",
+          "outcome": "block"
+        },
+        {
+          "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
+          "args": "replaced",
+          "input": {
+            "sha256": "ec8a5530b6a70082cd5cea66c214efea85f075ad1b1d4523539ecc7904fdd69b",
+            "bytes": 162
+          },
+          "exitCode": 2,
+          "stdout": "",
+          "stderr": "Blocked by ORCA: ORCA could not check this call (hook context permissionFiles must be absolute).\n",
+          "outcome": "block"
+        },
+        {
+          "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
+          "args": "replaced",
+          "input": {
+            "sha256": "ec8a5530b6a70082cd5cea66c214efea85f075ad1b1d4523539ecc7904fdd69b",
+            "bytes": 162
+          },
+          "exitCode": 2,
+          "stdout": "",
+          "stderr": "Blocked by ORCA: ORCA could not check this call (hook context permissions are invalid).\n",
+          "outcome": "block"
+        },
+        {
+          "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
+          "args": "replaced",
+          "input": {
+            "sha256": "ec8a5530b6a70082cd5cea66c214efea85f075ad1b1d4523539ecc7904fdd69b",
+            "bytes": 162
+          },
+          "exitCode": 2,
+          "stdout": "",
+          "stderr": "Blocked by ORCA: ORCA could not check this call (hook context file is too large).\n",
+          "outcome": "block"
+        },
+        {
+          "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
+          "args": "replaced",
+          "input": {
+            "sha256": "ec8a5530b6a70082cd5cea66c214efea85f075ad1b1d4523539ecc7904fdd69b",
+            "bytes": 162
+          },
+          "exitCode": 2,
+          "stdout": "",
+          "stderr": "Blocked by ORCA: ORCA could not check this call (the hook takes the absolute path of its context file, after --codex for Codex).\n",
+          "outcome": "block"
+        },
+        {
+          "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
+          "args": "replaced",
+          "input": {
+            "sha256": "ec8a5530b6a70082cd5cea66c214efea85f075ad1b1d4523539ecc7904fdd69b",
+            "bytes": 162
+          },
+          "exitCode": 2,
+          "stdout": "",
+          "stderr": "Blocked by ORCA: ORCA could not check this call (the hook takes the absolute path of its context file, after --codex for Codex).\n",
+          "outcome": "block"
+        },
+        {
+          "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
+          "args": "replaced",
+          "input": {
+            "sha256": "ec8a5530b6a70082cd5cea66c214efea85f075ad1b1d4523539ecc7904fdd69b",
+            "bytes": 162
+          },
+          "exitCode": 2,
+          "stdout": "",
+          "stderr": "Blocked by ORCA: ORCA could not check this call (hook context file cannot be read).\n",
+          "outcome": "block"
+        },
+        {
+          "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
+          "args": "replaced",
+          "input": {
+            "sha256": "ec8a5530b6a70082cd5cea66c214efea85f075ad1b1d4523539ecc7904fdd69b",
+            "bytes": 162
+          },
+          "exitCode": 2,
+          "stdout": "",
+          "stderr": "Blocked by ORCA: ORCA could not check this call (the hook takes the absolute path of its context file, after --codex for Codex).\n",
+          "outcome": "block"
+        }
+      ]
+    },
+    {
+      "id": "F03",
+      "contract": [
+        "C09"
+      ],
+      "via": "program",
+      "result": "pass",
+      "calls": []
+    },
+    {
+      "id": "F05",
+      "contract": [
+        "C19"
+      ],
+      "via": "program",
+      "result": "pass",
+      "calls": [
+        {
+          "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
+          "args": "installed",
+          "input": {
+            "sha256": "506d16c81967a2ce01de394a86e7e4c14c76a6160aae8ebbe0b4c2073972446e",
+            "bytes": 234
+          },
+          "exitCode": 0,
+          "stdout": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\",\"permissionDecisionReason\":\"ORCA asks first: ORCA's permission policy.\"}}\n",
+          "stderr": "",
+          "outcome": "ask"
+        },
+        {
+          "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
+          "args": "installed",
+          "input": {
+            "sha256": "abec343c1fb6634f2628ac8b0ede02f7e6e3fbf9e795c5235817e49aa0d908d1",
+            "bytes": 228
+          },
+          "exitCode": 0,
+          "stdout": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\",\"permissionDecisionReason\":\"ORCA asks first: ORCA's permission policy.\"}}\n",
+          "stderr": "",
+          "outcome": "ask"
+        },
+        {
+          "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
+          "args": "installed",
+          "input": {
+            "sha256": "a1edfd05460101318e96215202da70eb32fa36cffbb009630e7ae6471b4aa733",
+            "bytes": 221
+          },
+          "exitCode": 0,
+          "stdout": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\",\"permissionDecisionReason\":\"ORCA asks first: ORCA's permission policy.\"}}\n",
+          "stderr": "",
+          "outcome": "ask"
+        },
+        {
+          "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
+          "args": "installed",
+          "input": {
+            "sha256": "286057ab6011661f7b2d940456e6f6728a61f5b7340bf93a5592c49f9a80c991",
+            "bytes": 225
+          },
+          "exitCode": 0,
+          "stdout": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\",\"permissionDecisionReason\":\"ORCA asks first: ORCA's permission policy.\"}}\n",
+          "stderr": "",
+          "outcome": "ask"
+        }
+      ]
+    },
+    {
+      "id": "A01",
+      "contract": [
+        "C13"
+      ],
+      "via": "live",
+      "result": "pass",
+      "calls": [
+        {
+          "toolUseId": "toolu_72_0",
+          "expected": [
+            "allow"
+          ],
+          "tool": "mcp__github__create_issue",
+          "outcome": "allow",
+          "orcaDecision": "observed",
+          "refusal": null,
+          "approvals": [],
+          "effect": "observed",
+          "effectRef": {
+            "kind": "mcp",
+            "callRef": "c2",
+            "loggedFor": [
+              "caf20a022e51ac6d"
+            ],
+            "answeredWith": "caf20a022e51ac6d",
+            "unaccountedLines": 0
+          }
+        },
+        {
+          "toolUseId": "toolu_74_0",
+          "expected": [
+            "ask"
+          ],
+          "tool": "mcp__github__delete_repo",
+          "outcome": "ask",
+          "orcaDecision": "observed",
+          "refusal": "agent:User refused permission to run tool",
+          "approvals": [
+            {
+              "toolCallId": "toolu_74_0",
+              "sessionId": "a21198e7-bf9b-46b9-b8b4-9335f71def4c",
+              "answer": "reject_once"
+            }
+          ],
+          "effect": "none",
+          "effectRef": {
+            "kind": "mcp",
+            "callRef": "c3",
+            "loggedFor": [],
+            "answeredWith": null,
+            "unaccountedLines": 0
+          }
+        },
+        {
+          "toolUseId": "toolu_77_0",
+          "expected": [
+            "ask"
+          ],
+          "tool": "mcp__gitlab__create_issue",
+          "outcome": "ask",
+          "orcaDecision": "observed",
+          "refusal": "agent:User refused permission to run tool",
+          "approvals": [
+            {
+              "toolCallId": "toolu_77_0",
+              "sessionId": "a21198e7-bf9b-46b9-b8b4-9335f71def4c",
+              "answer": "reject_once"
+            }
+          ],
+          "effect": "none",
+          "effectRef": {
+            "kind": "mcp",
+            "callRef": "c4",
+            "loggedFor": [],
+            "answeredWith": null,
+            "unaccountedLines": 0
+          }
+        },
+        {
+          "toolUseId": "toolu_80_0",
+          "expected": [
+            "ask"
+          ],
+          "tool": "mcp__github__create_issue_comment",
+          "outcome": "ask",
+          "orcaDecision": "observed",
+          "refusal": "agent:User refused permission to run tool",
+          "approvals": [
+            {
+              "toolCallId": "toolu_80_0",
+              "sessionId": "a21198e7-bf9b-46b9-b8b4-9335f71def4c",
+              "answer": "reject_once"
+            }
+          ],
+          "effect": "none",
+          "effectRef": {
+            "kind": "mcp",
+            "callRef": "c5",
+            "loggedFor": [],
+            "answeredWith": null,
+            "unaccountedLines": 0
+          }
+        }
+      ]
+    },
+    {
+      "id": "A02",
+      "contract": [
+        "C13"
+      ],
+      "via": "program",
+      "result": "pass",
+      "calls": [
+        {
+          "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
+          "args": "installed",
+          "input": {
+            "sha256": "23f11822f417f5892534982135ccd5f2910d8c0a54c2ccfef13aba896bcb47f4",
+            "bytes": 275
+          },
+          "exitCode": 0,
+          "stdout": "",
+          "stderr": "",
+          "outcome": "allow"
+        },
+        {
+          "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
+          "args": "installed",
+          "input": {
+            "sha256": "9581f56b018cdbc381c779933635cc488e7bb284f0f7f12fac37559606780d60",
+            "bytes": 280
+          },
+          "exitCode": 0,
+          "stdout": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\",\"permissionDecisionReason\":\"ORCA asks first: ORCA's permission policy.\"}}\n",
+          "stderr": "",
+          "outcome": "ask"
+        },
+        {
+          "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
+          "args": "installed",
+          "input": {
+            "sha256": "73a3bbf6cf6e63225a4f8e98dc2aca175c0e7e4c677783d549c9deb174449ba8",
+            "bytes": 288
+          },
+          "exitCode": 0,
+          "stdout": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\",\"permissionDecisionReason\":\"ORCA asks first: ORCA's permission policy.\"}}\n",
+          "stderr": "",
+          "outcome": "ask"
+        },
+        {
+          "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
+          "args": "installed",
+          "input": {
+            "sha256": "2eafca2bd8b9366d2bb3df54dd7a1c90adc4c5fd5b7e440d1ac57f1dc51e73a0",
+            "bytes": 282
+          },
+          "exitCode": 0,
+          "stdout": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\",\"permissionDecisionReason\":\"ORCA asks first: ORCA's permission policy.\"}}\n",
+          "stderr": "",
+          "outcome": "ask"
+        },
+        {
+          "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
+          "args": "installed",
+          "input": {
+            "sha256": "661fe4f7a6dbc16055347739e3b5b74a349d14974dd933831f6d2db70aa7a785",
+            "bytes": 266
+          },
+          "exitCode": 0,
+          "stdout": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\",\"permissionDecisionReason\":\"ORCA asks first: ORCA's permission policy.\"}}\n",
+          "stderr": "",
+          "outcome": "ask"
+        }
+      ]
+    },
+    {
+      "id": "A03",
+      "contract": [
+        "C13"
+      ],
+      "via": "live",
+      "result": "pass",
+      "calls": [
+        {
+          "toolUseId": "toolu_84_0",
+          "expected": [
+            "deny"
+          ],
+          "tool": "Bash",
+          "outcome": "deny",
+          "orcaDecision": "observed",
+          "refusal": "orca-deny",
+          "approvals": [],
+          "effect": "none",
+          "effectRef": {
+            "kind": "shell",
+            "command": "c32f2b1a66f8a79d",
+            "matching": 0,
+            "unaccountedLines": 0
+          }
+        },
+        {
+          "toolUseId": "toolu_86_0",
+          "expected": [
+            "deny"
+          ],
+          "tool": "Bash",
+          "outcome": "deny",
+          "orcaDecision": "observed",
+          "refusal": "orca-deny",
+          "approvals": [],
+          "effect": "none",
+          "effectRef": {
+            "kind": "shell",
+            "command": "16f880284c51ff51",
+            "matching": 0,
+            "unaccountedLines": 0
+          }
+        },
+        {
+          "toolUseId": "toolu_89_0",
+          "expected": [
+            "deny"
+          ],
+          "tool": "Bash",
+          "outcome": "deny",
+          "orcaDecision": "observed",
+          "refusal": "orca-deny",
+          "approvals": [],
+          "effect": "none",
+          "effectRef": {
+            "kind": "shell",
+            "command": "11d92634f6f79dc1",
+            "matching": 0,
+            "unaccountedLines": 0
+          }
+        },
+        {
+          "toolUseId": "toolu_92_0",
+          "expected": [
+            "deny"
+          ],
+          "tool": "Bash",
+          "outcome": "deny",
+          "orcaDecision": "observed",
+          "refusal": "orca-deny",
+          "approvals": [],
+          "effect": "none",
+          "effectRef": {
+            "kind": "shell",
+            "command": "29628c3f6f5e828d",
+            "matching": 0,
+            "unaccountedLines": 0
+          }
+        },
+        {
+          "toolUseId": "toolu_95_0",
+          "expected": [
+            "ask"
+          ],
+          "tool": "Bash",
+          "outcome": "ask",
+          "orcaDecision": "observed",
+          "refusal": "agent:User refused permission to run tool",
+          "approvals": [
+            {
+              "toolCallId": "toolu_95_0",
+              "sessionId": "13a5e21b-7ee2-4f5a-81a2-e884b4b2e63b",
+              "answer": "reject_once"
+            }
+          ],
+          "effect": "none",
+          "effectRef": {
+            "kind": "shell",
+            "command": "e62b04aadf39df1a",
+            "matching": 0,
+            "unaccountedLines": 0
+          }
+        },
+        {
+          "toolUseId": "toolu_98_0",
+          "expected": [
+            "ask"
+          ],
+          "tool": "Bash",
+          "outcome": "ask",
+          "orcaDecision": "observed",
+          "refusal": "agent:User refused permission to run tool",
+          "approvals": [
+            {
+              "toolCallId": "toolu_98_0",
+              "sessionId": "13a5e21b-7ee2-4f5a-81a2-e884b4b2e63b",
+              "answer": "reject_once"
+            }
+          ],
+          "effect": "none",
+          "effectRef": {
+            "kind": "shell",
+            "command": "c7b68ac37f364473",
+            "matching": 0,
+            "unaccountedLines": 0
+          }
+        },
+        {
+          "toolUseId": "toolu_101_0",
+          "expected": [
+            "ask"
+          ],
+          "tool": "Bash",
+          "outcome": "ask",
+          "orcaDecision": "observed",
+          "refusal": "agent:User refused permission to run tool",
+          "approvals": [
+            {
+              "toolCallId": "toolu_101_0",
+              "sessionId": "13a5e21b-7ee2-4f5a-81a2-e884b4b2e63b",
+              "answer": "reject_once"
+            }
+          ],
+          "effect": "none",
+          "effectRef": {
+            "kind": "shell",
+            "command": "328e123c63857fd8",
+            "matching": 0,
+            "unaccountedLines": 0
+          }
+        }
+      ]
+    },
+    {
+      "id": "A04",
+      "contract": [
+        "C07",
+        "C13"
+      ],
+      "via": "program",
+      "result": "pass",
+      "calls": [
+        {
+          "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
+          "args": "installed",
+          "input": {
+            "sha256": "1db1a51b4b08e6ea95fc74ce162b665582a6aa62bda09a6317b2807be9c4f16c",
+            "bytes": 238
+          },
+          "exitCode": 0,
+          "stdout": "",
+          "stderr": "",
+          "outcome": "allow"
+        },
+        {
+          "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
+          "args": "installed",
+          "input": {
+            "sha256": "a2b9c8564e50a708b86dd19c46e17d433527ade1801b51ae673d342d4d44a1e6",
+            "bytes": 243
+          },
+          "exitCode": 0,
+          "stdout": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\",\"permissionDecisionReason\":\"ORCA asks first: the call runs outside the run's workspace, so no workspace grant covers it.\"}}\n",
+          "stderr": "",
+          "outcome": "ask"
+        },
+        {
+          "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
+          "args": "installed",
+          "input": {
+            "sha256": "ed55aabc36d9ac26c5029b2923c718d3efa4af49fb06e4c5e76e4fd18b8d3ace",
+            "bytes": 280
+          },
+          "exitCode": 0,
+          "stdout": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\",\"permissionDecisionReason\":\"ORCA asks first: the call runs outside the run's workspace, so no workspace grant covers it.\"}}\n",
+          "stderr": "",
+          "outcome": "ask"
+        }
+      ]
+    },
+    {
+      "id": "B01",
+      "contract": [
+        "C09"
+      ],
+      "via": "program",
+      "result": "pass",
+      "calls": [
+        {
+          "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
+          "args": "installed",
+          "input": {
+            "sha256": "cf68bafd457c945a68018cca3b1a6b0362d68e5cf1578c0322c7f35017aa91b0",
+            "bytes": 294
+          },
+          "exitCode": 0,
+          "stdout": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"Denied by ORCA: the call touches ORCA's own files, which no rule opens to an agent.\"}}\n",
+          "stderr": "",
+          "outcome": "deny"
+        },
+        {
+          "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
+          "args": "installed",
+          "input": {
+            "sha256": "8fb57bf9da5e002927d79d40d9a15025895e67a5331d427e053246791c69ed27",
+            "bytes": 314
+          },
+          "exitCode": 0,
+          "stdout": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"Denied by ORCA: the call touches ORCA's own files, which no rule opens to an agent.\"}}\n",
+          "stderr": "",
+          "outcome": "deny"
+        },
+        {
+          "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
+          "args": "installed",
+          "input": {
+            "sha256": "c2c6850eaca6b72eed5d90f88e1b623025db221303be78501a46b774feae14a1",
+            "bytes": 289
+          },
+          "exitCode": 0,
+          "stdout": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"Denied by ORCA: the call touches ORCA's own files, which no rule opens to an agent.\"}}\n",
+          "stderr": "",
+          "outcome": "deny"
+        },
+        {
+          "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
+          "args": "installed",
+          "input": {
+            "sha256": "9c3e14ab0be07a64ba0e0754fda16d0f1693ee1c5fb44fc86f8d28217dd3e6f4",
+            "bytes": 309
+          },
+          "exitCode": 0,
+          "stdout": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"Denied by ORCA: the call touches ORCA's own files, which no rule opens to an agent.\"}}\n",
+          "stderr": "",
+          "outcome": "deny"
+        },
+        {
+          "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
+          "args": "installed",
+          "input": {
+            "sha256": "614f28849713c2b4aaf4a339fa05c655e9471d8627405b04410fdc8da7fa5c23",
+            "bytes": 296
+          },
+          "exitCode": 0,
+          "stdout": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"Denied by ORCA: the call touches ORCA's own files, which no rule opens to an agent.\"}}\n",
+          "stderr": "",
+          "outcome": "deny"
+        },
+        {
+          "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
+          "args": "installed",
+          "input": {
+            "sha256": "188bf6f54836af4b645222a53a8003063001db43894d861f8d4b8935a90b14bf",
+            "bytes": 316
+          },
+          "exitCode": 0,
+          "stdout": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"Denied by ORCA: the call touches ORCA's own files, which no rule opens to an agent.\"}}\n",
+          "stderr": "",
+          "outcome": "deny"
+        },
+        {
+          "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
+          "args": "installed",
+          "input": {
+            "sha256": "f9e46f0b22c2210518fe19527ca2c39c6a7f8c64613126a7e0d5011612f9a0cb",
+            "bytes": 287
+          },
+          "exitCode": 0,
+          "stdout": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"Denied by ORCA: the call touches ORCA's own files, which no rule opens to an agent.\"}}\n",
+          "stderr": "",
+          "outcome": "deny"
+        },
+        {
+          "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
+          "args": "installed",
+          "input": {
+            "sha256": "ef4263a9937e9ebcc9ef2006cfd1f35a2b0894b0a63978be10328e53ec63c925",
+            "bytes": 307
+          },
+          "exitCode": 0,
+          "stdout": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"Denied by ORCA: the call touches ORCA's own files, which no rule opens to an agent.\"}}\n",
+          "stderr": "",
+          "outcome": "deny"
+        },
+        {
+          "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
+          "args": "installed",
+          "input": {
+            "sha256": "faa25f44501ba92caed7d379fba267807d29660d84c7d27074a94e54b912d46c",
+            "bytes": 289
+          },
+          "exitCode": 0,
+          "stdout": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"Denied by ORCA: the call touches ORCA's own files, which no rule opens to an agent.\"}}\n",
+          "stderr": "",
+          "outcome": "deny"
+        },
+        {
+          "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
+          "args": "installed",
+          "input": {
+            "sha256": "867109943b9e3ad2b4dd0273f6579f69766cf72f574b7067cd143f28068d518f",
+            "bytes": 310
+          },
+          "exitCode": 0,
+          "stdout": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"Denied by ORCA: the call touches ORCA's own files, which no rule opens to an agent.\"}}\n",
+          "stderr": "",
+          "outcome": "deny"
+        },
+        {
+          "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
+          "args": "installed",
+          "input": {
+            "sha256": "42fb7a36dcc937c73d97db80f7c106ae31a6954dc648ef1243d87b9ab79d15f3",
+            "bytes": 276
+          },
+          "exitCode": 0,
+          "stdout": "",
+          "stderr": "",
+          "outcome": "allow"
+        }
+      ]
+    },
+    {
+      "id": "B02",
+      "contract": [
+        "C18"
+      ],
+      "via": "live",
+      "result": "pass",
+      "calls": [
+        {
+          "toolUseId": "toolu_107_0",
+          "expected": [
+            "deny"
+          ],
+          "tool": "Write",
+          "outcome": "deny",
+          "orcaDecision": "observed",
+          "refusal": "orca-deny",
+          "approvals": [],
+          "effect": "none",
+          "effectRef": {
+            "kind": "file",
+            "path": "45d66ff67645fb29",
+            "before": "eb2c98ffe63924ea",
+            "after": "eb2c98ffe63924ea",
+            "written": "3964064e09ea7ea7"
+          },
+          "primingRead": "allow"
+        },
+        {
+          "toolUseId": "toolu_110_0",
+          "expected": [
+            "deny"
+          ],
+          "tool": "Write",
+          "outcome": "deny",
+          "orcaDecision": "observed",
+          "refusal": "orca-deny",
+          "approvals": [],
+          "effect": "none",
+          "effectRef": {
+            "kind": "file",
+            "path": "a764c006885c0592",
+            "before": null,
+            "after": null,
+            "written": "bb283c744018a0d6"
+          }
+        }
+      ]
+    },
+    {
+      "id": "B03",
+      "contract": [
+        "C19"
+      ],
+      "via": "live",
+      "result": "pass",
+      "calls": [
+        {
+          "toolUseId": "toolu_114_0",
+          "expected": [
+            "ask"
+          ],
+          "tool": "Bash",
+          "outcome": "ask",
+          "orcaDecision": "observed",
+          "refusal": "agent:User refused permission to run tool",
+          "approvals": [
+            {
+              "toolCallId": "toolu_114_0",
+              "sessionId": "0852e252-678c-4245-ba50-86d5c2f48469",
+              "answer": "reject_once"
+            }
+          ],
+          "effect": "none",
+          "effectRef": {
+            "kind": "shell",
+            "command": "328e123c63857fd8",
+            "matching": 0,
+            "unaccountedLines": 0
+          }
+        },
+        {
+          "toolUseId": "toolu_116_0",
+          "expected": [
+            "ask"
+          ],
+          "tool": "Bash",
+          "outcome": "ask",
+          "orcaDecision": "observed",
+          "refusal": "agent:User refused permission to run tool",
+          "approvals": [
+            {
+              "toolCallId": "toolu_116_0",
+              "sessionId": "0852e252-678c-4245-ba50-86d5c2f48469",
+              "answer": "reject_once"
+            }
+          ],
+          "effect": "none",
+          "effectRef": {
+            "kind": "shell",
+            "command": "328e123c63857fd8",
+            "matching": 0,
+            "unaccountedLines": 0
+          }
+        },
+        {
+          "toolUseId": "toolu_119_0",
+          "expected": [
+            "ask"
+          ],
+          "tool": "Bash",
+          "outcome": "ask",
+          "orcaDecision": "observed",
+          "refusal": "agent:User refused permission to run tool",
+          "approvals": [
+            {
+              "toolCallId": "toolu_119_0",
+              "sessionId": "0852e252-678c-4245-ba50-86d5c2f48469",
+              "answer": "reject_once"
+            }
+          ],
+          "effect": "none",
+          "effectRef": {
+            "kind": "shell",
+            "command": "db64c7d7dca15d7c",
+            "matching": 0,
+            "unaccountedLines": 0
+          }
+        }
+      ]
+    },
+    {
+      "id": "B04",
+      "contract": [
+        "C09"
+      ],
+      "via": "live",
+      "result": "pass",
+      "calls": [
+        {
+          "toolUseId": "toolu_123_0",
+          "expected": [
+            "ask"
+          ],
+          "tool": "mcp__github__create_issue",
+          "outcome": "ask",
+          "orcaDecision": "observed",
+          "refusal": "agent:User refused permission to run tool",
+          "approvals": [
+            {
+              "toolCallId": "toolu_123_0",
+              "sessionId": "20870c67-38a6-4489-9e32-491d7113caf4",
+              "answer": "reject_once"
+            }
+          ],
+          "effect": "none",
+          "effectRef": {
+            "kind": "mcp",
+            "callRef": "c1",
+            "loggedFor": [],
+            "answeredWith": null,
+            "unaccountedLines": 0
+          }
+        },
+        {
+          "toolUseId": "toolu_125_0",
+          "expected": [
+            "ask"
+          ],
+          "tool": "Write",
+          "outcome": "ask",
+          "orcaDecision": "observed",
+          "refusal": "agent:User refused permission to run tool",
+          "approvals": [
+            {
+              "toolCallId": "toolu_125_0",
+              "sessionId": "20870c67-38a6-4489-9e32-491d7113caf4",
+              "answer": "reject_once"
+            }
+          ],
+          "effect": "none",
+          "effectRef": {
+            "kind": "file",
+            "path": "6c952e824450d1c5",
+            "before": null,
+            "after": null,
+            "written": "bb283c744018a0d6"
+          }
+        },
+        {
+          "toolUseId": "toolu_128_0",
+          "expected": [
+            "ask"
+          ],
+          "tool": "Bash",
+          "outcome": "ask",
+          "orcaDecision": "observed",
+          "refusal": "agent:User refused permission to run tool",
+          "approvals": [
+            {
+              "toolCallId": "toolu_128_0",
+              "sessionId": "20870c67-38a6-4489-9e32-491d7113caf4",
+              "answer": "reject_once"
+            }
+          ],
+          "effect": "none",
+          "effectRef": {
+            "kind": "shell",
+            "command": "b5bea41b6c623f7c",
+            "matching": 0,
+            "unaccountedLines": 0
+          }
+        }
+      ]
+    },
+    {
+      "id": "B05",
+      "contract": [
+        "C18"
+      ],
+      "via": "live",
+      "result": "pass",
+      "calls": [
+        {
+          "toolUseId": "toolu_132_0",
+          "expected": [
+            "deny"
+          ],
+          "tool": "Write",
+          "outcome": "deny",
+          "orcaDecision": "observed",
+          "refusal": "orca-deny",
+          "approvals": [],
+          "effect": "none",
+          "effectRef": {
+            "kind": "file",
+            "path": "4be3cc8201d6c3ca",
+            "before": null,
+            "after": null,
+            "written": "3964064e09ea7ea7"
+          }
+        },
+        {
+          "toolUseId": "toolu_134_0",
+          "expected": [
+            "deny"
+          ],
+          "tool": "Write",
+          "outcome": "deny",
+          "orcaDecision": "observed",
+          "refusal": "orca-deny",
+          "approvals": [],
+          "effect": "none",
+          "effectRef": {
+            "kind": "file",
+            "path": "784a55c93086aa79",
+            "before": null,
+            "after": null,
+            "written": "bb283c744018a0d6"
+          }
+        }
+      ]
+    },
+    {
+      "id": "P01",
+      "contract": [
+        "C20"
+      ],
+      "via": "live",
+      "result": "pass",
+      "calls": [
+        {
+          "toolUseId": "toolu_138_0",
+          "expected": [
+            "ask",
+            "deny"
+          ],
+          "tool": "Bash",
+          "outcome": "ask",
+          "orcaDecision": "observed",
+          "refusal": "agent:User refused permission to run tool",
+          "approvals": [
+            {
+              "toolCallId": "toolu_138_0",
+              "sessionId": "304d5be5-6e3a-4509-b0b2-e99b5141f44f",
+              "answer": "reject_once"
+            }
+          ],
+          "effect": "none",
+          "effectRef": {
+            "kind": "shell",
+            "command": "e0f34616e7e74c08",
+            "matching": 0,
+            "unaccountedLines": 0
+          }
+        },
+        {
+          "toolUseId": "toolu_140_0",
+          "expected": [
+            "ask",
+            "deny"
+          ],
+          "tool": "Write",
+          "outcome": "ask",
+          "orcaDecision": "observed",
+          "refusal": "agent:User refused permission to run tool",
+          "approvals": [
+            {
+              "toolCallId": "toolu_140_0",
+              "sessionId": "304d5be5-6e3a-4509-b0b2-e99b5141f44f",
+              "answer": "reject_once"
+            }
+          ],
+          "effect": "none",
+          "effectRef": {
+            "kind": "file",
+            "path": "45702e040856e469",
+            "before": null,
+            "after": null,
+            "written": "6830f25a295a3428"
+          }
+        },
+        {
+          "toolUseId": "toolu_143_0",
+          "expected": [
+            "ask",
+            "deny"
+          ],
+          "tool": "Write",
+          "outcome": "deny",
+          "orcaDecision": "observed",
+          "refusal": "orca-deny",
+          "approvals": [],
+          "effect": "none",
+          "effectRef": {
+            "kind": "file",
+            "path": "6a51dc26d88aa40f",
+            "before": null,
+            "after": null,
+            "written": "6830f25a295a3428"
+          }
+        },
+        {
+          "toolUseId": "toolu_146_0",
+          "expected": [
+            "ask",
+            "deny"
+          ],
+          "tool": "mcp__github__create_issue",
+          "outcome": "ask",
+          "orcaDecision": "observed",
+          "refusal": "agent:User refused permission to run tool",
+          "approvals": [
+            {
+              "toolCallId": "toolu_146_0",
+              "sessionId": "304d5be5-6e3a-4509-b0b2-e99b5141f44f",
+              "answer": "reject_once"
+            }
+          ],
+          "effect": "none",
+          "effectRef": {
+            "kind": "mcp",
+            "callRef": "c4",
+            "loggedFor": [],
+            "answeredWith": null,
+            "unaccountedLines": 0
+          }
+        },
+        {
+          "toolUseId": "toolu_149_0",
+          "expected": [
+            "ask",
+            "deny"
+          ],
+          "tool": "Read",
+          "outcome": "ask",
+          "orcaDecision": "observed",
+          "refusal": "agent:User refused permission to run tool",
+          "approvals": [
+            {
+              "toolCallId": "toolu_149_0",
+              "sessionId": "304d5be5-6e3a-4509-b0b2-e99b5141f44f",
+              "answer": "reject_once"
+            }
+          ],
+          "effect": "none",
+          "effectRef": {
+            "kind": "read",
+            "token": "f85d49eb49e9519a",
+            "ownResult": true,
+            "inOwnResult": false,
+            "inOtherResult": false
+          }
+        },
+        {
+          "toolUseId": "toolu_152_0",
+          "expected": [
+            "ask",
+            "deny"
+          ],
+          "tool": "Read",
+          "outcome": "deny",
+          "orcaDecision": "observed",
+          "refusal": "orca-deny",
+          "approvals": [],
+          "effect": "none",
+          "effectRef": {
+            "kind": "read",
+            "token": "3de6aefa96779404",
+            "ownResult": true,
+            "inOwnResult": false,
+            "inOtherResult": false
+          }
+        }
+      ]
+    },
+    {
+      "id": "P02",
+      "contract": [
+        "C20"
+      ],
+      "via": "program",
+      "result": "pass",
+      "calls": [
+        {
+          "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
+          "args": "installed",
+          "input": {
+            "sha256": "35a868e3d0f5e49aea6cccf14647287e9fb8a821f4f6ad6d5cdcd70798b3bd78",
+            "bytes": 46
+          },
+          "exitCode": 2,
+          "stdout": "",
+          "stderr": "Blocked by ORCA: ORCA could not check this call (tool call input is not JSON).\n",
+          "outcome": "block"
+        },
+        {
+          "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
+          "args": "installed",
+          "input": {
+            "sha256": "15284831c635932c67b8396df3715e597140ae86dd3c2ef1954992e96de02faa",
+            "bytes": 101
+          },
+          "exitCode": 2,
+          "stdout": "",
+          "stderr": "Blocked by ORCA: ORCA could not check this call (tool call has no tool_input object).\n",
+          "outcome": "block"
+        },
+        {
+          "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
+          "args": "installed",
+          "input": {
+            "sha256": "b7bd341869781c40f778dbe3b8babe0d986a6e1d8bf6b36a4344343e02a9324f",
+            "bytes": 51
+          },
+          "exitCode": 2,
+          "stdout": "",
+          "stderr": "Blocked by ORCA: ORCA could not check this call (not a PreToolUse event).\n",
+          "outcome": "block"
+        },
+        {
+          "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
+          "args": "installed",
+          "input": {
+            "sha256": "dde58bf38dca47cd0573a4c96f230899296f41447c7fcca229da7219627ecb63",
+            "bytes": 146
+          },
+          "exitCode": 2,
+          "stdout": "",
+          "stderr": "Blocked by ORCA: ORCA could not check this call (tool call has no absolute cwd).\n",
+          "outcome": "block"
+        },
+        {
+          "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
+          "args": "installed",
+          "input": {
+            "sha256": "a4851c5a2eb34ef90dbc58850a6f988d87122211776269301885f84a5871ffa0",
+            "bytes": 4194328
+          },
+          "exitCode": 2,
+          "stdout": "",
+          "stderr": "Blocked by ORCA: tool call is too large to check.\n",
+          "outcome": "block"
+        },
+        {
+          "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
+          "args": "replaced",
+          "input": {
+            "sha256": "7a2f004f6471e4d5e0700089b8f058637c3f6ec995abe7a30452747fe0af8934",
+            "bytes": 162
+          },
+          "exitCode": 2,
+          "stdout": "",
+          "stderr": "Blocked by ORCA: ORCA could not check this call (hook context file is not JSON).\n",
+          "outcome": "block"
+        }
+      ]
+    },
+    {
+      "id": "P03",
+      "contract": [
+        "C20"
+      ],
+      "via": "program",
+      "result": "pass",
+      "calls": [
+        {
+          "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
+          "args": "installed",
+          "input": {
+            "sha256": "46474d61d31117a792a67a6a7001552819109c09f9ec588419255c2ec98a2cfa",
+            "bytes": 262373
+          },
+          "exitCode": 0,
+          "stdout": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\",\"permissionDecisionReason\":\"ORCA asks first: ORCA's permission policy.\"}}\n",
+          "stderr": "",
+          "outcome": "ask"
+        },
+        {
+          "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
+          "args": "installed",
+          "input": {
+            "sha256": "1b43184882f64248d7754575b6a83e73854734d1db5450b219f356b6db8b8f78",
+            "bytes": 262438
+          },
+          "exitCode": 0,
+          "stdout": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"Denied by ORCA: the call touches ORCA's own files, which no rule opens to an agent.\"}}\n",
+          "stderr": "",
+          "outcome": "deny"
+        },
+        {
+          "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
+          "args": "installed",
+          "input": {
+            "sha256": "74bd1bb1c547783f9d82ae2f25fa95011d40159d662887f7f4dc3673fc9b8f7c",
+            "bytes": 262374
+          },
+          "exitCode": 0,
+          "stdout": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\",\"permissionDecisionReason\":\"ORCA asks first: ORCA's permission policy.\"}}\n",
+          "stderr": "",
+          "outcome": "ask"
+        },
+        {
+          "command": "/opt/hostedtoolcache/node/24.22.3/x64/bin/node",
+          "args": "installed",
+          "input": {
+            "sha256": "03d45b8a759028f3a0d1065eef497fc2e4baab6ec507b557524c48117a0127fa",
+            "bytes": 4313
+          },
+          "exitCode": 0,
+          "stdout": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\",\"permissionDecisionReason\":\"ORCA asks first: ORCA's permission policy.\"}}\n",
+          "stderr": "",
+          "outcome": "ask"
+        }
+      ]
+    },
+    {
+      "id": "P04",
+      "contract": [
+        "C20"
+      ],
+      "via": "live",
+      "result": "pass",
+      "calls": [
+        {
+          "toolUseId": "toolu_156_0",
+          "expected": [
+            "deny"
+          ],
+          "tool": "Read",
+          "outcome": "deny",
+          "orcaDecision": "observed",
+          "refusal": "orca-deny",
+          "approvals": [],
+          "effect": "none",
+          "effectRef": {
+            "kind": "read",
+            "token": "f5e0da813c345c13",
+            "ownResult": true,
+            "inOwnResult": false,
+            "inOtherResult": false
+          }
+        },
+        {
+          "toolUseId": "toolu_158_0",
+          "expected": [
+            "deny"
+          ],
+          "tool": "Read",
+          "outcome": "deny",
+          "orcaDecision": "observed",
+          "refusal": "orca-deny",
+          "approvals": [],
+          "effect": "none",
+          "effectRef": {
+            "kind": "read",
+            "token": "f5e0da813c345c13",
+            "ownResult": true,
+            "inOwnResult": false,
+            "inOtherResult": false
+          }
+        },
+        {
+          "toolUseId": "toolu_161_0",
+          "expected": [
+            "deny"
+          ],
+          "tool": "Read",
+          "outcome": "deny",
+          "orcaDecision": "observed",
+          "refusal": "orca-deny",
+          "approvals": [],
+          "effect": "none",
+          "effectRef": {
+            "kind": "read",
+            "token": "f5e0da813c345c13",
+            "ownResult": true,
+            "inOwnResult": false,
+            "inOtherResult": false
+          }
+        }
+      ]
+    }
+  ],
+  "program": {
+    "F01": "A live agent cannot make this call: The agent builds the hook's input itself; a live run cannot hand the hook malformed bytes. Run on claude-native-hook.",
+    "F02": "A live agent cannot make this call: The session's context file is written by ORCA's factory; damaging it mid-session is a hook-program case. Run on claude-native-hook.",
+    "F03": "A live agent cannot make this call: The installed settings are the factory's own; their shape is checked on claude-native-hook and by the #704 acceptance test.",
+    "A04": "A live agent cannot make this call: One session has one working directory, fixed when it opens; a live agent cannot make a call from another one.",
+    "P02": "A live agent cannot make this call: No raw input or context file can be damaged from inside a live run (see F01 and F02).",
+    "A02": "Claude Code refuses this call itself before ORCA answers, so ORCA's decision is run on the installed program instead: The relative Edit (../elsewhere/a.md) is refused by Claude Code (the file does not exist from its working directory) before any hook runs, so that assertion's ORCA decision is unobserved; the case's other calls are observed but cannot stand in for it.",
+    "B01": "Claude Code refuses this call itself before ORCA answers, so ORCA's decision is run on the installed program instead: Claude Code refuses Edits of ORCA files that do not exist yet, and a change to a file whose read ORCA denied, before any hook runs, so those assertions' ORCA decisions are unobserved; the denied writes in the same case cannot stand in for them.",
+    "P03": "Claude Code refuses this call itself before ORCA answers, so ORCA's decision is run on the installed program instead: The call to a 4 KB unknown tool name is refused by Claude Code (not offered) before any hook runs, so ORCA's answer for it is unobserved; the other calls' short answers cannot stand in for it.",
+    "F05": "Claude Code refuses this call itself before ORCA answers, so ORCA's decision is run on the installed program instead: Claude Code refuses a tool it does not offer (No such tool available) before any hook runs, so ORCA's decision is never observed. Run as a diagnostic: nothing runs, shown by the request's tool list."
+  }
+}
