@@ -10,6 +10,7 @@ import {
   type FirstRunOwnership,
 } from "../../src/main/first-run/ownership.js";
 import { syntheticFirstRunWriter } from "../fixtures/synthetic-first-run-writer.js";
+import { selectFenceDirectory } from "../../../protocol/test/fixtures/fence-ports.js";
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -19,6 +20,9 @@ afterEach(async () => {
 export async function selected() {
   const path = await mkdtemp(join(process.cwd(), ".orca-compaction-test-"));
   roots.push(path);
+  // A workspace whose first-run fence port lies outside kernel autobind (#1088), so no
+  // worker's outgoing loopback socket can hold it.
+  await selectFenceDirectory(path, [], { firstRun: true });
   await writeFile(join(path, "orca.config.yaml"), "synthetic config\n");
   return path;
 }

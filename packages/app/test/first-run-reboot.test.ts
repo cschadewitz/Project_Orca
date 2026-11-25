@@ -16,6 +16,7 @@ import {
 } from "../src/main/first-run/ownership.js";
 import { FirstRunRecovery, endPreviousBootSession } from "../src/main/first-run/recovery.js";
 import { FirstRunSetup, type FirstRunDeps } from "../src/main/first-run/setup.js";
+import { selectFenceDirectory } from "../../protocol/test/fixtures/fence-ports.js";
 import { syntheticFirstRunWriter } from "./fixtures/synthetic-first-run-writer.js";
 
 // A restart, as the fence observes it: the same host, a new boot identity.
@@ -42,6 +43,8 @@ async function rig() {
     project = join(root, "project"),
     workspace = join(root, "workspace");
   for (const path of [home, project, workspace]) await mkdir(path);
+  // Its first-run fence port lies outside kernel autobind (#1088).
+  await selectFenceDirectory(workspace, [], { firstRun: true });
   const run = (...args: string[]) => execFileSync("git", ["-C", project, ...args], { stdio: "pipe" });
   run("init", "-b", "prepared");
   run("-c", "user.name=F", "-c", "user.email=f@example.invalid", "commit", "--allow-empty", "--no-gpg-sign", "-m", "f");

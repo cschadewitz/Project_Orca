@@ -1,9 +1,9 @@
-/** The fixture-side guard against kernel-fence port collisions under parallel workers (#807, #819). */
+/** The fixture-side guard against kernel-fence port collisions under parallel workers (#807, #819, #1088). */
 import { cp, mkdir, mkdtemp, readdir, rm, writeFile, readFile } from "node:fs/promises";
 import { createServer, connect, type AddressInfo } from "node:net";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
-import { fenceDirectory } from "@orca/protocol/first-run-fence";
+import { fenceDirectory, fencePort } from "@orca/protocol/first-run-fence";
 import {
   autobindRange,
   clearOfAutobind,
@@ -64,6 +64,23 @@ it("selects an empty directory whose slots, under every alias, avoid the autobin
     expect(port < low || port > high).toBe(true);
   // Rejected directories never outlive selection.
   expect(await readdir(join(root, "home"))).toEqual(["ORCA"]);
+});
+
+it("selects a workspace whose first-run fence port, and on request its update-window slots, avoid autobind", async () => {
+  const root = await base();
+  const [low, high] = autobindRange();
+  const clear = (port: number) => port < low || port > high;
+  const workspace = join(root, "workspace");
+  await mkdir(workspace, { mode: 0o700 });
+  await selectFenceDirectory(workspace, [], { firstRun: true });
+  expect(clear(fencePort(fenceDirectory(workspace)))).toBe(true);
+  const both = join(root, "both");
+  await mkdir(both, { mode: 0o700 });
+  await selectFenceDirectory(both, [], { updateWindow: true, firstRun: true });
+  const identity = fenceDirectory(both);
+  expect([fencePort(identity), ...fencePorts(identity)].every(clear)).toBe(true);
+  expect(clearOfAutobind(identity, [both], { updateWindow: true, firstRun: true })).toBe(true);
+  expect((await readdir(root)).sort()).toEqual(["both", "workspace"]);
 });
 
 it("copies a directory to a new inode clear of the autobind range, keeping its bytes", async () => {
