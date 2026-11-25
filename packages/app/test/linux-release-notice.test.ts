@@ -234,19 +234,28 @@ it("refuses to follow a redirect, so a hop cannot move the check off the allowed
   }
 });
 
-// The Orrery rename bridge (v0.8.1). rename-keep-start: both names on purpose
+// The Orrery rename bridge (v0.8.1). Only the names from before the rename are kept
+// (`rename-keep` on each line), as in the source's REPOSITORIES and PACKAGE_PREFIXES; the rest
+// follows the rename.
 describe("across the Orrery rename", () => {
-  const renamed = (tag: string) => {
+  const withPackage = (tag: string, prefix: string) => {
     const version = tag.replace(/^v/, "");
-    return { tag_name: tag, draft: false, prerelease: false, assets: [{ name: `Orrery-${version}-linux-amd64.deb` }] };
+    return {
+      tag_name: tag,
+      draft: false,
+      prerelease: false,
+      assets: [{ name: `${prefix}-${version}-linux-amd64.deb` }],
+    };
   };
+  const renamed = (tag: string) => withPackage(tag, "Orrery");
+  const beforeTheRename = (tag: string) => withPackage(tag, "ORCA"); // rename-keep: the package prefix up to v0.8
 
   it("offers a release whose package carries either name", () => {
     expect(newerRelease([renamed("v0.9.0")], "0.8.1", "x64", {})?.installCommand).toBe(
       "sudo apt install ./Orrery-0.9.0-linux-amd64.deb",
     );
-    expect(newerRelease([release("v0.8.2")], "0.8.1", "x64", {})?.installCommand).toBe(
-      "sudo apt install ./ORCA-0.8.2-linux-amd64.deb",
+    expect(newerRelease([beforeTheRename("v0.8.2")], "0.8.1", "x64", {})?.installCommand).toBe(
+      "sudo apt install ./ORCA-0.8.2-linux-amd64.deb", // rename-keep: the package prefix up to v0.8
     );
     expect(newerRelease([renamed("v0.9.0")], "0.8.1", "arm64", {})).toBeUndefined();
     const other = { ...renamed("v0.9.0"), assets: [{ name: "Kepler-0.9.0-linux-amd64.deb" }] };
@@ -256,7 +265,7 @@ describe("across the Orrery rename", () => {
   it("asks both repositories, and nothing else", () => {
     expect(new Set(RELEASES_URLS)).toEqual(
       new Set([
-        "https://api.github.com/repos/cschadewitz/Project_Orca/releases?per_page=30",
+        "https://api.github.com/repos/cschadewitz/Project_Orca/releases?per_page=30", // rename-keep: the repository up to v0.8
         "https://api.github.com/repos/cschadewitz/Orrery/releases?per_page=30",
       ]),
     );
@@ -290,4 +299,3 @@ describe("across the Orrery rename", () => {
     expect(changed).not.toHaveBeenCalled();
   });
 });
-// rename-keep-end
