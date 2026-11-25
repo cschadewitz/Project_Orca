@@ -329,6 +329,18 @@ with a `PreToolUse` hook it installs in the agent's sessions (#704, #705).
 > Calls the hook does not see, per agent, are listed in
 > [agent-hook-coverage.md](agent-hook-coverage.md). Treat it as an extra layer, not a sandbox.
 
+> **Codex: read the IPC caveat before you opt in.** The hook decides whether Codex may run a
+> command or apply a patch. It does not see what an allowed command then connects to. On the
+> same machine that can include programs listening on unix sockets, local TCP ports or named
+> pipes, such as a desktop session bus, a container engine's socket, an SSH or credential agent,
+> or a local development server. Through them, an allowed command can make something happen
+> that the hook never decided on. ORCA has not verified that Codex's sandbox keeps a command
+> away from them. When a Codex session opens with the hook, ORCA logs the potential endpoints
+> it observes from its own daemon. See [The IPC caveat](agent-hook-coverage.md#the-ipc-caveat)
+> for what that list covers. The list is a diagnostic, not a control or a proof. When it
+> finds nothing, the log says "None detected at startup; isolation has not been verified."
+> Opting in does not loosen Codex's own sandbox or approvals, and nothing here asks you to.
+
 It is opt-in, per agent, with the explicit value `experimental`, which is your acknowledgement
 of the above:
 
