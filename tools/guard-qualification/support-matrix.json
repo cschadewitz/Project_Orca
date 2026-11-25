@@ -140,11 +140,21 @@
     {
       "id": "claude",
       "tuple": "Claude ACP adapter 0.109.1 with Claude Code 2.1.330, linux-x64 (CLAUDE_HOOK_VERIFIED_PAIRS); not pinned here until a trusted receipt exists",
-      "pin": null,
+      "pin": {
+        "agentVersion": "2.1.330",
+        "adapterVersion": "0.109.1",
+        "host": "linux-x64",
+        "build": "41b4a51f515747de173ea80631231bd48fae35f4",
+        "artifacts": {
+          "adapterIntegrity": "sha512-tGT3IH6ey3V7wvFRhxK+1XLYDC6FBUyIehvNBm06/as/HG2MWhC6r8hRffSpS7osnMjARZMfDeLyQB0Wjjm0uQ==",
+          "runtimeSha256": "f390eaa0814e6a1bff74cbb47acb74cb9c89d30ced809fe0af5af00c7bfe8ebb",
+          "hookProgramSha256": "cb7f5fdc807bf1e62bc0c560ce56dc81fadaf2552b87b89f14ee5faa469c7868"
+        }
+      },
       "tier": "none",
       "routes": ["claude-native-hook"],
       "notAsserted": ["A02", "A04", "B01", "F01", "F02", "F03", "F05", "P02", "P03"],
-      "receipts": [],
+      "receipts": ["tools/guard-qualification/receipts/claude-claude-native-hook.json"],
       "unverified": [
         "Any tier: only with nativeToolHook: experimental, on the pinned pair and host; without the hook Claude runs remembered calls without asking ORCA",
         "Behaviour of a real model, which may make calls in shapes the stand-in does not",
