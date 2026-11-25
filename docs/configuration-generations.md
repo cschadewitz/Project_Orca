@@ -8,10 +8,10 @@ save/apply/restoration boundaries below remain relevant; see the
 [capability ledger](ROADMAP.md) for the combined runtime and acceptance limits.
 
 The integrated runtime provides generation capture, restoration, config apply and
-launch provenance. [332-runtime-integration.patch](patches/332-runtime-integration.patch)
+launch provenance. [332-runtime-integration.patch](archive/patches/332-runtime-integration.patch)
 is a historical handoff against preparation commit
 `7abc2342aa672ee9d2f10d565ca4f8eb546184df`; its wiring is already reconciled here.
-Do not reapply it. The post-review corrections are described here; [combined validation](runtime-next-integration.md#review-status-and-final-reconciliation)
+Do not reapply it. The post-review corrections are described here; [combined validation](archive/runtime-next-integration.md#review-status-and-final-reconciliation)
 remains a separate release gate.
 
 ## Saving and activation

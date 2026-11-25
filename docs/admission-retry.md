@@ -4,7 +4,7 @@ This is the feature handoff for issue #331 against the frozen preparation commit
 `9058fa8935ae4c999293727c005031eec93114be`. The feature branch contains the allocated
 modules and three existing exclusive edits. Shared bootstrap, protocol, auth,
 adapter and export changes are supplied separately in
-[`patches/331-operator-integration.patch`](patches/331-operator-integration.patch).
+[`patches/331-operator-integration.patch`](archive/patches/331-operator-integration.patch).
 They are not applied to this branch. This document does not claim production
 capability discovery or combined operator release acceptance.
 

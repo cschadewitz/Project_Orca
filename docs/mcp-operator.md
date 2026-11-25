@@ -4,7 +4,7 @@
 mounts the authenticated MCP reads and ten mutation/receipt aliases. `orca mcp` provides
 stdio; `createOperatorHttpHandler` provides the authenticated Streamable HTTP reference
 handler. The compiled production matrix runs with required mounts in CI on Node 24.
-See the [current evidence map](runtime-operator-integration.md#current-main-evidence-map)
+See the [current evidence map](archive/runtime-operator-integration.md#current-main-evidence-map)
 and [production matrix](mcp-operator-production-acceptance.md). The earlier A/B/C
 handoff and unapplied patch descriptions are historical design evidence, not
 instructions for integrating current main. #327 remains open for the remaining
