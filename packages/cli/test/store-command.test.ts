@@ -8,6 +8,7 @@ import { bootstrap } from "../src/bootstrap.js";
 import { storeCommand } from "../src/commands/store.js";
 import { readStoreFormat, STORE_FORMAT_EPOCH, switchStoreToSqlite } from "@orca/store";
 import type { CommandContext } from "../src/commands/index.js";
+import { STORE_FORMAT_ROW } from "../../app/test/windows-upgrade/store-format-row.js";
 
 /** The opt-in an earlier draft of the switch read; the shipped command must ignore it. */
 const OLD_OPT_IN = "ORCA_IN_PLACE_SQLITE_SWITCH";
@@ -41,8 +42,10 @@ describe("orca store", () => {
     await writeFile(join(dir, "orca.config.yaml"), "version: 1\nworkflows: []\ntemplates: []\n", "utf8");
     const format = ctx(dir, ["format"]);
     expect(await storeCommand(format)).toBe(0);
-    // packages/app/test/windows-upgrade/store-upgrade.spec.ts reads the epoch with this pattern.
-    expect(/^this ORCA\s+(\S+)/m.exec(format.lines.join("\n"))?.[1]).toBe(STORE_FORMAT_EPOCH);
+    // packages/app/test/windows-upgrade/store-upgrade.spec.ts reads the epoch with the same pattern.
+    expect(STORE_FORMAT_ROW.exec(format.lines.join("\n"))?.[1]).toBe(STORE_FORMAT_EPOCH);
+    // A release from before the rename, still the runner's Latest at first, prints the old label.
+    expect(STORE_FORMAT_ROW.exec("this ORCA        7 (ORCA 0.8.0)")?.[1]).toBe("7"); // rename-keep: a pre-rename release's row
   });
 
   it("refuses an older store at startup until carry-forward converts it", async () => {
