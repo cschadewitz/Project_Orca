@@ -5,7 +5,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 
-import { windowsDirectory, windowsFile } from "@orca/protocol/first-run-fence";
+import { firstRunLayout, windowsDirectory, windowsFile } from "@orca/protocol/first-run-fence";
 import { FirstRunRefusal } from "./refusal.js";
 const execute = promisify(execFile);
 export interface DirectoryIdentity {
@@ -101,7 +101,9 @@ export async function emptyDirectory(path: string): Promise<void> {
  */
 export async function verifyRuntimeDirectories(workspace: DirectoryIdentity): Promise<void> {
   if (process.platform !== "win32" && typeof process.getuid !== "function") throw selectionFailure();
-  const pending = [join(workspace.path, ".orca"), join(workspace.path, "auth")];
+  // The store under the name this workspace was set up with (protocol's firstRunLayout).
+  const roots = [firstRunLayout(workspace.path).store, join(workspace.path, "auth")];
+  const pending = [...roots];
   let remaining = 8192;
   while (pending.length) {
     const path = pending.pop()!;
@@ -114,7 +116,7 @@ export async function verifyRuntimeDirectories(workspace: DirectoryIdentity): Pr
       info = await lstat(path, { bigint: true });
     } catch (error) {
       if (
-        (path === join(workspace.path, ".orca") || path === join(workspace.path, "auth")) &&
+        roots.includes(path) &&
         typeof error === "object" &&
         error !== null &&
         "code" in error &&
@@ -124,13 +126,12 @@ export async function verifyRuntimeDirectories(workspace: DirectoryIdentity): Pr
       throw error;
     }
     if (process.platform === "win32") {
-      if ((path === join(workspace.path, ".orca") || path === join(workspace.path, "auth")) && !info.isDirectory())
-        throw runtimeFailure();
+      if (roots.includes(path) && !info.isDirectory()) throw runtimeFailure();
       const identity = info.isDirectory() ? windowsDirectory(path) : windowsFile(path);
       if (identity.dev !== workspace.dev || identity.uid !== workspace.uid) throw runtimeFailure();
     } else if (
       info.isSymbolicLink() ||
-      ((path === join(workspace.path, ".orca") || path === join(workspace.path, "auth")) && !info.isDirectory()) ||
+      (roots.includes(path) && !info.isDirectory()) ||
       (!info.isDirectory() && !info.isFile()) ||
       info.ino <= 0n ||
       String(info.dev) !== workspace.dev ||

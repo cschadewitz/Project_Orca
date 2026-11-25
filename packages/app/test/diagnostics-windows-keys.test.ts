@@ -55,7 +55,9 @@ it("native decrypt failure is final and never tries legacy decryption", async ()
   expect(storage.decryptStringAsync).not.toHaveBeenCalled();
 });
 
-it.each(["ORCADP02", "v11xxxxx", "damaged!"])("unknown/tampered wrapper header refuses (%s)", async (header) => {
+// A near miss of the persisted ORCADP01 header, which keeps its name through the rename.
+const nextHeader = "ORCADP02"; // rename-keep: a near miss of the kept ORCADP01 header
+it.each([nextHeader, "v11xxxxx", "damaged!"])("unknown/tampered wrapper header refuses (%s)", async (header) => {
   const { keys, backend, storage } = fixture();
   await expect(keys.unwrap(Buffer.concat([Buffer.from(header), Buffer.alloc(128)]))).rejects.toThrow("unavailable");
   expect(backend.unprotectKey).not.toHaveBeenCalled();

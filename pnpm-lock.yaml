@@ -230,6 +230,9 @@ importers:
 
   packages/app:
     dependencies:
+      '@orca/core':
+        specifier: workspace:*
+        version: link:../core
       '@orca/design':
         specifier: workspace:*
         version: link:../design

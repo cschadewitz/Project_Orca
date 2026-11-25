@@ -8,6 +8,7 @@ import {
   fenceBoot,
   assertFenceVolume,
   FenceBootSchema,
+  firstRunLayout,
 } from "@orca/protocol/first-run-fence";
 import {
   absent,
@@ -39,7 +40,9 @@ export class FirstRunRecovery {
       return { state: "ready" as const, requestId: recoveryRequestSchema.parse(JSON.parse(existing)).requestId };
     const writerText = latest.texts["writer.json"];
     const writer = writerText ? WriterSchema.parse(JSON.parse(writerText)) : undefined;
-    const store = absent(join(this.path, ".orca")) ? null : directory(join(this.path, ".orca"), snapshot.workspace);
+    const store = absent(firstRunLayout(this.path).store)
+      ? null
+      : directory(firstRunLayout(this.path).store, snapshot.workspace);
     if (
       writer
         ? !store || !sameDirectory(writer.store, store)
@@ -80,7 +83,9 @@ export class FirstRunRecovery {
     )
       return refuse();
     if (latest.settled) {
-      const store = absent(join(this.path, ".orca")) ? null : directory(join(this.path, ".orca"), snapshot.workspace);
+      const store = absent(firstRunLayout(this.path).store)
+        ? null
+        : directory(firstRunLayout(this.path).store, snapshot.workspace);
       if (JSON.stringify(store) !== JSON.stringify(request.store)) return refuse();
       assertCurrent();
       return { state: "reconciled" as const, requestId };
@@ -103,7 +108,9 @@ export class FirstRunRecovery {
       assertCurrent();
       // Holding the kernel handle is the positive proof; no PID query or signalling is involved.
       const fresh = inspectFirstRunOwnership(this.path, true);
-      const store = absent(join(this.path, ".orca")) ? null : directory(join(this.path, ".orca"), fresh.workspace);
+      const store = absent(firstRunLayout(this.path).store)
+        ? null
+        : directory(firstRunLayout(this.path).store, fresh.workspace);
       if (
         JSON.stringify(fresh) !== JSON.stringify(snapshot) ||
         JSON.stringify(store) !== JSON.stringify(request.store) ||
@@ -167,7 +174,9 @@ export async function endPreviousBootSession(path: string, reservationId: string
   const writer = latest.texts["writer.json"] ? WriterSchema.parse(JSON.parse(latest.texts["writer.json"])) : undefined;
   // The store rules of same-boot recovery: the attested writer's store, or the claim's store with no child.
   const store = () => {
-    const current = absent(join(path, ".orca")) ? null : directory(join(path, ".orca"), snapshot.workspace);
+    const current = absent(firstRunLayout(path).store)
+      ? null
+      : directory(firstRunLayout(path).store, snapshot.workspace);
     if (
       writer
         ? !current || !sameDirectory(writer.store, current)
@@ -251,10 +260,12 @@ export async function bindQuiescentConfiguration(
     (writer.bootId !== boot.bootId ||
       writer.hostHash !== boot.hostHash ||
       writer.kernelDomain !== boot.kernelDomain ||
-      !sameDirectory(writer.store, directory(join(path, ".orca"), snapshot.workspace)))
+      !sameDirectory(writer.store, directory(firstRunLayout(path).store, snapshot.workspace)))
   )
     return refuse();
-  const currentStore = absent(join(path, ".orca")) ? null : directory(join(path, ".orca"), snapshot.workspace);
+  const currentStore = absent(firstRunLayout(path).store)
+    ? null
+    : directory(firstRunLayout(path).store, snapshot.workspace);
   if (!writer && (JSON.stringify(currentStore) !== JSON.stringify(claim.store) || latest.texts["child.json"]))
     return refuse();
   let fence;

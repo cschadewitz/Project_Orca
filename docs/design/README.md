@@ -260,32 +260,42 @@ token's accessible name ("run 7X8PXX").
 
 ## Logo and app icon
 
-The mark is a hollow hexagon cut at the middle of each edge into six corner brackets, with a
-dorsal fin standing on a teal waterline inside it. The hexagon is the work item's `⬡`; the six
-pieces are the six stages an item passes through; the fin is the name. It is drawn on a 64-unit
-grid in four token colours and nothing else: `ink-primary` for the brackets and the fin,
-`accent` for the waterline, `surface-base` for the tile and `border-hairline` for its edge,
-each from the theme the icon is for (`test/brand.test.ts` holds that).
+The mark is two orbits: a filled centre, an inner and an outer ring, a planet in ink on the
+inner ring and a planet in teal on the outer one. It is drawn on a 64-unit grid in four token
+colours and nothing else: `ink-primary` for the rings, the centre and the inner planet,
+`accent` for the outer planet, `surface-base` for the tile and for the halo that parts each
+planet from its ring, and `border-hairline` for the tile's edge, each from the theme the icon
+is for (`test/brand.test.ts` holds that).
 
 ```
 packages/design/brand/
-  orca-mark-light.svg          the mark alone, transparent ground, for a light surface
-  orca-mark-dark.svg           the same for a dark surface
-  orca-icon-light.svg          the app icon: the mark at 96% on a rounded surface-base tile
-  orca-icon-dark.svg           the same tile in the dark theme
-  orca-icon-*-macos.svg        the tile on the macOS icon grid (824 of 1024, transparent margin)
+  orrery-mark-light.svg          the mark alone, transparent ground, for a light surface
+  orrery-mark-dark.svg           the same for a dark surface
+  orrery-icon-light.svg          the app icon: the mark at 92% on a rounded surface-base tile
+  orrery-icon-dark.svg           the same tile in the dark theme
+  orrery-icon-*-macos.svg        the tile on the macOS icon grid (824 of 1024, transparent margin)
+  orrery-icon-*-small*.svg       the small-size drawing for 16 and 24 px, on both grids
 packages/app/build/
   icon.png, icon.ico, icon.icns   what electron-builder packages, rendered from the light SVGs
 ```
 
-- The waterline passes *behind* the brackets: a mask cuts it where a bracket crosses, so the
-  hexagon reads whole and the mark works on any ground without a halo colour.
-- The installers ship the light tile on every platform. The dark files are for documentation,
-  the README and anywhere the ground is known to be dark.
+- A planet sits on its ring inside a `surface-base` halo, so the ring reads as passing behind
+  it. The halo is the ground's colour, so the mark alone belongs on the ground its theme names.
+- The installers ship the light tile on every platform: `icon.png` and `icon.ico` from
+  `orrery-icon-light.svg`, `icon.icns` from `orrery-icon-light-macos.svg`. The dark files are
+  for documentation, the README and anywhere the ground is known to be dark.
 - Do not redraw the mark at small sizes by scaling a screenshot. Re-render the PNG, `.ico`
   (16–256) and `.icns` (16–1024) from the SVG when the SVG changes, and commit both together.
+  Each size is rendered straight from the SVG (resvg, `@resvg/resvg-js`), never scaled down from
+  a bigger bitmap, then packed into the `.ico` and `.icns` with Pillow.
+- Small sizes have their own drawing. At 16px the full mark's rings are under a pixel wide and
+  render grey, and the inner ring runs into the centre. The small drawing keeps one orbit,
+  drawn at 6.5 units (1.5px at 16), the sun and the teal planet, and drops the inner orbit and
+  its planet. `icon.ico` uses it for 16 and 24, `icon.icns` for its 16 and 32 @1x entries
+  (`icp4`, `icp5`, from the macOS-grid version); every other size is the full mark. Pillow
+  writes no `icp4`/`icp5`, so the `.icns` is assembled entry by entry, each a PNG.
 - No wordmark is drawn: where the name sits beside the mark it is set in IBM Plex Sans
-  SemiBold, lowercase or as `ORCA`, at the mark's optical height.
+  SemiBold, as `Orrery`, at the mark's optical height.
 
 ## Building on this
 

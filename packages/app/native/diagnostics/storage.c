@@ -254,7 +254,7 @@ static int pair_copy(int from,int to,unsigned depth,pair_budget *budget,int pres
   while((entry=readdir(dir))) {
     const char *name=entry->d_name; if(!strcmp(name,".") || !strcmp(name,".."))continue;
     if(!pair_name(name) || ++budget->entries>65536){errno=EACCES;result=-1;break;}
-    if(preserve_guard && !strcmp(name,".orca-update-window.json"))continue;
+    if(preserve_guard && !strcmp(name,".orca-update-window.json"))continue; /* rename-keep: the update-window guard the release being updated from writes */
     struct stat original; if(fstatat(from,name,&original,AT_SYMLINK_NOFOLLOW) || original.st_uid!=getuid() || (original.st_mode&06000)){result=-1;break;}
     if(S_ISLNK(original.st_mode)) {
       char target[PATH_MAX]; ssize_t count=readlinkat(from,name,target,sizeof(target)-1);
@@ -299,7 +299,7 @@ static int pair_clear(int fd,unsigned depth,pair_budget *budget) {
   int list=openat(fd,".",O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);DIR *dir=list<0?NULL:fdopendir(list);
   if(!dir){if(list>=0)close(list);return -1;}int result=0;struct dirent *entry;errno=0;
   while((entry=readdir(dir))) {
-    const char *name=entry->d_name;if(!strcmp(name,".") || !strcmp(name,"..") || (!depth && !strcmp(name,".orca-update-window.json")))continue;
+    const char *name=entry->d_name;if(!strcmp(name,".") || !strcmp(name,"..") || (!depth && !strcmp(name,".orca-update-window.json")))continue; /* rename-keep: the update-window guard the release being updated from writes */
     if(!pair_name(name) || ++budget->entries>65536){errno=EACCES;result=-1;break;}
     struct stat st;if(fstatat(fd,name,&st,AT_SYMLINK_NOFOLLOW) || st.st_uid!=getuid()){result=-1;break;}
     if(S_ISDIR(st.st_mode)) {
