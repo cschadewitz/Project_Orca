@@ -31,18 +31,19 @@
  * It writes one JSON record with the exact ORCA build, adapter, Codex, platform and settings the
  * cases ran with, to `ORCA_ENFORCEMENT_RECEIPT_DIR` when set. **It is evidence, not a tier or a
  * scoped label**: nothing here signs, stages, promotes or changes a protection. Not covered here,
- * and named in the record: MCP calls, cancellation and restart (a follow-up), the judge, and the
+ * and named in the record: the judge, and the
  * route's known limitations, which stay documented from existing evidence and are not re-created
  * or counted as passes.
  *
  * `guard-receipts.yml` (job `codex`) runs this with ORCA_CODEX_ADAPTER set to the pinned adapter's
  * entry point. Without it there is nothing to run.
  */
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
+import { createInterface } from "node:readline";
 import { arch, platform, release, tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -52,6 +53,7 @@ import { AgentSpecSchema, silentLogger, type HookTelemetryLine } from "@orca/cor
 import {
   CODEX_HOOK_VERIFIED_PAIRS,
   LocalHost,
+  type AgentSession,
   openAcpSession,
   type OpenSessionOptions,
   type PermissionRuleRecord,
@@ -89,8 +91,6 @@ const EXPECTED_MODE = "agent";
 
 /** What these cases do not cover, and why; recorded so nothing reads as more than it is. */
 const NOT_COVERED = [
-  "MCP tool calls (follow-up PR)",
-  "cancellation of a pending call, and a fresh session after it (follow-up PR)",
   "the experimental judge (tracked separately)",
   "known limitation, documented, not re-created here: Codex lets a call through when its hook runner fails after the startup probe",
   "known limitation, documented, not re-created here: text typed into a running command (write_stdin) is never hooked",
@@ -101,10 +101,65 @@ interface Case {
   id: string;
   action: string;
   rule: unknown;
-  step: Step;
+  /** The one call the scripted model makes, given the case's workspace. */
+  step: Step | ((workspace: string) => Step);
   /** The workspace's change expected: path -> exact content, or nothing at all. */
   expect: Record<string, string>;
+  /** What the case adds to Codex's config: an MCP server, say. Nothing that loosens a protection. */
+  codex?: (base: string, workspace: string) => Promise<Record<string, unknown>>;
 }
+
+/**
+ * A stdio MCP server with one tool, `touch`, that can write one file only: the target the harness
+ * names on its command line, inside the case's disposable workspace. The tool takes no input; a
+ * call to another tool, or with any argument at all, is refused with an error and writes
+ * nothing. The target is created exclusively (never overwritten, never through a link).
+ */
+const MCP_TOUCH_SERVER = `import { createInterface } from "node:readline";
+import { writeFileSync } from "node:fs";
+import { isAbsolute } from "node:path";
+const target = process.argv[2];
+if (process.argv.length !== 3 || !target || !isAbsolute(target)) process.exit(2);
+const out = (m) => process.stdout.write(JSON.stringify(m) + "\\n");
+const refuse = (id, message) => out({ jsonrpc: "2.0", id, error: { code: -32602, message } });
+createInterface({ input: process.stdin }).on("line", (l) => {
+  let m;
+  try { m = JSON.parse(l); } catch { return; }
+  if (m.method === "initialize") out({ jsonrpc: "2.0", id: m.id, result: { protocolVersion: m.params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: "touch", version: "1" } } });
+  else if (m.method === "tools/list") out({ jsonrpc: "2.0", id: m.id, result: { tools: [{ name: "touch", description: "write the one file this server was started for", inputSchema: { type: "object", properties: {}, additionalProperties: false } }] } });
+  else if (m.method === "tools/call") {
+    const args = m.params?.arguments;
+    if (m.params?.name !== "touch") return refuse(m.id, "unknown tool");
+    if (args !== undefined && (args === null || typeof args !== "object" || Array.isArray(args) || Object.keys(args).length > 0)) return refuse(m.id, "touch takes no arguments");
+    try { writeFileSync(target, "mcp", { flag: "wx" }); } catch { return refuse(m.id, "target exists or cannot be created"); }
+    out({ jsonrpc: "2.0", id: m.id, result: { content: [{ type: "text", text: "ok" }] } });
+  }
+  else if (m.id !== undefined) out({ jsonrpc: "2.0", id: m.id, result: {} });
+});
+`;
+
+/** Write the server next to (not inside) the workspace; return its path. */
+async function writeMcpTouch(dir: string): Promise<string> {
+  const server = join(dir, "mcp-touch.mjs");
+  await writeFile(server, MCP_TOUCH_SERVER, "utf8");
+  return server;
+}
+
+/**
+ * The config a case adds for the server: its one target is `file` in the case's workspace,
+ * fixed here by the harness. Codex starts it under its default settings: no tool approval mode
+ * is set, so Codex's own MCP approval policy applies as it would in use.
+ */
+const mcpTouch =
+  (file: string) =>
+  async (base: string, workspace: string): Promise<Record<string, unknown>> => {
+    const server = await writeMcpTouch(base);
+    // A model Codex does not defer MCP tools for, so the scripted model can call one directly.
+    return { model: "gpt-5", mcp_servers: { t: { command: process.execPath, args: [server, join(workspace, file)] } } };
+  };
+
+/** The scripted model's call: the tool, with no arguments. */
+const MCP_CALL: Step = { tool: "touch", namespace: "mcp__t", args: {} };
 
 const CASES: Case[] = [
   {
@@ -134,6 +189,22 @@ const CASES: Case[] = [
     rule: { match: { kind: "edit" }, decision: "deny" },
     step: patch("*** Add File: patch-denied.txt", "+orca-1026"),
     expect: {},
+  },
+  {
+    id: "mcp-allow",
+    action: "mcp: t.touch (its one target: mcp-allowed.txt)",
+    rule: { match: { titlePattern: "^t: touch$" }, decision: "allow" },
+    step: MCP_CALL,
+    expect: { "mcp-allowed.txt": "mcp" },
+    codex: mcpTouch("mcp-allowed.txt"),
+  },
+  {
+    id: "mcp-deny",
+    action: "mcp: t.touch (its one target: mcp-denied.txt)",
+    rule: { match: { titlePattern: "^t: touch$" }, decision: "deny" },
+    step: MCP_CALL,
+    expect: {},
+    codex: mcpTouch("mcp-denied.txt"),
   },
 ];
 
@@ -175,6 +246,56 @@ function git(...args: string[]): string | null {
   }
 }
 
+describe("the MCP fixture writes only the target the harness names", () => {
+  it("refuses another tool or any argument without writing, and writes its target once", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orca-1026-mcp-touch-"));
+    try {
+      const server = await writeMcpTouch(dir);
+      const target = join(dir, "work", "target.txt");
+      const elsewhere = join(dir, "elsewhere.txt");
+      await mkdir(join(dir, "work"));
+      const child = spawn(process.execPath, [server, target], { stdio: ["pipe", "pipe", "inherit"] });
+      const replies = new Map<number, Record<string, unknown>>();
+      const waiting = new Map<number, () => void>();
+      createInterface({ input: child.stdout }).on("line", (line) => {
+        const m = JSON.parse(line) as Record<string, unknown> & { id: number };
+        replies.set(m.id, m);
+        waiting.get(m.id)?.();
+      });
+      let id = 0;
+      const call = async (method: string, params: unknown) => {
+        const n = ++id;
+        const replied = new Promise<void>((resolve) => waiting.set(n, resolve));
+        child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: n, method, params }) + "\n");
+        await replied;
+        return replies.get(n)!;
+      };
+      try {
+        await call("initialize", { protocolVersion: "2025-06-18" });
+        for (const params of [
+          { name: "touch", arguments: { file: elsewhere } },
+          { name: "touch", arguments: { extra: 1 } },
+          { name: "touch", arguments: [] },
+          { name: "other", arguments: {} },
+        ])
+          expect(await call("tools/call", params)).toHaveProperty("error");
+        expect(await readFile(target, "utf8").catch(() => undefined)).toBeUndefined();
+        expect(await readFile(elsewhere, "utf8").catch(() => undefined)).toBeUndefined();
+        expect(await call("tools/call", { name: "touch", arguments: {} })).toHaveProperty("result");
+        expect(await readFile(target, "utf8")).toBe("mcp");
+        // Never overwritten: a second call is refused and leaves the file as it was.
+        expect(await call("tools/call", { name: "touch", arguments: {} })).toHaveProperty("error");
+        expect(await readdir(dir)).toEqual(expect.arrayContaining(["mcp-touch.mjs", "work"]));
+        expect((await readdir(dir)).length).toBe(2);
+      } finally {
+        child.kill();
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe.skipIf(ADAPTER === undefined)("installed-session evidence for Codex's hook route (#1026)", () => {
   let model: ModelStandIn;
   let hookScript: string;
@@ -197,12 +318,13 @@ describe.skipIf(ADAPTER === undefined)("installed-session evidence for Codex's h
   });
 
   /** One disposable workspace, config directory and Codex home, and a session the factory opens. */
-  const open = async (id: string, rule: unknown) => {
+  const open = async (id: string, rule: unknown, extra?: Case["codex"]) => {
     const base = join(root, id);
     const configDir = join(base, "config");
     const workspace = join(base, "work");
     const codexHome = join(base, "codex-home");
     for (const dir of [configDir, workspace, codexHome]) await mkdir(dir, { recursive: true });
+    const added = (await extra?.(base, workspace)) ?? {};
     // A native approval that reaches the person is recorded and refused: the test never acts
     // as the person to let a call through.
     const personAsked: { title: string; answer: string | undefined }[] = [];
@@ -230,6 +352,7 @@ describe.skipIf(ADAPTER === undefined)("installed-session evidence for Codex's h
           model_providers: {
             standin: { name: "standin", base_url: model.url, wire_api: "responses", env_key: "ORCA_1026_KEY" },
           },
+          ...added,
         }),
         ORCA_1026_KEY: "sk-orca-1026-test",
         NO_PROXY: "127.0.0.1",
@@ -256,13 +379,25 @@ describe.skipIf(ADAPTER === undefined)("installed-session evidence for Codex's h
     session.hookTelemetry?.attach(async (lines) => {
       hookLines.push(...lines);
     });
-    return { session, workspace, personAsked, native, hookLines, recorded: session.hookTelemetry !== undefined };
+    return {
+      session,
+      workspace,
+      personAsked,
+      native,
+      hookLines,
+      recorded: session.hookTelemetry !== undefined,
+      codexAdded: added,
+    };
   };
 
   for (const c of CASES)
     it(`${c.id}: ${c.action}`, async () => {
       const allow = Object.keys(c.expect).length > 0;
-      const { session, workspace, personAsked, native, hookLines, recorded } = await open(c.id, c.rule);
+      const { session, workspace, personAsked, native, hookLines, recorded, codexAdded } = await open(
+        c.id,
+        c.rule,
+        c.codex,
+      );
       // The mode the adapter reports for the session, with its own description of it.
       const modeOption = session.configOptions.find((o) => o.category === "mode");
       const mode = modeOption?.currentValue ?? null;
@@ -274,7 +409,7 @@ describe.skipIf(ADAPTER === undefined)("installed-session evidence for Codex's h
       try {
         // The pinned adapter's mode, reported explicitly, before anything is asked of it.
         expect(mode).toBe(EXPECTED_MODE);
-        await session.prompt(script(c.step));
+        await session.prompt(script(typeof c.step === "function" ? c.step(workspace) : c.step));
         // The hook hands its record to a detached writer after answering, so it can land a
         // little after the call: read the spool until it does, within the writer's deadline.
         for (const until = Date.now() + 5_000; session.hookTelemetry && hookLines.length === 0 && Date.now() < until;) {
@@ -321,6 +456,7 @@ describe.skipIf(ADAPTER === undefined)("installed-session evidence for Codex's h
         id: c.id,
         action: c.action,
         rule: c.rule,
+        codexConfigAdded: codexAdded,
         status,
         reasons: failures.length > 0 ? failures : unverified,
         orca: {
@@ -348,8 +484,188 @@ describe.skipIf(ADAPTER === undefined)("installed-session evidence for Codex's h
       expect(failures).toEqual([]);
     }, 180_000);
 
+  /** ORCA's decisions for the session: read the spool until `n` have landed, within the writer's deadline. */
+  const settle = async (session: AgentSession, lines: unknown[], n: number) => {
+    for (const until = Date.now() + 5_000; session.hookTelemetry && lines.length < n && Date.now() < until;) {
+      await session.hookTelemetry.drain();
+      if (lines.length < n) await delay(100);
+    }
+  };
+  const modeOf = (session: AgentSession) =>
+    session.configOptions.find((o) => o.category === "mode")?.currentValue ?? null;
+  const hookRecord = (lines: HookTelemetryLine[]) =>
+    lines.map((l) => ({ tool: l.tool, title: l.title ?? null, decision: l.decision, rule: l.rule ?? null }));
+
+  it("shell-cancel: no late completion marker after an allowed command's turn is cancelled", async () => {
+    // The command marks that it started, waits, then would write a completion marker. The turn
+    // is cancelled once the start mark is seen; the completion marker must not appear, even
+    // after the wait. That is all this shows: not that the run had no other effect. The start
+    // mark is expected, and any other change is recorded as observed (`leftBehind`).
+    const cmd = "echo started > started.txt; sleep 4; echo done > done.txt";
+    const rule = {
+      match: { kind: "execute", titlePattern: "^echo started > started\\.txt; sleep 4; echo done > done\\.txt$" },
+      decision: "allow",
+    };
+    const { session, workspace, personAsked, native, hookLines, recorded } = await open("shell-cancel", rule);
+    const mode = modeOf(session);
+    const before = await tree(workspace);
+    const outputsBefore = model.outputs.length;
+    let started = false;
+    let cancelled = false;
+    try {
+      expect(mode).toBe(EXPECTED_MODE);
+      const turn = session.prompt(script(shell(cmd)));
+      for (const until = Date.now() + 20_000; Date.now() < until;) {
+        started = (await readFile(join(workspace, "started.txt"), "utf8").catch(() => undefined)) !== undefined;
+        if (started) break;
+        const done = await Promise.race([
+          turn.then(
+            () => true,
+            () => true,
+          ),
+          delay(100).then(() => false),
+        ]);
+        if (done) break;
+      }
+      if (started) {
+        await session.cancel();
+        cancelled = true;
+      }
+      await turn.catch(() => undefined);
+      // Longer than the command's own wait: a command still running would have written by now.
+      await delay(6_000);
+      await settle(session, hookLines, 1);
+    } finally {
+      await session.close();
+    }
+    const after = await tree(workspace);
+    const changed = changes(before, after);
+    const outputs = model.outputs.slice(outputsBefore);
+    const decisions = hookLines.map((l) => l.decision);
+    const finished = "done.txt" in after;
+    // Anything else the cancelled command's run left in the workspace, recorded as observed.
+    const leftBehind = Object.keys(changed).filter((path) => path !== "started.txt" && path !== "done.txt");
+
+    const failures: string[] = [];
+    if (decisions.some((d) => d !== "allow")) failures.push(`ORCA's hook decided ${decisions.join(", ")}, not allow`);
+    if (cancelled && finished) failures.push("the command's result appeared after the turn was cancelled");
+    const unverified: string[] = [];
+    if (!recorded || decisions.length === 0) unverified.push("ORCA's hook left no record of its decision");
+    if (!started)
+      unverified.push("the command never started under the native safeguards, so cancellation could not be observed");
+    const status = failures.length > 0 ? "failed" : unverified.length > 0 ? "unverified" : "verified";
+    results.push({
+      id: "shell-cancel",
+      action: `shell: ${cmd}, turn cancelled once started.txt appears`,
+      rule,
+      status,
+      reasons: failures.length > 0 ? failures : unverified,
+      orca: { configured: "allow", hookDecisions: hookRecord(hookLines) },
+      native: { mode, approvalsAnsweredByOrca: native, approvalsAnsweredAsThePerson: personAsked },
+      effect: {
+        expected:
+          "no late completion marker (done.txt) observed after the cancel, waiting past the command's own sleep; not proof of no effects: started.txt is expected and other changes are recorded in leftBehind",
+        started,
+        cancelled,
+        finished,
+        leftBehind,
+        before,
+        after,
+        changed,
+      },
+      toolOutput: outputs,
+    });
+    expect(failures).toEqual([]);
+  }, 180_000);
+
+  it("restart-fresh-decision: a fresh session decides again under the rules it starts with", async () => {
+    // Same workspace and Codex home across both sessions, so whatever Codex keeps between
+    // sessions is kept. The first allows the command; the second starts with a deny for it.
+    const cmd = "echo orca-1026 >> restart.txt";
+    const match = { kind: "execute", titlePattern: "^echo orca-1026 >> restart\\.txt$" };
+    const first = await open("restart-fresh-decision", { match, decision: "allow" });
+    const firstMode = modeOf(first.session);
+    try {
+      expect(firstMode).toBe(EXPECTED_MODE);
+      await first.session.prompt(script(shell(cmd)));
+      await settle(first.session, first.hookLines, 1);
+    } finally {
+      await first.session.close();
+    }
+    const between = await tree(first.workspace);
+
+    const second = await open("restart-fresh-decision", { match, decision: "deny" });
+    const secondMode = modeOf(second.session);
+    const outputsBefore = model.outputs.length;
+    try {
+      expect(secondMode).toBe(EXPECTED_MODE);
+      await second.session.prompt(script(shell(cmd)));
+      await settle(second.session, second.hookLines, 1);
+    } finally {
+      await second.session.close();
+    }
+    const after = await tree(second.workspace);
+    const changed = changes(between, after);
+    const outputs = model.outputs.slice(outputsBefore);
+    const decisions = second.hookLines.map((l) => l.decision);
+    const firstDecisions = first.hookLines.map((l) => ({ title: l.title ?? null, decision: l.decision }));
+    // Whether the first session's call had its effect: recorded, never required or implied.
+    const firstEffectObserved = "restart.txt" in between;
+    const refusal = outputs.find((o) => o.includes("Denied by ORCA"));
+    const nativeRefused = second.native.some((n) => !/allow/.test(n.decision)) || second.personAsked.length > 0;
+
+    const failures: string[] = [];
+    if (firstDecisions.some((d) => d.decision !== "allow"))
+      failures.push(`the first session's hook decided ${firstDecisions.map((d) => d.decision).join(", ")}, not allow`);
+    if (Object.keys(changed).length > 0) failures.push("the second session's call had an effect under a deny");
+    if (decisions.some((d) => d !== "deny"))
+      failures.push(`the second session's hook decided ${decisions.join(", ")}, not deny`);
+    const unverified: string[] = [];
+    if (!second.recorded || decisions.length !== 1)
+      unverified.push("the second session's hook did not record exactly one decision");
+    if (refusal === undefined) unverified.push("Codex did not report ORCA's refusal in the second session");
+    if (nativeRefused) unverified.push("a native refusal could also account for the absence of an effect");
+    // What the second session alone establishes: a verified deny in a fresh session.
+    const freshDeny = failures.length > 0 ? "failed" : unverified.length > 0 ? "unverified" : "verified";
+    // The allow-to-deny transition also needs the first session's allow, for exactly this call.
+    if (!first.recorded || firstDecisions.length !== 1 || firstDecisions[0]!.title !== cmd)
+      unverified.push("the first session's hook did not record exactly one allow for this exact call");
+    const status = failures.length > 0 ? "failed" : unverified.length > 0 ? "unverified" : "verified";
+    results.push({
+      id: "restart-fresh-decision",
+      action: `shell: ${cmd}, allowed in one session, then the same call in a fresh session started with a deny`,
+      rule: { first: { match, decision: "allow" }, second: { match, decision: "deny" } },
+      // `status` is the allow-to-deny transition; `freshDeny` is the second session alone.
+      status,
+      freshDeny,
+      reasons: failures.length > 0 ? failures : unverified,
+      orca: {
+        first: { configured: "allow", hookDecisions: hookRecord(first.hookLines) },
+        second: {
+          configured: "deny",
+          hookDecisions: hookRecord(second.hookLines),
+          refusalReportedByCodex: refusal !== undefined,
+        },
+      },
+      native: {
+        mode: { first: firstMode, second: secondMode },
+        first: { approvalsAnsweredByOrca: first.native, approvalsAnsweredAsThePerson: first.personAsked },
+        second: { approvalsAnsweredByOrca: second.native, approvalsAnsweredAsThePerson: second.personAsked },
+      },
+      effect: {
+        expected: "no change in the second session; the first session's effect is recorded, not required",
+        firstEffectObserved,
+        between,
+        after,
+        changed,
+      },
+      toolOutput: outputs,
+    });
+    expect(failures).toEqual([]);
+  }, 180_000);
+
   it("records the exact build, agent, platform and settings beside the cases", async () => {
-    expect(results.map((r) => r["id"])).toEqual(CASES.map((c) => c.id));
+    expect(results.map((r) => r["id"])).toEqual([...CASES.map((c) => c.id), "shell-cancel", "restart-fresh-decision"]);
     const adapterDir = dirname(dirname(ADAPTER!));
     const adapterPkg = JSON.parse(await readFile(join(adapterDir, "package.json"), "utf8")) as {
       name: string;
