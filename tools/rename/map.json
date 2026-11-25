@@ -55,14 +55,18 @@
       "pattern": "secrets\\.ORCA_[A-Z0-9_]+",
       "reason": "Actions secret names stay until the next key rotation (values cannot be read back)"
     },
+    {
+      "pattern": "\\|\\| vars\\.ORCA_[A-Z0-9_]+",
+      "reason": "Workflows read `vars.ORRERY_X || vars.ORCA_X` for one release: the cutover copies the Actions variables (tools/rename/github.sh --settings) and v0.10.0 drops the legacy half"
+    },
     { "pattern": "ORCADP01", "reason": "Persisted DPAPI wrapper header on Windows diagnostics" },
     {
       "pattern": "(?<![A-Za-z])orca1(?![0-9])",
       "reason": "Daemon credential prefix orca1.<id>.<secret>; issued tokens live on remote machines"
     },
     {
-      "pattern": "[A-Za-z0-9+/]{20,}Orca[A-Za-z0-9+/=]*",
-      "reason": "Base64 fixture keys that merely contain the letters"
+      "pattern": "AAAAC3NzaC1lZDI1NTE5AAAAIOrcaServerKey(?:One|Two)0*(?![A-Za-z0-9+/=])",
+      "reason": "The two ed25519 host-key fixtures in packages/cli/test/remote-add.test.ts, whose base64 merely contains the letters"
     }
   ],
   "rules": [

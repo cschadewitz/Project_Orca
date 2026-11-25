@@ -45,28 +45,40 @@ jobs:
           node-version: "24.21.0"
 
       - name: Apply the rename
+        id: apply
         run: |
           node tools/rename/codemod.mjs --apply | tail -n 1
           node tools/rename/codemod.mjs | tail -n 1
 
+      # Every check below runs once the rename is applied and installed, whatever an earlier
+      # check said: a red audit must not hide what typecheck, build and test say about the same
+      # tree. Each failure still fails the job.
       - name: Leftover names
+        if: ${{ !cancelled() && steps.apply.outcome == 'success' }}
         run: node tools/rename/audit.mjs
 
       # The lockfile is excluded from the codemod; package names inside it are regenerated.
       - name: Install
+        id: install
+        if: ${{ !cancelled() && steps.apply.outcome == 'success' }}
         run: pnpm install --no-frozen-lockfile
 
       - name: Typecheck
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm run typecheck
 
       - name: Design tokens
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm run design:check
 
       - name: Lint
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm run lint
 
       - name: Build
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm run build
 
       - name: Test
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm test
