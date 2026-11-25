@@ -19,6 +19,12 @@
     "docs/session-logs/**",
     "docs/v0.5.2-*",
     "examples/m10-plugin/candidate/**",
+    "tools/deploy/private-mcp-service/render-agent01.js",
+    "tools/deploy/private-mcp-service/orca-daemon.service.template",
+    "tools/deploy/private-mcp-service/orca-tunnel.service.template",
+    "tools/deploy/private-mcp-service/tunnel-profile.live-launcher.yaml.template",
+    "tools/deploy/test_agent01_*.py",
+    "tools/test/agent01-*.test.js",
     "packages/app/test/fixtures/store-v*/**"
   ],
   "binaryExtensions": [

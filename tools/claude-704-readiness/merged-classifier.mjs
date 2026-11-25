@@ -27,6 +27,15 @@ export const MERGED_REGION_SHA256 = {
   constants: "8e8b950f6900e56c7d6d921df73138e35e8db6b31da494c46713a66115b75b03",
   classifier: "8665c50ce92b204c9d09d403b36a34ba472459cd036dc2044ee83466f48c13ae",
 };
+/**
+ * The same merged regions after the Orrery rename (tools/rename/codemod.mjs), re-derived with
+ * mergedRegions(): only the product name changed (the `orca-decision` stage and its words). Either
+ * digest is the reviewed classifier. v0.10.0, with the rename long merged, keeps only these.
+ */
+export const RENAMED_REGION_SHA256 = {
+  constants: "8e8b950f6900e56c7d6d921df73138e35e8db6b31da494c46713a66115b75b03",
+  classifier: "cedbd94af70435628a6026b6812ce2e2f499998ec6daff85beb657368f366af3",
+};
 
 const EXPORTS = [
   "LEVELS",
@@ -64,10 +73,10 @@ export function mergedRegions() {
 }
 
 /** The merged classifier functions, bound to the merged evidence format, scenarios and provenance. */
-export function loadMergedClassifier({ pins = MERGED_REGION_SHA256 } = {}) {
+export function loadMergedClassifier({ pins = MERGED_REGION_SHA256, renamed = RENAMED_REGION_SHA256 } = {}) {
   const regions = mergedRegions();
   for (const [name, { sha256: actual }] of Object.entries(regions))
-    if (actual !== pins[name])
+    if (actual !== pins[name] && actual !== renamed?.[name])
       throw new Error(`merged classifier region "${name}" changed (sha256 ${actual}); review it and update the pin`);
   const format = json(`${FIXTURES}evidence-format.json`);
   const scenarios = json(`${FIXTURES}scenarios.json`);
