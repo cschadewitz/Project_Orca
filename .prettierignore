@@ -27,3 +27,7 @@ examples/m10-plugin/candidate/
 # An old release's store, kept byte for byte: what it proves is that today's code reads
 # yesterday's bytes (packages/app/test/fixtures/store-v0.6.0/README.md).
 packages/app/test/fixtures/store-v*/
+
+# Signed guard receipts and their Sigstore bundles: the attestation covers these exact bytes,
+# so reformatting one would break its verification (tools/guard-qualification/attestation.js).
+tools/guard-qualification/receipts/
