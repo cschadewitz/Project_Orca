@@ -49,7 +49,7 @@ import { dirname, join, relative } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { AgentSpecSchema, silentLogger, type HookTelemetryLine } from "@orca/core";
+import { AgentSpecSchema, literalEnv, silentLogger, type HookTelemetryLine } from "@orca/core";
 import {
   CODEX_HOOK_VERIFIED_PAIRS,
   LocalHost,
@@ -317,6 +317,56 @@ describe.skipIf(ADAPTER === undefined)("installed-session evidence for Codex's h
     await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   });
 
+  /**
+   * What ORCA's session factory handed the real opener (`openAcpSession`), per case: recorded by
+   * a test-only observer that then delegates, unchanged, to the real opener. This is the launch
+   * configuration itself, read at the boundary where the agent is started, not inferred from
+   * what the session reports afterwards. A case the factory refuses before starting anything has
+   * no entry.
+   */
+  interface Launch {
+    /** The agent's `nativeToolHook` as the opener received it (null when left out). */
+    nativeToolHook: string | null;
+    /** The `hooks` table of the `CODEX_CONFIG` Codex is started with (null when it has none). */
+    codexHooks: unknown;
+    /** Whether the opener was given the hook's admission (`sessionMeta`), which checks it is in force. */
+    hookAdmission: boolean;
+  }
+  const launches = new Map<string, Launch[]>();
+  const observedOpener =
+    (id: string): typeof openAcpSession =>
+    (options) => {
+      // The environment Codex is started with: ORCA's, the agent's own, then the factory's (LocalHost).
+      const codexConfig =
+        options.env?.["CODEX_CONFIG"] ?? literalEnv(options.agent.env)["CODEX_CONFIG"] ?? process.env["CODEX_CONFIG"];
+      const parsed = codexConfig === undefined ? {} : (JSON.parse(codexConfig) as Record<string, unknown>);
+      launches.get(id)!.push({
+        nativeToolHook: options.agent.nativeToolHook ?? null,
+        codexHooks: parsed["hooks"] ?? null,
+        hookAdmission: options.sessionMeta !== undefined,
+      });
+      return openAcpSession(options);
+    };
+
+  /** Whether a launch's Codex hooks are exactly ORCA's one pre-tool hook, trusted, running this build's hook program. */
+  const orcaHookIn = (launch: Launch | undefined): boolean => {
+    const hooks = launch?.codexHooks as
+      | { PreToolUse?: { matcher?: unknown; hooks?: { type?: unknown; command?: unknown }[] }[]; state?: object }
+      | null
+      | undefined;
+    const groups = hooks?.PreToolUse;
+    if (!Array.isArray(groups) || groups.length !== 1 || groups[0]!.matcher !== "*") return false;
+    const handlers = groups[0]!.hooks;
+    if (!Array.isArray(handlers) || handlers.length !== 1) return false;
+    const [h] = handlers;
+    return (
+      h!.type === "command" &&
+      typeof h!.command === "string" &&
+      h!.command.includes(hookScript) &&
+      Object.keys(hooks?.state ?? {}).length === 1
+    );
+  };
+
   /** One disposable workspace, config directory and Codex home, and a session the factory opens. */
   const open = async (
     id: string,
@@ -369,7 +419,8 @@ describe.skipIf(ADAPTER === undefined)("installed-session evidence for Codex's h
       // The hook's record is all the diagnostics give; without a hook they record nothing.
       ...(hook === "experimental" ? { diagnostics: SETTINGS.diagnostics } : {}),
     });
-    const session = await makeSessionFactory({ configDir, storeDir: ".orca" }, openAcpSession, {
+    launches.set(id, []);
+    const session = await makeSessionFactory({ configDir, storeDir: ".orca" }, observedOpener(id), {
       runtime: process.execPath,
       script: hookScript,
     })({
@@ -691,7 +742,7 @@ describe.skipIf(ADAPTER === undefined)("installed-session evidence for Codex's h
     const mode = modeOf(session);
     const before = await tree(workspace);
     const outputsBefore = model.outputs.length;
-    const hookInstalled = session.hookTelemetry !== undefined;
+    const launch = launches.get("optin-omitted") ?? [];
     try {
       expect(mode).toBe(EXPECTED_MODE);
       await session.prompt(script(shell(optInCmd(file))));
@@ -705,6 +756,13 @@ describe.skipIf(ADAPTER === undefined)("installed-session evidence for Codex's h
     const ran = sameJson(changed, { [file]: [null, sha256("orca-1026\n")] });
 
     const failures: string[] = [];
+    // The launch configuration itself, as the real opener received it.
+    if (launch.length !== 1) failures.push(`the opener was called ${launch.length} times, not once`);
+    else {
+      if (launch[0]!.nativeToolHook !== null) failures.push("the opener received a nativeToolHook setting");
+      if (launch[0]!.codexHooks !== null) failures.push("Codex was started with hooks in its CODEX_CONFIG");
+      if (launch[0]!.hookAdmission) failures.push("the opener was given the hook's admission");
+    }
     if (refusal !== undefined) failures.push("Codex reported an ORCA refusal with the hook omitted");
     if (hookLines.length > 0) failures.push("a hook decision was recorded with the hook omitted");
     if (Object.keys(changed).length > 0 && !ran) failures.push("the workspace changed other than expected");
@@ -720,7 +778,7 @@ describe.skipIf(ADAPTER === undefined)("installed-session evidence for Codex's h
       rule,
       status,
       reasons: failures.length > 0 ? failures : unverified,
-      orca: { nativeToolHook: null, configured: "deny", hookInstalled, refusalReportedByCodex: refusal !== undefined },
+      orca: { nativeToolHook: null, configured: "deny", launch, refusalReportedByCodex: refusal !== undefined },
       native: { mode, approvalsAnsweredByOrca: native, approvalsAnsweredAsThePerson: personAsked },
       effect: {
         expected: "the call runs: ORCA's deny is not enforced without the hook",
@@ -731,7 +789,6 @@ describe.skipIf(ADAPTER === undefined)("installed-session evidence for Codex's h
       },
       toolOutput: outputs,
     });
-    expect(hookInstalled).toBe(false);
     expect(failures).toEqual([]);
   }, 180_000);
 
@@ -747,12 +804,16 @@ describe.skipIf(ADAPTER === undefined)("installed-session evidence for Codex's h
     } catch (error) {
       refusedWith = error instanceof Error ? error.message : String(error);
     }
-    // Codex writes into its home as soon as it starts; an empty home means it never did.
+    // The factory must refuse before it calls the opener, so nothing is launched at all.
+    const launch = launches.get("optin-on");
+    // Supporting: Codex writes into its home as soon as it starts; an empty home means it never did.
     const codexHome = await readdir(join(base, "codex-home"));
     const workspace = await tree(join(base, "work"));
     const failures: string[] = [];
     if (refusedWith === undefined) failures.push("the session opened");
     else if (!/nativeToolHook: on/.test(refusedWith)) failures.push("refused, but not for nativeToolHook: on");
+    if (launch === undefined) failures.push("the open did not reach ORCA's session factory");
+    else if (launch.length > 0) failures.push("the factory called the opener before refusing");
     if (codexHome.length > 0) failures.push("Codex started before the refusal");
     if (Object.keys(workspace).length > 0) failures.push("the workspace changed");
     if (model.outputs.length !== outputsBefore) failures.push("the model was reached");
@@ -762,8 +823,12 @@ describe.skipIf(ADAPTER === undefined)("installed-session evidence for Codex's h
       rule,
       status: failures.length > 0 ? "failed" : "verified",
       reasons: failures,
-      orca: { nativeToolHook: "on", refusedWith: refusedWith ?? null },
-      effect: { expected: "refused before Codex starts: empty Codex home and workspace", codexHome, workspace },
+      orca: { nativeToolHook: "on", refusedWith: refusedWith ?? null, openerCalls: launch?.length ?? null },
+      effect: {
+        expected: "refused before the opener is called; supporting: empty Codex home and workspace",
+        codexHome,
+        workspace,
+      },
     });
     expect(failures).toEqual([]);
   }, 180_000);
@@ -775,7 +840,7 @@ describe.skipIf(ADAPTER === undefined)("installed-session evidence for Codex's h
     const mode = modeOf(session);
     const before = await tree(workspace);
     const outputsBefore = model.outputs.length;
-    const hookInstalled = session.hookTelemetry !== undefined;
+    const launch = launches.get("optin-experimental") ?? [];
     try {
       expect(mode).toBe(EXPECTED_MODE);
       await session.prompt(script(shell(optInCmd(file))));
@@ -790,6 +855,14 @@ describe.skipIf(ADAPTER === undefined)("installed-session evidence for Codex's h
     const refusal = outputs.find((o) => o.includes("Denied by ORCA"));
     const nativeRefused = native.some((n) => !/allow/.test(n.decision)) || personAsked.length > 0;
     const failures: string[] = [];
+    // The launch configuration itself, as the real opener received it.
+    if (launch.length !== 1) failures.push(`the opener was called ${launch.length} times, not once`);
+    else {
+      if (launch[0]!.nativeToolHook !== "experimental")
+        failures.push("the opener did not receive nativeToolHook: experimental");
+      if (!orcaHookIn(launch[0])) failures.push("Codex was not started with exactly ORCA's pre-tool hook");
+      if (!launch[0]!.hookAdmission) failures.push("the opener was not given the hook's admission");
+    }
     if (Object.keys(changed).length > 0) failures.push("an effect was observed after ORCA was configured to deny");
     if (decisions.some((d) => d !== "deny")) failures.push(`ORCA's hook decided ${decisions.join(", ")}, not deny`);
     const unverified: string[] = [];
@@ -806,7 +879,7 @@ describe.skipIf(ADAPTER === undefined)("installed-session evidence for Codex's h
       orca: {
         nativeToolHook: "experimental",
         configured: "deny",
-        hookInstalled,
+        launch,
         hookDecisions: hookRecord(hookLines),
         refusalReportedByCodex: refusal !== undefined,
       },
@@ -814,7 +887,6 @@ describe.skipIf(ADAPTER === undefined)("installed-session evidence for Codex's h
       effect: { expected: "no effect", before, after, changed },
       toolOutput: outputs,
     });
-    expect(hookInstalled).toBe(true);
     expect(failures).toEqual([]);
   }, 180_000);
 
