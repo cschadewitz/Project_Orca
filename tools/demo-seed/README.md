@@ -40,9 +40,9 @@ node orca-demo-seed/seed.mjs --workspace <app workspace folder>
 
 | Option | Default | What it does |
 | --- | --- | --- |
-| `--workspace <dir>` | the config's folder, from `config.get` | The app workspace (the folder with `orca.config.yaml`). Its `auth/local-client.token` is the daemon token. |
-| `--url <url>` | found from `/proc` on Linux | The daemon, `http://127.0.0.1:<port>`. The desktop app's bundled daemon listens on a random port; elsewhere pass it. `ORCA_DAEMON_URL` works too. |
-| `--token-file <file>` | `<workspace>/auth/local-client.token` | Or `ORCA_DAEMON_TOKEN` / `ORCA_DAEMON_TOKEN_FILE`. |
+| `--workspace <dir>` | required | The app workspace (the folder with `orca.config.yaml`). Its `auth/local-client.token` is the daemon token. Before either phase changes anything, the seed checks that the daemon's own config path (`config.get`) is this workspace's `orca.config.yaml`, and refuses otherwise. |
+| `--url <url>` | found from `/proc` on Linux | The daemon, `http://127.0.0.1:<port>`; only a loopback address is accepted, and redirects are refused, so the token stays on this machine. The desktop app's bundled daemon listens on a random port; elsewhere pass it. `ORCA_DAEMON_URL` works too. |
+| `--token-file <file>` | `<workspace>/auth/local-client.token` | |
 | `--phase prepare\|populate\|all` | `all` | `all` prepares, and populates only if no restart is needed. |
 | `--scale <n>` | `1` | Submit the work items and workflow runs `n` times. |
 | `--agent-node <path>` | this Node | What runs the agents. The installed ORCA binary works (`/opt/ORCA/orca-desktop`); the seed then sets `ELECTRON_RUN_AS_NODE=1` for the agents. |
@@ -91,5 +91,6 @@ planner per program, one with a very long name, and one whose command does not e
 - The store grows by about 5,000 files at scale 1 under the file store. The desktop app checks
   at most 8,192 files under `.orca` and `auth` when it reopens a workspace, so a large `--scale`
   can make the app refuse the workspace.
+- Plan decisions and risk updates only touch plans this invocation made: new since it started, and fed only by its own program requests. An older plan with the same key is left alone.
 - Populate is once per workspace; the plan slugs are fixed, so a second batch collides. Start
   from a fresh workspace instead of `--force` unless you only want more runs.

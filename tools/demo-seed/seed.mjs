@@ -14,7 +14,16 @@
 // Usage (see README.md):
 //   node seed.mjs [--workspace <dir>] [--url <daemon url>] [--token-file <file>]
 //                 [--scale <n>] [--agent-node <path>] [--phase prepare|populate|all] [--force]
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, writeFileSync } from "node:fs";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  readlinkSync,
+  realpathSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
@@ -74,7 +83,7 @@ function assets() {
 
 // ---------------------------------------------------------------- the daemon
 
-/** The daemon serving `workspace` (any, when none is given) and its `--config`, from /proc (Linux). */
+/** The loopback port of the daemon whose command line names `workspace`, from /proc (Linux). verifyTarget still checks it. */
 function discoverUrl(workspace) {
   if (process.platform !== "linux") return undefined;
   const listening = new Map();
@@ -121,26 +130,31 @@ function discoverUrl(workspace) {
   return undefined;
 }
 
-function connect() {
-  let workspace = args.workspace ? resolve(args.workspace) : undefined;
-  let url = args.url ?? process.env.ORCA_DAEMON_URL;
-  if (!url) {
-    const found = discoverUrl(workspace);
-    url = found?.url;
-    // The daemon's own --config names the workspace whose token it accepts.
-    if (!workspace && found?.config) workspace = dirname(resolve(found.config));
+const LOOPBACK = new Set(["127.0.0.1", "localhost", "[::1]"]);
+
+/**
+ * Only a daemon on this machine's loopback interface: the seed sends the workspace's local
+ * bearer token with every request, and that token is for the local daemon alone.
+ */
+function loopbackUrl(raw) {
+  let url;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error(`not a URL: ${raw}`);
   }
-  if (!url) throw new Error("could not find the daemon; pass --url http://127.0.0.1:<port> (and --workspace)");
-  const tokenFile =
-    args["token-file"] ??
-    process.env.ORCA_DAEMON_TOKEN_FILE ??
-    (workspace ? join(workspace, "auth", "local-client.token") : undefined);
-  const token = process.env.ORCA_DAEMON_TOKEN ?? (tokenFile ? readFileSync(tokenFile, "utf8").trim() : undefined);
-  if (!token) throw new Error("no daemon token; pass --workspace or --token-file");
+  if (url.protocol !== "http:" || !LOOPBACK.has(url.hostname) || url.username || url.password)
+    throw new Error(`refusing ${raw}: the seed only talks to a daemon on http://127.0.0.1, localhost or [::1]`);
+  return url.origin;
+}
+
+/** An RPC caller for `url` with `token`. Redirects are refused, so the token never follows one. */
+function rpcClient(url, token) {
   let id = 0;
   return async function call(method, params = {}) {
-    const response = await fetch(`${url.replace(/\/$/, "")}/rpc`, {
+    const response = await fetch(`${url}/rpc`, {
       method: "POST",
+      redirect: "error",
       headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
       body: JSON.stringify({ kind: "request", id: ++id, method, params }),
     });
@@ -151,6 +165,46 @@ function connect() {
     }
     return message.result;
   };
+}
+
+/**
+ * Refuse unless the daemon at the end of `call` serves exactly `workspace`'s config: the files
+ * the seed writes and the config, runs and plans it changes must be one workspace, the one the
+ * person named. Checked before either phase changes anything.
+ */
+async function verifyTarget(call, workspace) {
+  const expected = realpathSync(join(workspace, "orca.config.yaml"));
+  const served = (await call("config.get")).config?.path;
+  let actual;
+  try {
+    actual = served ? realpathSync(served) : undefined;
+  } catch {
+    actual = undefined;
+  }
+  if (actual !== expected)
+    throw new Error(
+      `refusing: the daemon serves ${served ?? "an unknown config"}, not ${expected}; point --url at the daemon for --workspace`,
+    );
+}
+
+/** The selected workspace, its daemon and a caller for it, verified before anything is written. */
+async function connect() {
+  if (!args.workspace) throw new Error("--workspace <app workspace folder> is required");
+  const workspace = realpathSync(resolve(args.workspace));
+  const url = loopbackUrl(
+    args.url ??
+      process.env.ORCA_DAEMON_URL ??
+      discoverUrl(workspace)?.url ??
+      fail("could not find the daemon for this workspace; pass --url http://127.0.0.1:<port>"),
+  );
+  const tokenFile = args["token-file"] ?? join(workspace, "auth", "local-client.token");
+  const call = rpcClient(url, readFileSync(tokenFile, "utf8").trim());
+  await verifyTarget(call, workspace);
+  return { workspace, call };
+}
+
+function fail(message) {
+  throw new Error(message);
 }
 
 // ---------------------------------------------------------------- prepare
@@ -297,10 +351,9 @@ function writeFiles(workspace, config, files) {
   return edits;
 }
 
-async function prepare(call) {
+async function prepare(call, workspace) {
   const files = assets();
   const current = await call("config.get");
-  const workspace = args.workspace ? resolve(args.workspace) : dirname(current.config.path);
   log(`workspace ${workspace}`);
   const edits = writeFiles(workspace, current.config, files);
   if (edits.length === 0) {
@@ -377,11 +430,14 @@ async function populate(call, workspace) {
       ...params,
     });
     const runId = runIdOf(result);
-    submitted.push({ label, runId, state: result.state, ...extra });
+    submitted.push({ label, runId, requestId: result.requestId, state: result.state, ...extra });
     if (result.state === "recoverable-failure") log(`  ${label}: ${result.failure.code} ${result.failure.message}`);
     return runId;
   };
 
+  // Plans that exist before this batch are never touched, whatever their key (see ownedPlan).
+  const before = await call("plans.list", {});
+  const existingPlans = new Set((before.plans ?? []).map((plan) => plan.id));
   log(
     `submitting ${WORK.length * scale} work items, ${WORKFLOW_RUNS.length * scale} workflow runs, ${PROGRAMS.length} programs`,
   );
@@ -473,11 +529,11 @@ async function populate(call, workspace) {
     }
     const plans = await call("plans.list", {}).catch(() => ({ plans: [] }));
     for (const plan of plans.plans ?? []) {
-      const program = PROGRAMS.find((p) => p.plan === plan.key);
-      if (!program || planned.has(plan.key)) continue;
+      const program = ownedPlan(plan, existingPlans, submitted);
+      if (!program || planned.has(plan.id)) continue;
       const decisions = await call("decisions.list", { planId: plan.id }).catch(() => ({ decisions: [] }));
       if (program.decomposition.decisions.length && !(decisions.decisions ?? []).length) continue; // not registered yet
-      planned.add(plan.key);
+      planned.add(plan.id);
       if (program.decide)
         await call("decisions.decide", { planId: plan.id, ...program.decide }).then(
           () => log(`decided ${program.decide.key} = ${program.decide.option} in ${plan.key}`),
@@ -490,11 +546,13 @@ async function populate(call, workspace) {
         );
     }
     const pendingCancels = cancels.some((c) => !c.done);
+    // Plans this batch cannot own never count, so the loop ends on the settle deadline then.
     const plansDone = planned.size === PROGRAMS.length;
     if (!pendingCancels && plansDone && answered.size >= expectedAnswers()) break;
     await sleep(5000);
   }
 
+  mkdirSync(dirname(marker), { recursive: true });
   writeFileSync(marker, json({ at: new Date().toISOString(), stamp, scale, submitted }));
   const runs = await call("runs.list", {}).catch(() => undefined);
   const list = runs?.runs ?? [];
@@ -519,6 +577,20 @@ async function populate(call, workspace) {
   }
 }
 
+/**
+ * The fixture program for `plan` when this invocation made the plan, else undefined: a plan
+ * that is new since the batch started, whose key is a fixture's, and whose every contributing
+ * request is that fixture's program request from this batch. An older plan with the same key, a
+ * plan another request joined, or one from a rejected submission is left alone.
+ */
+function ownedPlan(plan, existingPlans, submitted) {
+  if (existingPlans.has(plan.id)) return undefined;
+  const program = PROGRAMS.find((p) => p.plan === plan.key);
+  const ours = submitted.find((s) => s.program === plan.key && s.state === "accepted")?.requestId;
+  if (!program || !ours || plan.requestIds.length === 0 || plan.requestIds.some((id) => id !== ours)) return undefined;
+  return program;
+}
+
 /** Which option the seed picks for a gate, or undefined to leave it waiting. */
 function answerFor(seeded, input) {
   if (!seeded) return undefined;
@@ -541,18 +613,18 @@ function countFiles(dir) {
 
 // ---------------------------------------------------------------- main
 
-const call = connect();
-let workspace = args.workspace ? resolve(args.workspace) : undefined;
-if (args.phase !== "populate") {
-  const prepared = await prepare(call);
-  workspace = prepared.workspace;
-  if (prepared.restart) {
-    log("the daemon has not loaded the demo agents yet: restart it (quit and reopen ORCA), then run");
-    log(`  node ${process.argv[1]} --phase populate --workspace ${workspace}`);
-    process.exit(args.phase === "all" ? 2 : 0);
+try {
+  const { workspace, call } = await connect();
+  if (args.phase !== "populate") {
+    const prepared = await prepare(call, workspace);
+    if (prepared.restart) {
+      log("the daemon has not loaded the demo agents yet: restart it (quit and reopen ORCA), then run");
+      log(`  node ${process.argv[1]} --phase populate --workspace ${workspace}`);
+      process.exit(args.phase === "all" ? 2 : 0);
+    }
   }
-}
-if (args.phase !== "prepare") {
-  if (!workspace) workspace = dirname((await call("config.get")).config.path);
-  await populate(call, workspace);
+  if (args.phase !== "prepare") await populate(call, workspace);
+} catch (error) {
+  process.stderr.write(`[demo-seed] ${error.message}\n`);
+  process.exit(1);
 }
