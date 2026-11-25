@@ -80,8 +80,15 @@ const SETTINGS = {
   diagnostics: { toolCalls: "keep" },
 } as const;
 
-/** The adapter's mode that turns Codex's sandbox and approvals off; a case must not run in it. */
-const FULL_ACCESS_MODE = "agent-full-access";
+/**
+ * The mode the pinned adapter (codex-acp 2.9.0) opens a session in when none is set: "Auto
+ * review", Codex's workspace-write sandbox with on-request approvals. Each session has to report
+ * exactly this before it is prompted; a missing, unknown or other mode stops the case.
+ */
+const EXPECTED_MODE = "agent";
+
+/** A native approval request, as the test's stand-in for the person receives it. */
+type ApprovalRequest = Parameters<NonNullable<OpenSessionOptions["askPermission"]>>[0];
 
 /** What these cases do not cover, and why; recorded so nothing reads as more than it is. */
 const NOT_COVERED = [
@@ -100,6 +107,27 @@ interface Case {
   step: Step;
   /** The workspace's change expected: path -> exact content, or nothing at all. */
   expect: Record<string, string>;
+  /**
+   * For an allow case: whether a native approval request is for exactly this case's harmless
+   * fixture action in `workspace`. Only such a request, and only the first, is allowed once.
+   */
+  fixture?: (call: ApprovalRequest["toolCall"], workspace: string) => boolean;
+}
+
+/** The test's answer as the person: allow once for the first request for the fixture only. */
+function personAnswer(isFixture: boolean, asked: readonly { answer: string | undefined }[]) {
+  return isFixture && !asked.some((a) => a.answer === "allow_once") ? "allow_once" : "reject_once";
+}
+
+/** The command a native command approval names: its title, or the command in its input. */
+function commandsOf(call: ApprovalRequest["toolCall"]): string[] {
+  const input = (call.rawInput ?? {}) as { command?: unknown };
+  const command = input.command;
+  return [
+    ...(call.title ? [call.title] : []),
+    ...(typeof command === "string" ? [command] : []),
+    ...(Array.isArray(command) && typeof command.at(-1) === "string" ? [command.at(-1) as string] : []),
+  ];
 }
 
 const CASES: Case[] = [
@@ -109,6 +137,7 @@ const CASES: Case[] = [
     rule: { match: { kind: "execute", titlePattern: "^echo orca-1026 > shell-allowed\\.txt$" }, decision: "allow" },
     step: shell("echo orca-1026 > shell-allowed.txt"),
     expect: { "shell-allowed.txt": "orca-1026\n" },
+    fixture: (call) => call.kind === "execute" && commandsOf(call).includes("echo orca-1026 > shell-allowed.txt"),
   },
   {
     id: "shell-deny",
@@ -123,6 +152,10 @@ const CASES: Case[] = [
     rule: { match: { kind: "edit", scope: "workspace" }, decision: "allow" },
     step: patch("*** Add File: patch-allowed.txt", "+orca-1026"),
     expect: { "patch-allowed.txt": "orca-1026\n" },
+    fixture: (call, workspace) =>
+      call.kind === "edit" &&
+      call.locations?.length === 1 &&
+      call.locations[0]!.path === join(workspace, "patch-allowed.txt"),
   },
   {
     id: "patch-deny",
@@ -171,6 +204,48 @@ function git(...args: string[]): string | null {
   }
 }
 
+describe("the test's answers to native approvals, as the person", () => {
+  const ws = "/w";
+  const shellAllow = CASES.find((c) => c.id === "shell-allow")!.fixture!;
+  const patchAllow = CASES.find((c) => c.id === "patch-allow")!.fixture!;
+  const call = (over: Partial<ApprovalRequest["toolCall"]>) => ({ toolCallId: "t", ...over });
+
+  it("allows once only the exact fixture action, and only the first request for it", () => {
+    expect(shellAllow(call({ kind: "execute", title: "echo orca-1026 > shell-allowed.txt" }), ws)).toBe(true);
+    expect(
+      shellAllow(
+        call({
+          kind: "execute",
+          title: "Run command",
+          rawInput: { command: ["bash", "-lc", "echo orca-1026 > shell-allowed.txt"] },
+        }),
+        ws,
+      ),
+    ).toBe(true);
+    expect(personAnswer(true, [])).toBe("allow_once");
+    expect(personAnswer(true, [{ answer: "allow_once" }])).toBe("reject_once");
+    expect(patchAllow(call({ kind: "edit", locations: [{ path: "/w/patch-allowed.txt" }] }), ws)).toBe(true);
+  });
+
+  it("refuses anything else", () => {
+    for (const other of [
+      call({ kind: "execute", title: "rm -rf x; echo orca-1026 > shell-allowed.txt" }),
+      call({ kind: "execute", title: "echo orca-1026 > shell-allowed.txt.bak" }),
+      call({ kind: "edit", title: "echo orca-1026 > shell-allowed.txt" }),
+      call({ kind: "execute", title: "Run command", rawInput: { command: "curl example.invalid" } }),
+    ])
+      expect(shellAllow(other, ws)).toBe(false);
+    for (const other of [
+      call({ kind: "edit", locations: [{ path: "/w/patch-allowed.txt" }, { path: "/w/other.txt" }] }),
+      call({ kind: "edit", locations: [{ path: "/elsewhere/patch-allowed.txt" }] }),
+      call({ kind: "execute", locations: [{ path: "/w/patch-allowed.txt" }] }),
+      call({ kind: "edit" }),
+    ])
+      expect(patchAllow(other, ws)).toBe(false);
+    expect(personAnswer(false, [])).toBe("reject_once");
+  });
+});
+
 describe.skipIf(ADAPTER === undefined)("installed-session evidence for Codex's hook route (#1026)", () => {
   let model: ModelStandIn;
   let hookScript: string;
@@ -193,19 +268,25 @@ describe.skipIf(ADAPTER === undefined)("installed-session evidence for Codex's h
   });
 
   /** One disposable workspace, config directory and Codex home, and a session the factory opens. */
-  const open = async (id: string, rule: unknown, allow: boolean) => {
+  const open = async (id: string, rule: unknown, fixture: Case["fixture"]) => {
     const base = join(root, id);
     const configDir = join(base, "config");
     const workspace = join(base, "work");
     const codexHome = join(base, "codex-home");
     for (const dir of [configDir, workspace, codexHome]) await mkdir(dir, { recursive: true });
     // A native approval that reaches the person is answered as the person would for this
-    // harmless call: once, for this call only; allowed in an allow case, refused in a deny case.
-    const personAsked: { title: string; answer: string | undefined }[] = [];
+    // harmless call: allowed once only when it is for exactly the case's fixture action, and only
+    // the first time; anything else (a deny case, another action, a second request) is refused.
+    const personAsked: { title: string; fixture: boolean; answer: string | undefined }[] = [];
     const askPermission: OpenSessionOptions["askPermission"] = async (req) => {
-      const kind = allow ? "allow_once" : "reject_once";
+      const isFixture = fixture?.(req.toolCall, workspace) ?? false;
+      const kind = personAnswer(isFixture, personAsked);
       const answer = req.options.find((o) => o.kind === kind)?.optionId;
-      personAsked.push({ title: req.toolCall.title ?? "", answer: answer === undefined ? undefined : kind });
+      personAsked.push({
+        title: req.toolCall.title ?? "",
+        fixture: isFixture,
+        answer: answer === undefined ? undefined : kind,
+      });
       return answer;
     };
     // Every native approval request ORCA answered, by its policy or by the person.
@@ -259,7 +340,7 @@ describe.skipIf(ADAPTER === undefined)("installed-session evidence for Codex's h
   for (const c of CASES)
     it(`${c.id}: ${c.action}`, async () => {
       const allow = Object.keys(c.expect).length > 0;
-      const { session, workspace, personAsked, native, hookLines, recorded } = await open(c.id, c.rule, allow);
+      const { session, workspace, personAsked, native, hookLines, recorded } = await open(c.id, c.rule, c.fixture);
       // The mode the adapter reports for the session, with its own description of it.
       const modeOption = session.configOptions.find((o) => o.category === "mode");
       const mode = modeOption?.currentValue ?? null;
@@ -269,6 +350,8 @@ describe.skipIf(ADAPTER === undefined)("installed-session evidence for Codex's h
       const before = await tree(workspace);
       const outputsBefore = model.outputs.length;
       try {
+        // The pinned adapter's mode, reported explicitly, before anything is asked of it.
+        expect(mode).toBe(EXPECTED_MODE);
         await session.prompt(script(c.step));
         // The hook hands its record to a detached writer after answering, so it can land a
         // little after the call: read the spool until it does, within the writer's deadline.
@@ -339,8 +422,7 @@ describe.skipIf(ADAPTER === undefined)("installed-session evidence for Codex's h
         effect: { expected: allow ? "exactly this change" : "no effect", observed: effect, before, after, changed },
         toolOutput: outputs,
       });
-      // The session ran with Codex's native protections, and nothing contradicts the expected outcome.
-      expect(mode).not.toBe(FULL_ACCESS_MODE);
+      // Nothing contradicts the expected outcome.
       expect(failures).toEqual([]);
     }, 180_000);
 
