@@ -7,10 +7,10 @@ See [Development](DEVELOPMENT.md) for current source setup and the
 [capability ledger](ROADMAP.md) for guided-launch and native release gaps.
 
 The combined runtime includes the connection UI, authenticated target switching and
-persistent workspace identity. [318-daemon-connection-integration.patch](patches/318-daemon-connection-integration.patch)
+persistent workspace identity. [318-daemon-connection-integration.patch](archive/patches/318-daemon-connection-integration.patch)
 is a historical handoff against preparation baseline
 `7abc2342aa672ee9d2f10d565ca4f8eb546184df`. Its wiring is reconciled here; do not
-reapply it. See [integration review status](runtime-next-integration.md#review-status-and-final-reconciliation)
+reapply it. See [integration review status](archive/runtime-next-integration.md#review-status-and-final-reconciliation)
 for the remaining combined validation gates.
 
 ## Connecting

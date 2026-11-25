@@ -47,7 +47,7 @@ asserted here.
 
 ## Repository evidence and scope decision
 
-The [integrated runtime foundation](../../runtime-foundation-integration.md) is on the
+The [integrated runtime foundation](../../archive/runtime-foundation-integration.md) is on the
 pinned main commit. [Principal definitions](../../../packages/daemon/src/auth/principal.ts),
 [resource checks](../../../packages/daemon/src/auth/resources.ts),
 [credential lifecycle](../../../packages/daemon/src/auth/credentials.ts), and

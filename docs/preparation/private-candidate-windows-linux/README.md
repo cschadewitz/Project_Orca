@@ -12,7 +12,7 @@ double-brace fill-in, such as `{{CANDIDATE_VERSION}}`, declared in the
 Testers are **not unblocked**: the checklist's gates G1–G9 all start unchecked.
 
 macOS/Apple Silicon is out of scope. The existing Mac drafts (`native-mac-*`, #389,
-#390) are unchanged. The Mac/Windows drafts in [`beta-feedback/`](../beta-feedback/README.md)
+#390) are unchanged. The Mac/Windows drafts in [`beta-feedback/`](../../archive/preparation/beta-feedback/README.md)
 are unchanged apart from a superseding note on their diagnostics wording. That note
 points Windows/Linux readers here.
 
@@ -38,7 +38,7 @@ It does **not** change, and only coordinates with, the following:
 - the updater, lockfiles and `tools/owned-read-proof`
 - application code
 
-The [private-beta release guidance](../private-beta-release-guidance.md) supplements
+The [private-beta release guidance](../../archive/preparation/private-beta-release-guidance.md) supplements
 this onboarding with the release checklist and the v0.6.0 upgrade/rollback
 limitations. It also introduces an explicit consent-notice fill-in in the candidate
 card and coordinator checklist. The baseline and validation record below describe the
@@ -46,7 +46,7 @@ original preparation; they do not validate or accept a later candidate.
 
 ## Sources audited
 
-- [Readiness audit](../../reviews/2026-10-27-release-readiness.md) (#775): the evidence
+- [Readiness audit](../../archive/reviews/2026-10-27-release-readiness.md) (#775): the evidence
   vocabulary, R5/R7/R10, C1–C3, C7 and decision D1.
 - [#772](https://github.com/cschadewitz/Project_Orca/issues/772) and its draft
   [#779](https://github.com/cschadewitz/Project_Orca/pull/779) plan at `554d3ee`
@@ -54,14 +54,14 @@ original preparation; they do not validate or accept a later candidate.
   candidate manifest, static inspection, L1–L4, W1–W5, U1–U6 and the source findings
   they record.
 - Windows first-run receipts:
-  - [m21-windows-first-run.md](../../implementation/m21-windows-first-run.md) (#605 delta)
-  - [m21-windows-acceptance.md](../../implementation/m21-windows-acceptance.md)
+  - [m21-windows-first-run.md](../../archive/implementation/m21-windows-first-run.md) (#605 delta)
+  - [m21-windows-acceptance.md](../../archive/implementation/m21-windows-acceptance.md)
   - `packages/app/test/milestone21/windows-first-run.mjs`, which is the click sequence
     the F-steps follow
-- [`beta-feedback/`](../beta-feedback/README.md) (#422) and the
+- [`beta-feedback/`](../../archive/preparation/beta-feedback/README.md) (#422) and the
   [`beta-first-job`](../beta-first-job/acceptance.md) fixture (#420).
 - Diagnostics: the save-only decision banner in
-  [ui-boundaries.md](../crash-recovery/ui-boundaries.md#current-save-only-export-authority),
+  [ui-boundaries.md](../../archive/preparation/crash-recovery/ui-boundaries.md#current-save-only-export-authority),
   `packages/app/src/diagnostics-contract.ts` and
   `packages/app/renderer/src/diagnostics/diagnostics-section.tsx`.
 - [RELEASING.md](../../RELEASING.md) (artifacts, bundled daemon, signing) and

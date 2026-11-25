@@ -314,7 +314,7 @@ the token; do not inline the number.
 | The two dependency-graph options and the recommendation | `80-dependency-graph-options.md` |
 | Guided launch, first-run setup, diagnostics, the template studio, updates | `90-setup-launch-and-maintenance.md` |
 | The brief the system was designed from | `claude-design-prompt.md` |
-| How closely the app matched the Claude Design artifact, and the drift still open | [`../reviews/2026-10-10-design-conformance.md`](../reviews/2026-10-10-design-conformance.md) |
+| How closely the app matched the Claude Design artifact, and the drift still open | [`../reviews/2026-10-10-design-conformance.md`](../archive/reviews/2026-10-10-design-conformance.md) |
 
 The rendered version of this system — live component previews, both themes side by side, and
 the seven key screens — lives in a Claude Design System artifact,

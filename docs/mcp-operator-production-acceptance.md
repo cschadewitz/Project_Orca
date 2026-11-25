@@ -13,7 +13,7 @@ validate this current-main binary on that host.
 
 The C-branch setup and #434 overlay described in the later historical sections
 are dated preparation evidence. They no longer describe the installation state of
-current main. The [evidence map](runtime-operator-integration.md#current-main-evidence-map)
+current main. The [evidence map](archive/runtime-operator-integration.md#current-main-evidence-map)
 separates code, compiled tests and deployed observations.
 
 The [7 October actual-Cal handoff](preparation/private-mcp-access/actual-cal-matrix.md)

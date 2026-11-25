@@ -80,7 +80,7 @@ revision. The same canonical type is used by approved rule predicates. Mixed/mal
 kinds and missing identities refuse; no cross-kind or undefined-field match is permitted.
 The actual private-cell capability supplies synthetic memory evidence only. Resource-kind
 support does not qualify a provider, lower a profile or turn a path into a physical handle.
-See [the bounded composed slice](../enforcement-conformance/composition-slice.md).
+See [the bounded composed slice](../../archive/preparation/enforcement-conformance/composition-slice.md).
 
 `CoverageV1.level` has four distinct meanings: unknown; observation/UI only; current
 policy per received ask; verified check at every execution on the **named path**.

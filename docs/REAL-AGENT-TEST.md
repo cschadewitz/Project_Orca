@@ -6,7 +6,7 @@ not current contributor setup, proof of present host health, or a native beta gu
 not every proposed run was executed. Do not replay install/auth/SSH/provider commands
 just to validate these docs. Start at [Development](DEVELOPMENT.md) for current
 source setup, [Integrations](INTEGRATIONS.md) for supported boundaries and the
-[current evidence map](reviews/2026-10-07-living-docs.md) for later acceptance.
+[current evidence map](archive/reviews/2026-10-07-living-docs.md) for later acceptance.
 
 How this machine was set up to drive ORCA with **Claude Code as a real ACP agent**, and how to
 reach that install from **Kepler on your desktop**. This is the setup half of issue #98 (*Run
@@ -392,7 +392,7 @@ What that run says about the untested surface:
 Prompt typed into a Kepler desktop session with ORCA as the agent: *"create a new file that
 contains a poem. And save it to the test repo you are in."* Store: `/srv/dev/orca-live/.orca-kepler`.
 Both event logs are saved under
-[`session-logs/2026-09-19-kepler-session-sess_01M2VHXARDM7Z6V5RTVVBE136M/`](session-logs/2026-09-19-kepler-session-sess_01M2VHXARDM7Z6V5RTVVBE136M/).
+[`session-logs/2026-09-19-kepler-session-sess_01M2VHXARDM7Z6V5RTVVBE136M/`](archive/session-logs/2026-09-19-kepler-session-sess_01M2VHXARDM7Z6V5RTVVBE136M/).
 
 | Run | What | Result |
 | --- | --- | --- |

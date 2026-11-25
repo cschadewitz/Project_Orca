@@ -131,10 +131,10 @@ When your coordinator confirms nothing more is needed:
 
 | Claim | Evidence | Status |
 | --- | --- | --- |
-| First-run setup, one harmless sample, restart and reopen | Real Windows x64 Electron 44.4.5, **source-built**, with a test-substituted folder picker ([receipt](../../implementation/m21-windows-first-run.md)) | Passed on source only |
+| First-run setup, one harmless sample, restart and reopen | Real Windows x64 Electron 44.4.5, **source-built**, with a test-substituted folder picker ([receipt](../../archive/implementation/m21-windows-first-run.md)) | Passed on source only |
 | Personal desktop launch, bundled-daemon connection and agent-free sample | [5 November exploratory receipt on #773](https://github.com/cschadewitz/Project_Orca/issues/773#issuecomment-6649853644): Windows 11 AMD64, unsigned `b4361b1558bf0ffa3f45f18be790bbd0c24ae013` artifact; `sampleResult` value was not visible | Exploratory observation only; not a selected-candidate or clean-install acceptance receipt. Windows 10 is excluded from this round |
 | Clean install, launch, logs, shutdown of the **packaged** installer | [#772](https://github.com/cschadewitz/Project_Orca/issues/772) procedures W1–W5 | Not run for any candidate |
-| Preparatory Windows x64/arm64 packaging | [Desktop run 41878358657](https://github.com/cschadewitz/Project_Orca/actions/runs/41878358657), source `b4361b1`; packaging preparation merged in #814/#815 ([readiness audit](../../reviews/2026-10-27-release-readiness.md)) | Packaging passed; unsigned and not a selected candidate. Native arm64 execution is not established |
+| Preparatory Windows x64/arm64 packaging | [Desktop run 41878358657](https://github.com/cschadewitz/Project_Orca/actions/runs/41878358657), source `b4361b1`; packaging preparation merged in #814/#815 ([readiness audit](../../archive/reviews/2026-10-27-release-readiness.md)) | Packaging passed; unsigned and not a selected candidate. Native arm64 execution is not established |
 | arm64 | — | Never executed |
 | Signing, publisher trust, SmartScreen reputation | Signed rc.1 x64 build from the `windows-signed.yml` workflow; Authenticode `Valid`, signer `CN=Casey Schadewitz`, installed and opened on a real Windows 11 26H2 x64 machine that had run ORCA before (no SmartScreen shown there) | Signature verified on one machine; SmartScreen reputation on a fresh machine unknown. The release page's own Windows files remain unsigned |
 | In-place upgrade from an earlier ORCA | Readiness audit C3 | Unverified; excluded from this round |
