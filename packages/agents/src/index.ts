@@ -22,6 +22,7 @@ export * from "./codex-exec-gate.js";
 export * from "./codex-exec-gate-policy.js";
 export * from "./codex-exec-isolation.js";
 export * from "./codex-exec-gate-session.js";
+export * from "./host-ipc-inventory.js";
 export * from "./providers/index.js";
 export * from "./agent-profiles/index.js";
 export * from "./judged-lane.js";

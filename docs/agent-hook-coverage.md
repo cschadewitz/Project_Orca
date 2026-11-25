@@ -83,6 +83,25 @@ replaces the hook, which runs before them.
 | Agent's own `CODEX_CONFIG` sets hooks | Refused: ORCA does not reorder somebody else's hooks | installed |
 | Adapter runs another Codex (`CODEX_PATH`) | Refused before the session is created: ORCA finds the Codex app-server among the agent's own processes and hashes the image it runs, accepting only the digest pinned for the adapter (`CODEX_HOOK_VERIFIED_PAIRS`). Nothing it finds is executed | installed (0.170.0 refused) |
 
+### The IPC caveat
+
+Once an opted-in Codex session is admitted, ORCA logs a warning naming the host's
+communication endpoints that Codex's processes, running as this user, can reach:
+
+- unix sockets listening in ORCA's network namespace that this user may connect to, and every
+  abstract one;
+- TCP listeners on any address;
+- named pipes this user may write, under the per-user runtime directory, `/tmp`, `/var/tmp`,
+  `/dev/shm` and the home directory, three levels down.
+
+A command can talk to any of them without a further tool call, so the hook does not see it.
+When none is found, the warning says "None detected at startup; isolation has not been
+verified.". Whatever could not be read, or was cut short, is named as incomplete.
+
+**This is a diagnostic, not a control or a proof.** It is read once, at startup. It can miss a
+connection the agent inherited, an endpoint made later, and a named pipe anywhere else. It
+changes nothing about what the agent may do.
+
 ## Gemini CLI (`@google/gemini-cli` 0.70.0)
 
 ORCA installs nothing in Gemini and decides only what Gemini asks about

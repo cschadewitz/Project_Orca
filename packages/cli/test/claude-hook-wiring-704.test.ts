@@ -22,10 +22,12 @@ import {
   runClaudeRuntimeAttestation,
   codexHookTrustHash,
   codexPreToolHookCommand,
+  hostIpcCaveat,
   SshHost,
   permissionPolicyPath,
   type AgentHost,
   type AgentSession,
+  type HostIpcInventory,
   type OpenSessionOptions,
 } from "@orca/agents";
 import { childBundle } from "@orca/testing/child-bundle";
@@ -74,6 +76,8 @@ async function setup(
     signal?: AbortSignal;
     /** The admission's single deadline. */
     deadlineMs?: number;
+    /** The host's communication endpoints, for the Codex IPC caveat. */
+    ipcInventory?: (env: Readonly<Record<string, string | undefined>>) => HostIpcInventory;
   } = {},
 ) {
   const ext =
@@ -135,6 +139,7 @@ async function setup(
           "pid" in codex && pid === codex.pid ? { ...process.env } : { error: "not the Codex process" }),
       codexShell: codexOpts.shell ?? (() => ({ program: "/bin/sh", args: ["-c"] })),
       codexAdmissionDeadlineMs: codexOpts.deadlineMs,
+      ipcInventory: codexOpts.ipcInventory,
     },
   );
   const warnings: { msg: string; fields?: Record<string, unknown> }[] = [];
@@ -402,6 +407,7 @@ describe("installing the hook in Codex (#705)", () => {
       ext?: (method: string) => Promise<unknown>;
       signal?: AbortSignal;
       deadlineMs?: number;
+      ipcInventory?: (env: Readonly<Record<string, string | undefined>>) => HostIpcInventory;
     } = {},
   ) => {
     const seen: { options?: OpenSessionOptions } = {};
@@ -430,6 +436,7 @@ describe("installing the hook in Codex (#705)", () => {
         runtimeBin: process.execPath,
         ...(opts.environment ? { environment: opts.environment } : {}),
         ...(opts.shell ? { shell: opts.shell } : {}),
+        ...(opts.ipcInventory ? { ipcInventory: opts.ipcInventory } : {}),
       },
     );
     await mkdir(join(t.dir, "work"), { recursive: true });
@@ -439,9 +446,31 @@ describe("installing the hook in Codex (#705)", () => {
   it.skipIf(script === undefined || process.platform === "win32")(
     "hands Codex the trusted hook at spawn, and opens once Codex lists it and it blocks when run",
     async () => {
-      const t = await codexSetup();
+      const asked: Readonly<Record<string, string | undefined>>[] = [];
+      const inventory: HostIpcInventory = {
+        endpoints: [{ kind: "unix-socket", name: "/run/user/1000/bus" }],
+        pipesSearched: ["/tmp"],
+        incomplete: [],
+      };
+      const t = await codexSetup(
+        {},
+        {
+          ipcInventory: (env) => {
+            asked.push(env);
+            return inventory;
+          },
+        },
+      );
       const session = await t.open();
       expect(t.seen.meta).toBeUndefined();
+      // Said beside the opt-in, after the session is admitted: experimental, then what Codex's
+      // processes can reach on the host, read from the environment the agent was started with.
+      expect(t.warnings).toEqual([
+        { msg: NATIVE_TOOL_HOOK_EXPERIMENTAL, fields: { agent: "codex" } },
+        { msg: hostIpcCaveat(inventory), fields: { agent: "codex", ipcEndpoints: 1, ipcIncomplete: 0 } },
+      ]);
+      expect(asked).toHaveLength(1);
+      expect(asked[0]!["CODEX_CONFIG"]).toBeDefined();
       const config = JSON.parse(t.seen.options!.env!["CODEX_CONFIG"]!) as Record<string, unknown>;
       expect(config["model"]).toBe("m");
       const [file] = await t.left();

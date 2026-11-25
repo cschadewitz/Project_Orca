@@ -39,6 +39,8 @@ import {
   admitCodexExecGateSession,
   claudePreToolHookScript,
   codexExecGateRequested,
+  hostIpcCaveat,
+  hostIpcInventory,
   CLAUDE_ADAPTER_NAMES,
   nativeToolHookNotQualified,
   nativeToolHookRequested,
@@ -49,6 +51,7 @@ import {
   permissionPolicyPath,
   type AgentSession,
   type CodexExecGateAdmission,
+  type HostIpcInventory,
   type OpenSessionOptions,
   type ProtectedPaths,
 } from "@orca/agents";
@@ -318,6 +321,8 @@ export function makeSessionFactory(
     codexShell?: (() => { program: string; args: string[] } | { error: string }) | undefined;
     /** The single deadline for a Codex session's admission checks (`CODEX_ADMISSION_DEADLINE_MS`). */
     codexAdmissionDeadlineMs?: number | undefined;
+    /** The host's communication endpoints, for the Codex IPC caveat; `hostIpcInventory` unless given. */
+    ipcInventory?: ((env: Readonly<Record<string, string | undefined>>) => HostIpcInventory) | undefined;
   } = {
     runtime: process.execPath,
     script: claudePreToolHookScript(),
@@ -384,6 +389,7 @@ export function makeSessionFactory(
           `ORCA refuses the session rather than run it unguarded; remove nativeToolHook to run it without the hook.`,
         { agentId: options.agent.id, host: options.host.spec.id },
       );
+    const agentEnv = { ...process.env, ...literalEnv(options.agent.env), ...(options.env ?? {}) };
     const installed = nativeToolHookSession({
       agentId: options.agent.id,
       permissions: options.agent.permissions,
@@ -403,7 +409,7 @@ export function makeSessionFactory(
       codexAdmissionDeadlineMs: hook.codexAdmissionDeadlineMs,
       // A cancelled run stops the hook's admission checks too.
       signal: options.origin?.signal,
-      agentEnv: { ...process.env, ...literalEnv(options.agent.env), ...(options.env ?? {}) },
+      agentEnv,
       toolCallTelemetry: options.agent.diagnostics?.toolCalls,
       // In the desktop app ORCA's runtime is the Electron binary, which runs a script as Node
       // only with this set; the hooks the agent starts inherit it from the agent.
@@ -456,6 +462,16 @@ export function makeSessionFactory(
     admit();
     // Said on every hooked session: the hook is an experimental, unqualified layer (#704 review).
     options.logger?.warn(NATIVE_TOOL_HOOK_EXPERIMENTAL, { agent: options.agent.id });
+    // The Codex IPC caveat (#1026): what of the host's communication endpoints Codex's processes
+    // can reach, read once now. A warning only: it neither grants nor takes anything away.
+    if (installed.status() === "codex") {
+      const inventory = (hook.ipcInventory ?? hostIpcInventory)(agentEnv);
+      options.logger?.warn(hostIpcCaveat(inventory), {
+        agent: options.agent.id,
+        ipcEndpoints: inventory.endpoints.length,
+        ipcIncomplete: inventory.incomplete.length,
+      });
+    }
     void session.closed.then(installed.cleanup, installed.cleanup);
     const close = session.close.bind(session);
     session.close = async (...args: Parameters<AgentSession["close"]>) => {
