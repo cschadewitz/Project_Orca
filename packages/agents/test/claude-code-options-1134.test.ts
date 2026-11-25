@@ -26,6 +26,13 @@ describe("claudeCodeOptions", () => {
     expect(claudeCodeOptions({ sandbox: "off" }, protectedPaths)).toBeUndefined();
   });
 
+  it("refuses a sandbox while any settings file is loaded, since their sandbox exceptions merge in", () => {
+    expect(() => claudeCodeOptions({ sandbox: "on" }, undefined)).toThrow(/needs settingSources: \[\]/);
+    expect(() => claudeCodeOptions({ sandbox: "on", settingSources: ["user"] }, undefined)).toThrow(
+      /needs settingSources: \[\]/,
+    );
+  });
+
   it("passes the chosen sources, and turns bypass off when the checkout's are left out", () => {
     expect(claudeCodeOptions({ settingSources: [] }, undefined)).toEqual({
       settingSources: [],
@@ -41,8 +48,12 @@ describe("claudeCodeOptions", () => {
   });
 
   it("puts the sandbox in the settings layer, asking about every command and never letting one out", () => {
-    const options = claudeCodeOptions({ sandbox: "on" }, protectedPaths);
-    expect(options).toEqual({ settings: { sandbox: claudeSandboxSettings(protectedPaths) } });
+    const options = claudeCodeOptions({ settingSources: [], sandbox: "on" }, protectedPaths);
+    expect(options).toEqual({
+      settingSources: [],
+      allowDangerouslySkipPermissions: false,
+      settings: { sandbox: claudeSandboxSettings(protectedPaths) },
+    });
     expect(claudeSandboxSettings(protectedPaths)).toEqual({
       enabled: true,
       failIfUnavailable: true,
@@ -50,8 +61,8 @@ describe("claudeCodeOptions", () => {
       allowUnsandboxedCommands: false,
       filesystem: {
         denyRead: ["/cfg/auth", "/cfg/.orca/private-execution"],
-        // The store holds an area the agent writes, so it is left to the policy.
-        denyWrite: ["/cfg/orca.yaml", "/cfg/auth", "/cfg/.orca/private-execution"],
+        // The whole store, agent areas included: an exception beneath a deny does not hold.
+        denyWrite: ["/cfg/orca.yaml", "/cfg/.orca", "/cfg/auth", "/cfg/.orca/private-execution"],
       },
     });
     expect(claudeSandboxSettings(undefined)).toEqual({
@@ -108,7 +119,7 @@ describe("claudeCodeSessionMeta", () => {
   });
 
   it("refuses an agent that is not the Claude adapter, or does not say", async () => {
-    const meta = claudeCodeSessionMeta("a", { sandbox: "on" }, undefined)!;
+    const meta = claudeCodeSessionMeta("a", { settingSources: [], sandbox: "on" }, undefined)!;
     await expect(meta({ name: "codex-acp", version: "1" }, vi.fn(), 1)).rejects.toMatchObject({
       code: "NOT_SUPPORTED",
       message: expect.stringMatching(/says it is codex-acp/),
@@ -121,6 +132,8 @@ describe("the agent config", () => {
   it("takes settingSources and sandbox, each source once", () => {
     const parse = (claudeCode: unknown) => AgentSpecSchema.safeParse({ id: "c", command: "x", claudeCode });
     expect(parse({ settingSources: [], sandbox: "on" }).success).toBe(true);
+    expect(parse({ sandbox: "on" }).success).toBe(false);
+    expect(parse({ settingSources: ["user"], sandbox: "on" }).success).toBe(false);
     expect(parse({ settingSources: ["user", "user"] }).success).toBe(false);
     expect(parse({ settingSources: ["managed"] }).success).toBe(false);
     expect(parse({ sandbox: true }).success).toBe(false);

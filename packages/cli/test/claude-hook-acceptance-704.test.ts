@@ -48,6 +48,7 @@ import {
   CLAUDE_HOOK_VERIFIED_PLATFORMS,
   LocalHost,
   claudePreToolHookSettings,
+  claudeSandboxSettings,
   openAcpSession,
   permissionPolicyPath,
   readPermissionPolicyFile,
@@ -110,10 +111,17 @@ function modelStandIn(): Promise<{ server: Server; url: string }> {
         .filter((b) => b.type === "text")
         .map((b) => b.text ?? "")
         .join("\n");
-      const calls = [...text.matchAll(/CALL:(\{.*\})/g)];
-      const call = calls.length
-        ? (JSON.parse(calls[calls.length - 1]![1]!) as { name: string; input: unknown })
-        : undefined;
+      // The last call that parses: Claude Code can quote a prompt back (escaped) in its own text.
+      const call = [...text.matchAll(/CALL:(\{.*\})/g)]
+        .map((m) => {
+          try {
+            return JSON.parse(m[1]!) as { name: string; input: unknown };
+          } catch {
+            return undefined;
+          }
+        })
+        .filter((c) => c !== undefined)
+        .at(-1);
       const id = `msg_${++n}`;
       const events: [string, unknown][] = [
         [
@@ -739,7 +747,7 @@ rl.on("line", (line) => {
       id: "other",
       command: process.execPath,
       args: [other],
-      claudeCode: { sandbox: "on" },
+      claudeCode: { settingSources: [], sandbox: "on" },
     });
     await expect(
       makeSessionFactory(
@@ -774,7 +782,7 @@ rl.on("line", (line) => {
     }
     await rm(outside, { force: true });
 
-    session = await factorySession(permissions, undefined, { claudeCode: { sandbox: "on" } });
+    session = await factorySession(permissions, undefined, { claudeCode: { settingSources: [], sandbox: "on" } });
     try {
       // Inside the workspace a sandboxed command still runs.
       await session.prompt(CALL);
@@ -789,11 +797,98 @@ rl.on("line", (line) => {
 
     // Sandboxed is not allowed: a command ORCA has no rule for is still asked about, and refused.
     await writeFile(join(claudeConfig, "settings.json"), "{}", "utf8");
-    session = await factorySession(undefined, undefined, { claudeCode: { sandbox: "on" } });
+    session = await factorySession(undefined, undefined, { claudeCode: { settingSources: [], sandbox: "on" } });
     try {
       await session.prompt(CALL);
       expect(asks).toEqual([COMMAND]);
       expect(await marks()).toBe(1);
+    } finally {
+      await session.close();
+    }
+  }, 240_000);
+
+  it("keeps a settings file's sandbox exceptions out: they widen the sandbox when loaded, so sandbox: on loads none", async () => {
+    const outside = join(root, "outside.txt");
+    const escape = `echo orca-704-escape >> ${outside}`;
+    const escapeCall = `CALL:${JSON.stringify({ name: "Bash", input: { command: escape, description: "escape" } })}`;
+    const permissions = { rules: [{ match: { kind: "execute", titlePattern: "^echo orca-704" }, decision: "allow" }] };
+    // The user's own settings open the sandbox beyond the workspace.
+    await writeFile(
+      join(claudeConfig, "settings.json"),
+      JSON.stringify({ sandbox: { filesystem: { allowWrite: [root] } }, permissions: { allow: [`Edit(${root}/**)`] } }),
+      "utf8",
+    );
+    // Pinned so a change is noticed: with the file loaded, its exception merges into ORCA's sandbox.
+    const loaded = await openAcpSession({
+      host: new LocalHost({ id: "local", type: "local" }),
+      agent: AgentSpecSchema.parse({ ...agent(permissions), nativeToolHook: undefined }),
+      cwd: workspace,
+      askPermission,
+      logger: silentLogger,
+      handshakeTimeoutMs: 60_000,
+      sessionMeta: async () => ({
+        claudeCode: { options: { settings: { sandbox: claudeSandboxSettings(undefined) } } },
+      }),
+    });
+    try {
+      await loaded.prompt(escapeCall);
+      expect(await readFile(outside, "utf8").catch(() => "")).toContain("orca-704-escape");
+    } finally {
+      await loaded.close();
+    }
+    await rm(outside, { force: true });
+    // So ORCA refuses sandbox: on with any file source, and with none the exception is gone.
+    expect(() =>
+      AgentSpecSchema.parse({ ...agent(permissions), claudeCode: { settingSources: ["user"], sandbox: "on" } }),
+    ).toThrow(/needs settingSources/);
+    const session = await unhookedSession(permissions, { claudeCode: { settingSources: [], sandbox: "on" } });
+    try {
+      await session.prompt(escapeCall);
+      expect(await readFile(outside, "utf8").catch(() => "")).toBe("");
+    } finally {
+      await session.close();
+    }
+  }, 240_000);
+
+  it("keeps sandboxed commands off an ORCA store inside the workspace, while the agent's file tools still reach its work area", async () => {
+    asks.length = 0;
+    // ORCA's config and store in the workspace itself, with some state in the store.
+    const store = join(workspace, ".orca");
+    await mkdir(join(store, "work"), { recursive: true });
+    await writeFile(join(store, "state.txt"), "orig\n", "utf8");
+    const session = await makeSessionFactory(
+      { configDir: workspace, storeDir: ".orca" },
+      openAcpSession,
+    )({
+      host: new LocalHost({ id: "local", type: "local" }),
+      agent: AgentSpecSchema.parse({
+        ...agent({ rules: [{ match: { kind: "execute", titlePattern: "^echo orca-704" }, decision: "allow" }] }),
+        nativeToolHook: undefined,
+        claudeCode: { settingSources: [], sandbox: "on" },
+      }),
+      cwd: workspace,
+      askPermission,
+      logger: silentLogger,
+      handshakeTimeoutMs: 60_000,
+    });
+    const bash = (command: string) =>
+      session.prompt(`CALL:${JSON.stringify({ name: "Bash", input: { command, description: "x" } })}`);
+    const write = (path: string, content: string) =>
+      session.prompt(`CALL:${JSON.stringify({ name: "Write", input: { file_path: path, content } })}`);
+    try {
+      // An ordinary sandboxed write in the workspace runs.
+      await bash(COMMAND);
+      expect(await marks()).toBe(1);
+      // Sandboxed commands cannot touch the store, its state or its work area.
+      await bash("echo orca-704-state >> .orca/state.txt");
+      await bash("echo orca-704-work >> .orca/work/bash.txt");
+      expect(await readFile(join(store, "state.txt"), "utf8")).toBe("orig\n");
+      expect(await readFile(join(store, "work", "bash.txt"), "utf8").catch(() => "")).toBe("");
+      // Claude's file tools still write the agent's own output, and ORCA still refuses its state.
+      await write(join(store, "work", "out.txt"), "written\n");
+      await write(join(store, "state.txt"), "overwritten\n");
+      expect(await readFile(join(store, "work", "out.txt"), "utf8")).toBe("written\n");
+      expect(await readFile(join(store, "state.txt"), "utf8")).toBe("orig\n");
     } finally {
       await session.close();
     }

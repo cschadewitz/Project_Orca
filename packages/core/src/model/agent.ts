@@ -1218,8 +1218,10 @@ export const AgentSpecSchema = z
      *   leaves out CLAUDE.md. Leaving out `project` or `local` turns bypass mode off too, since
      *   the adapter still reads the checkout's initial mode.
      * - `sandbox: on`: Bash commands run in Claude Code's OS sandbox, or the session fails to
-     *   start; no command may leave it, ORCA's private paths are kept out of it, and every
-     *   command is still asked about as before.
+     *   start; no command may leave it, ORCA's private paths and the whole store are kept from
+     *   its writes, and every command is still asked about as before. It needs
+     *   `settingSources: []`, since Claude Code merges sandbox exceptions from every settings
+     *   file it loads.
      */
     claudeCode: z
       .object({
@@ -1231,6 +1233,11 @@ export const AgentSpecSchema = z
         sandbox: z.enum(["off", "on"]).optional(),
       })
       .strict()
+      .refine((c) => c.sandbox !== "on" || (c.settingSources !== undefined && c.settingSources.length === 0), {
+        message:
+          "sandbox: on needs settingSources: [] (Claude Code merges sandbox exceptions from every settings file it loads)",
+        path: ["settingSources"],
+      })
       .optional(),
     /**
      * MCP servers passed in `session/new`. The legacy inline form: each one is on for this

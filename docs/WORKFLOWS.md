@@ -525,7 +525,7 @@ agents:
     command: npx
     args: ["@agentclientprotocol/claude-agent-acp"]
     claudeCode:
-      settingSources: [user]   # leave out the checkout's .claude/settings*.json
+      settingSources: []       # none of Claude Code's own settings files
       sandbox: on              # Bash in Claude Code's OS sandbox
 ```
 
@@ -537,8 +537,11 @@ agents:
   and leaving out `project` or `local` also turns bypass mode off.
 - `sandbox: on` runs Claude Code's Bash commands in its sandbox (bubblewrap and socat on
   Linux, Seatbelt on macOS). The session fails to start if the sandbox cannot, no command may
-  ask to leave it, ORCA's private paths are kept out of it, and a sandboxed command is still
-  asked about like any other.
+  ask to leave it, ORCA's private paths and its whole store are kept from sandboxed commands
+  (an agent's output reaches the store's work area through Claude's file tools, which ORCA's
+  permission checks govern), and a sandboxed command is still asked about like any other. It
+  needs `settingSources: []`: Claude Code merges sandbox exceptions from every settings file it
+  loads, so a user file's `allowWrite` or `Edit(...)` allow rules would widen it.
 
 Both go to Claude Code in `session/new`, so ORCA refuses the session if the agent turns out
 not to be the Claude adapter, rather than run it without them.

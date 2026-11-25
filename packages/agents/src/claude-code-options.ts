@@ -14,7 +14,11 @@
  * - `sandbox: on` runs Claude Code's Bash commands in its OS sandbox, refusing the session at
  *   startup when the sandbox cannot start, and never letting a command out of it. A sandboxed
  *   command is still asked about: `autoAllowBashIfSandboxed` stays off, so the sandbox adds a
- *   boundary and never takes a permission decision away from ORCA.
+ *   boundary and never takes a permission decision away from ORCA. It requires
+ *   `settingSources: []`: Claude Code merges sandbox lists across settings layers (a user
+ *   file's `sandbox.filesystem.allowWrite`, or `Edit(...)` allow rules, widen the sandbox ORCA
+ *   asked for; observed on adapter 0.109.1 / Claude Code 2.1.330), so with any file source
+ *   loaded the sandbox ORCA asked for is not the one that runs.
  *
  * The adapter's own settings reader still reads every source for the few decisions it makes
  * before starting Claude Code (the initial permission mode among them), so a narrowed
@@ -43,16 +47,16 @@ export function claudeCodeOptionsRequested(config: ClaudeCodeConfig | undefined)
 
 /**
  * Claude Code's `sandbox` settings for `sandbox: on`. ORCA's no-access paths are kept from
- * sandboxed commands entirely and its read-only files from their writes; the sandbox already
- * keeps writes inside the session's directories.
+ * sandboxed commands entirely, and its read-only paths, the whole store included, from their
+ * writes; the sandbox already keeps writes inside the session's directories. The store's agent
+ * areas (`work/`, `program/`) are not opened to sandboxed commands: Claude Code's sandbox lets a
+ * deny win over an allow beneath it, so an exception would not hold, and widening the deny to
+ * fit would open the rest of the store. Claude's file tools (Write, Edit) are not sandboxed and
+ * still reach those areas through ORCA's permission checks, which refuse the rest of the store.
  */
 export function claudeSandboxSettings(protectedPaths: ProtectedPaths | undefined): Record<string, unknown> {
   const noAccess = [...(protectedPaths?.noAccess ?? [])];
-  // A read-only directory that holds an area the agent may write (the store's `work/`) is left
-  // to the policy, as the ACP session's own checks leave it.
-  const readOnly = (protectedPaths?.readOnly ?? []).filter(
-    (p) => !(protectedPaths?.agentAreas ?? []).some((area) => area.startsWith(`${p}/`) || area === p),
-  );
+  const readOnly = [...(protectedPaths?.readOnly ?? [])];
   return {
     enabled: true,
     failIfUnavailable: true,
@@ -69,6 +73,16 @@ export function claudeSandboxSettings(protectedPaths: ProtectedPaths | undefined
   };
 }
 
+/** Why a `claudeCode` config cannot be enforced as written, or undefined when it can. */
+export function claudeCodeConfigProblem(config: ClaudeCodeConfig | undefined): string | undefined {
+  if (config?.sandbox === "on" && (config.settingSources === undefined || config.settingSources.length > 0))
+    return (
+      "sandbox: on needs settingSources: [], because Claude Code merges sandbox exceptions from every " +
+      "settings file it loads (a user file's allowWrite or Edit allow rules widen it)"
+    );
+  return undefined;
+}
+
 /**
  * The `_meta.claudeCode.options` for an agent's `claudeCode` config, or undefined when it asks
  * for nothing.
@@ -78,6 +92,8 @@ export function claudeCodeOptions(
   protectedPaths: ProtectedPaths | undefined,
 ): Record<string, unknown> | undefined {
   if (!claudeCodeOptionsRequested(config)) return undefined;
+  const problem = claudeCodeConfigProblem(config);
+  if (problem) throw new OrcaError("CONFIG_INVALID", `claudeCode: ${problem}`);
   const sources = config?.settingSources;
   const narrowed = sources !== undefined && !(sources.includes("project") && sources.includes("local"));
   return {
