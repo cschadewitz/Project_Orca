@@ -263,8 +263,9 @@ interface Command {
 }
 export const commands: Record<string, Command> = {
   mcp: {
-    help: "mcp [--endpoint <url>] [--token-env <name>]",
-    usage: "Authenticated MCP over stdio. Requires an explicitly supplied daemon credential; does not start a daemon.",
+    help: "mcp [--endpoint <url>] [--token-env <name>]  Serve the daemon's tools to an MCP client over stdio.",
+    usage:
+      "Connects to a running daemon with a credential you supply; it does not start a daemon.\n--endpoint <url> (or ORCA_DAEMON_URL) selects the daemon; --token-env <name> names the environment variable holding the credential (default ORCA_MCP_TOKEN).\n",
     async run(ctx) {
       const ended = new Promise<void>((resolve) => process.stdin.once("end", resolve));
       const handle = await mcpCommand({
@@ -283,7 +284,7 @@ export const commands: Record<string, Command> = {
     run: authCommand,
   },
   remote: {
-    help: "remote add [user@]host | remote enroll <id>  Make a Linux machine a managed ORCA server over SSH, in one step (#881); or enroll a configured remote daemon for delegated steps (#883).",
+    help: "remote add [user@]host | remote enroll <id>  Make a Linux machine a managed ORCA server over SSH, in one step; or enroll a configured remote daemon for delegated steps.",
     usage:
       "add: --ssh-port N and --identity FILE choose how to reach it; --port N is the daemon's port there (default 6722).\nThe server's host key is pinned on first use under ~/.config/orca/known_hosts. Re-running verifies and repairs.\nIt refuses a machine with an ORCA installation it did not make. --json prints the typed result.\nenroll: trusts a host key only if it is already pinned in auth/remotes/<id>.known_hosts (.jump for the jump host) or matches a fingerprint you give: --host-key SHA256:... (and --jump-host-key), as ssh-keygen -l prints it on that machine. It refuses an unverified host before sending anything.\nIt then pins the keys, checks the credential in auth/remotes/<id>.token (with no such file, or with --issue, the remote's orca CLI first issues one over the same ssh: a client credential scoped to the workflows this config's agents delegate there, saved 0600; one it issued before is revoked), and records the route, workspace and principal in auth/remotes/<id>.json. Delegated steps go only to an enrolled remote, over that route and those keys, with that credential. Enroll again after replacing the credential or changing the remote's route.\n--json prints the enrollment record.\n",
     run: (ctx) => remoteCommand(ctx),
@@ -520,7 +521,9 @@ export const commands: Record<string, Command> = {
   },
 
   admissions: {
-    help: "admissions [list|inspect <id>|reconcile <id>]  Inspect or recover original local Request admissions without starting execution.",
+    help: "admissions [list|inspect <id>|reconcile <id>]  Check on requests this machine submitted, and finish recording one that was interrupted.",
+    usage:
+      "list shows the requests submitted from this workspace; inspect <id> shows one.\nreconcile <id> finishes recording an interrupted submission. It never starts the run: continue it with resume.\n",
     run: admissionsCommand,
   },
 
@@ -589,7 +592,7 @@ export const commands: Record<string, Command> = {
   plan: {
     usage:
       "Subcommands:\n  list\n  show|schedule|graph|risks|decisions|journal [key]\n  explain <slug> [key]\n  depend <slug> <ref> [key]\n  waive|satisfy <dependencyId> [key] [--rationale text]\n  decide <decisionKey> <option> [key] [--rationale text]\n  risk <riskKey> --status <status> [key]\n  dispatch [key] [--workflow id] [--item-workflow id] [--agent role=id]... [--model [agent=]model]... [--quiet]\n    --workflow picks the program workflow (default plan-resume; it must contain a custom:plan-dispatch node);\n    --item-workflow picks the workflow each dispatched item runs (default program.itemWorkflow).\n--plan key overrides the positional plan. --json prints structured read results.\n",
-    help: "plan [list|show|schedule|explain|graph|risks|decisions|journal|depend|waive|satisfy|decide|risk|dispatch] ...  Inspect and steer the long-term plan (see docs/PLANNING.md).",
+    help: "plan [list|show|schedule|explain|graph|risks|decisions|journal|depend|waive|satisfy|decide|risk|dispatch] ...  Inspect and steer the long-term plan.",
     run: planCommand,
   },
 
@@ -609,17 +612,23 @@ export const commands: Record<string, Command> = {
   },
 
   recovery: {
-    help: "recovery <runId> [--checkpoint <stepRunId|nodeId>] [--json] | review <runId> <stepRunId> --run-again|--abandon [--note text] | start <runId> [--checkpoint <stepRunId|nodeId>] [--idempotency-key k] [--quiet] | retire <runId> <attemptRunId>  Preview how a run could be recovered (resume, new run, checkpoint attempt) without changing anything; record your review of a step that may have acted and never finished; start a checkpoint attempt of a failed run and follow it; or retire an attempt that was reserved and never created.",
+    help: "recovery <runId> | review <runId> <stepRunId> | start <runId> | retire <runId> <attemptRunId>  See how a stopped or failed run can be recovered, then recover it.",
+    usage:
+      "recovery <runId> [--checkpoint <stepRunId|nodeId>] [--json]\n  Show the ways to recover the run and which steps may have had effects. Changes nothing.\nreview <runId> <stepRunId> --run-again|--abandon [--note text]\n  Decide what happens to a step that may have acted but never finished.\nstart <runId> [--checkpoint <stepRunId|nodeId>] [--idempotency-key k] [--quiet]\n  Rerun a failed run from a checkpoint and follow it.\nretire <runId> <attemptRunId>\n  Drop a recovery attempt that was interrupted before it started.\n",
     run: recoveryCommand,
   },
 
   store: {
-    help: "store [format | carry-forward | sqlite convert|switch|import|backup <file>|restore <file>|verify]  Show the store's format; convert an older-format store once, with every other ORCA stopped; convert the store into a SQLite store of its own, leaving the file store as it was; build, back up, restore or check the SQLite metadata.",
+    help: "store [format | carry-forward | sqlite convert|switch|import|backup <file>|restore <file>|verify]  Check, upgrade, back up or convert where runs are stored.",
+    usage:
+      "format shows the store's format and whether this version can open it.\ncarry-forward upgrades a store from an older version. Stop every other daemon and command first.\nsqlite convert copies the store into a new SQLite store and uses that; the original is left as it was.\nsqlite import, backup <file>, restore <file> and verify build, copy, restore and check the SQLite data.\n",
     run: storeCommand,
   },
 
   judge: {
-    help: "judge budget [status | init | reset]  Check that this machine can keep the plain-language rule judge's daily budget durably (Linux and macOS; not Windows); create it once (that UTC day counts as spent); or replace one that was refused after the store was restored.",
+    help: "judge budget [status | init | reset]  Set up the daily spending limit for the plain-language rule judge.",
+    usage:
+      "status checks that this machine can keep the limit (Linux and macOS; not Windows).\ninit creates it. The current UTC day counts as fully spent, so the judge starts the next day.\nreset replaces a limit that was refused after the store was restored.\n",
     run: judgeCommand,
   },
 

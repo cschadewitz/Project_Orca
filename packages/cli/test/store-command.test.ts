@@ -6,7 +6,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { silentLogger } from "@orca/core";
 import { bootstrap } from "../src/bootstrap.js";
 import { storeCommand } from "../src/commands/store.js";
-import { readStoreFormat, switchStoreToSqlite } from "@orca/store";
+import { readStoreFormat, STORE_FORMAT_EPOCH, switchStoreToSqlite } from "@orca/store";
 import type { CommandContext } from "../src/commands/index.js";
 
 /** The opt-in an earlier draft of the switch read; the shipped command must ignore it. */
@@ -35,6 +35,16 @@ const LOG =
     .join("\n") + "\n";
 
 describe("orca store", () => {
+  it("prints this version's store format on the row the Windows upgrade check parses", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orca-store-command-"));
+    dirs.push(dir);
+    await writeFile(join(dir, "orca.config.yaml"), "version: 1\nworkflows: []\ntemplates: []\n", "utf8");
+    const format = ctx(dir, ["format"]);
+    expect(await storeCommand(format)).toBe(0);
+    // packages/app/test/windows-upgrade/store-upgrade.spec.ts reads the epoch with this pattern.
+    expect(/^this ORCA\s+(\S+)/m.exec(format.lines.join("\n"))?.[1]).toBe(STORE_FORMAT_EPOCH);
+  });
+
   it("refuses an older store at startup until carry-forward converts it", async () => {
     const dir = await mkdtemp(join(tmpdir(), "orca-store-command-"));
     dirs.push(dir);

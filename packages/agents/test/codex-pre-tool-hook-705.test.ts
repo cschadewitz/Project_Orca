@@ -382,8 +382,8 @@ describe("the fail-closed line around ORCA's program (#1026)", () => {
 describe("installing it in Codex", () => {
   it("hashes the hook the way Codex 0.171 does", () => {
     // Both values were read from the real Codex 0.171 (`hooks/list` on its app server, with
-    // this hook passed as a session flag).
-    const command = codexPreToolHookProgram("/usr/bin/node", "/opt/orca/claude-pre-tool-hook.mjs", "/x/ctx.json");
+    // this hook passed as a session flag), for exactly this command, so its path stays as it was read.
+    const command = codexPreToolHookProgram("/usr/bin/node", "/opt/orca/claude-pre-tool-hook.mjs", "/x/ctx.json"); // rename-keep: the input Codex 0.171 hashed
     expect(codexHookTrustHash(command, 10)).toBe(
       "sha256:b90b4753446a395a8b1c43ebf10ba44ec9feeebeba9153a2ea3372c2f04bf306",
     );
