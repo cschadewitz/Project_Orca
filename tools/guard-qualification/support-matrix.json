@@ -221,15 +221,14 @@
           "P03": "Claude Code refuses this call itself before ORCA answers, so ORCA's decision is run on the installed program instead: The call to a 4 KB unknown tool name is refused by Claude Code (not offered) before any hook runs, so ORCA's answer for it is unobserved; the other calls' short answers cannot stand in for it."
         },
         "stillOff": [
-          "Shell commands keep the human approval prompt; nothing auto-allows a shell command",
-          "Judge review is off by default; with it on, command advice is shown with the ask and the person still decides",
+          "ORCA's judge is off by default and cannot auto-approve shell commands; a command routed to a human approval prompt still requires the person's answer",
           "Without nativeToolHook: experimental there is no hook, and Claude runs remembered calls without asking ORCA",
           "Remote sessions over SSH while the hook is on, and any Claude Code other than the pinned one"
         ],
         "unverified": [
           "That Claude blocks the call when the hook times out or cannot start (recovery; B stays off)",
           "fresh session: an MCP call's one-time allow (the hook and ORCA's relay each ask, so one bound answer does not run it)",
-          "Judge review in the packaged product journey; the installed run used a stand-in provider",
+          "Judge review in the packaged product journey: command advice reaching the person's approval prompt was observed only in the installed run, with a stand-in provider",
           "Judge review of MCP calls: the hook asks the person before the relay's judge runs",
           "Behaviour of a real model, which may make calls in shapes the stand-in does not",
           "Events and logs about its calls are redacted"
