@@ -39,6 +39,8 @@ import {
   admitCodexExecGateSession,
   claudePreToolHookScript,
   codexExecGateRequested,
+  hostIpcCaveat,
+  hostIpcInventory,
   CLAUDE_ADAPTER_NAMES,
   nativeToolHookNotQualified,
   nativeToolHookRequested,
@@ -49,6 +51,7 @@ import {
   permissionPolicyPath,
   type AgentSession,
   type CodexExecGateAdmission,
+  type HostIpcInventory,
   type OpenSessionOptions,
   type ProtectedPaths,
 } from "@orca/agents";
@@ -318,6 +321,10 @@ export function makeSessionFactory(
     codexShell?: (() => { program: string; args: string[] } | { error: string }) | undefined;
     /** The single deadline for a Codex session's admission checks (`CODEX_ADMISSION_DEADLINE_MS`). */
     codexAdmissionDeadlineMs?: number | undefined;
+    /** Potential host communication endpoints, for the Codex IPC caveat; `hostIpcInventory` unless given. */
+    ipcInventory?:
+      | ((env: Readonly<Record<string, string | undefined>>, signal: AbortSignal) => Promise<HostIpcInventory>)
+      | undefined;
   } = {
     runtime: process.execPath,
     script: claudePreToolHookScript(),
@@ -384,6 +391,7 @@ export function makeSessionFactory(
           `ORCA refuses the session rather than run it unguarded; remove nativeToolHook to run it without the hook.`,
         { agentId: options.agent.id, host: options.host.spec.id },
       );
+    const agentEnv = { ...process.env, ...literalEnv(options.agent.env), ...(options.env ?? {}) };
     const installed = nativeToolHookSession({
       agentId: options.agent.id,
       permissions: options.agent.permissions,
@@ -403,7 +411,7 @@ export function makeSessionFactory(
       codexAdmissionDeadlineMs: hook.codexAdmissionDeadlineMs,
       // A cancelled run stops the hook's admission checks too.
       signal: options.origin?.signal,
-      agentEnv: { ...process.env, ...literalEnv(options.agent.env), ...(options.env ?? {}) },
+      agentEnv,
       toolCallTelemetry: options.agent.diagnostics?.toolCalls,
       // In the desktop app ORCA's runtime is the Electron binary, which runs a script as Node
       // only with this set; the hooks the agent starts inherit it from the agent.
@@ -465,6 +473,32 @@ export function makeSessionFactory(
         await installed.cleanup();
       }
     };
+    // The Codex IPC caveat (#1026): potential host communication endpoints, observed from the
+    // daemon once the session's cleanup is in place. Off the open's path: nothing waits on it, it
+    // stops at its own deadline or when the session ends, and a failure is an incomplete result.
+    // Only where the warning has somewhere to go; it grants and takes away nothing.
+    const logger = options.logger;
+    if (installed.status() === "codex" && logger !== undefined) {
+      const ended = new AbortController();
+      void session.closed.then(
+        () => ended.abort(),
+        () => ended.abort(),
+      );
+      void (hook.ipcInventory ?? ((env, signal) => hostIpcInventory(env, { signal })))(agentEnv, ended.signal)
+        .catch((error: unknown): HostIpcInventory => ({
+          endpoints: [],
+          pipesSearched: [],
+          incomplete: [`the inventory failed (${error instanceof Error ? error.message : String(error)})`],
+        }))
+        .then((inventory) =>
+          logger.warn(hostIpcCaveat(inventory), {
+            agent: options.agent.id,
+            ipcEndpoints: inventory.endpoints.length,
+            ipcIncomplete: inventory.incomplete.length,
+          }),
+        )
+        .catch(() => undefined);
+    }
     // The engine drains it while the session runs (#1000); `cleanup` reads it a last time.
     const telemetry = installed.telemetry();
     if (telemetry !== undefined) Object.defineProperty(session, "hookTelemetry", { value: telemetry });

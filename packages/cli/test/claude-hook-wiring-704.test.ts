@@ -10,7 +10,7 @@ import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentSpecSchema, SshHostSchema, silentLogger, type Logger } from "@orca/core";
 import {
   CLAUDE_HOOK_VERIFIED_ADAPTERS,
@@ -22,10 +22,12 @@ import {
   runClaudeRuntimeAttestation,
   codexHookTrustHash,
   codexPreToolHookCommand,
+  hostIpcCaveat,
   SshHost,
   permissionPolicyPath,
   type AgentHost,
   type AgentSession,
+  type HostIpcInventory,
   type OpenSessionOptions,
 } from "@orca/agents";
 import { childBundle } from "@orca/testing/child-bundle";
@@ -74,6 +76,13 @@ async function setup(
     signal?: AbortSignal;
     /** The admission's single deadline. */
     deadlineMs?: number;
+    /** Potential host communication endpoints, for the Codex IPC caveat. */
+    ipcInventory?: (
+      env: Readonly<Record<string, string | undefined>>,
+      signal: AbortSignal,
+    ) => Promise<HostIpcInventory>;
+    /** Open with no logger at all. */
+    noLogger?: boolean;
   } = {},
 ) {
   const ext =
@@ -135,6 +144,7 @@ async function setup(
           "pid" in codex && pid === codex.pid ? { ...process.env } : { error: "not the Codex process" }),
       codexShell: codexOpts.shell ?? (() => ({ program: "/bin/sh", args: ["-c"] })),
       codexAdmissionDeadlineMs: codexOpts.deadlineMs,
+      ipcInventory: codexOpts.ipcInventory,
     },
   );
   const warnings: { msg: string; fields?: Record<string, unknown> }[] = [];
@@ -149,7 +159,7 @@ async function setup(
     factory({
       host,
       ...(run ? { origin: { runId: "run-1", signal: run } } : {}),
-      logger,
+      ...(codexOpts.noLogger ? {} : { logger }),
       agent: AgentSpecSchema.parse({
         id: "claude",
         command: "claude-agent-acp",
@@ -402,6 +412,11 @@ describe("installing the hook in Codex (#705)", () => {
       ext?: (method: string) => Promise<unknown>;
       signal?: AbortSignal;
       deadlineMs?: number;
+      ipcInventory?: (
+        env: Readonly<Record<string, string | undefined>>,
+        signal: AbortSignal,
+      ) => Promise<HostIpcInventory>;
+      noLogger?: boolean;
     } = {},
   ) => {
     const seen: { options?: OpenSessionOptions } = {};
@@ -430,6 +445,8 @@ describe("installing the hook in Codex (#705)", () => {
         runtimeBin: process.execPath,
         ...(opts.environment ? { environment: opts.environment } : {}),
         ...(opts.shell ? { shell: opts.shell } : {}),
+        ...(opts.ipcInventory ? { ipcInventory: opts.ipcInventory } : {}),
+        ...(opts.noLogger ? { noLogger: true } : {}),
       },
     );
     await mkdir(join(t.dir, "work"), { recursive: true });
@@ -439,9 +456,32 @@ describe("installing the hook in Codex (#705)", () => {
   it.skipIf(script === undefined || process.platform === "win32")(
     "hands Codex the trusted hook at spawn, and opens once Codex lists it and it blocks when run",
     async () => {
-      const t = await codexSetup();
+      const asked: Readonly<Record<string, string | undefined>>[] = [];
+      const inventory: HostIpcInventory = {
+        endpoints: [{ kind: "unix-socket", name: "/run/user/1000/bus" }],
+        pipesSearched: ["/tmp"],
+        incomplete: [],
+      };
+      const t = await codexSetup(
+        {},
+        {
+          ipcInventory: async (env) => {
+            asked.push(env);
+            return inventory;
+          },
+        },
+      );
       const session = await t.open();
       expect(t.seen.meta).toBeUndefined();
+      // Said beside the opt-in, after the session is admitted and off its path: experimental,
+      // then the potential endpoints, read from the environment the agent was started with.
+      await vi.waitFor(() => expect(t.warnings).toHaveLength(2));
+      expect(t.warnings).toEqual([
+        { msg: NATIVE_TOOL_HOOK_EXPERIMENTAL, fields: { agent: "codex" } },
+        { msg: hostIpcCaveat(inventory), fields: { agent: "codex", ipcEndpoints: 1, ipcIncomplete: 0 } },
+      ]);
+      expect(asked).toHaveLength(1);
+      expect(asked[0]!["CODEX_CONFIG"]).toBeDefined();
       const config = JSON.parse(t.seen.options!.env!["CODEX_CONFIG"]!) as Record<string, unknown>;
       expect(config["model"]).toBe("m");
       const [file] = await t.left();
@@ -452,6 +492,47 @@ describe("installing the hook in Codex (#705)", () => {
       });
       await session.close();
       expect(await t.left()).toEqual([]);
+    },
+  );
+
+  it.skipIf(script === undefined || process.platform === "win32")(
+    "opens and closes a Codex session whatever the IPC inventory does, and says when it failed",
+    async () => {
+      // One that never answers: the session opens, closes and cleans up all the same, and the
+      // inventory is told the session ended.
+      let told: AbortSignal | undefined;
+      const hangs = await codexSetup(
+        {},
+        {
+          ipcInventory: (_env, signal) => {
+            told = signal;
+            return new Promise<HostIpcInventory>(() => undefined);
+          },
+        },
+      );
+      const session = await hangs.open();
+      expect(hangs.warnings).toEqual([{ msg: NATIVE_TOOL_HOOK_EXPERIMENTAL, fields: { agent: "codex" } }]);
+      await session.close();
+      hangs.resolveClosed();
+      expect(await hangs.left()).toEqual([]);
+      await vi.waitFor(() => expect(told?.aborted).toBe(true));
+
+      // One that fails: the session is unaffected, and the warning says the check is incomplete.
+      const fails = await codexSetup({}, { ipcInventory: () => Promise.reject(new Error("boom")) });
+      const failed = await fails.open();
+      await vi.waitFor(() => expect(fails.warnings).toHaveLength(2));
+      expect(fails.warnings[1]!.msg).toMatch(
+        /^None detected at startup; isolation has not been verified\. .* The check was incomplete: the inventory failed \(boom\)\.$/,
+      );
+      expect(fails.warnings[1]!.fields).toEqual({ agent: "codex", ipcEndpoints: 0, ipcIncomplete: 1 });
+      await failed.close();
+      expect(await fails.left()).toEqual([]);
+
+      // With nowhere to say it, it is not looked for at all.
+      const quiet = vi.fn(() => Promise.reject(new Error("looked for")));
+      const silent = await codexSetup({}, { ipcInventory: quiet, noLogger: true });
+      await (await silent.open()).close();
+      expect(quiet).not.toHaveBeenCalled();
     },
   );
 
