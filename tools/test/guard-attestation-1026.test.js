@@ -232,4 +232,11 @@ describe("the release gate refuses a certification that is not current", () => {
     };
     expect(releaseProblems(matrix, "/r", (_root, b) => [`stale ${b}`])).toEqual([`agent claude: stale ${build}`]);
   });
+
+  it("checks a scoped claim's build too, whatever the base tier", () => {
+    const matrix = { agents: [{ id: "claude", tier: "none", pin: null, scoped: { pin: { build } } }] };
+    expect(releaseProblems(matrix, "/r", (_root, b) => [`stale ${b}`])).toEqual([
+      `agent claude: scoped: stale ${build}`,
+    ]);
+  });
 });

@@ -36,6 +36,24 @@ const TIERS = ["none", "A", "B", "C"];
 export const PROMOTABLE_TIERS = [];
 export const PROMOTION_DISABLED =
   "tier promotion is disabled until guard-receipts.yml's receipts and end-to-end check are reviewed on main (#1026)";
+/**
+ * Scoped assurance (#1026): a narrower claim than a tier, kept in its own field (`scoped`) so the
+ * `tier` enum never holds a starred value and the base tier is unchanged by it. Absent by
+ * default. It names one route, the exact installed build, agent, adapter, host, artifacts and
+ * ORCA settings, the cases it covers, every case of the route it does not cover with a reason,
+ * what stays refused or human-controlled, and attested installed receipts that show all of it.
+ * Nothing renders it as a badge; this only checks that a claim written in it holds.
+ */
+export const SCOPED_LEVELS = ["A", "B"];
+/** Installed checks every scoped claim needs: the opt-in is off by default and explicit. */
+export const SCOPED_CHECKS = ["optInDefaultOff"];
+/**
+ * Further checks a scoped B claim needs: a normally pending request that is cancelled has no
+ * observed effect, and a fresh session needs a fresh decision rather than carrying over the
+ * cancelled request's authorization. Without them B stays off.
+ */
+export const SCOPED_B_CHECKS = ["cancelledNoEffect", "freshSessionFreshDecision"];
+
 /** What a receipt is when nothing verified its attestation (the function's default). */
 export const UNVERIFIED = "attestation not verified (run check-support-matrix.js, which verifies it)";
 
@@ -578,6 +596,12 @@ export function checkSupportMatrix(
       problems.push(
         `${at}: notAsserted must name exactly its routes' installed diagnostics (${diagnostics.join(",") || "none"})`,
       );
+    if (agent.scoped !== undefined)
+      problems.push(
+        ...scopedProblems(matrix, catalogue, assertions, agent, paths, exists, readReceipt, verifyReceipt).map(
+          (p) => `${at}: scoped: ${p}`,
+        ),
+      );
     if (tier === 0) continue;
     if (!promotable.includes(agent.tier)) problems.push(`${at}: ${PROMOTION_DISABLED}`);
 
@@ -680,13 +704,112 @@ export function checkSupportMatrix(
 }
 
 /**
- * Why promoted rows are not current at HEAD: each row above `none` must pin a build whose
+ * Why `agent.scoped` does not hold. Every listed receipt must be attested, installed, on the
+ * scoped pin and route, carry the scoped settings and pass every covered case and the checks
+ * its level needs. Empty when it holds.
+ */
+export function scopedProblems(
+  matrix,
+  catalogue,
+  assertions,
+  agent,
+  paths,
+  exists = () => false,
+  readReceipt = () => undefined,
+  verifyReceipt = () => [UNVERIFIED],
+) {
+  const s = agent.scoped;
+  if (!s || typeof s !== "object" || Array.isArray(s)) return ["must be an object when present"];
+  const problems = [];
+  if (!SCOPED_LEVELS.includes(s.level)) problems.push(`level ${s.level}, must be one of ${SCOPED_LEVELS.join(", ")}`);
+  const path = paths.get(s.route);
+  if (!agent.routes.includes(s.route) || !path || path.connected) {
+    problems.push(`route ${s.route} is not one of the row's routes`);
+    return problems;
+  }
+  const pin = s.pin;
+  const artifacts = ["adapterIntegrity", "runtimeSha256", "hookProgramSha256"];
+  if (
+    !pin ||
+    !pin.agentVersion ||
+    !pin.adapterVersion ||
+    !pin.host ||
+    !/^[0-9a-f]{40}$/.test(pin.build ?? "") ||
+    artifacts.some((k) => typeof pin.artifacts?.[k] !== "string")
+  )
+    problems.push("needs a pinned agent version, adapter version, host, exact build and artifact digests");
+  const settings = s.settings;
+  if (!settings || typeof settings !== "object" || Array.isArray(settings) || Object.keys(settings).length === 0)
+    problems.push("needs the ORCA settings the claim holds under");
+
+  const asserted = assertedCases(path, catalogue);
+  const runs = casesFor(path, catalogue);
+  const covers = Array.isArray(s.covers) ? s.covers : [];
+  if (covers.length === 0) problems.push("needs the cases it covers");
+  if (new Set(covers).size !== covers.length) problems.push("covers a case twice");
+  for (const id of covers)
+    if (!asserted.includes(id)) problems.push(`covers ${id}, which ${s.route} does not assert on an installed agent`);
+  if (s.level === "B")
+    for (const id of asserted)
+      if (!covers.includes(id)) problems.push(`B covers every asserted case; ${id} is missing`);
+  // Everything the route does not cover as evidence is named, with a reason, so the claim reads as its scope.
+  const uncovered = [
+    ...new Set([...runs.filter((id) => !covers.includes(id)), ...Object.keys(path.excluded ?? {})]),
+  ].sort();
+  const excludes = s.excludes && typeof s.excludes === "object" ? s.excludes : {};
+  if (Object.keys(excludes).sort().join() !== uncovered.join())
+    problems.push(`excludes must name exactly the cases it does not cover (${uncovered.join(",") || "none"})`);
+  for (const [id, reason] of Object.entries(excludes))
+    if (typeof reason !== "string" || reason.trim().length < 20)
+      problems.push(`exclusion of ${id} needs a reason a reader can check`);
+  for (const list of ["stillOff", "unverified"])
+    if (!Array.isArray(s[list]) || s[list].length === 0 || s[list].some((x) => typeof x !== "string" || !x.trim()))
+      problems.push(
+        `needs ${list}: ${list === "stillOff" ? "what stays refused or human-controlled" : "what it does not verify"}`,
+      );
+  if (!["verified", "unverified"].includes(s.judge)) problems.push("judge must say verified or unverified");
+  if (problems.length) return problems;
+
+  const checks = [
+    ...SCOPED_CHECKS,
+    ...(s.level === "B" ? SCOPED_B_CHECKS : []),
+    ...(s.judge === "verified" ? ["judgedAction"] : []),
+  ];
+  const pinned = { ...agent, pin };
+  const profile = qualificationProfile(matrix, catalogue, assertions, agent, path);
+  const files = Array.isArray(s.receipts) ? s.receipts : [];
+  if (files.length === 0) problems.push("needs an attested installed receipt");
+  const refused = [];
+  for (const file of files) {
+    if (!exists(file)) {
+      problems.push(`receipt ${file} does not exist`);
+      continue;
+    }
+    const receipt = readReceipt(file);
+    const why = [
+      ...verifyReceipt(file, receipt),
+      ...receiptProblems(receipt, pinned, s.route, "installed", covers, assertions, path, profile),
+      ...(canonical(receipt?.agentSettings) === canonical(settings)
+        ? []
+        : ["agentSettings are not the scoped settings"]),
+      ...checks.filter((c) => receipt?.checks?.[c] !== "pass").map((c) => `needs checks.${c} passing`),
+    ];
+    if (why.length === 0) return problems;
+    refused.push(...why.map((p) => `${file}: ${p}`));
+  }
+  // One receipt that backs every part of the claim is enough; otherwise say why each falls short.
+  return [...problems, ...refused];
+}
+
+/**
+ * Why promoted rows are not current at HEAD: each row above `none`, and each scoped claim, must pin a build whose
  * certified code and requirements HEAD has not changed (`attestation.js`, `staleProblems`). The release gate.
  */
 export function releaseProblems(matrix, repoRoot = REPO_ROOT, stale = staleProblems) {
-  return matrix.agents
-    .filter((a) => a.tier !== "none" && a.pin?.build)
-    .flatMap((a) => stale(repoRoot, a.pin.build).map((p) => `agent ${a.id}: ${p}`));
+  return matrix.agents.flatMap((a) => [
+    ...(a.tier !== "none" && a.pin?.build ? stale(repoRoot, a.pin.build).map((p) => `agent ${a.id}: ${p}`) : []),
+    ...(a.scoped?.pin?.build ? stale(repoRoot, a.scoped.pin.build).map((p) => `agent ${a.id}: scoped: ${p}`) : []),
+  ]);
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

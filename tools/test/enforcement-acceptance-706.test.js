@@ -534,6 +534,115 @@ describe("the matrix checker refuses claims beyond the evidence", () => {
       "path claude-native-hook: case L08 is neither run nor excluded with a reason",
     ]);
   });
+
+  describe("scoped assurance, a field apart from the tier (#1026)", () => {
+    const ask = testPaths.find((p) => p.id === "acp-ask");
+    const settings = { nativeToolHook: "experimental" };
+    const reason = "Not covered by this claim; see the row's unverified list.";
+    const excludesFor = (covers) =>
+      Object.fromEntries(
+        [...new Set([...acpCases.filter((id) => !covers.includes(id)), ...Object.keys(ask.excluded ?? {})])].map(
+          (id) => [id, reason],
+        ),
+      );
+    const scoped = (extra = {}) => {
+      const covers = extra.covers ?? acpCases;
+      return {
+        level: "B",
+        route: "acp-ask",
+        pin,
+        settings,
+        covers,
+        excludes: excludesFor(covers),
+        stillOff: ["Shell commands keep the human prompt"],
+        unverified: ["Hook timeout and startup failure"],
+        judge: "unverified",
+        receipts: ["s.json"],
+        ...extra,
+      };
+    };
+    const allChecks = {
+      connects: "pass",
+      uncoveredRoutesRefused: "pass",
+      optInDefaultOff: "pass",
+      cancelledNoEffect: "pass",
+      freshSessionFreshDecision: "pass",
+    };
+    const scopedReceipt = (extra = {}) => receipt({ agentSettings: settings, checks: allChecks, ...extra });
+    // The base tier stays none: a scoped claim needs no promotion and changes no tier.
+    const checkScoped = (s, r = scopedReceipt(), verify = attested) =>
+      check(claude({ scoped: s }), { "s.json": r }, testPaths, inventoryFor(testPaths), verify, PROMOTABLE_TIERS);
+
+    it("is never a value of the tier", () => {
+      expect(check(claude({ tier: "B*" }))).toEqual(["agent claude: unknown tier B*"]);
+    });
+
+    it("holds B on an attested receipt with every asserted case, the settings and the B checks", () => {
+      expect(checkScoped(scoped())).toEqual([]);
+    });
+
+    it("leaves B off without the cancellation and fresh-session checks", () => {
+      const { cancelledNoEffect: _c, freshSessionFreshDecision: _f, ...rest } = allChecks;
+      expect(checkScoped(scoped(), scopedReceipt({ checks: rest }))).toEqual([
+        "agent claude: scoped: s.json: needs checks.cancelledNoEffect passing",
+        "agent claude: scoped: s.json: needs checks.freshSessionFreshDecision passing",
+      ]);
+      // A covers what it names, and needs neither.
+      const covers = acpCases.slice(0, 3);
+      expect(checkScoped(scoped({ level: "A", covers }), scopedReceipt({ checks: rest }))).toEqual([]);
+    });
+
+    it("needs the opt-in journey at every level", () => {
+      const { optInDefaultOff: _o, ...rest } = allChecks;
+      expect(checkScoped(scoped({ level: "A" }), scopedReceipt({ checks: rest }))).toEqual([
+        "agent claude: scoped: s.json: needs checks.optInDefaultOff passing",
+      ]);
+    });
+
+    it("names every case it does not cover, with a reason", () => {
+      const covers = acpCases.slice(0, 3);
+      const excludes = excludesFor(covers);
+      const dropped = Object.keys(excludes)[0];
+      delete excludes[dropped];
+      expect(checkScoped(scoped({ level: "A", covers, excludes }))).toEqual([
+        expect.stringMatching(/^agent claude: scoped: excludes must name exactly the cases it does not cover/),
+      ]);
+      expect(checkScoped(scoped({ level: "B", covers }))).toEqual(
+        acpCases.slice(3).map((id) => `agent claude: scoped: B covers every asserted case; ${id} is missing`),
+      );
+    });
+
+    it("is tied to the exact build, settings and attested evidence", () => {
+      expect(checkScoped(scoped(), scopedReceipt({ agentSettings: {} }))).toEqual([
+        "agent claude: scoped: s.json: agentSettings are not the scoped settings",
+      ]);
+      expect(checkScoped(scoped(), scopedReceipt({ build: "f".repeat(40) }))).toEqual([
+        `agent claude: scoped: s.json: build ${"f".repeat(40)}, expected ${build}`,
+      ]);
+      expect(checkScoped(scoped(), scopedReceipt(), () => [UNVERIFIED])).toEqual([
+        `agent claude: scoped: s.json: ${UNVERIFIED}`,
+      ]);
+      expect(checkScoped(scoped({ pin: { ...pin, artifacts: undefined } }))).toEqual([
+        "agent claude: scoped: needs a pinned agent version, adapter version, host, exact build and artifact digests",
+      ]);
+    });
+
+    it("claims a judged action only with an installed one observed", () => {
+      expect(checkScoped(scoped({ judge: "verified" }))).toEqual([
+        "agent claude: scoped: s.json: needs checks.judgedAction passing",
+      ]);
+      expect(
+        checkScoped(scoped({ judge: "verified" }), scopedReceipt({ checks: { ...allChecks, judgedAction: "pass" } })),
+      ).toEqual([]);
+    });
+
+    it("lists what stays off and what it does not verify", () => {
+      expect(checkScoped(scoped({ stillOff: [], unverified: [] }))).toEqual([
+        "agent claude: scoped: needs stillOff: what stays refused or human-controlled",
+        "agent claude: scoped: needs unverified: what it does not verify",
+      ]);
+    });
+  });
 });
 
 for (const path of PATHS) {
