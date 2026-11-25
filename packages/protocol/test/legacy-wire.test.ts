@@ -11,7 +11,7 @@ import {
 const hello = { protocol: PROTOCOL_VERSION, capabilities: ["runs.read"] };
 const discovery = {
   target: { workspaceId: "6f1c1f8e-3a52-4b8e-9d1c-0a8e1b2c3d4e", instanceId: "0b7a3e8f-1c2d-4e5f-8a9b-0c1d2e3f4a5b" },
-  protocol: { major: 2, minor: 12 },
+  protocol: { major: 2, minor: 13 },
   principalId: "p",
   authentication: "credential",
   scope: { runs: "all", workflows: "*", permissions: [] },

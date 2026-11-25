@@ -19,7 +19,7 @@ describe("operator integration compatibility boundary", () => {
     const release: { protocol: typeof PROTOCOL_VERSION; storeEpoch: string; capabilities: string[] } = JSON.parse(
       await readFile(new URL("../../../release-compatibility.json", import.meta.url), "utf8"),
     );
-    expect(PROTOCOL_VERSION).toEqual({ major: 2, minor: 12 });
+    expect(PROTOCOL_VERSION).toEqual({ major: 2, minor: 13 });
     expect(release.protocol).toEqual(PROTOCOL_VERSION);
     expect(release.storeEpoch).toBe("operator-journals-v4");
     expect(release.capabilities).toEqual([
