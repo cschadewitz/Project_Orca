@@ -22,7 +22,7 @@ import {
   type ConfigurationGenerations,
   type GenerationStatus,
 } from "@orca/engine";
-import { ProtocolFault, displayStatusForRun, type ArtifactsGetResult } from "@orca/protocol";
+import { ProtocolFault, displayStatusForRun, legacyVersionField, type ArtifactsGetResult } from "@orca/protocol";
 import {
   OperatorArtifactParamsSchema,
   OperatorConfigSchema,
@@ -136,6 +136,7 @@ export class OperatorReadModel {
     return OperatorDiscoverySchema.parse({
       target: this.options.target,
       protocol: this.options.protocol,
+      ...legacyVersionField(this.options.orcaVersion),
       orcaVersion: this.options.orcaVersion,
       principalId: p.id,
       authentication: "credential",

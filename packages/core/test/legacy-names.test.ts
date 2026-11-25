@@ -3,6 +3,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+  AgentTypeSchema,
+  DAEMON_AGENT_TYPE,
+  LEGACY_DAEMON_AGENT_TYPE,
   adoptEnvPrefix,
   adoptLegacyEnv,
   ENV_PREFIX,
@@ -51,5 +54,14 @@ describe("reading a file under its old name", () => {
     expect(warnings).toHaveLength(1);
     writeFileSync(join(dir, "new.yaml"), "a: 2\n");
     expect(legacyFallbackPath(dir, "new.yaml", "old.yaml", warn)).toBe(join(dir, "new.yaml"));
+  });
+});
+
+describe("the remote daemon agent type from before the rename", () => {
+  it("is accepted in a config and read as the current type", () => {
+    expect(AgentTypeSchema.parse(LEGACY_DAEMON_AGENT_TYPE)).toBe(DAEMON_AGENT_TYPE);
+    expect(AgentTypeSchema.parse(DAEMON_AGENT_TYPE)).toBe(DAEMON_AGENT_TYPE);
+    expect(AgentTypeSchema.parse("acp")).toBe("acp");
+    expect(AgentTypeSchema.safeParse("other").success).toBe(false);
   });
 });

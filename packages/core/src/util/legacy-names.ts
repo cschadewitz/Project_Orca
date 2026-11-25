@@ -85,6 +85,10 @@ export function legacyFallbackPath(
   if (name === legacyName || existsSync(path)) return path;
   const legacy = join(dir, legacyName);
   if (!existsSync(legacy)) return path;
-  warnOnce(`file:${legacy}`, `warning: reading ${legacy}; rename it to ${name} (the old name is read until 0.10)`, warn);
+  warnOnce(
+    `file:${legacy}`,
+    `warning: reading ${legacy}; rename it to ${name} (the old name is read until 0.10)`,
+    warn,
+  );
   return legacy;
 }

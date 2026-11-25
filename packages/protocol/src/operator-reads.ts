@@ -3,6 +3,7 @@ import { z } from "zod";
 import { RunOverridesSchema, SubmissionCommandSchema } from "@orca/core/schemas";
 import { ValidationResultSchema, WorkflowInputSchemaViewSchema } from "./workflow-inputs.js";
 import { LiveInputViewSchema } from "./live-input.js";
+import { LEGACY_VERSION_SHAPE, readingLegacyVersion } from "./legacy-wire.js";
 
 export const OPERATOR_PAGE_SIZE = 50;
 export const OPERATOR_MAX_PAGE_SIZE = 100;
@@ -15,17 +16,21 @@ export const OperatorScopeSchema = z.object({
   workflows: z.union([z.literal("*"), z.array(OperatorIdSchema).max(100)]),
   permissions: z.array(z.string().max(80)).max(32),
 });
-export const OperatorDiscoverySchema = z.object({
-  target: OperatorTargetSchema,
-  protocol: z.object({ major: z.number().int(), minor: z.number().int() }),
-  orcaVersion: z.string().max(100),
-  principalId: OperatorIdSchema,
-  authentication: z.literal("credential"),
-  scope: OperatorScopeSchema,
-  operations: z.array(z.string().max(80)).max(100),
-  collections: z.array(z.string().max(80)).max(20),
-  asOf: z.iso.datetime(),
-});
+export const OperatorDiscoverySchema = readingLegacyVersion(
+  z.object({
+    ...LEGACY_VERSION_SHAPE,
+    target: OperatorTargetSchema,
+    protocol: z.object({ major: z.number().int(), minor: z.number().int() }),
+    /** The release the daemon runs. Sent under its old name too until 0.10 (legacy-wire.ts). */
+    orcaVersion: z.string().max(100),
+    principalId: OperatorIdSchema,
+    authentication: z.literal("credential"),
+    scope: OperatorScopeSchema,
+    operations: z.array(z.string().max(80)).max(100),
+    collections: z.array(z.string().max(80)).max(20),
+    asOf: z.iso.datetime(),
+  }),
+);
 export type OperatorDiscovery = z.infer<typeof OperatorDiscoverySchema>;
 export type OperatorTarget = z.infer<typeof OperatorTargetSchema>;
 export const OperatorCollectionSchema = z.enum([

@@ -51,6 +51,8 @@ import {
   permissionRuleExpired,
   OrcaError,
   OrcaConfigSchema,
+  LEGACY_PERMISSION_POLICY_FILENAME,
+  legacyFallbackPath,
   PERMISSION_POLICY_FILENAME,
   PermissionPolicyFileSchema,
   systemClock,
@@ -117,7 +119,11 @@ export interface ConfigModelOptions {
    * `config.set` would create, which is `<configDir>/orca.config.yaml`.
    */
   configFile?: string | undefined;
-  /** The sidecar. Defaults to `orca.permissions.json` in `configDir`, which is where it is. */
+  /**
+   * The sidecar. Defaults to `orca.permissions.json` in `configDir`, which is where it is; until
+   * 0.10, a workspace that has only the sidecar's name from before the rename is read and edited
+   * under that name, and one that has neither gets the current name.
+   */
   permissionsFile?: string | undefined;
   /** Injectable so a test can pin `asOf` and the notification's `at`. */
   clock?: Clock | undefined;
@@ -153,7 +159,9 @@ export class ConfigModel {
 
   constructor(opts: ConfigModelOptions) {
     this.configFile = opts.configFile ?? join(opts.configDir, DEFAULT_CONFIG_FILENAME);
-    this.permissionsFile = opts.permissionsFile ?? join(opts.configDir, PERMISSION_POLICY_FILENAME);
+    this.permissionsFile =
+      opts.permissionsFile ??
+      legacyFallbackPath(opts.configDir, PERMISSION_POLICY_FILENAME, LEGACY_PERMISSION_POLICY_FILENAME);
     this.clock = opts.clock ?? systemClock;
     this.generations = opts.generations;
     this.templates = new TemplateAuthoringService({

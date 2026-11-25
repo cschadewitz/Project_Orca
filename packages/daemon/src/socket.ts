@@ -52,7 +52,7 @@ import { resourceResponseForPublication } from "./operator-host-resources.js";
 import { Subscription, type SubscriptionSource } from "./subscriptions.js";
 import { bindPrincipal, type Authorizer } from "./auth/guard.js";
 import type { Principal } from "./auth/principal.js";
-import { SOCKET_PROTOCOL, type Admission, type TransportGate } from "./auth/transport.js";
+import { LEGACY_SOCKET_PROTOCOL, SOCKET_PROTOCOL, type Admission, type TransportGate } from "./auth/transport.js";
 
 /** Close code for a connection whose credential stopped being valid. Application range, after HTTP 401. */
 export const CLOSE_AUTH_INVALID = 4401;
@@ -81,9 +81,15 @@ let nextSubscriptionId = 0;
 export function attachSocket(server: Server, opts: SocketOptions): () => Promise<void> {
   const wss = new WebSocketServer({
     noServer: true,
-    // Select `orca.v1` when it is offered, and never anything else: in particular never the
-    // `orca.bearer.*` protocol, which would echo the token back in a response header.
-    handleProtocols: (protocols) => (protocols.has(SOCKET_PROTOCOL) ? SOCKET_PROTOCOL : false),
+    // Select `orca.v1` when it is offered (or, until 0.10, its name from before the rename), and
+    // never anything else: in particular never the `orca.bearer.*` protocol, which would echo the
+    // token back in a response header.
+    handleProtocols: (protocols) =>
+      protocols.has(SOCKET_PROTOCOL)
+        ? SOCKET_PROTOCOL
+        : protocols.has(LEGACY_SOCKET_PROTOCOL)
+          ? LEGACY_SOCKET_PROTOCOL
+          : false,
   });
 
   const onUpgrade = (req: IncomingMessage, socket: Duplex, head: Buffer): void => {
