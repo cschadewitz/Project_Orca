@@ -12,7 +12,8 @@ const repo = resolve(fileURLToPath(new URL("../../..", import.meta.url)));
 
 /** `SERVER_CONFIG` from the setup script: its adjacent Python string literals, joined. */
 async function serverConfig(): Promise<string> {
-  const source = await readFile(join(repo, "tools/deploy/orca-server-setup.py"), "utf8");
+  // A CRLF checkout (core.autocrlf on Windows) must parse the same as LF.
+  const source = (await readFile(join(repo, "tools/deploy/orca-server-setup.py"), "utf8")).replace(/\r\n/g, "\n");
   const block = /^SERVER_CONFIG = \(\n((?: {4}"(?:[^"\\]|\\.)*"\n)+)\)$/m.exec(source)?.[1];
   if (!block) throw new Error("SERVER_CONFIG not found in orca-server-setup.py");
   return [...block.matchAll(/"((?:[^"\\]|\\.)*)"/g)].map((m) => JSON.parse(`"${m[1]}"`) as string).join("");

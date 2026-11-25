@@ -331,6 +331,12 @@ its lock. A failed first setup leaves no link and no enabled unit.
   confirmed directory, not taken from the server. Anything else is a mismatch: nothing is
   saved, the profile's port and pins stay as they were, and nothing signs in.
 
+A new server's `orca.config.yaml` (in that directory) lists **no workflows**, so the daemon
+starts before any agent is configured there; the release's templates are listed. Declare the
+agents this server runs and the workflows other machines delegate to
+([setup 4](MULTI-MACHINE.md#4-a-parent-daemon-delegating-to-remote-daemons)) before delegating work to it. The file is yours: a re-run of the
+setup never rewrites it.
+
 The update timer (#878) is not enabled here.
 
 ## Watching several daemons (#882)
