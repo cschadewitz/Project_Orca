@@ -65,7 +65,7 @@ import { CONVERTED_STORE_SUFFIX } from "@orca/store";
 export const JUDGE_BUDGET_PLATFORMS: readonly NodeJS.Platform[] = Object.freeze(["linux", "darwin"]);
 
 const WORKSPACE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const ANCHORS = "orca-judge-budget-anchors";
+const ANCHORS = "orca-judge-budget-anchors"; // rename-keep: existing budget anchors live under this name
 
 export type JudgeBudgetUnavailableReason =
   /** Not Linux or macOS: the replacement protocol is not verified there (Windows). */

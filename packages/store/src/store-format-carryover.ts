@@ -59,7 +59,7 @@ export const STORE_FORMAT_BACKUP_SLOTS = ["store-backup-1.zip", "store-backup-2.
  */
 const SlotIdentitySchema = z.object({
   format: z.literal(1),
-  tool: z.literal("orca-backup-slot"),
+  tool: z.literal("orca-backup-slot"), // rename-keep: persisted carryover record
   slot: z.string().min(1).max(64),
   volume: z.string().regex(/^\d{1,24}$/),
   file: z.string().regex(/^\d{1,24}$/),
@@ -104,13 +104,13 @@ const skipped = (name: string, top: boolean) =>
       name === STORE_WRITERS_DIR ||
       name === STORE_SWITCH_FILE ||
       name === SQLITE_SWITCH_DIR ||
-      name.startsWith(".orca-update-window") ||
+      name.startsWith(".orca-update-window") || // rename-keep: update window files of the protocol guard
       name.startsWith("store-format.json") ||
       name.startsWith(STORE_UPDATE_HANDOFF_FILE)));
 
 const ManifestSchema = z.object({
   format: z.literal(1),
-  tool: z.literal("orca-store-format"),
+  tool: z.literal("orca-store-format"), // rename-keep: persisted carryover record
   from: z.string().min(1).max(64),
   to: z.string().min(1).max(64),
   createdAt: z.string().min(1).max(64),
@@ -409,7 +409,7 @@ export async function stageCarryover(
     fence();
     const manifest: Manifest = {
       format: 1,
-      tool: "orca-store-format",
+      tool: "orca-store-format", // rename-keep: persisted carryover record
       from,
       to,
       createdAt: now.toISOString(),
@@ -574,7 +574,7 @@ async function isThisSlot(path: string, name: string, identity: SlotIdentity): P
 async function writeIdentity(path: string, name: string, boot: number): Promise<void> {
   const identity: SlotIdentity = {
     format: 1,
-    tool: "orca-backup-slot",
+    tool: "orca-backup-slot", // rename-keep: persisted carryover record
     slot: name,
     ...(await fileIdentity(path)),
     createdBoot: boot,

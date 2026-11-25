@@ -47,17 +47,17 @@ const DAY3 = Date.parse("2026-11-24T10:00:00Z");
 describe("#701 judge budget: where the anchor lives", () => {
   it("Linux uses $XDG_STATE_HOME, else ~/.local/state; macOS uses Application Support; Windows has none", () => {
     expect(judgeBudgetAnchorRoot({ platform: "linux", home: "/home/a", env: { XDG_STATE_HOME: "/state" } })).toBe(
-      "/state/orca-judge-budget-anchors",
+      "/state/orca-judge-budget-anchors", // rename-keep: persisted name kept on purpose
     );
     expect(judgeBudgetAnchorRoot({ platform: "linux", home: "/home/a", env: { XDG_STATE_HOME: "rel" } })).toBe(
-      "/home/a/.local/state/orca-judge-budget-anchors",
+      "/home/a/.local/state/orca-judge-budget-anchors", // rename-keep: persisted name kept on purpose
     );
     expect(judgeBudgetAnchorRoot({ platform: "darwin", home: "/Users/a", env: {} })).toBe(
-      "/Users/a/Library/Application Support/orca-judge-budget-anchors",
+      "/Users/a/Library/Application Support/orca-judge-budget-anchors", // rename-keep: persisted name kept on purpose
     );
     expect(judgeBudgetAnchorRoot({ platform: "win32", home: "C:\\Users\\a", env: {} })).toBeUndefined();
     expect(judgeBudgetAnchorDir(WORKSPACE.toUpperCase(), { platform: "linux", home: "/h", env: {} })).toBe(
-      `/h/.local/state/orca-judge-budget-anchors/${WORKSPACE}`,
+      `/h/.local/state/orca-judge-budget-anchors/${WORKSPACE}`, // rename-keep: persisted name kept on purpose
     );
     expect(judgeBudgetAnchorDir("../x", { platform: "linux", home: "/h", env: {} })).toBeUndefined();
   });

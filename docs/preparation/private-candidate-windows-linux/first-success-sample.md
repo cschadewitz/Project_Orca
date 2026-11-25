@@ -13,7 +13,7 @@ own background daemon and run one piece of work on your computer. It does not te
 coding, agents, diagnostics or updates.
 
 The expected results below come from the source. F3–F8 follow the same sequence as a
-passing **source-built** Windows x64 run (the [first-run receipt](../../implementation/m21-windows-first-run.md)).
+passing **source-built** Windows x64 run (the [first-run receipt](../../archive/implementation/m21-windows-first-run.md)).
 F10's automatic reconnect comes from the source alone. None of this has **yet been
 observed on a packaged candidate**. Write down anything that differs, even if it seems
 minor.

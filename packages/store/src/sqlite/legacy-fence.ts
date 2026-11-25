@@ -44,11 +44,13 @@ import { SQLITE_KEY_FILE } from "../protected-file.js";
 export const SQLITE_SWITCH_DIR = ".sqlite-switch";
 const JOURNAL = "journal.json";
 const ASIDE = "aside";
+// rename-keep-start: a fence marker is compared byte for byte with what existing stores hold
 /** What a marker says, for a person who finds one. */
 export const LEGACY_FENCE_NOTE =
   "This ORCA store keeps its metadata in SQLite (metadata.sqlite); this file only keeps ORCA versions from before 0.7.1 out of it.";
 const MARKER = `${JSON.stringify({ orcaStore: "sqlite", note: LEGACY_FENCE_NOTE })}\n`;
 const MARKER_README = "ORCA-SQLITE-STORE.json";
+// rename-keep-end
 
 type FenceKind = "key" | "file" | "dir" | "relocate" | "index";
 

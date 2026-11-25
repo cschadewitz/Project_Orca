@@ -17,7 +17,7 @@ are new files in this directory. Production and existing test files are reserved
   29 actual JSON-RPC/NDJSON dispatch tests, extending merged PR676. Native
   completeness and maintained release-pair support remain unavailable.
 
-- [#594 provider contract proposal](../../implementation/594-provider-evidence-contract.md):
+- [#594 provider contract proposal](../../archive/implementation/594-provider-evidence-contract.md):
   25 October release/source refresh, smallest binding proposal and remaining
   installed-provider/actual-Cal blockers. The positive handoff stays disabled.
 
@@ -31,7 +31,7 @@ are new files in this directory. Production and existing test files are reserved
   separate authorization under [#393](https://github.com/cschadewitz/Project_Orca/issues/393).
 - [Validation](validation.md): exact commands, results and blocked checks.
 
-Later follow-up: the [9 October M10 disposition](../../implementation/m10-live-command-evidence-disposition.md)
+Later follow-up: the [9 October M10 disposition](../../archive/implementation/m10-live-command-evidence-disposition.md)
 reuses this completed packet at #589 over #584 and records the unsupported exact
 evidence contract, required product decision and still-disabled live handoff.
 The original preparation ownership and validation below remain historical; this

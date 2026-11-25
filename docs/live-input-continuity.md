@@ -7,7 +7,7 @@ callbacks and process/session restoration retain the distinct limits described h
 see the [capability ledger](ROADMAP.md) for remaining actual-client/native acceptance.
 
 The combined runtime wires owner-local live permissions through engine, daemon and app.
-[237-live-input-integration.patch](patches/237-live-input-integration.patch) is retained
+[237-live-input-integration.patch](archive/patches/237-live-input-integration.patch) is retained
 as a historical handoff against preparation baseline
 `7abc2342aa672ee9d2f10d565ca4f8eb546184df`, reconciled with the other feature heads.
 Do not apply it to the integrated tree. Historical feature checks below are not final
@@ -148,7 +148,7 @@ carry a sanitized `details.contextRecoveryReason`: `missing-session-id`,
 `load-unsupported`, `load-failed` or `load-timeout`. Provider error text and stderr
 are omitted from these load-failure errors. A successful load still establishes
 only protocol success, not expected native checkpoint identity or context completeness.
-See [#357 investigation and remaining contract](preparation/agent-context-recovery-357/README.md).
+See [#357 investigation and remaining contract](archive/preparation/agent-context-recovery-357/README.md).
 
 Default engine restart behavior remains fresh; automatic persisted session
 selection and durable approval continuation are not implemented by this option.

@@ -40,10 +40,10 @@ profiles, inspect stores, contact a daemon, collect evidence or send anything.
 ## Reused foundations and source limits
 
 [#402](https://github.com/cschadewitz/Project_Orca/issues/402)'s
-[artifact contract](../native-mac-delivery/artifact-contract.md) supplies the proposed
+[artifact contract](../../archive/preparation/native-mac-delivery/artifact-contract.md) supplies the proposed
 verified candidate identity. [#403](https://github.com/cschadewitz/Project_Orca/issues/403)'s
-[fixture contracts](../native-mac-testing/fixture-contracts.md) and
-[handoff](../native-mac-testing/implementation-handoff.md) supply native test ownership
+[fixture contracts](../../archive/preparation/native-mac-testing/fixture-contracts.md) and
+[handoff](../../archive/preparation/native-mac-testing/implementation-handoff.md) supply native test ownership
 and physical-evidence boundaries. Their recorded baseline and proposed fields are
 historical preparation, not current packaged evidence. At this baseline,
 [release-compatibility.json](../../../release-compatibility.json) states protocol 1.10

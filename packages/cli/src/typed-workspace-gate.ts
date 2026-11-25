@@ -396,12 +396,21 @@ export function createManagedTypedWorkspace(ports: ManagedTypedOwnerPorts) {
   });
 }
 
+/** The marker's name, and until 0.10 its name from before the rename to Orrery; one name until the codemod runs. */
+const TYPED_WORKSPACE_MARKERS = [
+  ...new Set([
+    ".orca-typed-workspace",
+    ".orca-typed-workspace", // rename-keep: pre-rename marker, still fences until 0.10
+  ]),
+];
+
 /** Pre-producer refusal locator, never an ownership/enablement receipt. An unsupported
  * managed path carrying this evidence cannot fall through to stores, auth or plugins. */
 export function assertNoUnownedTypedWorkspace(paths: readonly string[]): void {
   for (const path of paths) {
     for (let cursor = resolve(path); ; cursor = dirname(cursor)) {
-      if (present(join(cursor, ".orca-typed-workspace"))) fail("trusted Linux inspection bridge required");
+      for (const marker of TYPED_WORKSPACE_MARKERS)
+        if (present(join(cursor, marker))) fail("trusted Linux inspection bridge required");
       if (dirname(cursor) === cursor) break;
     }
   }

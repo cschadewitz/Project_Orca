@@ -1,7 +1,7 @@
 # C3-01: current-main protected catalog preparation
 
 Focused evidence for [#408](https://github.com/cschadewitz/Project_Orca/issues/408),
-following [C3-01](../../reviews/2026-10-13-review-detail/C3.md). Runtime is main
+following [C3-01](../../archive/reviews/2026-10-13-review-detail/C3.md). Runtime is main
 `0f45181c52dfc4bf1edd0e4469ff688dedef9189`. No production code, persistence format,
 security policy, runtime activation state or quotas change. This does not close #408.
 

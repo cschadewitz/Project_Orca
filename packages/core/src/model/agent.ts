@@ -506,6 +506,8 @@ export type PermissionExplanation = {
  * SDK and nothing else; a format is not worth a dependency edge. See ADR 0009.
  */
 export const PERMISSION_POLICY_FILENAME = "orca.permissions.json";
+/** Its name before the rename to Orrery: read when the new one is absent, until 0.10; never written. */
+export const LEGACY_PERMISSION_POLICY_FILENAME = "orca.permissions.json"; // rename-keep: pre-rename sidecar name
 
 /**
  * A rule ORCA wrote itself, in answer to one permission request. The two extra fields are
@@ -1122,7 +1124,15 @@ export type McpServerConfig = z.infer<typeof McpServerConfigSchema>;
  * tunnel and runs `workflow` there, so the work is the remote daemon's own run, in its own run
  * list. `command`, `args`, `env` and `mcpServers` do not apply to it.
  */
-export const AgentTypeSchema = z.enum(["acp", "orca-daemon"]);
+export const DAEMON_AGENT_TYPE = "orca-daemon";
+/**
+ * `orca-daemon` as configs from before the rename to Orrery spell it: accepted and read as
+ * {@link DAEMON_AGENT_TYPE} until 0.10, never written.
+ */
+export const LEGACY_DAEMON_AGENT_TYPE = "orca-daemon"; // rename-keep: pre-rename agent type in user configs
+export const AgentTypeSchema = z
+  .enum(["acp", DAEMON_AGENT_TYPE, LEGACY_DAEMON_AGENT_TYPE])
+  .overwrite((type) => (type === LEGACY_DAEMON_AGENT_TYPE ? DAEMON_AGENT_TYPE : type));
 export type AgentType = z.infer<typeof AgentTypeSchema>;
 
 export const AgentSpecSchema = z

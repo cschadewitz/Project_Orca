@@ -419,7 +419,7 @@ Artifact intake skips reconciliation for unchanged signals (#105/#487), and crit
 phases/in-progress work remains #108. Automatic matrix intake preserves decided choices
 (#104); an explicit human decision may replace one. Artifact-index locking (#102), fenced
 run writes (#197) and released-item repair (#123) are implemented. These mechanisms do not
-prove every crash/interleaving scenario: see the [historical review reconciliation](../Current_State/addenda/2026-10-01-main-reconciliation.md)
+prove every crash/interleaving scenario: see the [historical review reconciliation](archive/Current_State/addenda/2026-10-01-main-reconciliation.md)
 and [operations/history backlog](ROADMAP.md). Fixed since: cycle
 detection ignores `soft` edges (#71); a work-item claim stops two dispatchers from launching one item twice (#72);
 artifact intake is serialised per plan (#73); work‑item status is projected from the event

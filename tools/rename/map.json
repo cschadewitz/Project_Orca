@@ -64,6 +64,10 @@
     {
       "pattern": "[A-Za-z0-9+/]{20,}Orca[A-Za-z0-9+/=]*",
       "reason": "Base64 fixture keys that merely contain the letters"
+    },
+    {
+      "pattern": "\"note\": \"targets not verified by ORCA\"",
+      "reason": "A case in the published plain-rule eval set v1 (packages/agents/test/fixtures/plain-rule-eval); its reports record the digest over these bytes"
     }
   ],
   "rules": [

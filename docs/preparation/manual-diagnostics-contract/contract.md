@@ -55,7 +55,7 @@ No correlation with another report is promised or required.
 
 ## Reconciled rolling implementation budgets
 
-The [accepted recovery contract](../crash-recovery/integration-contract.md) and decisions 1–9 govern this disabled rolling slice. One-shot remains a separate unimplemented proposal with 256 KiB, 32 events and 60 seconds; this change grants no one-shot consent or producer expansion.
+The [accepted recovery contract](../../archive/preparation/crash-recovery/integration-contract.md) and decisions 1–9 govern this disabled rolling slice. One-shot remains a separate unimplemented proposal with 256 KiB, 32 events and 60 seconds; this change grants no one-shot consent or producer expansion.
 
 | Resource | Accepted rolling bound | Behavior |
 | --- | --- | --- |

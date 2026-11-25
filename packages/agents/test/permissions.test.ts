@@ -29,6 +29,7 @@ import {
   loadEffectivePermissionPolicy,
   permissionOverlayFor,
   permissionPolicyPath,
+  permissionPolicyPaths,
   existingDirectoryWithin,
   protectedPathFor,
   readPermissionPolicyFile,
@@ -455,6 +456,18 @@ describe("the default policy", () => {
    * and a recorded `reject_always` could never fire. ADR 0009 puts the sidecar second and
    * rules nobody wrote last.
    */
+  it("uses a sidecar under its name from before the rename only while it is the only one, until 0.10", async () => {
+    const dir = await workspace();
+    const current = join(dir, PERMISSION_POLICY_FILENAME);
+    const legacy = join(dir, "orca.permissions.json"); // rename-keep: a workspace from before the rename
+    expect(permissionPolicyPaths(dir)).toEqual([...new Set([current, legacy])]);
+    expect(permissionPolicyPath(dir)).toBe(current);
+    await writeFile(legacy, JSON.stringify({ version: 1, agents: {} }));
+    expect(permissionPolicyPath(dir)).toBe(legacy);
+    await writeFile(current, JSON.stringify({ version: 1, agents: {} }));
+    expect(permissionPolicyPath(dir)).toBe(current);
+  });
+
   it("lets a sidecar deny beat the default allow on an in-workspace edit", async () => {
     const dir = await workspace();
     const file = permissionPolicyPath(dir);

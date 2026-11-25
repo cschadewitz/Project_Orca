@@ -3,7 +3,7 @@
 A workflow can declare the vars a run of it must be started with. The declaration is
 enforced when a run is admitted, before anything is written, and the same check is
 available as a side-effect-free preflight. This is #330; the boundary decisions are frozen
-in [runtime-foundation-parallel-contract.md](runtime-foundation-parallel-contract.md).
+in [runtime-foundation-parallel-contract.md](archive/runtime-foundation-parallel-contract.md).
 
 ## Three different "inputs"
 
@@ -196,7 +196,7 @@ ordinary vars remain in public run history. See [protected storage](protected-ex
 
 This section records the independent #330 slice's handoff. The combined integration
 implements the encrypted storage, projections and migration fences described in
-[runtime integration](runtime-foundation-integration.md) and
+[runtime integration](archive/runtime-foundation-integration.md) and
 [protected execution storage](protected-execution-storage.md). The limitations below
 describe the slice before that shared wiring, not the integrated runtime.
 

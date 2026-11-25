@@ -157,7 +157,7 @@ it("keeps exact owned receipt and private-input guard after provisioning but bef
   const first = await f.service.admitRun({ workflowId: "program" }, { idempotencyKey: "failed-root" }, f.authority);
   if (first.state !== "resolved" || first.result.state !== "recoverable-failure") throw new Error("expected failure");
   const runId = first.result.runId!;
-  const receiptPath = join(f.dir, ".git", "orca-root-workspaces", `${runId}.json`);
+  const receiptPath = join(f.dir, ".git", "orca-root-workspaces", `${runId}.json`); // rename-keep: persisted name kept on purpose
   const receipt = await readFile(receiptPath, "utf8");
   expect(JSON.parse(receipt)).toMatchObject({ runId, repo: f.dir, path: join(f.dir, "trees", runId) });
   expect(await f.stores.execution.getInputs(runId)).toBeDefined();
@@ -266,7 +266,7 @@ async function refFixture() {
   );
   git(f.dir, "push", "-q", "origin", `${moved}:refs/heads/moved-source`);
   const moveTo = (commit: string) => git(upstream, "update-ref", "refs/heads/feature", commit);
-  const receipts = () => readdir(join(f.dir, ".git", "orca-root-workspaces")).catch(() => [] as string[]);
+  const receipts = () => readdir(join(f.dir, ".git", "orca-root-workspaces")).catch(() => [] as string[]); // rename-keep: persisted name kept on purpose
   return { ...f, upstream, original, moved, moveTo, receipts };
 }
 
@@ -475,7 +475,7 @@ it("reports a refusal it could not record as the reconcilable failure, and decid
   const put = execution.putInputs.bind(execution);
   let failNext = false;
   vi.spyOn(execution, "putInputs").mockImplementation(async (inputs) => {
-    if (failNext || inputs.workflowId !== "orca:refused-admission") return put(inputs);
+    if (failNext || inputs.workflowId !== "orca:refused-admission") return put(inputs); // rename-keep: persisted name kept on purpose
     failNext = true;
     throw new OrcaError("RUN_STATE", "protected execution record or key could not be written safely");
   });

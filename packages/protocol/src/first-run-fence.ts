@@ -268,7 +268,7 @@ export async function enterFirstRunWriter(
   let path = realpathSync(configDir);
   let root: string | undefined;
   for (let depth = 0; depth < 256; depth++) {
-    if (exists(join(path, ".orca-first-run-ownership")) || exists(join(path, ".orca-first-run-ownership.json"))) {
+    if (holdsFirstRunOwnership(path)) {
       root = path;
       break;
     }
@@ -286,15 +286,15 @@ export async function enterFirstRunWriter(
     }
     path = realpathSync(path);
     for (let depth = 0; depth < 256; depth++) {
-      if (exists(join(path, ".orca-first-run-ownership")) || exists(join(path, ".orca-first-run-ownership.json")))
-        throw new Error("First-run writer requires the selected configuration");
+      if (holdsFirstRunOwnership(path)) throw new Error("First-run writer requires the selected configuration");
       const parent = dirname(path);
       if (parent === path) break;
       path = parent;
     }
     return;
   }
-  if (root !== configDir || storeDir !== join(root, ".orca") || !token)
+  const layout = firstRunLayout(root);
+  if (root !== configDir || storeDir !== layout.store || !token)
     throw new Error("First-run writer requires an owned launch capability");
   const workspace = fenceDirectory(root);
   assertFenceVolume(root);
@@ -302,11 +302,11 @@ export async function enterFirstRunWriter(
   const fence = await acquireFirstRunFence(workspace, () => (writer ? fenceHash(JSON.stringify(writer)) : undefined));
   try {
     // Read after acquiring: a delayed pre-recovery child cannot enter the retired attempt.
-    const journal = join(root, ".orca-first-run-ownership");
+    const journal = layout.journal;
     const anchor = z
       .object({ version: z.literal(1), workspace: FenceDirectorySchema, journal: FenceDirectorySchema })
       .strict()
-      .parse(JSON.parse(fenceRead(join(root, ".orca-first-run-ownership.json"))));
+      .parse(JSON.parse(fenceRead(layout.anchor)));
     if (
       JSON.stringify(anchor.workspace) !== JSON.stringify(workspace) ||
       JSON.stringify(anchor.journal) !== JSON.stringify(fenceDirectory(journal))
@@ -335,7 +335,7 @@ export async function enterFirstRunWriter(
     if (
       entries.join(",") !== "claim.json" ||
       claim.launchHash !== fenceHash(token) ||
-      claim.configHash !== fenceHash(fenceRead(join(root, "orca.config.yaml"), 1024 * 1024)) ||
+      claim.configHash !== fenceHash(fenceRead(layout.config, 1024 * 1024)) ||
       JSON.stringify(claim.workspace) !== JSON.stringify(workspace) ||
       JSON.stringify(claim.boot) !== JSON.stringify(fenceBoot())
     )
@@ -412,6 +412,35 @@ function exists(path: string): boolean {
   }
 }
 
+// A first-run workspace's own names. One the app set up before the rename to Orrery holds them
+// under the old names and keeps them: it is recognised under either name, and read under the
+// names it was set up with, until 0.10.
+const OWNERSHIP = ".orca-first-run-ownership";
+const LEGACY_OWNERSHIP = ".orca-first-run-ownership"; // rename-keep: app workspaces set up before the rename
+const FIRST_RUN_STORE = ".orca";
+const LEGACY_FIRST_RUN_STORE = ".orca"; // rename-keep: app workspaces set up before the rename
+const FIRST_RUN_CONFIG = "orca.config.yaml";
+const LEGACY_FIRST_RUN_CONFIG = "orca.config.yaml"; // rename-keep: app workspaces set up before the rename
+
+const ownsAs = (path: string, name: string) => exists(join(path, name)) || exists(join(path, `${name}.json`));
+
+/** Whether `path` holds a first-run ownership journal or anchor, under either name. */
+export function holdsFirstRunOwnership(path: string): boolean {
+  return ownsAs(path, OWNERSHIP) || ownsAs(path, LEGACY_OWNERSHIP);
+}
+
+/** Where the first-run workspace at `root` keeps its journal, anchor, store and config. */
+export function firstRunLayout(root: string): { journal: string; anchor: string; store: string; config: string } {
+  const legacy = !ownsAs(root, OWNERSHIP) && ownsAs(root, LEGACY_OWNERSHIP);
+  const journal = join(root, legacy ? LEGACY_OWNERSHIP : OWNERSHIP);
+  return {
+    journal,
+    anchor: `${journal}.json`,
+    store: join(root, legacy ? LEGACY_FIRST_RUN_STORE : FIRST_RUN_STORE),
+    config: join(root, legacy ? LEGACY_FIRST_RUN_CONFIG : FIRST_RUN_CONFIG),
+  };
+}
+
 /** Paths may be aliases or nested cwd values. Direct auth/demo mutations cannot bypass lifetime admission. */
 export function assertNoUnownedFirstRunMutation(input: string): void {
   let path = input;
@@ -422,8 +451,7 @@ export function assertNoUnownedFirstRunMutation(input: string): void {
   }
   path = realpathSync(path);
   for (let depth = 0; depth < 256; depth++) {
-    if (exists(join(path, ".orca-first-run-ownership")) || exists(join(path, ".orca-first-run-ownership.json")))
-      throw new Error("First-run mutation requires owned daemon admission");
+    if (holdsFirstRunOwnership(path)) throw new Error("First-run mutation requires owned daemon admission");
     const parent = dirname(path);
     if (parent === path) return;
     path = parent;

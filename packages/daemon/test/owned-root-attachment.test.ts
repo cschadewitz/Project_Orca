@@ -129,7 +129,7 @@ edges:
     return provider;
   };
   const workspace = (await orc.getState(runId)).run.workspace;
-  const receiptPath = join(repo, ".git", "orca-root-workspaces", `${runId}.json`);
+  const receiptPath = join(repo, ".git", "orca-root-workspaces", `${runId}.json`); // rename-keep: persisted name kept on purpose
   const receipt = await readFile(receiptPath, "utf8");
   await writeFile(join(workspace.cwd, "partial"), "keep work");
   const access = { current, workspaceId, authorizer };

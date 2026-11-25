@@ -23,7 +23,7 @@ second adapter, auth system or bridge story:
 
 | Work | Observed state / implication |
 | --- | --- |
-| [#368](https://github.com/cschadewitz/Project_Orca/pull/368), [#371](https://github.com/cschadewitz/Project_Orca/pull/371), [#330](https://github.com/cschadewitz/Project_Orca/issues/330) | Merged authentication/runtime foundation and shipped typed validation; source evidence is [runtime integration](../../runtime-foundation-integration.md). #328's open issue is not evidence that these are absent. |
+| [#368](https://github.com/cschadewitz/Project_Orca/pull/368), [#371](https://github.com/cschadewitz/Project_Orca/pull/371), [#330](https://github.com/cschadewitz/Project_Orca/issues/330) | Merged authentication/runtime foundation and shipped typed validation; source evidence is [runtime integration](../../archive/runtime-foundation-integration.md). #328's open issue is not evidence that these are absent. |
 | [#397](https://github.com/cschadewitz/Project_Orca/pull/397) | Open, unmerged integration of #329/#332/#318/#237. Its target identity, configuration generation and live-gate work is pending. Recheck exact main before implementation; do not import its branch or count its advertised checks as Cal proof. |
 | [#327](https://github.com/cschadewitz/Project_Orca/issues/327), [#328](https://github.com/cschadewitz/Project_Orca/issues/328) | Single owners for inbound MCP and daemon authority. User mapping, safe projections and bounded existing-run inspection belong here. |
 | [#391](https://github.com/cschadewitz/Project_Orca/issues/391), [#392](https://github.com/cschadewitz/Project_Orca/issues/392), [#393](https://github.com/cschadewitz/Project_Orca/issues/393) | Existing feasibility, operational bridge and actual-Cal evidence stories. This packet prepares them; it implements none of them. |
@@ -52,7 +52,7 @@ are not asserted to exist. Freeze exact files with the relevant owners before co
 
 Do not assign a second implementation owner to daemon methods, protocol schemas,
 admission, configuration generations or live-gate state. Reuse the seams in
-[runtime-next parallel contract](../../runtime-next-parallel-contract.md) and recheck their
+[runtime-next parallel contract](../../archive/runtime-next-parallel-contract.md) and recheck their
 integration status. The adapter consumes authenticated wire operations; it must not
 bootstrap a parallel engine to bypass a daemon refusal.
 

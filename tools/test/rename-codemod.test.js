@@ -41,6 +41,7 @@ describe("rename rules", () => {
     "AAAAC3NzaC1lZDI1NTE5AAAAIOrcaServerKeyOne0000",
     "header ORCADP01",
     "orrery and Orrery are already renamed",
+    '      "note": "targets not verified by ORCA",',
   ])("leaves %s alone", (text) => {
     expect(rename(text)).toBe(text);
   });

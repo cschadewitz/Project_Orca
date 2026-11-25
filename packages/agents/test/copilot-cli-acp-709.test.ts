@@ -32,7 +32,7 @@ const PREFIX = "/opt/orca-providers";
 
 /** The example profile's agent, parsed by ORCA's own config schema. The YAML parser is core's. */
 async function exampleProfile(): Promise<AgentSpec> {
-  const text = await readFile(new URL("orca.copilot-acp.example.yaml", PACKET), "utf8");
+  const text = await readFile(new URL("orca.copilot-acp.example.yaml", PACKET), "utf8"); // rename-keep: docs/preparation is not renamed, so the file keeps its name
   const config = parseOrcaConfig(parseFrontMatter(`---\n${text}\n---\n`).data);
   expect(config.agents).toHaveLength(1);
   return config.agents[0]!;

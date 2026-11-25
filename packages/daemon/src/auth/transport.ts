@@ -41,6 +41,12 @@ import type { ResourceResolver } from "./resources.js";
 export const SOCKET_PROTOCOL = "orca.v1";
 /** The prefix of the subprotocol that carries a bearer token on a socket upgrade. */
 export const SOCKET_BEARER_PREFIX = "orca.bearer.";
+/**
+ * The two as clients from before the rename to Orrery offer them: selected and read until 0.10.
+ * A client that offers both names for one token is reading either kind of daemon, not two tokens.
+ */
+export const LEGACY_SOCKET_PROTOCOL = "orca.v1"; // rename-keep: pre-rename subprotocol
+export const LEGACY_SOCKET_BEARER_PREFIX = "orca.bearer."; // rename-keep: pre-rename subprotocol
 
 interface CommonAuthOptions {
   /** Browser origins allowed to call the daemon. Empty (the default): no browser may. */
@@ -214,10 +220,13 @@ export class TransportGate {
       found.push(m[1]!);
     }
     if (transport === "socket") {
+      const offered = new Set<string>();
       for (const protocol of (header(req, "sec-websocket-protocol") ?? "").split(",")) {
         const p = protocol.trim();
-        if (p.startsWith(SOCKET_BEARER_PREFIX)) found.push(p.slice(SOCKET_BEARER_PREFIX.length));
+        if (p.startsWith(SOCKET_BEARER_PREFIX)) offered.add(p.slice(SOCKET_BEARER_PREFIX.length));
+        else if (p.startsWith(LEGACY_SOCKET_BEARER_PREFIX)) offered.add(p.slice(LEGACY_SOCKET_BEARER_PREFIX.length));
       }
+      found.push(...offered);
     }
     if (found.length > 1) return "malformed";
     return found[0];

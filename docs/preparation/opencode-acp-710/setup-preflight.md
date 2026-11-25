@@ -5,7 +5,7 @@ These steps are for an operator **after** the bounded installed test in
 them was run while preparing this packet.
 
 They do not replace the #386 first-run review
-([agent preflight](../../implementation/386-agent-preflight.md)). That review only observes
+([agent preflight](../../archive/implementation/386-agent-preflight.md)). That review only observes
 whether the configured executable exists and reads its header. It does not check the
 version, the ACP route or sign-in, and it does not accept a provider. These steps add the
 OpenCode-specific checks it leaves to an operator.

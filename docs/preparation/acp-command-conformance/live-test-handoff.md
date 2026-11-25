@@ -12,7 +12,7 @@ transforms the native command string. Resolve or explicitly characterize those
 gaps with their owning seams first. A title, task sentence or tool update cannot
 replace the command under review. Unsupported routing is an actionable result.
 
-The [9 October M10 disposition](../../implementation/m10-live-command-evidence-disposition.md)
+The [9 October M10 disposition](../../archive/implementation/m10-live-command-evidence-disposition.md)
 rechecks the pinned native/bridge contracts at #589 over #584. It establishes that
 the shell transform is non-injective and neither AIR metadata nor earlier tool
 observations restores exact pending native evidence. No supported ORCA-only fix

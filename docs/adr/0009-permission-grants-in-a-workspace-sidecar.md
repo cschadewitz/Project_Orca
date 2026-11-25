@@ -130,7 +130,7 @@ and skipped for the ask rather than failing it, because an unreadable file must 
 to block an agent. **2026-10-01 clarification:** this fallback can lose restrictions too:
 the sidecar schema allows deny/ask rules, and dropping them can expose a later default
 allow. Configured rules still precede the overlay. A conservative error policy is not
-established by rereading; see [R07 reconciliation](../../Current_State/addenda/2026-10-01-main-reconciliation.md).
+established by rereading; see [R07 reconciliation](../archive/Current_State/addenda/2026-10-01-main-reconciliation.md).
 
 **2026‑10‑14 (C4‑01):** an agent could grant itself everything. With no `workspace:` the
 config directory *is* the run's workspace, so this file, `orca.config.yaml`, the `.orca`
