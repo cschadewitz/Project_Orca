@@ -16,7 +16,7 @@ import {
 } from "node:fs/promises";
 import { join } from "node:path";
 import { createServer, type Server } from "node:net";
-import { fenceBoot, fenceDirectory, fenceHash } from "@orca/protocol/first-run-fence";
+import { fenceDirectory } from "@orca/protocol/first-run-fence";
 import { afterEach, expect, it as platformIt, vi } from "vitest";
 import { ClosedUpdateWindow, enterUpdateWriter, provisionUpdateWindow } from "@orca/protocol/update-window";
 import { createPairTreePort, type PairTreePort } from "../src/main/mac-fixed-path-files.js";
@@ -26,6 +26,7 @@ import { MacClosedWindowValidation } from "../src/main/mac-closed-window-validat
 import { readMacManifest, sha256 } from "../src/main/mac-candidate-manifest.js";
 import type { MacNativeCommitRequest } from "../src/main/mac-native-handoff.js";
 import { randomUUID } from "node:crypto";
+import { fencePorts, selectFenceDirectory } from "../../protocol/test/fixtures/fence-ports.js";
 
 // The "posix-fixture" pair tree port is Linux-only fixture evidence and refuses elsewhere.
 const it = platformIt.skipIf(process.platform !== "linux");
@@ -51,6 +52,9 @@ async function provisionFixture(beforeProvision?: (layout: FixtureLayout) => Pro
       data = [join(base, "app"), join(base, "store")],
       binary = join(base, "Orca.app");
     for (const path of [control, ...data, binary]) await mkdir(path, { mode: 0o700 });
+    // Fenced roots get identities whose slots lie outside kernel autobind (#807, #819, #1084),
+    // so only the contention a test injects can refuse them.
+    for (const path of [control, ...data]) await selectFenceDirectory(path);
     await writeFile(join(data[0]!, "intents.enc"), "protected-old", { mode: 0o600 });
     await writeFile(join(data[1]!, "history.json"), "old-history", { mode: 0o600 });
     await writeFile(join(binary, "manifest"), old, { mode: 0o600 });
@@ -94,17 +98,7 @@ async function fixture(candidateHash = candidate, beforeProvision?: (layout: Fix
 }
 // Contention is injected with an owned kernel listener, never a free-port probe or a
 // mocked fence. Mirror only the production identity mapping needed to occupy its slots.
-function fixtureSlots(root: string) {
-  const start =
-    20000 +
-    (Number.parseInt(
-      fenceHash(JSON.stringify(["orca-update-window-v1", fenceBoot().kernelDomain, fenceDirectory(root)])).slice(0, 8),
-      16,
-    ) %
-      5000) *
-      8;
-  return Array.from({ length: 8 }, (_, slot) => start + slot);
-}
+const fixtureSlots = (root: string) => fencePorts(fenceDirectory(root));
 async function occupy(port: number) {
   const server: Server = createServer();
   const close = async () => {
