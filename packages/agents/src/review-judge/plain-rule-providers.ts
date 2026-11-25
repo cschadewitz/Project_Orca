@@ -145,12 +145,12 @@ export const PLAIN_RULE_SYSTEM_PROMPT = [
  */
 const CLASS_NOTES: Readonly<Record<Exclude<PlainRuleActionClass, "read">, string>> = Object.freeze({
   edit:
-    "The action is a write ORCA itself will perform to the one file in `locations`. Your answer is shown to the " +
+    "The action is a write ORCA itself will perform to the one file in `locations`. Your answer is shown to the " + // rename-keep: prompt text hashed into the provider version that issued grants name
     "user as advice. Only its path is known: what " +
     "the write adds, removes or changes is not shown. Answer covered only when the criterion is about which files " +
     "may be written. If it depends on the content or effect of the write, answer unsure with criterion-ambiguous.",
   mcp:
-    "The action is one call to a tool on an MCP server ORCA runs: `mcp.server` and `mcp.tool` name it, and " +
+    "The action is one call to a tool on an MCP server ORCA runs: `mcp.server` and `mcp.tool` name it, and " + // rename-keep: prompt text hashed into the provider version that issued grants name
     "`mcp.arguments` (a JSON object string) holds only the arguments the user chose to show, exactly as they will " +
     "be sent. If the criterion depends on anything not shown, answer unsure with criterion-ambiguous.",
   command:
