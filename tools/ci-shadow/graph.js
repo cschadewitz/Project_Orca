@@ -381,7 +381,7 @@ export function graph(snapshot, manifest) {
     let target;
     if (specifier.startsWith(".")) target = posix.normalize(posix.join(posix.dirname(consumer), specifier));
     else if (specifier.startsWith("@orca/")) {
-      const [name, ...rest] = specifier.slice(6).split("/");
+      const [name, ...rest] = specifier.slice("@orca/".length).split("/");
       const packagePath = [...files.values()].find(
         (entry) =>
           entry.path.endsWith("/package.json") && entry.text && JSON.parse(entry.text).name === `@orca/${name}`,
@@ -444,7 +444,8 @@ export function graph(snapshot, manifest) {
     if (/^packages\/[^/]+\/package\.json$/.test(entry.path)) {
       const pkgManifest = JSON.parse(entry.text);
       for (const name of Object.keys({ ...pkgManifest.dependencies, ...pkgManifest.devDependencies }))
-        if (name.startsWith("@orca/")) add(packageNode(name.slice(6)), packageNode(pkg), "workspace-dependency");
+        if (name.startsWith("@orca/"))
+          add(packageNode(name.slice("@orca/".length)), packageNode(pkg), "workspace-dependency");
     }
     if (/^packages\/[^/]+\/tsconfig\.json$/.test(entry.path)) {
       const config = ts.parseConfigFileTextToJson(entry.path, entry.text);
