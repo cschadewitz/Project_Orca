@@ -19,6 +19,7 @@ import {
   scopedEligibilityProblems,
   REPO_ROOT,
   casesFor,
+  assertedCases,
   checkSupportMatrix,
   loadCatalogue,
   loadMatrix,
@@ -27,6 +28,7 @@ import {
   qualifyingCases,
 } from "../guard-qualification/check-support-matrix.js";
 import { PATHS } from "../guard-qualification/paths.js";
+import { recordReceipts } from "../guard-qualification/record-receipts.js";
 import { SCENARIOS } from "../guard-qualification/scenarios.js";
 import { createWorld } from "../guard-qualification/world.js";
 
@@ -54,7 +56,11 @@ describe("the catalogue, the scenarios and the matrix agree", () => {
   });
 
   it("the support matrix holds", () => {
-    expect(checkSupportMatrix(matrix, catalogue)).toEqual([]);
+    // Structure only: attestation is verified by check-support-matrix.js in CI (guard-matrix.yml),
+    // so here every committed receipt's attestation is taken as verified.
+    expect(checkSupportMatrix(matrix, catalogue, undefined, undefined, loadAssertions(), () => [])).toEqual([]);
+    // Without that, nothing but the unverified attestations is refused.
+    for (const p of checkSupportMatrix(matrix, catalogue)) expect(p).toContain(UNVERIFIED);
   });
 
   it("the suite's page names every case", async () => {
@@ -88,8 +94,24 @@ describe("the matrix checker refuses claims beyond the evidence", () => {
       ],
     },
   };
+  /**
+   * The committed Claude row without its live claim metadata (its pin, receipts and any scoped
+   * claim), so the synthetic fixtures below do not change when a real claim is recorded.
+   */
+  const committedClaude = (from = matrix) => {
+    const { scoped: _scoped, ...row } = structuredClone(from.agents.find((a) => a.id === "claude"));
+    return { ...row, pin: null, receipts: [] };
+  };
+  /** The committed matrix with every row's live claim metadata removed, for path-structure fixtures. */
+  const synthetic = () => ({
+    ...matrix,
+    agents: matrix.agents.map((a) => {
+      const { scoped: _scoped, ...row } = structuredClone(a);
+      return { ...row, pin: null, receipts: [] };
+    }),
+  });
   const claude = (extra = {}) => ({
-    ...structuredClone(matrix.agents.find((a) => a.id === "claude")),
+    ...committedClaude(),
     // The structure tests claim the ask route; the hook route's rules are tested with hookAgent.
     routes: ["acp-ask"],
     notAsserted: [],
@@ -506,7 +528,7 @@ describe("the matrix checker refuses claims beyond the evidence", () => {
     const paths = structuredClone(matrix.paths);
     paths.find((p) => p.id === "acp-ask").unobserved = { L01: "Not a connected path, so it cannot say this." };
     paths.find((p) => p.id === "claude-connected").unobserved.F01 = "It does not run this case at all.";
-    expect(checkSupportMatrix({ ...matrix, paths }, catalogue)).toEqual([
+    expect(checkSupportMatrix({ ...synthetic(), paths }, catalogue)).toEqual([
       "path acp-ask: only a connected path lists unobserved cases",
       "path claude-connected: lists F01 as unobserved, but does not run it",
     ]);
@@ -538,7 +560,7 @@ describe("the matrix checker refuses claims beyond the evidence", () => {
     const hook = paths.find((p) => p.id === "claude-native-hook");
     delete hook.excluded.L08;
     hook.excluded.L01 = "Not run here for a reason somebody made up.";
-    expect(checkSupportMatrix({ ...matrix, paths }, catalogue)).toEqual([
+    expect(checkSupportMatrix({ ...synthetic(), paths }, catalogue)).toEqual([
       "path claude-native-hook: excludes L01, which it can run; run it instead",
       "path claude-native-hook: case L08 is neither run nor excluded with a reason",
     ]);
@@ -630,9 +652,10 @@ describe("the matrix checker refuses claims beyond the evidence", () => {
       expect(scopedEligibilityProblems("claude-native-hook:A*", committed)).toEqual([
         "must be route:level with level A or B",
       ]);
-      // The committed matrix carries no claim: enabling a scope awards nothing by itself.
-      expect(matrix.agents.some((a) => a.scoped !== undefined)).toBe(false);
-      expect(checkSupportMatrix(matrix, catalogue)).toEqual([]);
+      // Enabling a scope awards nothing by itself: a committed claim is only one of these
+      // scopes, and it holds only on its attested receipt (the support matrix holds, above).
+      for (const a of matrix.agents.filter((x) => x.scoped !== undefined))
+        expect(SCOPED_ENABLED, a.id).toContain(`${a.scoped.route}:${a.scoped.level}`);
     });
 
     it("refuses an enabled scope whose route is not eligible, whatever any row claims", () => {
@@ -661,6 +684,7 @@ describe("the matrix checker refuses claims beyond the evidence", () => {
 
     it("refuses Claude's committed row a B claim on the hook route, and an A claim without its receipt", () => {
       const row = matrix.agents.find((a) => a.id === "claude");
+      expect(row.scoped === undefined || row.scoped.level === "A").toBe(true);
       const claim = (level) => ({
         ...matrix,
         agents: matrix.agents.map((a) =>
@@ -671,6 +695,57 @@ describe("the matrix checker refuses claims beyond the evidence", () => {
       const a = checkSupportMatrix(claim("A"), catalogue);
       expect(a).not.toContain(`agent claude: scoped: ${SCOPED_DISABLED}`);
       expect(a.length).toBeGreaterThan(0);
+    });
+
+    it("holds a populated committed claim, and the fixtures do not depend on it", async () => {
+      const file = "tools/guard-qualification/receipts/claude-claude-native-hook.json";
+      const recorded = JSON.parse(await readFile(join(REPO_ROOT, file), "utf8"));
+      const path = matrix.paths.find((p) => p.id === "claude-native-hook");
+      const covers = assertedCases(path, catalogue);
+      const excludes = Object.fromEntries(
+        [...casesFor(path, catalogue).filter((id) => !covers.includes(id)), ...Object.keys(path.excluded)]
+          .sort()
+          .map((id) => [id, path.installed?.diagnostic?.[id] ?? path.excluded[id]]),
+      );
+      // The row as guard-receipts.yml records the receipt on it.
+      const recordedRow = recordReceipts(matrix, [{ file, receipt: recorded }]).agents.find((a) => a.id === "claude");
+      const claim = {
+        level: "A",
+        route: "claude-native-hook",
+        pin: recordedRow.pin,
+        settings: recorded.agentSettings,
+        covers,
+        excludes,
+        stillOff: ["ORCA's judge is off by default and cannot auto-approve shell commands"],
+        unverified: ["That Claude blocks the call when the hook times out or cannot start"],
+        judge: "unverified",
+        receipts: [file],
+      };
+      const withClaim = (scoped) => ({
+        ...matrix,
+        agents: matrix.agents.map((a) =>
+          a.id === "claude" ? { ...a, pin: recordedRow.pin, receipts: recordedRow.receipts, scoped } : a,
+        ),
+      });
+      const attestedCheck = (m) => checkSupportMatrix(m, catalogue, undefined, undefined, loadAssertions(), () => []);
+      // A valid claim on the recorded receipt holds, through the production enabled scopes.
+      expect(attestedCheck(withClaim(claim))).toEqual([]);
+      // Unsupported claims on the same receipt are still refused.
+      expect(attestedCheck(withClaim({ ...claim, level: "B" }))).toContain(`agent claude: scoped: ${SCOPED_DISABLED}`);
+      expect(attestedCheck(withClaim({ ...claim, route: "acp-ask" }))).toContain(
+        `agent claude: scoped: ${SCOPED_DISABLED}`,
+      );
+      expect(attestedCheck(withClaim({ ...claim, covers: [...covers, "F01"] })).length).toBeGreaterThan(0);
+      expect(attestedCheck(withClaim({ ...claim, settings: {} })).length).toBeGreaterThan(0);
+      // The synthetic fixtures read the same row whether or not a claim is recorded on it.
+      expect(committedClaude(withClaim(claim))).toEqual(
+        committedClaude({
+          ...matrix,
+          agents: matrix.agents.map((a) =>
+            a.id === "claude" ? { ...a, pin: null, receipts: [], scoped: undefined } : a,
+          ),
+        }),
+      );
     });
 
     it("refuses a scope that is not enabled, whatever the receipt says", () => {
