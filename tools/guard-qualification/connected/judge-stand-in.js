@@ -16,7 +16,7 @@ import { preparePlainRuleJudge, secretJudgeCredentials } from "@orca/agents/revi
 import { memoryJudgeBudget } from "@orca/agents/judge-budget";
 
 /** The reply schema ORCA's judge accepts (`PLAIN_RULE_VERDICT_SCHEMA`). */
-const VERDICT_SCHEMA = "orca-plain-rule-verdict/v1";
+const VERDICT_SCHEMA = "orca-plain-rule-verdict/v1"; // rename-keep: the judge's wire format keeps its pre-rename name
 
 export async function judgeStandIn() {
   const state = { verdict: "covered", requests: [] };

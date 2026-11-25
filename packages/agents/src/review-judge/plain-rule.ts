@@ -222,6 +222,7 @@ const TRIPWIRES = [
   /disregard (all |any )?(previous|prior|above|earlier)/i,
   /\byou are (now )?(a|an|the)\b/i,
   /\b(system|assistant|developer) ?(prompt|message|:)/i,
+  /orca-plain-rule-(request|verdict)/i, // rename-keep: the wire format names, which keep their pre-rename spelling
   /orca-plain-rule-(request|verdict)/i,
   /\bverdict\b\s*["':=]/i,
   /\bcovered\b\s*["':=]/i,
