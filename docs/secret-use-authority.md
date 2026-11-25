@@ -44,7 +44,7 @@ its entry also names `"purpose": "review-judge"`, that destination and a `source
 variable it is read from), which `auth issue`
 copies from the config. Such an entry covers only a judge connection's use at that
 destination, and an entry without them covers only delivery to an agent. A re-pin or a change of
-variable is not followed; rotating the value at the same variable needs no new grant. See [BYOK judge credentials](preparation/review-judge-701/byok-credentials.md).
+variable is not followed; rotating the value at the same variable needs no new grant. See [BYOK judge credentials](archive/preparation/review-judge-701/byok-credentials.md).
 
 ## The use decision
 

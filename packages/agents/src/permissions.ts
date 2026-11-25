@@ -38,7 +38,7 @@
  * path checks are here.
  */
 import { createHash } from "node:crypto";
-import { readlinkSync, realpathSync, statSync } from "node:fs";
+import { existsSync, readlinkSync, realpathSync, statSync } from "node:fs";
 import { readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, sep } from "node:path";
 import { revisionOf, withPolicyLock } from "./permission-file.js";
@@ -723,9 +723,27 @@ function pathSegments(path: string): string[] {
 
 const EMPTY_POLICY_FILE: PermissionPolicyFile = { version: 1, agents: {} };
 
+/**
+ * The sidecar's name from before the rename to Orrery. A workspace that has only that one is
+ * read and added to under it until 0.10, the same file the daemon's config editor uses; a
+ * workspace with neither gets the current name. Until the codemod runs it is the same name.
+ */
+const LEGACY_PERMISSION_POLICY_FILENAME = "orca.permissions.json"; // rename-keep: pre-rename sidecar, read until 0.10
+
 /** Where the workspace sidecar lives: beside `orca.config.yaml`, in the config directory. */
 export function permissionPolicyPath(configDir: string): string {
-  return join(configDir, PERMISSION_POLICY_FILENAME);
+  const [path, legacy] = permissionPolicyPaths(configDir);
+  return legacy === undefined || existsSync(path) || !existsSync(legacy) ? path : legacy;
+}
+
+/**
+ * Every name the workspace sidecar may have in `configDir`, current first: what an agent must
+ * not write, since either one would be read.
+ */
+export function permissionPolicyPaths(configDir: string): [string] | [string, string] {
+  const path = join(configDir, PERMISSION_POLICY_FILENAME);
+  const legacy = join(configDir, LEGACY_PERMISSION_POLICY_FILENAME);
+  return legacy === path ? [path] : [path, legacy];
 }
 
 /**

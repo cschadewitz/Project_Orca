@@ -8,7 +8,7 @@ import { assertClosedUpdateCommand, enterCommandUpdateBootstrap } from "./update
 import { dirname, resolve } from "node:path";
 import { homedir } from "node:os";
 
-const USAGE = `orca - Orchestration Runtime for Coding Agents
+const USAGE = `orca - orchestration for coding agents
 
 usage: orca <command> [options]
 

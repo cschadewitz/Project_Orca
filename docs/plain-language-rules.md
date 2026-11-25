@@ -94,4 +94,4 @@ Three more kinds of call can be shown to the judge. Each is off by default and n
 
 All three also need `enabled: true`.
 
-See [experimental-kinds.md](preparation/review-judge-701/experimental-kinds.md) for the details, and [plain-language-rules.md](preparation/review-judge-701/plain-language-rules.md) for the design.
+See [experimental-kinds.md](archive/preparation/review-judge-701/experimental-kinds.md) for the details, and [plain-language-rules.md](archive/preparation/review-judge-701/plain-language-rules.md) for the design.

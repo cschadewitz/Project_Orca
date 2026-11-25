@@ -443,5 +443,5 @@ export function sameBinding(a: DelegationBinding, b: DelegationBinding): boolean
 /** The remote admission key for one generation of one delegation: ≤128 bytes, stable. */
 export function delegationKey(parentRunId: string, delegationId: string, generation: number): string {
   const digest = createHash("sha256").update(`${parentRunId}\n${delegationId}\n${generation}`).digest("hex");
-  return `orca-delegate-${digest.slice(0, 48)}`;
+  return `orca-delegate-${digest.slice(0, 48)}`; // rename-keep: idempotency key a remote daemon already holds for in-flight delegations
 }

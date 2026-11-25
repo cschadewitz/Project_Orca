@@ -5,6 +5,7 @@ import type { OperatorReadModel } from "./operator-read-model.js";
 import type { ContinuationAdmissionModel, ContinuationAccess } from "./continuation-admission.js";
 import {
   RunsContinueParamsSchema,
+  legacyVersionField,
   ContinuationsGetParamsSchema,
   ContinuationsReconcileParamsSchema,
   type ManagedDeployment,
@@ -464,6 +465,7 @@ export const hello: Method<HelloParams, HelloResult> = {
     }
     return {
       protocol: negotiated.protocol,
+      ...legacyVersionField(ctx.orcaVersion),
       orcaVersion: ctx.orcaVersion,
       ...(ctx.processId === undefined ? {} : { processId: ctx.processId }),
       ...(ctx.identity ? { identity: ctx.identity } : {}),

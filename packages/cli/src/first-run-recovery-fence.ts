@@ -1,9 +1,24 @@
 /** Preserve retained continuations after ownership reconciliation; execution needs explicit operator action. */
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+/**
+ * The journal's names: this version's and, until 0.10, the one from before the rename to Orrery,
+ * since a journal written then still holds work that must stay parked. The same name until the
+ * codemod runs.
+ */
+const JOURNALS = [
+  ...new Set([
+    ".orca-first-run-ownership",
+    ".orca-first-run-ownership", // rename-keep: pre-rename journal, read until 0.10
+  ]),
+];
+
 export function firstRunRequiresExplicitContinuationRecovery(configDir: string): boolean {
+  return JOURNALS.some((name) => journalRequiresRecovery(join(configDir, name)));
+}
+
+function journalRequiresRecovery(journal: string): boolean {
   try {
-    const journal = join(configDir, ".orca-first-run-ownership");
     const names = readdirSync(journal);
     if (names.length >= 256) return true;
     return names.some((name) => {

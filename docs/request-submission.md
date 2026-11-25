@@ -6,7 +6,7 @@ uses this shared service; “no MCP transport here” and protocol 1.10 below re
 to this feature's original scope/checkpoint. See [retry receipts](admission-retry.md)
 and the [capability ledger](ROADMAP.md) for current composition and residual acceptance.
 
-This feature slice implements the frozen [parallel contract](runtime-next-parallel-contract.md).
+This feature slice implements the frozen [parallel contract](archive/runtime-next-parallel-contract.md).
 The combined runtime wires daemon methods and CLI/ACP entry points to the real
 configuration-generation provider, historical `RestoreLaunch`, persistent workspace
 identity and durable admission store. The patch is a historical handoff; do not
@@ -229,7 +229,7 @@ capability class; discovery and current operation grants still govern access.
 
 ## Integrated wiring and historical handoff
 
-[329-request-submission-integration.patch](patches/329-request-submission-integration.patch)
+[329-request-submission-integration.patch](archive/patches/329-request-submission-integration.patch)
 is retained as a historical handoff against preparation baseline
 `7abc2342aa672ee9d2f10d565ca4f8eb546184df`. Its wiring is reconciled in this tree;
 do not apply it to the integrated runtime. Bootstrap supplies the real generation
@@ -243,7 +243,7 @@ for nonsensitive workflows. Missing provider support refuses submission before
 admission side effects, and a returned root is verified before acceptance.
 
 Final combined checks remain necessary; see the unresolved findings and reconciliation
-checklist in [runtime-next integration](runtime-next-integration.md#review-status-and-final-reconciliation).
+checklist in [runtime-next integration](archive/runtime-next-integration.md#review-status-and-final-reconciliation).
 
 Dedicated tests cover admission/refusal, each durable write boundary, concurrent recovery,
 file-store restart, protected Request projections, configuration capture and fail-closed

@@ -23,6 +23,7 @@ import {
   bootstrap,
   CONFIG_FILENAMES,
   findConfig,
+  LEGACY_CONFIG_FILENAMES,
   loadConfig,
   makeHumanInput,
   makeSessionFactory,
@@ -61,8 +62,17 @@ describe("orcaProtectedPaths", () => {
     const dir = resolve("/srv/project");
     const paths = orcaProtectedPaths({ configDir: dir, storeDir: ".orca" });
     expect(paths.readOnly).toEqual([
-      ...CONFIG_FILENAMES.map((name) => join(dir, name)),
-      join(dir, "orca.permissions.json"),
+      ...new Set([
+        ...CONFIG_FILENAMES.map((name) => join(dir, name)),
+        // Until 0.10 the names from before the rename are read, so an agent may not write them either.
+        join(dir, "orca.config.yaml"), // rename-keep: pre-rename config name, protected until 0.10
+        join(dir, "orca.config.yml"), // rename-keep: pre-rename config name, protected until 0.10
+        join(dir, "orca.config.json"), // rename-keep: pre-rename config name, protected until 0.10
+      ]),
+      ...new Set([
+        join(dir, "orca.permissions.json"),
+        join(dir, "orca.permissions.json"), // rename-keep: pre-rename sidecar, protected until 0.10
+      ]),
       join(dir, ".orca"),
     ]);
     expect(paths.noAccess).toEqual([
@@ -123,6 +133,23 @@ describe("findConfig", () => {
     expect(above === undefined || above.endsWith(".yaml") || above.endsWith(".yml") || above.endsWith(".json")).toBe(
       true,
     );
+  });
+
+  it("finds a config under its name from before the rename, with a warning, until 0.10", async () => {
+    const dir = await temp();
+    const legacy = join(dir, "orca.config.yaml"); // rename-keep: a workspace from before the rename
+    await writeFile(legacy, "version: 1\n", "utf8");
+    const warnings: string[] = [];
+    expect(await findConfig(dir, (m) => warnings.push(m))).toBe(legacy);
+    const renamed = !CONFIG_FILENAMES.includes(LEGACY_CONFIG_FILENAMES[0]!);
+    expect(warnings).toEqual(
+      renamed ? [`warning: reading ${legacy}; rename it to ${CONFIG_FILENAMES[0]} (the old name is read until 0.10)`] : [],
+    );
+    // The current name wins wherever both are present, and is read without a warning.
+    await writeFile(join(dir, CONFIG_FILENAMES[0]!), "version: 1\n", "utf8");
+    warnings.length = 0;
+    expect(await findConfig(dir, (m) => warnings.push(m))).toBe(join(dir, CONFIG_FILENAMES[0]!));
+    expect(warnings).toEqual([]);
   });
 });
 

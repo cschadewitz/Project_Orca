@@ -10,7 +10,7 @@ of them are checked for the specific candidate.
 [#790](https://github.com/cschadewitz/Project_Orca/pull/790) merged this preparation;
 [#789](https://github.com/cschadewitz/Project_Orca/pull/789) merged the source/offline/synthetic
 store rehearsal. Neither supplies installed candidate acceptance. The
-[readiness matrix and unbound candidate ledger](../../reviews/2026-10-27-release-readiness.md#candidate-evidence-ledger-unbound-preparation)
+[readiness matrix and unbound candidate ledger](../../archive/reviews/2026-10-27-release-readiness.md#candidate-evidence-ledger-unbound-preparation)
 record the verified main reference and the remaining evidence per possible combination.
 The current personal desktop round targets Windows 11; Windows 10 testing is excluded.
 No offered platform set, final candidate identity, support route, retention policy or date
@@ -29,13 +29,13 @@ installation, launch, onboarding, update and offline-restore receipts into that 
 A rebuild creates a new identity. Source-built Windows receipts and a green main CI do
 not satisfy G2–G4. The preparation issue may be complete while these gates stay unchecked.
 For existing installs, use the
-[store-rehearsal installed prerequisites](../store-compatibility-rehearsal/README.md#5-installed-windowslinux-rehearsal-prerequisites-and-expected-evidence):
+[store-rehearsal installed prerequisites](../../archive/preparation/store-compatibility-rehearsal/README.md#5-installed-windowslinux-rehearsal-prerequisites-and-expected-evidence):
 backup must precede the first candidate open, including read-only opens that can write;
 rollback requires complete matching pre-upgrade state plus binary/toolchain. Installed
 upgrade and restore remain unverified. No manual migration procedure is chosen here.
 
 For Casey's proposed Windows 11 x64 NSIS / Ubuntu 24.04 Desktop x64 `.deb` test setup,
-use the [disposable Proxmox VM runbook](../release-test-vms/README.md). It adds capacity
+use the [disposable Proxmox VM runbook](../../archive/preparation/release-test-vms/README.md). It adds capacity
 preflight, reusable baselines, independent backup/restore and effort estimates without
 changing the candidate decisions or gates below. Its earlier Windows 10 best-effort
 proposal is historical and does not apply to this round: Windows 10 testing is excluded.
@@ -68,7 +68,7 @@ declare.
 
 | Placeholder | Decision | Source of truth / owner |
 | --- | --- | --- |
-| `{{CANDIDATE_VERSION}}` | The version stamped into the artifacts. Testers compare it with the status bar's `orca-daemon …` | Release owner; the release or Desktop run's version step ([readiness audit](../../reviews/2026-10-27-release-readiness.md) R7) |
+| `{{CANDIDATE_VERSION}}` | The version stamped into the artifacts. Testers compare it with the status bar's `orca-daemon …` | Release owner; the release or Desktop run's version step ([readiness audit](../../archive/reviews/2026-10-27-release-readiness.md) R7) |
 | `{{CANDIDATE_COMMIT}}` | The full 40-character source commit | The producing workflow run's record. No commit is embedded in the artifacts ([#772 plan](https://github.com/cschadewitz/Project_Orca/issues/772), "Inputs") |
 | `{{DOWNLOAD_LOCATION}}` | Where approved testers download the files. It must be reachable with the private GitHub access they **already** have | Repository owner. Don't change visibility or collaborators, or send invitations, to make it reachable |
 | `{{SUPPORTED_PLATFORMS}}` | Exactly which platform, architecture and file type combinations this round offers. Examples: Windows x64 NSIS; Ubuntu 24.04 Desktop x64 (`amd64`) `.deb` | Repository owner, as readiness decision D1. List only combinations that pass gates G2–G4 |
@@ -228,7 +228,7 @@ declare.
 
 ## 5. During and after the round
 
-- [ ] **Triage** with the existing [triage rubric](../beta-feedback/triage-checklist.md).
+- [ ] **Triage** with the existing [triage rubric](../../archive/preparation/beta-feedback/triage-checklist.md).
   Its diagnostics lines are superseded; see the [README](README.md#reconciled-findings).
   On Windows, "stopped at a security warning" is an expected launch
   blocker (B0 for the journey), not a tester error.

@@ -1,27 +1,25 @@
 # Contributing to ORCA
 
-For setup, tests and code conventions, read [Development](docs/DEVELOPMENT.md).
-Agents also start at [AGENTS.md](AGENTS.md). This guide describes how to turn a
-request into useful GitHub issues without duplicating work or promising a release.
+This guide is for anyone, person or agent, who turns a request into GitHub issues or opens a pull
+request here. It explains how to track work, avoid duplicates, group what ships together and
+check what you published. For setup, tests and code conventions, read
+[Development](docs/DEVELOPMENT.md). Agents also start at [AGENTS.md](AGENTS.md).
 
-An invited observing developer can begin with the [documentation index](docs/README.md)
-and [capability ledger](docs/ROADMAP.md) without installing tools or using private
-credentials. Repository collaboration access does not itself request code changes,
-host operation, credential changes or additional invitations. For a docs-only PR,
-follow [scoped documentation validation](docs/DEVELOPMENT.md#documentation-only-review)
-and distinguish source, review, CI, deployed and native evidence.
+You can read the [documentation index](docs/README.md) and [capability ledger](docs/ROADMAP.md)
+without installing anything. Collaborator access alone does not ask you to change code, operate
+hosts, change credentials or invite others. For a docs-only PR, follow
+[documentation-only review](docs/DEVELOPMENT.md#documentation-only-review), and keep source,
+review, CI, deployed and native evidence apart.
 
 ## Track work in GitHub
 
-Track public-safe work and unfinished follow-ups in GitHub issues and pull requests,
-reusing existing owners and linking implementation, evidence and remaining acceptance.
-Write for the repository's eventual public audience. Keep work that cannot eventually
-be public, private host/account details, credentials, private commands and owner
-personal notes out of repository content, issue/PR tracking and the site.
+- Track public-safe work and follow-ups in GitHub issues and PRs. Reuse existing owners and link
+  the implementation, evidence and remaining acceptance.
+- Write for an eventual public audience. Keep out of the repository, issues, PRs and the site:
+  work that cannot become public, private host or account details, credentials, private commands
+  and the owner's personal notes.
 
-Use GitHub issues as the source for the site's read-only workboard, following
-[#692](https://github.com/cschadewitz/Project_Orca/issues/692). Derive columns from
-issue tags using this mapping:
+The site's read-only workboard is built from issue labels ([#692](https://github.com/cschadewitz/Project_Orca/issues/692)):
 
 | Issue label | Board column |
 | --- | --- |
@@ -33,104 +31,94 @@ issue tags using this mapping:
 | `status:done` | Done |
 | `status:cancelled` | Cancelled |
 
-Each classified issue has exactly one status label; preserve unrelated labels.
-No status label means **Untriaged**. Unknown or multiple status labels, a closed
-issue with an active status, or an open issue with a terminal status means
-**Needs classification**; do not guess. Done requires closed/completed; Cancelled
-requires closed/not planned (`state_reason: not_planned`). If `state_reason` is
-missing, report it as unknown rather than inventing completion or cancellation.
-A PR's state does not prove its parent issue is done.
+1. A classified issue has exactly one status label. Keep unrelated labels.
+2. No status label means **Untriaged**.
+3. An unknown or second status label, a closed issue with an active status, or an open issue with
+   a terminal status means **Needs classification**. Do not guess.
+4. Done requires closed as completed. Cancelled requires closed as not planned
+   (`state_reason: not_planned`). If `state_reason` is missing, report it as unknown.
+5. A PR's state does not prove its parent issue is done.
 
-Keep the site read-only and preserve the existing owner-only connection guard.
-This workflow does not change repository visibility or authorize upstream publication.
+Keep the site read-only, with its owner-only connection guard. This process does not change
+repository visibility or authorize publishing upstream.
 
 ## Inventory before creating
 
-1. Search open issues and pull requests for the outcome, affected area and likely
-   alternate terms. Read relevant closed issues, merged pull requests, current code
-   and documentation too: a closed issue alone does not prove a feature shipped.
-2. Record what already exists, what is in progress and the remaining gap, with links.
-   Reuse a suitable existing issue; cross-reference related work. Retag an issue
-   when needed to reflect the agreed grouping rather than opening a duplicate.
-3. Preserve existing labels, assignees, state and discussion history unless a change
-   to them is specifically requested. Add missing context rather than replacing
-   someone else's issue wholesale. Do not reopen completed work or recreate shipped
-   features just because a new plan uses different words.
+1. Search open issues and PRs for the outcome, the area and alternative terms. Also read relevant
+   closed issues, merged PRs, current code and docs. A closed issue alone does not prove a feature
+   shipped.
+2. Record what exists, what is in progress and the remaining gap, with links. Reuse a suitable
+   issue and cross-reference related work. Retag an issue rather than open a duplicate.
+3. Keep existing labels, assignees, state and history unless asked to change them. Add context
+   instead of rewriting someone else's issue. Do not reopen completed work or recreate a shipped
+   feature because a new plan uses different words.
 
 ## Write one clear outcome
 
-Use the **Feature or planned work** issue template for a feature, substantial
-improvement or implementation slice. Each issue should state:
+Use the **Feature or planned work** template for a feature, substantial improvement or
+implementation slice. State:
 
-- **Problem and outcome:** who needs it, what is missing, and what becomes possible.
-- **Scope:** the concrete work included in this issue.
-- **Acceptance criteria:** observable, testable results; include failure or recovery
-  cases when relevant, and how the result will be verified.
-- **Non-goals:** tempting adjacent work deliberately left out.
-- **Existing foundations:** issues, pull requests, code or docs to build on, including
-  what is already shipped and why this issue still needs to exist.
-- **Dependencies and execution:** real blockers, related work, ordering and what can
-  proceed in parallel.
+| Section | Contents |
+| --- | --- |
+| Problem and outcome | Who needs it, what is missing, what becomes possible. |
+| Scope | The concrete work in this issue. |
+| Acceptance criteria | Observable, testable results, including failure and recovery cases, and how they will be verified. |
+| Non-goals | Tempting nearby work deliberately left out. |
+| Existing foundations | Issues, PRs, code or docs to build on, what already shipped, and why this issue is still needed. |
+| Dependencies and execution | Real blockers, related work, ordering, and what can run in parallel. |
 
-Split work when outcomes can be implemented and verified independently. Do not turn
-every implementation detail into an issue. Small bugs can use a blank issue with
-reproduction steps, expected versus actual behavior, and relevant version/environment;
-they do not need the full planning template.
+Split work when the parts can be built and verified independently. Do not make every detail an
+issue. A small bug can use a blank issue with reproduction steps, expected and actual behaviour,
+and version or environment.
 
 ## Group by what ships together
 
-Use one primary `ship-group:<coherent-outcome>` label on each issue intended to ship
-with a group. Choose a short, stable outcome name, reuse an existing group where it
-fits, and apply the same label to all members. A group is a coherent deliverable,
-not every issue touching the same package. Cross-reference other groups in the body
-instead of giving an issue several competing primary ship groups. An independent
-small issue need not invent a group.
+Give each issue meant to ship with a group one primary `ship-group:<coherent-outcome>` label.
+Choose a short, stable outcome name, reuse an existing group where it fits, and label every
+member. A group is a deliverable, not every issue touching one package. Cross-reference other
+groups in the body; never give one issue several primary groups. A small independent issue needs
+no group.
 
-These are separate dimensions:
+These are separate:
 
-- **Ship group:** which issues are intended to ship together.
-- **Topic/area labels:** what the issue concerns; keep useful existing labels.
-- **Release bump labels:** `release:major`, `release:minor`, `release:patch` or
-  `release:none`, following [Releasing](docs/RELEASING.md).
-- **Milestone:** an explicitly chosen release plan. Leave new issues unassigned until
-  milestone planning is requested; preserve existing assignments unless asked to
-  change them. A ship group or dependency does not assign a version or milestone.
+| Dimension | Meaning |
+| --- | --- |
+| Ship group | Which issues ship together. |
+| Topic or area labels | What the issue is about. Keep useful existing ones. |
+| Release bump labels | `release:major`, `release:minor`, `release:patch` or `release:none` ([Releasing](docs/RELEASING.md)). |
+| Milestone | An explicitly chosen release plan. Leave new issues without one until milestone planning is asked for. Keep existing assignments. A group or dependency never assigns a version. |
 
-The template's ship-group text is a proposal, not an automatic GitHub label. Select
-the matching label in GitHub when triaging; if it does not exist, agree on the name
-before creating it. This process adds no label automation or release triggers.
+The template's ship-group text is a proposal, not a label. Select the matching label when
+triaging; if it does not exist, agree the name before creating it. Nothing here automates labels
+or triggers releases.
 
 ## Make dependencies precise
 
-- **Hard dependency:** `Blocked by #123 — needs the exported schema before this can
-  be completed.` Use actual issue links and explain the prerequisite; write `None`
-  when there are no hard blockers. Issue numbers here are illustrative, not defaults.
-- **Related / soft dependency:** `Related to #124 — coordinates terminology, but can
-  proceed independently.` Shared topics, shared files or a preferred order alone are
-  not hard blockers.
-- State the implementation order where it matters, and explicitly identify work
-  that can run in parallel. A shared ship group does not require serial execution.
+- **Hard dependency:** `Blocked by #123 — needs the exported schema before this can be completed.`
+  Use real links and explain the prerequisite. Write `None` when there are no hard blockers. (The
+  numbers here are examples.)
+- **Related or soft dependency:** `Related to #124 — coordinates terminology, but can proceed
+  independently.` A shared topic, shared files or a preferred order is not a hard blocker.
+- State the order where it matters, and say what can run in parallel. A shared ship group does not
+  mean serial work.
 
-For a batch, sketch the directed graph of hard dependencies before publishing.
-Follow blockers outside the batch too. Confirm every link resolves, there are no
-self-links or cycles, and prerequisites come before dependents in a topological
-order. If a cycle appears, split the shared prerequisite or revise the scope; do
-not disguise it as an ordering note. Name unresolved dependencies explicitly rather
-than inventing issue numbers, and resolve them before treating the plan as ready.
+For a batch, sketch the graph of hard dependencies before publishing, following blockers outside
+the batch too. Check every link resolves, there are no self-links or cycles, and prerequisites
+come first. If there is a cycle, split the shared prerequisite or change the scope; do not hide it
+in an ordering note. Name unresolved dependencies instead of inventing issue numbers, and resolve
+them before the plan counts as ready.
 
 ## Publish and read back
 
-Before publishing, check the inventory again for work created or completed during
-planning. When creating a batch, keep a draft-to-issue-number map and replace draft
-names with the actual `#` links after creation. Then read every created or edited
-issue back from GitHub and verify:
-
-- Title, body and acceptance criteria match the intended outcome.
-- Each grouped item has its one primary ship-group label; topic and bump labels are
-  intact, and assignees, state and existing milestone assignments were preserved.
-- Hard blockers and related links point to the right issues, ordering agrees with
-  the links, parallel work is clear, and the final hard-dependency graph is acyclic.
-- No duplicate issue or unrequested milestone assignment was introduced.
-
-Report the published issue links and anything still unresolved. Successful write
-responses alone are not verification of the final plan.
+1. Check the inventory again for work created or finished while you planned.
+2. For a batch, keep a map from draft names to issue numbers, and replace draft names with real
+   `#` links after creating them.
+3. Read every created or edited issue back from GitHub and check:
+   - title, body and acceptance criteria match the intended outcome;
+   - each grouped issue has its one primary ship-group label; topic and bump labels, assignees,
+     state and milestones are intact;
+   - blocker and related links point at the right issues, the order agrees with them, parallel
+     work is clear, and the hard-dependency graph has no cycles;
+   - no duplicate issue or unrequested milestone was added.
+4. Report the published links and anything unresolved. A successful write response is not
+   verification.

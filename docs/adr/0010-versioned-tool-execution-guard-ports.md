@@ -14,7 +14,7 @@ allow_once is unavailable. Owned ACP file callbacks perform host I/O without tha
 policy evaluator. A review model or prompt cannot close those execution gaps.
 
 [ADR 0009](0009-permission-grants-in-a-workspace-sidecar.md), the existing
-[research architecture](../research/tool-call-safety/architecture.md) and
+[research architecture](../archive/research/tool-call-safety/architecture.md) and
 [LiveHumanInput](../../packages/engine/src/live-input.ts) remain foundations.
 This decision specializes the research into minimal ports; it does not approve
 that entire architecture or change existing support/activation gates.

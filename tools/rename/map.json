@@ -75,6 +75,10 @@
     {
       "pattern": "AAAAC3NzaC1lZDI1NTE5AAAAIOrcaServerKey(?:One|Two)0*(?![A-Za-z0-9+/=])",
       "reason": "The two ed25519 host-key fixtures in packages/cli/test/remote-add.test.ts, whose base64 merely contains the letters"
+    },
+    {
+      "pattern": "\"note\": \"targets not verified by ORCA\"",
+      "reason": "A case in the published plain-rule eval set v1 (packages/agents/test/fixtures/plain-rule-eval); its reports record the digest over these bytes"
     }
   ],
   "rules": [

@@ -17,7 +17,7 @@ import { createServer, type Server } from "node:net";
 import { z } from "zod";
 import { assertFenceVolume, fenceBoot, fenceDirectory, fenceHash, FenceDirectorySchema } from "./first-run-fence.js";
 
-const GUARD = ".orca-update-window.json";
+const GUARD = ".orca-update-window.json"; // rename-keep: written by the release being updated from
 const SLOTS = 8;
 const uuid = z.uuid();
 const digest = z.string().regex(/^[a-f0-9]{64}$/);
@@ -232,7 +232,7 @@ function port(root: z.infer<typeof FenceDirectorySchema>, slot: number) {
   return (
     20000 +
     (Number.parseInt(
-      fenceHash(JSON.stringify(["orca-update-window-v1", fenceBoot().kernelDomain, root])).slice(0, 8),
+      fenceHash(JSON.stringify(["orca-update-window-v1", fenceBoot().kernelDomain, root])).slice(0, 8), // rename-keep: names a window the release being updated from opened
       16,
     ) %
       5000) *

@@ -9,7 +9,13 @@ import type { OrcaEventInput } from "@orca/core";
 import { z } from "zod";
 import { OrcaEventSchema } from "@orca/core";
 import { PROTOCOL_VERSION, RunsEventsResultSchema, STEP_CHANGED } from "@orca/protocol";
-import { CredentialStore } from "../src/auth/index.js";
+import {
+  CredentialStore,
+  LEGACY_SOCKET_BEARER_PREFIX,
+  LEGACY_SOCKET_PROTOCOL,
+  SOCKET_BEARER_PREFIX,
+  SOCKET_PROTOCOL,
+} from "../src/auth/index.js";
 import { harness, recordGateArtifact, recordJsonArtifact, type Harness } from "./security-harness.js";
 
 type Frame = {
@@ -157,6 +163,29 @@ describe("socket authentication", () => {
     const viaHeader = await connect(h.tokens.alice);
     expect(viaHeader.ws.protocol).toBe("orca.v1");
     expect((await viaHeader.call("runs.list")).ok).toBe(true);
+  });
+
+  it("selects and reads the subprotocols clients from before the rename offer, never echoing a token", async () => {
+    h = await harness();
+    const open = async (protocols: string[]) => {
+      const ws = new globalThis.WebSocket(h.daemon.socketUrl!, protocols);
+      await new Promise((resolve, reject) => {
+        ws.addEventListener("open", resolve);
+        ws.addEventListener("error", reject);
+      });
+      const chosen = ws.protocol;
+      ws.close();
+      return chosen;
+    };
+    const token = h.tokens.alice;
+    expect(await open([LEGACY_SOCKET_PROTOCOL, `${LEGACY_SOCKET_BEARER_PREFIX}${token}`])).toBe(LEGACY_SOCKET_PROTOCOL);
+    // A client offering both names for one token, to reach a daemon of either age.
+    expect(
+      await open([
+        ...new Set([SOCKET_PROTOCOL, LEGACY_SOCKET_PROTOCOL]),
+        ...new Set([`${SOCKET_BEARER_PREFIX}${token}`, `${LEGACY_SOCKET_BEARER_PREFIX}${token}`]),
+      ]),
+    ).toBe(SOCKET_PROTOCOL);
   });
 
   it("checks the operation on the socket too, before its params", async () => {

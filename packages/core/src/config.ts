@@ -72,6 +72,18 @@ export const HumanInputConfigSchema = z.discriminatedUnion("mode", [
 ]);
 export type HumanInputConfig = z.infer<typeof HumanInputConfigSchema>;
 
+/** The names config discovery looks for in each directory, in order. */
+export const CONFIG_FILENAMES: readonly string[] = ["orca.config.yaml", "orca.config.yml", "orca.config.json"];
+/**
+ * The same names before the rename to Orrery, read with a warning when no current one is there
+ * (until 0.10). Nothing writes them.
+ */
+export const LEGACY_CONFIG_FILENAMES: readonly string[] = [
+  "orca.config.yaml", // rename-keep: pre-rename config name
+  "orca.config.yml", // rename-keep: pre-rename config name
+  "orca.config.json", // rename-keep: pre-rename config name
+];
+
 /** The config version that may hold `command` permission rules (#702). */
 export const CONFIG_COMMAND_RULES_VERSION = 2;
 

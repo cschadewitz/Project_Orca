@@ -18,6 +18,7 @@ export * from "./store-format.js";
 export * from "./store-backend.js";
 export * from "./store-writers.js";
 export * from "./store-convert.js";
+export * from "./store-dir-migration.js";
 export {
   LEGACY_FENCES,
   LEGACY_FENCE_MARKER,

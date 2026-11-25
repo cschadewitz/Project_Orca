@@ -58,11 +58,11 @@ it("enrolls new managed roots before producers while retaining the existing app 
     app = await writer(f.data[0]!);
   const next = join(f.base, "new-config");
   await mkdir(next, { mode: 0o700 });
-  const original = await readFile(join(f.data[0]!, ".orca-update-window.json"));
+  const original = await readFile(join(f.data[0]!, ".orca-update-window.json")); // rename-keep: persisted name kept on purpose
   const enrolled = await enrollUpdateWindowRoots(f.control, [next, join(next, "future-store")]);
   expect(enrolled.roots.map((root) => root.path)).toEqual([f.data[0]!, next].sort());
   expect(app.check()).toBe(true);
-  expect(await readFile(join(f.data[0]!, ".orca-update-window.json"))).toEqual(original);
+  expect(await readFile(join(f.data[0]!, ".orca-update-window.json"))).toEqual(original); // rename-keep: persisted name kept on purpose
   const child = await writer(next);
   expect(child.check()).toBe(true);
   const fresh = new ClosedUpdateWindow(f.control);
@@ -82,14 +82,14 @@ it("refuses enrollment into a closed namespace or a broader overlapping root wit
   expect(await readFile(join(f.control, "window.json"))).toEqual(original);
   f.window.closeAdmission("a".repeat(64));
   await expect(enrollUpdateWindowRoots(f.control, [next])).rejects.toThrow();
-  await expect(readFile(join(next, ".orca-update-window.json"))).rejects.toMatchObject({ code: "ENOENT" });
+  await expect(readFile(join(next, ".orca-update-window.json"))).rejects.toMatchObject({ code: "ENOENT" }); // rename-keep: persisted name kept on purpose
 });
 it("torn added-root enrollment refuses ordinary work and preserves the original anchor", async () => {
   const f = await fixture(),
     app = await writer(f.data[0]!),
     next = join(f.base, "new-config");
   await mkdir(next, { mode: 0o700 });
-  const original = await readFile(join(f.data[0]!, ".orca-update-window.json"));
+  const original = await readFile(join(f.data[0]!, ".orca-update-window.json")); // rename-keep: persisted name kept on purpose
   await expect(
     enrollUpdateWindowRoots(f.control, [next], {
       fileSync: () => {
@@ -100,7 +100,7 @@ it("torn added-root enrollment refuses ordinary work and preserves the original 
   expect(app.check()).toBe(false);
   expect(updateAdmissionOpen(f.data[0]!)).toBe(false);
   expect(() => inspectUpdateWindowRoots(f.control)).toThrow();
-  expect(await readFile(join(f.data[0]!, ".orca-update-window.json"))).toEqual(original);
+  expect(await readFile(join(f.data[0]!, ".orca-update-window.json"))).toEqual(original); // rename-keep: persisted name kept on purpose
 });
 it("closes admission before capture while existing writers finish naturally", async () => {
   const f = await fixture(2),
@@ -210,7 +210,7 @@ it("refuses lost control identity, replaced roots and unsafe/torn state", async 
 });
 it("refuses deletion of an enrolled anchor rather than provisioning it again", async () => {
   const f = await fixture();
-  await rm(join(f.data[0]!, ".orca-update-window.json"));
+  await rm(join(f.data[0]!, ".orca-update-window.json")); // rename-keep: persisted name kept on purpose
   await expect(provisionUpdateWindow(f.control, f.data)).rejects.toThrow();
 });
 it("refuses incomplete writes and cannot use a cached open decision", async () => {
@@ -280,7 +280,7 @@ it("a real surviving child blocks same-boot recovery after supervisor loss", asy
   expect(JSON.parse(await readFile(join(f.control, "window.json"), "utf8")).phase).toBe("restored");
 });
 
-const GUARD = ".orca-update-window.json";
+const GUARD = ".orca-update-window.json"; // rename-keep: persisted name kept on purpose
 /** What Migration Assistant or a Time Machine restore leaves: same path and bytes, new inode. */
 async function recreate(path: string) {
   const before = path + "-before";

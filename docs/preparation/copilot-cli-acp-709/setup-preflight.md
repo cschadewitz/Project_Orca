@@ -2,7 +2,7 @@
 
 Contributor guidance for a person who has chosen, and is entitled, to try the
 [inactive profile](orca.copilot-acp.example.yaml). It follows the
-[#386 launch rules](../configuration-launch-implementation/launch.md): no silent install,
+[#386 launch rules](../../archive/preparation/configuration-launch-implementation/launch.md): no silent install,
 no credential capture, no standing permission grant, and a real provider run only after
 separate authorization and preflight. **None of the commands below was run for this
 packet**; they are the reproducible procedure, and every one that downloads, executes or

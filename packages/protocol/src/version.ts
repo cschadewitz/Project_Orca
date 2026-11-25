@@ -239,7 +239,15 @@ export type ProtocolVersion = z.infer<typeof ProtocolVersionSchema>;
  * likewise only by a daemon that lists it. A permission ask may carry the judge's note in its
  * free `context` record, `context.judge` (`JudgeAskNoteSchema`); an older client ignores it.
  */
-export const PROTOCOL_VERSION: ProtocolVersion = { major: 2, minor: 12 };
+/**
+ * 2.13 is the rename to Orrery (0.9). `hello` and `operator.discover` add `orcaVersion`, the
+ * daemon's release under the product's new name, and keep sending it under the name before the
+ * rename (legacy-wire.ts); readers take either, so a 2.12 peer still finds the field it requires.
+ * The daemon also selects the socket subprotocol and reads the bearer prefix under their names
+ * from before the rename. Additions by this file's rule; nothing sent before stops being sent.
+ * 0.10 drops the old names, which is a major.
+ */
+export const PROTOCOL_VERSION: ProtocolVersion = { major: 2, minor: 13 };
 
 /**
  * The previous major this build still speaks, as its last minor, or `undefined` when there is

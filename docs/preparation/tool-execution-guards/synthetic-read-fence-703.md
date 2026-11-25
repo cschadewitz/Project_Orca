@@ -1,7 +1,7 @@
 # Inactive synthetic read fence — #703 bounded slice
 
 The original #719 behavior below is retained as dependency evidence. The later
-[#706 composition repair](../enforcement-conformance/composition-slice.md) adds
+[#706 composition repair](../../archive/preparation/enforcement-conformance/composition-slice.md) adds
 fence-owned delegated review completion and full post-record policy revalidation,
 plus a separately registered private-memory capability/profile. Generic string-path
 capture still carries unknown physical resources and cannot inherit memory qualification.
