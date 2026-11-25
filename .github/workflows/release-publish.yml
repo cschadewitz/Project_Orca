@@ -239,7 +239,9 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
-          cache: ${{ !contains(needs.runner.outputs.runner, 'tyler') && 'pnpm' || '' }}
+          # A rehearsal's ref may be any branch and runs in the default branch's cache scope, so
+          # it restores and saves no dependency cache; neither do the self-hosted runners.
+          cache: ${{ !inputs.dry_run && !contains(needs.runner.outputs.runner, 'tyler') && 'pnpm' || '' }}
 
       # From here to the compiled smoke this is ci.yml's full path, in its order and with its
       # environment: the release PR never ran CI, so this is the only verification the tagged

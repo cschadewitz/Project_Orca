@@ -203,7 +203,7 @@ it("never hands a write token to the ref under test (#863)", () => {
   expect(verify["runs-on"]).toBe("${{ fromJSON(needs.runner.outputs.runner) }}");
   expect(verify.env.WORKERS_CAP).toBe("${{ contains(needs.runner.outputs.runner, 'tyler') && '20' || '2' }}");
   expect(verify.steps.find((s) => s.uses?.startsWith("actions/setup-node@")).with.cache).toBe(
-    "${{ !contains(needs.runner.outputs.runner, 'tyler') && 'pnpm' || '' }}",
+    "${{ !inputs.dry_run && !contains(needs.runner.outputs.runner, 'tyler') && 'pnpm' || '' }}",
   );
   expect(verify.steps[0].with.ref).toBe("${{ needs.check.outputs.sha }}");
 
