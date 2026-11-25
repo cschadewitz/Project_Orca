@@ -507,6 +507,42 @@ the agent is told `cancelled` and the *tool call* fails while the run carries on
 `agent.permission` event records which it was (`ask:allow`, `ask:deny`, `ask:cancelled`,
 `ask:no-answerer`).
 
+#### Claude's permission mode, settings sources and sandbox (`claudeCode`)
+
+ORCA puts a recognized Claude session in Claude Code's `default` (Manual) permission mode
+when it opens, new or loaded, and again before each prompt, and refuses its own requests to
+switch it away (#1190). The Claude ACP adapter would otherwise start it in `auto`, where
+Claude Code settles calls itself and they never reach ORCA's policy. Manual is not a
+guarantee that every call reaches ORCA: Claude's own rules still settle calls, and the mode
+is not watched during a turn. That guarantee is the native hook's.
+
+An agent that is the Claude ACP adapter can also narrow what Claude Code loads and where its
+commands run (#1134):
+
+```yaml
+agents:
+  - id: claude
+    command: npx
+    args: ["@agentclientprotocol/claude-agent-acp"]
+    claudeCode:
+      settingSources: [user]   # leave out the checkout's .claude/settings*.json
+      sandbox: on              # Bash in Claude Code's OS sandbox
+```
+
+- `settingSources` picks which of Claude Code's own settings files it reads: `user`,
+  `project` (the checkout's `.claude/settings.json`, and CLAUDE.md) and `local`
+  (`.claude/settings.local.json`). Leave it out for all three, as before; `[]` reads none. A
+  checkout left out can no longer add rules, hooks or MCP servers ORCA did not choose. The
+  adapter still reads the checkout's starting mode itself, which ORCA's Manual pin overrides,
+  and leaving out `project` or `local` also turns bypass mode off.
+- `sandbox: on` runs Claude Code's Bash commands in its sandbox (bubblewrap and socat on
+  Linux, Seatbelt on macOS). The session fails to start if the sandbox cannot, no command may
+  ask to leave it, ORCA's private paths are kept out of it, and a sandboxed command is still
+  asked about like any other.
+
+Both go to Claude Code in `session/new`, so ORCA refuses the session if the agent turns out
+not to be the Claude adapter, rather than run it without them.
+
 ## Completion policies (agent steps)
 
 - `mode: turn-end` (default): wait for the agent's prompt turn to finish, then collect.

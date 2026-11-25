@@ -19,6 +19,7 @@ export * from "./claude-pre-tool-hook.js";
 export * from "./hook-telemetry.js";
 export * from "./native-tool-hook-session.js";
 export * from "./claude-mode.js";
+export * from "./claude-code-options.js";
 export * from "./codex-exec-gate.js";
 export * from "./codex-exec-gate-policy.js";
 export * from "./codex-exec-isolation.js";

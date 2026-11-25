@@ -230,8 +230,9 @@ describe.skipIf(ADAPTER === undefined || OTHER_RUNTIME === undefined)("the hook 
     return () => rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   });
 
-  const agent = (permissions: unknown = { rules: [] }, env: Record<string, string> = {}) =>
+  const agent = (permissions: unknown = { rules: [] }, env: Record<string, string> = {}, extra: object = {}) =>
     AgentSpecSchema.parse({
+      ...extra,
       id: "claude",
       command: process.execPath,
       args: [ADAPTER],
@@ -256,13 +257,13 @@ describe.skipIf(ADAPTER === undefined || OTHER_RUNTIME === undefined)("the hook 
     return req.options.find((o) => o.kind === "reject_once")?.optionId;
   };
 
-  const factorySession = (permissions?: unknown, env?: Record<string, string>): Promise<AgentSession> =>
+  const factorySession = (permissions?: unknown, env?: Record<string, string>, extra?: object): Promise<AgentSession> =>
     makeSessionFactory({ configDir, storeDir: ".orca" }, openAcpSession, {
       runtime: process.execPath,
       script: hookScript,
     })({
       host: new LocalHost({ id: "local", type: "local" }),
-      agent: agent(permissions, env),
+      agent: agent(permissions, env, extra),
       cwd: workspace,
       askPermission,
       logger: silentLogger,
@@ -545,13 +546,13 @@ rl.on("line", (line) => {
   /* ------------------------------ Claude's permission mode ------------------------------ */
 
   /** A session the factory opens for the agent without ORCA's hook. */
-  const unhookedSession = (permissions: unknown, resumeSessionId?: string): Promise<AgentSession> =>
+  const unhookedSession = (permissions: unknown, extra: object = {}, resumeSessionId?: string): Promise<AgentSession> =>
     makeSessionFactory(
       { configDir, storeDir: ".orca" },
       openAcpSession,
     )({
       host: new LocalHost({ id: "local", type: "local" }),
-      agent: AgentSpecSchema.parse({ ...agent(permissions), nativeToolHook: undefined }),
+      agent: AgentSpecSchema.parse({ ...agent(permissions), nativeToolHook: undefined, ...extra }),
       cwd: workspace,
       askPermission,
       logger: silentLogger,
@@ -667,7 +668,7 @@ rl.on("line", (line) => {
       await first.close();
     }
     // Loaded through the factory, with recovery required, it opens in Manual and ORCA's deny holds.
-    const loaded = await unhookedSession({ default: "deny", rules: [] }, resumeId);
+    const loaded = await unhookedSession({ default: "deny", rules: [] }, {}, resumeId);
     try {
       expect(modeOf(loaded)).toBe("default");
       await loaded.prompt(CALL);
@@ -686,4 +687,115 @@ rl.on("line", (line) => {
       await session.close();
     }
   }, 120_000);
+
+  /* ------------------------- settings sources and sandbox (#1134) ------------------------- */
+
+  it.each([
+    ["every source, as the adapter's default", undefined, 0],
+    ["only the user's", ["user"], 1],
+    ["none", [], 1],
+  ] as const)(
+    "applies the checkout's own Claude settings only when its sources include them: %s",
+    async (_what, settingSources, runs) => {
+      asks.length = 0;
+      // The checkout's own settings forbid Bash, which ORCA's policy allows: an effect of the
+      // checkout's file that is visible in the workspace.
+      await mkdir(join(workspace, ".claude"));
+      await writeFile(
+        join(workspace, ".claude", "settings.json"),
+        JSON.stringify({ permissions: { deny: ["Bash"] } }),
+        "utf8",
+      );
+      const session = await unhookedSession(
+        { rules: [{ match: { kind: "execute", titlePattern: "^echo orca-704" }, decision: "allow" }] },
+        settingSources === undefined ? {} : { claudeCode: { settingSources } },
+      );
+      try {
+        await session.prompt(CALL);
+        expect(await marks()).toBe(runs);
+        expect(asks).toEqual([]);
+      } finally {
+        await session.close();
+      }
+    },
+    120_000,
+  );
+
+  it("refuses claudeCode settings for an agent that is not the Claude adapter", async () => {
+    const other = join(root, "not-claude.cjs");
+    // An ACP agent that says at initialize it is something else.
+    await writeFile(
+      other,
+      [
+        `const rl = require("node:readline").createInterface({ input: process.stdin });`,
+        `rl.on("line", (line) => {`,
+        `  const m = JSON.parse(line);`,
+        `  if (m.method === "initialize")`,
+        `    process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: m.id, result: { protocolVersion: 1, agentCapabilities: {}, agentInfo: { name: "not-claude", version: "1" } } }) + String.fromCharCode(10));`,
+        `});`,
+      ].join("\n"),
+    );
+    const spec = AgentSpecSchema.parse({
+      id: "other",
+      command: process.execPath,
+      args: [other],
+      claudeCode: { sandbox: "on" },
+    });
+    await expect(
+      makeSessionFactory(
+        { configDir, storeDir: ".orca" },
+        openAcpSession,
+      )({
+        host: new LocalHost({ id: "local", type: "local" }),
+        agent: spec,
+        cwd: workspace,
+        askPermission,
+        logger: silentLogger,
+        handshakeTimeoutMs: 60_000,
+      }),
+    ).rejects.toMatchObject({ code: "NOT_SUPPORTED", message: expect.stringMatching(/says it is not-claude/) });
+  }, 60_000);
+
+  it("runs Bash in Claude Code's sandbox with sandbox: on, and still asks ORCA about each command", async () => {
+    asks.length = 0;
+    const outside = join(root, "outside.txt");
+    const escape = `echo orca-704-escape >> ${outside}`;
+    const escapeCall = `CALL:${JSON.stringify({ name: "Bash", input: { command: escape, description: "escape" } })}`;
+    const permissions = {
+      rules: [{ match: { kind: "execute", titlePattern: "^echo orca-704" }, decision: "allow" }],
+    };
+    // The control: without the sandbox the same allowed command writes outside the workspace.
+    let session = await factorySession(permissions);
+    try {
+      await session.prompt(escapeCall);
+      expect(await readFile(outside, "utf8").catch(() => "")).toContain("orca-704-escape");
+    } finally {
+      await session.close();
+    }
+    await rm(outside, { force: true });
+
+    session = await factorySession(permissions, undefined, { claudeCode: { sandbox: "on" } });
+    try {
+      // Inside the workspace a sandboxed command still runs.
+      await session.prompt(CALL);
+      expect(await marks()).toBe(1);
+      // Outside it, the sandbox stops the write ORCA's policy allowed.
+      await session.prompt(escapeCall);
+      expect(await readFile(outside, "utf8").catch(() => "")).toBe("");
+      expect(asks).toEqual([]);
+    } finally {
+      await session.close();
+    }
+
+    // Sandboxed is not allowed: a command ORCA has no rule for is still asked about, and refused.
+    await writeFile(join(claudeConfig, "settings.json"), "{}", "utf8");
+    session = await factorySession(undefined, undefined, { claudeCode: { sandbox: "on" } });
+    try {
+      await session.prompt(CALL);
+      expect(asks).toEqual([COMMAND]);
+      expect(await marks()).toBe(1);
+    } finally {
+      await session.close();
+    }
+  }, 240_000);
 });

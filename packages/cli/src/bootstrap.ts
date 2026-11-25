@@ -43,6 +43,7 @@ import {
   hostIpcInventory,
   CLAUDE_ADAPTER_NAMES,
   claudeModePin,
+  claudeCodeSessionMeta,
   nativeToolHookNotQualified,
   nativeToolHookRequested,
   nativeToolHookSession,
@@ -381,8 +382,13 @@ export function makeSessionFactory(
     // says who it is, and the session refused wherever it cannot be put in force.
     // Claude runs in Manual mode, where its calls reach ORCA's policy (see claude-mode.ts).
     const modePin = claudeModePin();
-    if (!nativeToolHookRequested(options.agent))
-      return modePin.guard(await guarded({ ...bound, sessionMeta: modePin.sessionMeta(bound.sessionMeta) }));
+    if (!nativeToolHookRequested(options.agent)) {
+      // Claude Code's settings sources and sandbox (#1134), when the agent asks for them.
+      const sessionMeta = modePin.sessionMeta(
+        claudeCodeSessionMeta(options.agent.id, options.agent.claudeCode, protectedPaths, bound.sessionMeta),
+      );
+      return modePin.guard(await guarded({ ...bound, sessionMeta }));
+    }
     // `on` waits for a guard-qualified hook; only the explicit `experimental` installs this one.
     const unqualified = nativeToolHookNotQualified(options.agent);
     if (unqualified) throw unqualified;
@@ -443,7 +449,9 @@ export function makeSessionFactory(
       session = await guarded({
         ...bound,
         env: { ...(options.env ?? {}), ...hookEnv },
-        sessionMeta: modePin.sessionMeta(installed.sessionMeta),
+        sessionMeta: modePin.sessionMeta(
+          claudeCodeSessionMeta(options.agent.id, options.agent.claudeCode, protectedPaths, installed.sessionMeta),
+        ),
         admission,
         // Claude Code would start its MCP servers itself, before ORCA has admitted the runtime
         // it runs, and would hold their secrets; ORCA runs them instead and serves them over
