@@ -140,7 +140,7 @@ beforeEach(async () => {
       };
       sent.push({ url: req.url ?? "", frame });
       const text = JSON.stringify({
-        schema: "orca-plain-rule-verdict/v1",
+        schema: "orca-plain-rule-verdict/v1", // rename-keep: the judge's wire format keeps its pre-rename name
         requestId: frame.requestId,
         verdicts: frame.rules.map((r) => ({
           ruleId: r.id,

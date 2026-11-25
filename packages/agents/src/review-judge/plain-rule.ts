@@ -25,8 +25,8 @@
  */
 import { createHash, randomUUID } from "node:crypto";
 
-export const PLAIN_RULE_REQUEST_SCHEMA = "orca-plain-rule-request/v1";
-export const PLAIN_RULE_VERDICT_SCHEMA = "orca-plain-rule-verdict/v1";
+export const PLAIN_RULE_REQUEST_SCHEMA = "orca-plain-rule-request/v1"; // rename-keep: judge wire format named in issued disclosure grants and hashed into the provider version
+export const PLAIN_RULE_VERDICT_SCHEMA = "orca-plain-rule-verdict/v1"; // rename-keep: judge wire format named in issued disclosure grants and hashed into the provider version
 
 /**
  * What a judge is asked about (#701, Cal's answer of 2026-11-23 on the per-kind switches). Each class is its own
@@ -51,9 +51,9 @@ export const PLAIN_RULE_ACTION_CLASSES: readonly PlainRuleActionClass[] = Object
 /** The request schema, and so the disclosure grant, for each class. `read` keeps the first rollout's. */
 export const PLAIN_RULE_REQUEST_SCHEMAS = Object.freeze({
   read: PLAIN_RULE_REQUEST_SCHEMA,
-  edit: "orca-plain-rule-request/edit/v1",
-  mcp: "orca-plain-rule-request/mcp/v1",
-  command: "orca-plain-rule-request/command/v1",
+  edit: "orca-plain-rule-request/edit/v1", // rename-keep: judge wire format named in issued disclosure grants and hashed into the provider version
+  mcp: "orca-plain-rule-request/mcp/v1", // rename-keep: judge wire format named in issued disclosure grants and hashed into the provider version
+  command: "orca-plain-rule-request/command/v1", // rename-keep: judge wire format named in issued disclosure grants and hashed into the provider version
 } as const) satisfies Readonly<Record<PlainRuleActionClass, string>>;
 /** One of the request schemas: what a disclosure grant names. */
 export type PlainRuleRequestSchema = (typeof PLAIN_RULE_REQUEST_SCHEMAS)[PlainRuleActionClass];
@@ -222,6 +222,7 @@ const TRIPWIRES = [
   /disregard (all |any )?(previous|prior|above|earlier)/i,
   /\byou are (now )?(a|an|the)\b/i,
   /\b(system|assistant|developer) ?(prompt|message|:)/i,
+  /orca-plain-rule-(request|verdict)/i, // rename-keep: the wire format names, which keep their pre-rename spelling
   /orca-plain-rule-(request|verdict)/i,
   /\bverdict\b\s*["':=]/i,
   /\bcovered\b\s*["':=]/i,

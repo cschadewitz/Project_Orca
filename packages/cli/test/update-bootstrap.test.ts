@@ -60,7 +60,7 @@ function fixtureSlots(root: string): number[] {
   const start =
     20000 +
     (Number.parseInt(
-      fenceHash(JSON.stringify(["orca-update-window-v1", fenceBoot().kernelDomain, fenceDirectory(root)])).slice(0, 8),
+      fenceHash(JSON.stringify(["orca-update-window-v1", fenceBoot().kernelDomain, fenceDirectory(root)])).slice(0, 8), // rename-keep: the hash domain update-window.ts keeps
       16,
     ) %
       5000) *

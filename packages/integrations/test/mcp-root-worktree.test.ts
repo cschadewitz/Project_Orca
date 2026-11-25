@@ -46,7 +46,7 @@ it("a six-grant owned-only MCP client admits isolated direct roots without plan 
   const first = await f.start(peer, "gate", "first-root");
   const second = await f.start(peer, "gate", "second-root");
   expect(first.runId).not.toBe(second.runId);
-  const receiptDir = join(repo, ".git", "orca-root-workspaces");
+  const receiptDir = join(repo, ".git", "orca-root-workspaces"); // rename-keep: the engine keeps the receipts' directory name
   expect((await readdir(receiptDir)).filter((name) => name.endsWith(".json"))).toHaveLength(2);
   const paths = new Set<string>();
   for (const runId of [first.runId, second.runId]) {

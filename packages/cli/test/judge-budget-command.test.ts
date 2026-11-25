@@ -59,7 +59,7 @@ describe.skipIf(process.platform === "win32")("orca judge budget", () => {
     const status = ctx(workspace, ["budget"]);
     expect(await judgeCommand(status)).toBe(0);
     const text = status.lines.join("\n");
-    expect(text).toContain(join("orca-judge-budget-anchors", id));
+    expect(text).toContain(join("orca-judge-budget-anchors", id)); // rename-keep: the daemon keeps the anchors' directory name
     expect(text).toMatch(/\(not created yet\)/);
     expect(text).toMatch(/storage eligible/);
     expect(text).toMatch(/not created: run `orca judge budget init`/);

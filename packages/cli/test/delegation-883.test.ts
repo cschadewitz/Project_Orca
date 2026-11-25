@@ -1639,7 +1639,7 @@ describe("delegation through a proxy the test controls (#883)", () => {
   });
 
   it("fences only in the workspace and principal the caller names", async () => {
-    const key = `orca-delegate-scope-${randomUUID()}`;
+    const key = `orca-delegate-scope-${randomUUID()}`; // rename-keep: shaped like the delegation keys the daemon keeps (receipts.ts)
     const other = await remote.call(
       "admissions.fence",
       {
