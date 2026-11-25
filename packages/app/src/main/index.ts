@@ -89,7 +89,7 @@ import { appMenuTemplate } from "./app-menu.js";
 import { hasTitleBarOverlay, titleBarOverlay, windowChrome } from "./window-chrome.js";
 import { createAlerts, type AlertTier } from "./alerts.js";
 import { ConnectionMachine } from "./connection-state.js";
-import { DeepLinkQueue, ORCA_SCHEME, protocolClientArgs, urlFromArgv } from "./deep-link.js";
+import { DeepLinkQueue, SCHEMES, protocolClientArgs, urlFromArgv } from "./deep-link.js";
 import { findBundledDaemon, startBundledDaemon } from "./daemon-process.js";
 import { StoreSwitchRestart, takeStoreSwitchRequest, writeStoreSwitchRequest } from "./store-switch.js";
 import { storeRoot, Workspace } from "./workspace.js";
@@ -188,7 +188,7 @@ export async function pauseMacUpdateAppWriters(signal: AbortSignal): Promise<boo
 }
 
 /** The recovery shell's one action, offered only when the update-protection records are lost
- * or unreadable and record no attempt; docs/implementation/mac-closed-window-fixed-path.md. */
+ * or unreadable and record no attempt; docs/archive/implementation/mac-closed-window-fixed-path.md. */
 async function offerUpdateProtectionReset(startup: NonNullable<typeof macReplacement>): Promise<void> {
   const { response } = await dialog.showMessageBox({
     type: "warning",
@@ -1988,12 +1988,13 @@ if (!primary) {
     powerMonitor.on("resume", observeResume);
     powerObservationMounted = true;
     applyTheme(preferences.read().theme);
-    /* Registering the scheme is what makes `orca://` reach this app at all. In development
+    /* Registering the scheme (and, until v0.10.0, its pre-rename alias) is what makes these URLs reach this app at all. In development
        the executable is Electron itself and the app is an argument to it, which is what
        `protocolClientArgs` supplies; a packaged app is its own executable and needs none. */
-    app.setAsDefaultProtocolClient(ORCA_SCHEME, process.execPath, [
-      ...(protocolClientArgs(app.isPackaged, process.argv) ?? []),
-    ]);
+    for (const scheme of SCHEMES)
+      app.setAsDefaultProtocolClient(scheme, process.execPath, [
+        ...(protocolClientArgs(app.isPackaged, process.argv) ?? []),
+      ]);
     /* The app had no menu at all until there was something to put in one. Replacing the
        default menu also replaces the Edit menu, which on macOS is where ⌘C lives — so
        `appMenuTemplate` restates the standard roles rather than dropping them. */

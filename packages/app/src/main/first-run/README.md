@@ -55,7 +55,7 @@ Original #564 left main/preload/Workspace unchanged under root's ownership split
 The combined integration now registers `OrcaBridge.firstRun?: FirstRunBridge` from
 `src/first-run-contract.ts` in main and preload, stages exact owned Workspace candidates,
 and removes implicit home startup. The optional bridge is now a declared contract.
-See [combined integration](../../../../../docs/implementation/first-run-native-integration.md)
+See [combined integration](../../../../../docs/archive/implementation/first-run-native-integration.md)
 for current evidence and filesystem limits; source/portable composition is not native
 end-user acceptance.
 
@@ -167,13 +167,13 @@ manifest edits. The original worktree stays on `work` at the supplied main SHA.
 The #570 successor adds main-only launch capabilities, kernel lifetime admission,
 explicit same-boot reconciliation and quiescent saved-config binding. Shared entrypoint
 composition and legacy limits are documented in
-[the handoff](../../../../../docs/implementation/first-run-same-boot-recovery.md).
+[the handoff](../../../../../docs/archive/implementation/first-run-same-boot-recovery.md).
 An attempt left by an earlier boot is settled only when a person confirms **Mark previous
 session ended** (`recovery.ts` `endPreviousBootSession`), described in that handoff.
 
 ## Current #386 agent evidence
 
-[Local-agent preflight and recovery](../../../../../docs/implementation/386-agent-preflight.md)
+[Local-agent preflight and recovery](../../../../../docs/archive/implementation/386-agent-preflight.md)
 documents the current observation-only projection, explicit support/version/ACP/sign-in
 gaps, cancellation and separately authorized real-agent handoff. Config binding does not
 clear #594's unsupported exact-command hold or supply native/physical acceptance.

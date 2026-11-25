@@ -6,9 +6,11 @@
  * preferences and remote daemon profiles across, once, and leaves the old folder where it is.
  * rename-keep-end
  *
- * Only those two: everything else in the folder is either Chromium's own cache or sealed with
- * a key the new name does not hold. A profile's sealed credential comes across with its
- * profile and is read, or refused and asked for again, exactly as `RemoteProfiles` does today.
+ * Those two, and the first-run selection receipt (`first-run/selection.json`), so a workspace
+ * set up before the rename reopens without being chosen again. Everything else in the folder
+ * is either Chromium's own cache or sealed with a key the new name does not hold. A profile's
+ * sealed credential comes across with its profile and is read, or refused and asked for
+ * again, exactly as `RemoteProfiles` does today.
  *
  * Compatibility for v0.9.0 only; v0.10.0 removes it with the other old-name reads.
  */
@@ -18,7 +20,7 @@ import { basename, dirname, join } from "node:path";
 /** The folder name before the rename. */
 export const LEGACY_USER_DATA_NAME = "ORCA"; // rename-keep: the pre-rename settings folder
 /** What is carried across. */
-export const CARRIED_ITEMS = ["preferences.json", "remote-daemons"] as const;
+export const CARRIED_ITEMS = ["preferences.json", "remote-daemons", "first-run"] as const;
 /** Written once the carry has run, so it never runs a second time. */
 export const CARRY_MARKER = "legacy-user-data.json";
 

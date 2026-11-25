@@ -16,6 +16,8 @@ beforeEach(() => {
   writeFileSync(join(legacy, "preferences.json"), '{"theme":"dark"}\n');
   writeFileSync(join(legacy, "remote-daemons", "profiles.json"), '{"version":1,"profiles":[]}\n');
   writeFileSync(join(legacy, "remote-daemons", "credentials", "p1.credential"), "sealed");
+  mkdirSync(join(legacy, "first-run"));
+  writeFileSync(join(legacy, "first-run", "selection.json"), '{"version":1}\n');
   writeFileSync(join(legacy, "admission-intents.enc"), "sealed with the old name's key");
   mkdirSync(join(legacy, "Cache"));
 });
@@ -23,11 +25,12 @@ afterEach(() => rmSync(appData, { recursive: true, force: true }));
 
 const read = (...parts: string[]) => readFileSync(join(...parts), "utf8");
 
-test("copies preferences and remote daemons into a new, empty folder and leaves the old one", () => {
+test("copies preferences, remote daemons and the first-run receipt into a new, empty folder and leaves the old one", () => {
   expect(carryLegacyUserData(userData)).toBe("copied");
   expect(read(userData, "preferences.json")).toBe('{"theme":"dark"}\n');
   expect(read(userData, "remote-daemons", "profiles.json")).toBe('{"version":1,"profiles":[]}\n');
   expect(read(userData, "remote-daemons", "credentials", "p1.credential")).toBe("sealed");
+  expect(read(userData, "first-run", "selection.json")).toBe('{"version":1}\n');
   // Nothing else comes across, and nothing leaves the old folder.
   expect(existsSync(join(userData, "admission-intents.enc"))).toBe(false);
   expect(existsSync(join(userData, "Cache"))).toBe(false);
@@ -45,6 +48,7 @@ test("runs once: a later launch never copies again, even after the settings are 
   expect(carryLegacyUserData(userData)).toBe("copied");
   rmSync(join(userData, "preferences.json"));
   rmSync(join(userData, "remote-daemons"), { recursive: true });
+  rmSync(join(userData, "first-run"), { recursive: true });
   expect(carryLegacyUserData(userData)).toBe("already-set-up");
   expect(existsSync(join(userData, "preferences.json"))).toBe(false);
   expect(existsSync(join(userData, CARRY_MARKER))).toBe(true);
@@ -65,8 +69,9 @@ test("does nothing without an old folder, or when the folder never changed name"
   expect(carryLegacyUserData(legacy)).toBe("same-folder");
 });
 
-test("copies whichever of the two the old folder has", () => {
+test("copies whichever of the items the old folder has", () => {
   rmSync(join(legacy, "remote-daemons"), { recursive: true });
+  rmSync(join(legacy, "first-run"), { recursive: true });
   expect(carryLegacyUserData(userData)).toBe("copied");
   expect(existsSync(join(userData, "preferences.json"))).toBe(true);
   expect(existsSync(join(userData, "remote-daemons"))).toBe(false);
