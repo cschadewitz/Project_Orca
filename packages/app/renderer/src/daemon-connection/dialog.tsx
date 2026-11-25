@@ -59,7 +59,7 @@ export function ConnectionDialog({
   return (
     <div className="orca-dialog-layer">
       <form
-        className="orca-dialog"
+        className="orca-dialog orca-connection-dialog"
         role="dialog"
         aria-modal="true"
         aria-labelledby="daemon-connection-title"

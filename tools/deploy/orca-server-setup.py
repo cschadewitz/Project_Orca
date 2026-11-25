@@ -79,6 +79,19 @@ import tempfile
 import time
 
 SETUP_MARKER = "orca-server-setup"
+
+# A new server's operator config, after the marker line. The daemon refuses to start while a
+# listed workflow names an agent it cannot resolve, and a new server has no agents yet, so it
+# lists no workflows: the release's own (ai-sdlc, program) need agents for their roles. The
+# operator adds agents and the workflows parents delegate to (docs/MULTI-MACHINE.md).
+SERVER_CONFIG = (
+    "# Add the agents this server runs, and the workflows other machines delegate to\n"
+    "# (docs/MULTI-MACHINE.md). The release's own workflows need agents for their roles;\n"
+    "# once those agents are declared, they can be listed with:\n"
+    "#   workflows: ['${ORCA_RELEASE}/workflows/**/*.yaml']\n"
+    "workflows: []\n"
+    "templates: ['${ORCA_RELEASE}/templates/**/*.md']\n"
+)
 SERVICE = "orca.service"
 HEALTH_SECONDS = 60
 VERSION_RE = r"\d+\.\d+\.\d+(?:-(?:rc|beta|alpha)\.\d+)?"
@@ -612,9 +625,7 @@ class Setup:
         else:
             write_file(self.manifest, json.dumps(manifest, indent=2) + "\n", 0o600)
             changed.append("deployment.json")
-        config = (f"# Written by {SETUP_MARKER} (#881). Yours to edit: setup never rewrites it.\n"
-                  "workflows: ['${ORCA_RELEASE}/workflows/**/*.yaml']\n"
-                  "templates: ['${ORCA_RELEASE}/templates/**/*.md']\n")
+        config = f"# Written by {SETUP_MARKER} (#881). Yours to edit: setup never rewrites it.\n" + SERVER_CONFIG
         for name in ("orca.config.yaml", "orca-kepler.config.yaml"):
             if not (root / name).exists():
                 write_file(root / name, config, 0o600)

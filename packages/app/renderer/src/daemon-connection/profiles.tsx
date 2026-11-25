@@ -237,7 +237,7 @@ export function ConnectionProfiles({
   };
 
   return (
-    <section className="orca-field" aria-labelledby="daemon-profiles-title">
+    <section className="orca-connection-stack" aria-labelledby="daemon-profiles-title">
       <h3 id="daemon-profiles-title" className={textClass("label-strong")}>
         SSH profiles
       </h3>
@@ -253,7 +253,7 @@ export function ConnectionProfiles({
         </Text>
       )}
       {list.map((profile) => (
-        <div key={profile.id} className="orca-field">
+        <div key={profile.id} className="orca-connection-stack">
           <Text style="body" as="p">
             {profile.name} <span className={textClass("mono-id")}>{profile.destination}</span>
             {current === profile.id ? " · connected" : ""}
@@ -505,7 +505,7 @@ function ServerConfirmation({
 }): JSX.Element {
   const { fingerprints } = inspection;
   return (
-    <div className="orca-field" role="group" aria-label="Confirm server setup">
+    <div className="orca-connection-stack" role="group" aria-label="Confirm server setup">
       <Text style="label-strong" as="p">
         Set up {name} as an ORCA server?
       </Text>
@@ -576,7 +576,7 @@ function ProfileEditor({
     </ConfigField>
   );
   return (
-    <div className="orca-field" role="group" aria-label={initial.id ? "Edit profile" : "New profile"}>
+    <div className="orca-connection-stack" role="group" aria-label={initial.id ? "Edit profile" : "New profile"}>
       {field("name", "Name", "How this daemon is named in the app.", false)}
       {field("destination", "Server", "user@host, as you would pass it to ssh.")}
       {field("sshPort", "SSH port", "Leave empty for 22.")}

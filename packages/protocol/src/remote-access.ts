@@ -210,8 +210,11 @@ export interface SshTunnelOptions {
   knownHostsFile: string;
   /** Default `ssh` from PATH. */
   sshBinary?: string;
-  /** Test seam. */
-  spawn?: (command: string, args: readonly string[]) => ChildProcess;
+  /**
+   * Test seam. `stdin` is what the real spawn gives ssh: a pipe for a hop that carries a
+   * connection or a command, nothing for a forwarding ssh.
+   */
+  spawn?: (command: string, args: readonly string[], stdin: SshStdin) => ChildProcess;
   /** Test seam over `markPinEnrolled`. */
   markEnrolled?: (knownHostsFile: string) => void;
   /** Test seam: pick the local port. Default: an ephemeral loopback port from the OS. */
@@ -660,7 +663,7 @@ export class SshTunnel {
     if (!args.includes("StrictHostKeyChecking=yes")) throw new TunnelRefusal("host-key-missing");
     let child: ChildProcess;
     try {
-      child = (this.options.spawn ?? defaultSpawn)(this.options.sshBinary ?? "ssh", args);
+      child = (this.options.spawn ?? defaultSpawn)(this.options.sshBinary ?? "ssh", args, "pipe");
     } catch {
       throw new TunnelRefusal("ssh-missing");
     }
@@ -754,7 +757,7 @@ export class SshTunnel {
     if (!args.includes("StrictHostKeyChecking=yes")) throw new TunnelRefusal("host-key-missing");
     let child: ChildProcess;
     try {
-      child = (this.options.spawn ?? defaultSpawn)(this.options.sshBinary ?? "ssh", args);
+      child = (this.options.spawn ?? defaultSpawn)(this.options.sshBinary ?? "ssh", args, "pipe");
     } catch {
       throw new TunnelRefusal("ssh-missing");
     }
@@ -949,7 +952,7 @@ export class SshTunnel {
     if (pinState(hop.knownHostsFile) === "broken") throw new TunnelRefusal("host-key-missing");
     let child: ChildProcess;
     try {
-      child = (this.options.spawn ?? defaultSpawn)(this.options.sshBinary ?? "ssh", hopArgs(hop));
+      child = (this.options.spawn ?? defaultSpawn)(this.options.sshBinary ?? "ssh", hopArgs(hop), "pipe");
     } catch {
       throw new TunnelRefusal("ssh-missing");
     }
@@ -1065,7 +1068,7 @@ export class SshTunnel {
         return;
       }
       try {
-        child = (this.options.spawn ?? defaultSpawn)(this.options.sshBinary ?? "ssh", args);
+        child = (this.options.spawn ?? defaultSpawn)(this.options.sshBinary ?? "ssh", args, "ignore");
       } catch {
         reject(new TunnelRefusal("ssh-missing"));
         return;
@@ -1294,9 +1297,16 @@ async function stop(child: ChildProcess): Promise<void> {
   clearTimeout(timer);
 }
 
-function defaultSpawn(command: string, args: readonly string[]): ChildProcess {
-  // A `-W` stream carries the connection on stdin/stdout; a forwarding ssh reads nothing.
-  const stdin = args.includes("-W") ? "pipe" : "ignore";
+/**
+ * What ssh's standard input is. A `-W` stream carries the connection on it, and a command
+ * (`exec`, `follow`) reads its input from it, so both get a pipe that ORCA writes and closes:
+ * a command must never inherit "nothing" instead, which on Windows is an input that never
+ * ends, and `python3 -` then waits for its program forever (#881). A forwarding ssh (`-N`)
+ * reads nothing.
+ */
+export type SshStdin = "pipe" | "ignore";
+
+function defaultSpawn(command: string, args: readonly string[], stdin: SshStdin): ChildProcess {
   return spawn(command, [...args], { stdio: [stdin, "pipe", "pipe"], windowsHide: true });
 }
 

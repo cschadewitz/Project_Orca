@@ -90,7 +90,7 @@ export function ServerUpdatePanel({
     (!approved || approved.adapter !== declared.adapter || approved.manifest !== declared.manifest),
   );
   return (
-    <section className="orca-field" aria-labelledby="connected-server-title">
+    <section className="orca-connection-stack" aria-labelledby="connected-server-title">
       <h3 id="connected-server-title" className={textClass("label-strong")}>
         Connected server
       </h3>
