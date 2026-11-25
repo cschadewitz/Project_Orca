@@ -37,6 +37,8 @@ on:
     paths:
       - tools/guard-qualification/**
       - tools/test/enforcement-installed-*.test.js
+      - packages/cli/test/codex-installed-evidence-1026.test.ts
+      - packages/cli/test/codex-model-stand-in.ts
       - .github/workflows/guard-receipts.yml
   schedule:
     - cron: "41 5 * * 2"
@@ -65,6 +67,9 @@ env:
   # adapter's own integrity, so pin the peer here: a PR run and a later signed run must install
   # the same SDK. (A checked-in lockfile installed with `npm ci` would pin the whole tree.)
   ANTHROPIC_SDK_VERSION: 1.13.0
+  # As in codex-hook-acceptance.yml: the pair CODEX_HOOK_VERIFIED_PAIRS admits.
+  CODEX_ADAPTER_VERSION: 2.9.0
+  CODEX_VERSION: 0.171.0
 
 jobs:
   claude:
@@ -131,6 +136,65 @@ jobs:
         with:
           name: guard-receipt-claude
           path: ${{ runner.temp }}/receipts/
+          if-no-files-found: error
+          retention-days: 30
+
+  # Installed-session evidence for Codex's hook route (#1026), checks-only: allow and deny of a
+  # harmless shell command and patch, each effect observed in the workspace apart from the hook.
+  # It is evidence, not a receipt: its artifact (guard-evidence-codex) is never staged, signed
+  # or proposed (the sign job takes guard-receipt-* only), and it claims no tier.
+  codex:
+    name: installed evidence (codex, linux)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+
+      - name: Install the pinned Codex ACP adapter and Codex outside the workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          d="$RUNNER_TEMP/codex-adapter"
+          mkdir -p "$d"
+          cd "$d"
+          npm init -y >/dev/null
+          npm install --no-audit --no-fund --ignore-scripts \
+            "@agentclientprotocol/codex-acp@${CODEX_ADAPTER_VERSION}" "@openai/codex@${CODEX_VERSION}"
+          test "$(node -p 'require("@openai/codex/package.json").version')" = "$CODEX_VERSION"
+          entry="$d/node_modules/@agentclientprotocol/codex-acp/dist/index.js"
+          test -f "$entry"
+          echo "ORCA_CODEX_ADAPTER=$entry" >> "$GITHUB_ENV"
+
+      - name: Run the installed evidence test
+        shell: bash
+        env:
+          ORCA_ENFORCEMENT_RECEIPT_DIR: ${{ runner.temp }}/evidence
+        run: |
+          set -euo pipefail
+          pnpm exec vitest run packages/cli/test/codex-installed-evidence-1026.test.ts \
+            --reporter=default --reporter=json --outputFile="$RUNNER_TEMP/evidence.json"
+          # Skipped without the adapter; here every test has to have run and passed.
+          node -e '
+            const r = require(process.argv[1]);
+            if (r.numTotalTests === 0 || r.numPendingTests > 0 || r.numPassedTests !== r.numTotalTests)
+              throw new Error(`expected every evidence test to run and pass: ${JSON.stringify({total: r.numTotalTests, passed: r.numPassedTests, skipped: r.numPendingTests})}`);
+          ' "$RUNNER_TEMP/evidence.json"
+          test -f "$RUNNER_TEMP/evidence/codex-installed-evidence.json"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: guard-evidence-codex
+          path: ${{ runner.temp }}/evidence/
           if-no-files-found: error
           retention-days: 30
 
