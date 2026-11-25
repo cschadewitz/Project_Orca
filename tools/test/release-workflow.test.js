@@ -205,7 +205,12 @@ it("never hands a write token to the ref under test (#863)", () => {
   expect(verify.steps.find((s) => s.uses?.startsWith("actions/setup-node@")).with.cache).toBe(
     "${{ !inputs.dry_run && !contains(needs.runner.outputs.runner, 'tyler') && 'pnpm' || '' }}",
   );
-  expect(verify.steps[0].with.ref).toBe("${{ needs.check.outputs.sha }}");
+  // The same trusted ref `check` checked out, then held to the commit `check` pinned.
+  expect(verify.steps[0].with.ref).toBe(
+    file.jobs.check.steps.find((s) => s.uses?.startsWith("actions/checkout@")).with.ref,
+  );
+  expect(verify.steps[1].env).toEqual({ SHA: "${{ needs.check.outputs.sha }}" });
+  expect(verify.steps[1].run).toContain('"$(git rev-parse HEAD)" != "$SHA"');
 
   // Desktop picks runners and its matrix with the workflow revision's tooling, not the ref's.
   const desktop = workflow("desktop.yml");

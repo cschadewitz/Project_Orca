@@ -219,9 +219,12 @@ jobs:
       # workers and no Actions cache on the self-hosted runners, 2 and `cache: pnpm` hosted.
       WORKERS_CAP: ${{ contains(needs.runner.outputs.runner, 'tyler') && '20' || '2' }}
     steps:
+      # The trusted event's own ref, exactly as `check` resolved it, never a value a job
+      # produced. The next step requires it to be the commit `check` pinned: if a dispatched
+      # branch moved in between, verification fails instead of testing another commit.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.check.outputs.sha }}
+          ref: ${{ inputs.ref || github.event.pull_request.merge_commit_sha }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -230,7 +233,7 @@ jobs:
           SHA: ${{ needs.check.outputs.sha }}
         run: |
           if [ "$(git rev-parse HEAD)" != "$SHA" ]; then
-            echo "::error::checked out $(git rev-parse HEAD), not the release commit $SHA"
+            echo "::error::checked out $(git rev-parse HEAD), not the release commit $SHA; dispatch again (with the commit SHA as ref to pin it)"
             exit 1
           fi
 
