@@ -1,0 +1,4 @@
+{
+  "$comment": "Leftover ORCA names that are correct after the rename. Each entry: path (exact or with *), pattern (regex tested against the trimmed line), reason. Prefer a `rename-keep` marker in the file itself; use this only where a comment cannot go (JSON, fixtures).",
+  "entries": []
+}

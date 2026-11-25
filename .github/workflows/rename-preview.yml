@@ -1,0 +1,72 @@
+# The Orrery rename, rehearsed. Takes Rename-Migration, merges today's main into it, applies
+# the mechanical rename (tools/rename/codemod.mjs) and runs the checks on the result. Nothing
+# is pushed: the mechanical layer is regenerated at cutover, never committed piecemeal
+# (tools/rename/README.md). Runs on every push to Rename-Migration (the merge handler merges
+# main into it at least daily) and on dispatch. A schedule would not fire here: scheduled
+# workflows run only from the default branch.
+name: Rename preview
+
+on:
+  push:
+    branches: [Rename-Migration]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rename-preview
+  cancel-in-progress: true
+
+jobs:
+  preview:
+    name: codemod + checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: Rename-Migration
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Merge today's main
+        run: |
+          git config user.name "rename-preview"
+          git config user.email "rename-preview@users.noreply.github.com"
+          git merge --no-edit origin/main
+
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24.21.0"
+
+      - name: Apply the rename
+        run: |
+          node tools/rename/codemod.mjs --apply | tail -n 1
+          node tools/rename/codemod.mjs | tail -n 1
+
+      - name: Leftover names
+        run: node tools/rename/audit.mjs
+
+      # The lockfile is excluded from the codemod; package names inside it are regenerated.
+      - name: Install
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm run typecheck
+
+      - name: Design tokens
+        run: pnpm run design:check
+
+      - name: Lint
+        run: pnpm run lint
+
+      - name: Build
+        run: pnpm run build
+
+      - name: Test
+        run: pnpm test
