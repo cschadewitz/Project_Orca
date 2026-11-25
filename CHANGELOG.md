@@ -57,22 +57,26 @@ The Runs board previews recovery for runs that have stopped: which steps need re
   it to: only such a pinned secret can be a judge's key, and a pinned secret can never be
   referenced by an agent or MCP server (the config check and session open both refuse it).
   The key is read on the daemon's own machine at each use, after the run owner's secret use
-  check, and is never cached, logged or serialized. Judges are still not switched on.
+  check, and is never cached, logged or serialized. A judge runs only after the owner opts in
+  to plain-language rules (below).
 - experimental, off-by-default switches under `review.plainRules.experimental.kinds` let
   the plain-language rule judge also answer tool calls to MCP servers ORCA relays (`mcpCalls`), as a
   one-time allow for a rule naming that server and tool, and give advice on file writes ORCA makes
   itself (`edits`) and on command asks (`commands`) while the person is still asked. Deny and ask rules
   still win, nothing is saved as a standing grant, and each kind needs its own owner grant (`orca auth
-  issue --judge-disclosure --judge-disclosure-kind <edits|mcp-calls|commands>`). The judge is still not
-  switched on.
-- plain-language permission rules can now be switched on (#701). They stay off, and existing configurations behave as before, until you opt in with `review.plainRules.enabled: true`. Once you also configure a judge on your own API key (`review.plainRules.judge`, Anthropic or an OpenAI-compatible endpoint), grant it disclosure (`orca auth issue --judge-disclosure`) and create its daily budget (`orca judge budget init`, Linux and macOS), a rule written as a sentence can allow a single file read that ORCA performs for the agent. Reads and searches the agent makes itself, edits and commands still go to you (for edits and commands, with the judge's view shown as advice). Nothing is sent when any part of the call's description would contain one of the session's secret values. Written deny and ask rules still decide first, nothing is saved as a standing grant, and every call the judge does not allow goes to you, with its reason shown on the ask. The Config surface's checklist says which step is missing. To turn it off, set `enabled: false`. See [docs/plain-language-rules.md](docs/plain-language-rules.md).
-- Plain-language permission rules can now be written in the config (#702): `judge: { criterion: "..." }` instead of a `decision`. When a judge is configured (not yet available in the app or CLI), a rule like this can allow a single read or search the person would otherwise have been asked about. That happens only when no deny or ask rule matches, only for files ORCA checked are inside the workspace and not its own, and only once per call. Every other case is decided by the usual rules.
+  issue --judge-disclosure --judge-disclosure-kind <edits|mcp-calls|commands>`) on top of the owner opt-in
+  below. A command is never allowed by the judge: when you are prompted, you approve it.
+- plain-language permission rules, **experimental and off by default**, can be switched on by the owner (#701). They stay off, and existing configurations behave as before, until you opt in with `review.plainRules.enabled: true`. Once you also configure a judge on your own API key (`review.plainRules.judge`, Anthropic or an OpenAI-compatible endpoint), grant it disclosure (`orca auth issue --judge-disclosure`) and create its daily budget (`orca judge budget init`, Linux and macOS), a rule written as a sentence can allow a single file read that ORCA performs for the agent. Reads and searches the agent makes itself, edits and commands still go to you (for edits and commands, with the judge's view shown as advice). Nothing is sent when any part of the call's description would contain one of the session's secret values. Written deny and ask rules still decide first, nothing is saved as a standing grant, and every call the judge does not allow goes to you, with its reason shown on the ask. The Config surface's checklist says which step is missing. To turn it off, set `enabled: false`. The judge in the packaged app is not covered by the support matrix. See [docs/plain-language-rules.md](docs/plain-language-rules.md).
+- Plain-language permission rules can now be written in the config (#702): `judge: { criterion: "..." }` instead of a `decision`. Once the owner has opted in and configured a judge (above), a rule like this can allow a single file read that ORCA performs for the agent, which the person would otherwise have been asked about. That happens only when no deny or ask rule matches, only for files ORCA checked are inside the workspace and not its own, and only once per call. Every other case, including reads and searches the agent makes itself, is decided by the usual rules.
 - Each permission decision in the run log now says what decided it (#702): ORCA's protected files, a rule, the policy's fallthrough, or the shell-command restriction. For a rule it gives where the rule lives (the config, the permission sidecar or ORCA's defaults) and its position there. This applies to an agent's permission asks and to ORCA's file reads and writes for an agent.
-- ORCA's `PreToolUse` hook for local Claude agents, **experimental and not
-  guard-qualified**: opt-in per agent with the explicit `nativeToolHook: experimental`, off by
-  default (`nativeToolHook: on` is kept for a qualified hook and is still refused, so a config
-  that set it earlier stays inactive), and no agent
-  qualified by the #706 support matrix. In acceptance runs with a scripted model it puts every
+- ORCA's `PreToolUse` hook for local Claude agents, **experimental**: opt-in per agent with the
+  explicit `nativeToolHook: experimental`, off by default (`nativeToolHook: on` is kept for a
+  fully qualified hook and is still refused, so a config that set it earlier stays inactive).
+  The #706 support matrix records a scoped Tier A result for this hook only, from a signed
+  installed receipt: the pinned adapter and Claude Code below, on Linux x64, with
+  `nativeToolHook: experimental`. It is not Tier B (a hook that times out or cannot start is not
+  yet shown to fail closed), it makes no claim for the plain-language rule judge, and a command
+  routed to your approval prompt still needs your answer. In acceptance runs with a scripted model it puts every
   tool call Claude hooks, including calls Claude
   remembers as "always allowed", through ORCA's rules, so a revoked grant applies to the very
   next call; a hook that fails blocks the call; and ORCA admits a session only with the
@@ -102,7 +106,8 @@ The Runs board previews recovery for runs that have stopped: which steps need re
   Codex runs it. That check is made once, when the session opens: Codex lets a call through
   if its hook runner fails later, and nothing re-checks it. ORCA admits the session only once it has found the Codex process the adapter
   started among the agent's own processes and hashed the image it runs against the digest
-  pinned for that adapter. Gemini and pi agents with `nativeToolHook: experimental` are refused. See
+  pinned for that adapter. Codex stays experimental and has no support tier in this release, because
+  of that hook runner limitation. Gemini and pi agents with `nativeToolHook: experimental` are refused. See
   `docs/agent-hook-coverage.md` (#705).
 - Gemini CLI 0.70.0 is qualified as an ACP agent without a hook (#705): a CI suite runs ORCA against the real CLI, `docs/agent-hook-coverage.md` lists which of its calls reach ORCA and which it runs on its own, and `orca agents` shows an advisory of the known Gemini settings it can see in an agent's command line and environment (YOLO in a trusted workspace, allowed tools, policy files, the user's own Gemini home) that let calls run without asking ORCA.
 - pi (through `pi-acp` 0.0.35, pi 1.6.0) is connectivity tested as an ACP agent without a hook (#705): a CI suite runs ORCA against the real agent, and `orca agents` and `docs/agent-hook-coverage.md` say plainly that pi runs every tool call without asking ORCA, so ORCA's rules and protected files do not apply to it. Run pi only inside an operating-system sandbox.
@@ -179,7 +184,7 @@ The Runs board previews recovery for runs that have stopped: which steps need re
   never stops work: a busy app tries again later, and after three days the header highlights
   **Restart to update**. **Turn off automatic updates** in the command palette makes every step
   manual again.
-- Plain-language permission rules can be written, edited and removed in the app (#701). The permission panel on the Agents surface has a "Plain-language rules" section after the written grants: write the rule in a sentence, choose read or search, and optionally narrow it to a path inside the workspace. The row says what is missing before Save would be refused. The Config surface lists each agent's plain-language rules in their own group, after the rules that decide in order. Nothing is allowed by a rule until a judge is configured.
+- Plain-language permission rules can be written, edited and removed in the app (#701). The permission panel on the Agents surface has a "Plain-language rules" section after the written grants: write the rule in a sentence, choose read or search, and optionally narrow it to a path inside the workspace. The row says what is missing before Save would be refused. The Config surface lists each agent's plain-language rules in their own group, after the rules that decide in order. A rule allows nothing until the owner opts in and configures a judge, and then only one read that ORCA performs, once.
 - first-run setup names a configured `copilot` executable as a Copilot CLI candidate and says what ORCA needs from its profile.
 - first-run setup names a configured `cline` executable as a Cline CLI candidate.
 - Connect to a daemon on another machine with a saved SSH profile (`user@host`, optional
@@ -251,7 +256,8 @@ The Runs board previews recovery for runs that have stopped: which steps need re
   `review.plainRules.judge`: that destination, provider and model only. No preset includes it, and
   changing the judge's destination, provider or model needs a new grant (its timeout and daily call
   limit do not). Revoking or expiring the
-  credential stops the next send. The judge is still not switched on.
+  credential stops the next send. Nothing is sent unless the owner has also opted in with
+  `review.plainRules.enabled: true`.
 - `orca store carry-forward` refuses desktop-app-owned workspaces (`APP_OWNED`) (#897).
 - `orca diagnostics tool-calls (runs | export <runId> [sessionId] | delete <runId> [sessionId] | prune)`.
 
@@ -277,7 +283,7 @@ The Runs board previews recovery for runs that have stopped: which steps need re
   before anything is sent. An artifact body sent back redacted is held to the size limit as
   sent, and checked against the size and digest the worker reports for it (`artifacts.get`
   `redacted`) (#363).
-- Plain-language permission rules can now be saved from the app as well as written in the config (#701): `permissions.saveJudgedRule` (protocol 2.12) adds one to `orca.permissions.json`, after every hand-written rule. A saved rule must name `read` or `search`, cannot match a command, and keeps its paths inside the workspace. A sidecar holding one is version 4, which earlier releases refuse rather than read the rule as a plain allow. As with config rules, nothing is allowed by it until a judge is configured, and then only one read or search at a time.
+- Plain-language permission rules can now be saved from the app as well as written in the config (#701): `permissions.saveJudgedRule` (protocol 2.12) adds one to `orca.permissions.json`, after every hand-written rule. A saved rule must name `read` or `search`, cannot match a command, and keeps its paths inside the workspace. A sidecar holding one is version 4, which earlier releases refuse rather than read the rule as a plain allow. As with config rules, nothing is allowed by it until the owner opts in and configures a judge, and then only one read that ORCA performs, once.
 - Delegate a workflow step to another ORCA daemon. An agent with
   `type: orca-daemon`, a `profile` from the new `remotes:` list and a `workflow` runs each of
   its steps as a run of that workflow on the remote daemon, over the same SSH tunnel as the
