@@ -50,6 +50,11 @@ export function makeSource(version) {
     }) + "\n",
   );
   write("packages/app/renderer/index.html", html());
+  write("packages/agents/src/bin/claude-pre-tool-hook.ts", "// synthetic hook entry\n");
+  write(
+    "packages/app/scripts/build-daemon.js",
+    'await build({ entryPoints: [fileURLToPath(new URL("../../agents/dist/bin/claude-pre-tool-hook.js", import.meta.url))] });\n',
+  );
   for (const [name, body] of Object.entries(FONTS)) write(`packages/design/fonts/${name}`, body);
   for (const name of WINDOWS_NATIVE_SOURCES)
     write(`packages/app/native/diagnostics/${name}`, `/* synthetic ${name} */\n`);
@@ -166,8 +171,21 @@ export function makeElf(machine) {
   return bytes;
 }
 
+/** A daemon bundle stamped as build-daemon.js stamps it since #896 (`readOrcaVersion()`). */
 export const daemon = (version) =>
+  text(
+    `// synthetic daemon\nfunction readOrcaVersion() {\n  return true ? "${version}" : createRequire(import.meta.url)("../../../package.json").version;\n}\nexport {};\n`,
+  );
+
+/** The stamp's form before #896, which older packages still carry. */
+export const legacyDaemon = (version) =>
   text(`// synthetic daemon\nvar ORCA_VERSION = true ? "${version}" : fallback();\nexport {};\n`);
+
+/** Claude's tool-call hook as build-daemon.js bundles it beside the daemon (#704). */
+export const claudeHookBody = () =>
+  text(
+    "#!/usr/bin/env node\nimport { createRequire as __createRequire } from 'node:module';\n\n// packages/agents/dist/bin/claude-pre-tool-hook.js\nexport {};\n",
+  );
 
 const TAR_MAGIC = { posix: "ustar\x0000", gnu: "ustar  \x00", v7: "\0\0\0\0\0\0\0\0" };
 
@@ -366,7 +384,7 @@ export function windowsNative(source, arch, { addonArch = arch } = {}) {
 export function linuxArchive(
   version,
   arch,
-  { asar = appAsar(version), daemonBody = daemon(version), extra = [], globalPax } = {},
+  { asar = appAsar(version), daemonBody = daemon(version), hookBody = claudeHookBody(), extra = [], globalPax } = {},
 ) {
   const top = `ORCA-${version}`;
   const runtime = ["resources.pak", "icudtl.dat", "v8_context_snapshot.bin", "libffmpeg.so", "locales/en-US.pak"];
@@ -378,6 +396,7 @@ export function linuxArchive(
       ...runtime.map((name) => ({ name: `${top}/${name}`, body: `placeholder ${name}` })),
       { name: `${top}/resources/app.asar`, body: asar },
       { name: `${top}/resources/daemon/orca-daemon.mjs`, body: daemonBody },
+      ...(hookBody ? [{ name: `${top}/resources/daemon/claude-pre-tool-hook.mjs`, body: hookBody }] : []),
       ...extra,
     ],
     { globalPax },
@@ -389,7 +408,7 @@ export function windowsArchive(
   version,
   arch,
   source,
-  { asar = appAsar(version), daemonBody = daemon(version), native, extra = [] } = {},
+  { asar = appAsar(version), daemonBody = daemon(version), hookBody = claudeHookBody(), native, extra = [] } = {},
 ) {
   const runtime = ["resources.pak", "icudtl.dat", "v8_context_snapshot.bin", "ffmpeg.dll", "locales/en-US.pak"];
   const addons = native ?? windowsNative(source, arch);
@@ -399,6 +418,7 @@ export function windowsArchive(
     { name: "resources/app.asar", body: asar },
     { name: "resources/app-update.yml", body: "provider: generic\nurl: https://updates.invalid/\nchannel: latest\n" },
     { name: "resources/daemon/orca-daemon.mjs", body: daemonBody },
+    ...(hookBody ? [{ name: "resources/daemon/claude-pre-tool-hook.mjs", body: hookBody }] : []),
     ...Object.entries(addons).map(([name, body]) => ({
       name: `resources/native/diagnostics/win32-${arch}/${name}`,
       body,

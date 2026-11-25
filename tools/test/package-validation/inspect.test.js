@@ -15,7 +15,9 @@ import {
   appImage,
   blockmap,
   debPackage,
+  claudeHookBody,
   daemon,
+  legacyDaemon,
   linuxArchive,
   makePe,
   makeSource,
@@ -230,7 +232,7 @@ describe("content refusals", () => {
   it("refuses an understated EOCD count hiding a trailing traversal entry", () => {
     const bytes = windowsArchive(VERSION, "x64", source, { extra: [{ name: "../unseen", body: "x" }] });
     const count = bytes.readUInt16LE(bytes.length - 22 + 10);
-    expect(count).toBe(14);
+    expect(count).toBe(15);
     bytes.writeUInt16LE(count - 1, bytes.length - 22 + 8);
     bytes.writeUInt16LE(count - 1, bytes.length - 22 + 10);
     expect(refusal(run({ [windows]: bytes }), windows)).toMatch(/zip_directory_invalid/);
@@ -342,7 +344,7 @@ describe("content refusals", () => {
 
     it("reports tar members and ASAR entries separately", () => {
       const { observations } = run({ [linux]: linuxArchive(VERSION, "x64") }).artifacts[0];
-      expect(observations.entries).toBe(10); // the tar members linuxArchive writes
+      expect(observations.entries).toBe(11); // the tar members linuxArchive writes
       expect(observations.asarEntries).toBeGreaterThan(observations.entries);
     });
 
@@ -742,6 +744,63 @@ describe("daemon version stamp", () => {
     expect(daemonVersion(daemon("1.2.3"))).toBe("1.2.3");
     expect(() => daemonVersion(Buffer.from("no stamp"))).toThrow(/daemon_version_unstamped/);
     expect(() => daemonVersion(Buffer.concat([daemon("1.2.3"), daemon("1.2.4")]))).toThrow(/2 version stamps/);
+  });
+
+  it("reads the stamp's form before #896 too, and still exactly one of either form", () => {
+    expect(daemonVersion(legacyDaemon("0.7.1"))).toBe("0.7.1");
+    expect(() => daemonVersion(Buffer.concat([daemon("1.2.3"), legacyDaemon("1.2.3")]))).toThrow(/2 version stamps/);
+  });
+});
+
+describe("the bundled Claude hook (#704)", () => {
+  const win = `ORCA-${VERSION}-win-x64.zip`;
+  const linux = `ORCA-${VERSION}-linux-x64.tar.gz`;
+  const only = (name, bytes) => run({ [name]: bytes }, { only: [name], allowPartial: true });
+
+  it("is required beside the daemon, and nothing else is allowed there", () => {
+    expect(only(win, windowsArchive(VERSION, "x64", source)).artifacts[0].status).toBe("consistent");
+    expect(only(linux, linuxArchive(VERSION, "x64")).artifacts[0].checks).toContain(
+      "bundled-hook:resources/daemon/claude-pre-tool-hook.mjs",
+    );
+    const extra = only(
+      win,
+      windowsArchive(VERSION, "x64", source, { extra: [{ name: "resources/daemon/other.mjs", body: "x" }] }),
+    );
+    expect(refusal(extra, win)).toMatch(/bundled_daemon_layout/);
+  });
+
+  it("refuses a package without it", () => {
+    const missing = windowsArchive(VERSION, "x64", source, { hookBody: null });
+    expect(refusal(only(win, missing), win)).toMatch(/bundled_daemon_layout/);
+  });
+
+  it("refuses a hook that is not the hook entry's bundle, or is a copy of the daemon", () => {
+    const other = windowsArchive(VERSION, "x64", source, {
+      hookBody: Buffer.from("#!/usr/bin/env node\nexport {};\n"),
+    });
+    expect(refusal(only(win, other), win)).toMatch(/bundled_hook_unrecognized: 0 hook entry modules/);
+    const copy = linuxArchive(VERSION, "x64", {
+      hookBody: Buffer.concat([claudeHookBody(), daemon(VERSION)]),
+    });
+    expect(refusal(only(linux, copy), linux)).toMatch(/bundled_hook_unrecognized: carries a daemon version stamp/);
+  });
+
+  it("refuses when the source checkout has no hook entry for it", () => {
+    const bare = makeSource(VERSION);
+    cleanup.push(bare.root);
+    const git = (...args) =>
+      execFileSync("git", ["-c", "user.name=fixture", "-c", "user.email=fixture@invalid", ...args], {
+        cwd: bare.root,
+        encoding: "utf8",
+      });
+    git("rm", "-q", "packages/agents/src/bin/claude-pre-tool-hook.ts");
+    git("commit", "-q", "-m", "no hook");
+    const commit = git("rev-parse", "HEAD").trim();
+    const report = run(
+      { [win]: windowsArchive(VERSION, "x64", source) },
+      { only: [win], allowPartial: true, commit, sourceRoot: bare.root },
+    );
+    expect(refusal(report, win)).toMatch(/the source has no Claude hook entry/);
   });
 });
 
