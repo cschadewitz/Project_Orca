@@ -48,7 +48,11 @@ export interface HostIpcReads {
   writable: (path: string) => Promise<boolean>;
 }
 
-const realReads: HostIpcReads = {
+/**
+ * How the inventory reads the host when no other reads are given: the real file system. Exported
+ * so a test can run these same reads over a fixture, without the rest of the host in the answer.
+ */
+export const hostIpcHostReads: HostIpcReads = {
   readFile: (path) => readFile(path, "utf8"),
   readdir: async function* (path) {
     // `opendir` reads the directory a batch at a time, so a huge one is not read whole first.
@@ -93,7 +97,7 @@ export async function hostIpcInventory(
   env: Readonly<Record<string, string | undefined>>,
   options: HostIpcInventoryOptions = {},
 ): Promise<HostIpcInventory> {
-  const reads = options.reads ?? realReads;
+  const reads = options.reads ?? hostIpcHostReads;
   const deadlineMs = options.deadlineMs ?? HOST_IPC_DEADLINE_MS;
   const stop = AbortSignal.any([
     AbortSignal.timeout(deadlineMs),

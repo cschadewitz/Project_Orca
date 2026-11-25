@@ -8,12 +8,13 @@ import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
 import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative, sep } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   HOST_IPC_PIPE_DEPTH,
   HOST_IPC_PIPE_ENTRIES,
   hostIpcCaveat,
+  hostIpcHostReads,
   hostIpcInventory,
   type HostIpcReads,
 } from "../src/host-ipc-inventory.js";
@@ -169,6 +170,27 @@ describe("what it could not check", () => {
     );
   });
 
+  it("names the first five directories it could not list and counts the rest, a missing root among them", async () => {
+    const unreadable = Array.from({ length: 6 }, (_, i) => ({ name: `d${i}`, type: "dir" as const }));
+    const inventory = await hostIpcInventory(ENV, {
+      reads: fakeHost({
+        dirs: {
+          "/tmp": unreadable,
+          ...Object.fromEntries(unreadable.map((entry) => [`/tmp/${entry.name}`, errno("EACCES")])),
+          // Home is looked through last, so here it is one of those counted, not named.
+          "/home/u": errno("ENOENT"),
+        },
+      }),
+    });
+    expect(inventory.pipesSearched).toEqual(ROOTS);
+    expect(inventory.incomplete).toEqual([
+      "named pipes: 7 directories could not be listed: /tmp/d0 (EACCES), /tmp/d1 (EACCES), /tmp/d2 (EACCES), " +
+        "/tmp/d3 (EACCES), /tmp/d4 (EACCES), and 2 more",
+    ]);
+    // Still incomplete, and the warning says so.
+    expect(hostIpcCaveat(inventory)).toMatch(/ The check was incomplete: named pipes: 7 directories .*, and 2 more\.$/);
+  });
+
   it("says where it stopped when there are too many entries to look through", async () => {
     const many = Array.from({ length: HOST_IPC_PIPE_ENTRIES + 1 }, (_, i) => ({
       name: `f${i}`,
@@ -275,6 +297,34 @@ describe("the caveat", () => {
   });
 });
 
+/**
+ * The real reads over a fixture: directories in it are read as they are, a directory holding it
+ * shows only the way down to it, and any other directory is empty, so what else is on the
+ * machine (another user's unreadable directories under /tmp, say: #1084) cannot change what the
+ * named pipe search finds or could not list. The machine's own sockets and TCP listeners are
+ * still in the answer, so the tests look for theirs among them.
+ */
+function readsWithin(fixture: string): HostIpcReads {
+  const within = (path: string, dir: string) => {
+    const rel = relative(dir, path);
+    return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !rel.startsWith(sep));
+  };
+  return {
+    ...hostIpcHostReads,
+    readdir: (path) => {
+      if (within(path, fixture)) return hostIpcHostReads.readdir(path);
+      if (!within(fixture, path))
+        return (async function* () {
+          /* outside the fixture */
+        })();
+      return (async function* () {
+        for await (const entry of hostIpcHostReads.readdir(path))
+          if (entry.type === "dir" && within(fixture, join(path, entry.name))) yield entry;
+      })();
+    },
+  };
+}
+
 describe.skipIf(process.platform !== "linux")("on this machine", () => {
   let dir: string | undefined;
   let server: Server | undefined;
@@ -287,9 +337,12 @@ describe.skipIf(process.platform !== "linux")("on this machine", () => {
 
   it("finds a socket listening and a named pipe it may write, not a pipe reached only by a link, once each", async () => {
     dir = await mkdtemp(join(tmpdir(), "orca-1026-ipc-"));
-    const runtime = join(dir, "runtime");
+    // Home holds the runtime directory, so what is in it is under two roots; the link's target is
+    // under neither, and outside what the reads show.
+    const home = join(dir, "home");
+    const runtime = join(home, "runtime");
     const elsewhere = join(dir, "elsewhere");
-    await mkdir(runtime);
+    await mkdir(runtime, { recursive: true });
     await mkdir(elsewhere);
     const socket = join(runtime, "listening.sock");
     server = createServer();
@@ -297,14 +350,31 @@ describe.skipIf(process.platform !== "linux")("on this machine", () => {
     execFileSync("mkfifo", [join(runtime, "pipe")]);
     execFileSync("mkfifo", [join(elsewhere, "linked")]);
     await symlink(join(elsewhere, "linked"), join(runtime, "link"));
-    const inventory = await hostIpcInventory({ XDG_RUNTIME_DIR: runtime, HOME: "/nonexistent-orca-home" });
+    const inventory = await hostIpcInventory({ XDG_RUNTIME_DIR: runtime, HOME: home }, { reads: readsWithin(home) });
     expect(inventory.endpoints).toContainEqual({ kind: "unix-socket", name: socket });
     expect(inventory.endpoints).toContainEqual({ kind: "named-pipe", name: join(runtime, "pipe") });
-    // Under the runtime directory and under /tmp both, and named once.
+    // Found under the runtime directory and under home both, and named once.
     expect(inventory.endpoints.filter((e) => e.name === join(runtime, "pipe"))).toHaveLength(1);
     expect(inventory.endpoints.map((e) => e.name)).not.toContain(join(runtime, "link"));
-    expect(inventory.pipesSearched[0]).toBe(runtime);
-    expect(inventory.incomplete).toContainEqual(expect.stringContaining("/nonexistent-orca-home (ENOENT)"));
+    expect(inventory.endpoints.map((e) => e.name)).not.toContain(join(elsewhere, "linked"));
+    expect(inventory.pipesSearched).toEqual([runtime, "/tmp", "/var/tmp", "/dev/shm", home]);
+    // The named pipe search was complete (this host's socket tables are not the fixture's to vouch for).
+    expect(
+      inventory.incomplete.filter((entry) => !entry.startsWith("unix sockets") && !entry.startsWith("TCP")),
+    ).toEqual([]);
     expect(hostIpcCaveat(inventory)).toContain(`unix-socket ${socket}`);
+  });
+
+  it("names a missing home as a directory it could not list", async () => {
+    dir = await mkdtemp(join(tmpdir(), "orca-1026-ipc-"));
+    const runtime = join(dir, "runtime");
+    const home = join(dir, "missing-home");
+    await mkdir(runtime);
+    const inventory = await hostIpcInventory({ XDG_RUNTIME_DIR: runtime, HOME: home }, { reads: readsWithin(dir) });
+    expect(inventory.pipesSearched).toEqual([runtime, "/tmp", "/var/tmp", "/dev/shm", home]);
+    expect(inventory.incomplete.filter((entry) => entry.startsWith("named pipes"))).toEqual([
+      `named pipes: 1 directory could not be listed: ${home} (ENOENT)`,
+    ]);
+    expect(hostIpcCaveat(inventory)).toContain(`The check was incomplete: `);
   });
 });
