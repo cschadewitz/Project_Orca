@@ -68,3 +68,26 @@ describe("a first-run workspace the app set up before the rename", () => {
     expect(firstRunLayout(current).config).toBe(join(current, "orca.config.yaml"));
   });
 });
+
+describe("a first-run workspace set up before the rename and never started", () => {
+  it("has no ownership yet, so its config alone decides which names it opens under", async () => {
+    const { mkdtempSync, writeFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { firstRunLayout } = await import("../src/first-run-fence.js");
+    const unstarted = mkdtempSync(join(tmpdir(), "first-run-unstarted-"));
+    writeFileSync(join(unstarted, "orca.config.yaml"), "version: 1\n"); // rename-keep: the old config is the fixture
+    expect(firstRunLayout(unstarted)).toEqual({
+      journal: join(unstarted, ".orca-first-run-ownership"), // rename-keep: the old journal is expected
+      anchor: join(unstarted, ".orca-first-run-ownership.json"), // rename-keep: the old anchor is expected
+      store: join(unstarted, ".orca"), // rename-keep: the old store is expected
+      config: join(unstarted, "orca.config.yaml"), // rename-keep: the old config is expected
+    });
+    // Once the current config is there too, or only it, the current names win.
+    writeFileSync(join(unstarted, "orca.config.yaml"), "version: 1\n");
+    expect(firstRunLayout(unstarted).config).toBe(join(unstarted, "orca.config.yaml"));
+    expect(firstRunLayout(unstarted).store).toBe(join(unstarted, ".orca"));
+    const fresh = mkdtempSync(join(tmpdir(), "first-run-fresh-"));
+    expect(firstRunLayout(fresh).config).toBe(join(fresh, "orca.config.yaml"));
+  });
+});
