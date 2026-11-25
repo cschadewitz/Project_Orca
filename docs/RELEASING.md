@@ -528,7 +528,7 @@ one), not on the `release/vX.Y.Z` pull request heads: pull requests only, no for
 deletion, the `check (node 24)` and `release line check` status checks required with GitHub
 Actions as their source (not "any source"), and branches kept up to date before merging. And a GitHub App with contents and pull-requests write,
 installed on this repository, with its id in the variable `ORCA_RELEASE_APP_ID` and its private
-key in the secret `ORCA_RELEASE_APP_PRIVATE_KEY`, both in a `release-bot` environment whose
+key in the secret `ORCA_RELEASE_APP_PRIVATE_KEY`, both in a `release-bot` environment whose <!-- rename-keep: Actions secret name -->
 deployment branches are `main` only (so no other branch's workflow can read the key): prepare opens release pull requests, and
 the sync its notes pull requests, with it, so CI and the guard run on them. Without it those
 pull requests get no checks, and a line that requires them cannot merge a release.

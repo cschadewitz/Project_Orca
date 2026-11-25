@@ -40,8 +40,9 @@ From 0.9.0 the product is **Orrery**. The rename keeps your data and settings. F
    0.10.0.
 3. **Desktop installs.** The Windows app updates in place: it keeps its installer identity
    (`dev.orca.desktop`), so shortcuts and the update path continue. The Linux package is now
-   `orrery-desktop` and replaces `orca-desktop` on upgrade.
-
+   `orrery-desktop` and replaces `orca-desktop` on upgrade. To go back to an ORCA release,
+   `sudo apt remove orrery-desktop` first, then install the old `.deb`; `--allow-downgrades`
+   alone does not cross the package rename.
 4. **The Windows feed token.** The app reads `%LOCALAPPDATA%\Orrery\feed-token.txt` and, for one
    release, still reads `%LOCALAPPDATA%\ORCA\feed-token.txt`.
 
@@ -322,11 +323,11 @@ To turn it on:
    canary tokens, never the R2 write credential.
 2. Mint one canary token per ring with `node tools/deploy/feed-token.js RING` and add its
    `FEED_TOKENS` entry to the Worker secret.
-3. Store the tokens as the **environment** secret `ORCA_FEED_CANARY_TOKENS` in `feed-canary`, as
+3. Store the tokens as the **environment** secret `ORCA_FEED_CANARY_TOKENS` in `feed-canary`, as <!-- rename-keep: Actions secret name -->
    JSON: `{"internal": "…", "preview": "…", "stable": "…"}`.
 4. Create a GitHub environment `feed-reader`, limited to `main`. Store an R2 token with **Object
-   Read** only, on the feed bucket, as `ORCA_FEED_READER_ACCESS_KEY_ID` and
-   `ORCA_FEED_READER_SECRET_ACCESS_KEY`. Never reuse the `desktop-feed` key. Without it the
+   Read** only, on the feed bucket, as `ORCA_FEED_READER_ACCESS_KEY_ID` and <!-- rename-keep: Actions secret names -->
+   `ORCA_FEED_READER_SECRET_ACCESS_KEY`. Never reuse the `desktop-feed` key. Without it the <!-- rename-keep: Actions secret names -->
    watchdog fails once `ORCA_FEED_BUCKET` is set.
 5. Set the repository variable `ORCA_FEED_URL` to the feed's https origin. Until then the workflow
    is skipped. It runs only from main.
@@ -408,8 +409,8 @@ The Worker serves nothing of a version until its `complete.json` exists.
    Merge the printed entries into one JSON object and store it with
    `npx wrangler secret put FEED_TOKENS`. Revoke a person by removing their entry.
 4. Create the `desktop-feed` environment (Settings → Environments), deployment branches `main`
-   only, no required reviewers (owner's decision, 2026-11-21). Store `ORCA_FEED_ACCESS_KEY_ID` and
-   `ORCA_FEED_SECRET_ACCESS_KEY` there as **environment** secrets. Both feed workflows refuse any
+   only, no required reviewers (owner's decision, 2026-11-21). Store `ORCA_FEED_ACCESS_KEY_ID` and <!-- rename-keep: Actions secret names -->
+   `ORCA_FEED_SECRET_ACCESS_KEY` there as **environment** secrets. Both feed workflows refuse any <!-- rename-keep: Actions secret names -->
    other ref.
 5. Set repository variables `ORCA_RELEASE_AUTO_SIGN` (`true` to sign and attach finals
    automatically), `ORCA_FEED_AUTO` (`true` to feed published finals automatically),
