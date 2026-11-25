@@ -38,11 +38,12 @@
  * `guard-receipts.yml` (job `codex`) runs this with ORCA_CODEX_ADAPTER set to the pinned adapter's
  * entry point. Without it there is nothing to run.
  */
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
+import { createInterface } from "node:readline";
 import { arch, platform, release, tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -105,38 +106,60 @@ interface Case {
   /** The workspace's change expected: path -> exact content, or nothing at all. */
   expect: Record<string, string>;
   /** What the case adds to Codex's config: an MCP server, say. Nothing that loosens a protection. */
-  codex?: (base: string) => Promise<Record<string, unknown>>;
+  codex?: (base: string, workspace: string) => Promise<Record<string, unknown>>;
 }
 
 /**
- * A stdio MCP server with one tool, `touch`, that writes "mcp" to the file it is given. Codex
- * starts it under its default settings: no tool approval mode is set, so Codex's own MCP
- * approval policy applies as it would in use.
+ * A stdio MCP server with one tool, `touch`, that can write one file only: the target the harness
+ * names on its command line, inside the case's disposable workspace. The tool takes no input; a
+ * call to another tool, or with any argument at all, is refused with an error and writes
+ * nothing. The target is created exclusively (never overwritten, never through a link).
  */
-async function mcpTouch(base: string): Promise<Record<string, unknown>> {
-  const server = join(base, "mcp-touch.mjs");
-  await writeFile(
-    server,
-    `import { createInterface } from "node:readline";
+const MCP_TOUCH_SERVER = `import { createInterface } from "node:readline";
 import { writeFileSync } from "node:fs";
+import { isAbsolute } from "node:path";
+const target = process.argv[2];
+if (process.argv.length !== 3 || !target || !isAbsolute(target)) process.exit(2);
 const out = (m) => process.stdout.write(JSON.stringify(m) + "\\n");
+const refuse = (id, message) => out({ jsonrpc: "2.0", id, error: { code: -32602, message } });
 createInterface({ input: process.stdin }).on("line", (l) => {
-  const m = JSON.parse(l);
+  let m;
+  try { m = JSON.parse(l); } catch { return; }
   if (m.method === "initialize") out({ jsonrpc: "2.0", id: m.id, result: { protocolVersion: m.params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: "touch", version: "1" } } });
-  else if (m.method === "tools/list") out({ jsonrpc: "2.0", id: m.id, result: { tools: [{ name: "touch", description: "write a file", inputSchema: { type: "object", properties: { file: { type: "string" } }, required: ["file"] } }] } });
-  else if (m.method === "tools/call") { writeFileSync(m.params.arguments.file, "mcp"); out({ jsonrpc: "2.0", id: m.id, result: { content: [{ type: "text", text: "ok" }] } }); }
+  else if (m.method === "tools/list") out({ jsonrpc: "2.0", id: m.id, result: { tools: [{ name: "touch", description: "write the one file this server was started for", inputSchema: { type: "object", properties: {}, additionalProperties: false } }] } });
+  else if (m.method === "tools/call") {
+    const args = m.params?.arguments;
+    if (m.params?.name !== "touch") return refuse(m.id, "unknown tool");
+    if (args !== undefined && (args === null || typeof args !== "object" || Array.isArray(args) || Object.keys(args).length > 0)) return refuse(m.id, "touch takes no arguments");
+    try { writeFileSync(target, "mcp", { flag: "wx" }); } catch { return refuse(m.id, "target exists or cannot be created"); }
+    out({ jsonrpc: "2.0", id: m.id, result: { content: [{ type: "text", text: "ok" }] } });
+  }
   else if (m.id !== undefined) out({ jsonrpc: "2.0", id: m.id, result: {} });
 });
-`,
-    "utf8",
-  );
-  // A model Codex does not defer MCP tools for, so the scripted model can call one directly.
-  return { model: "gpt-5", mcp_servers: { t: { command: process.execPath, args: [server] } } };
+`;
+
+/** Write the server next to (not inside) the workspace; return its path. */
+async function writeMcpTouch(dir: string): Promise<string> {
+  const server = join(dir, "mcp-touch.mjs");
+  await writeFile(server, MCP_TOUCH_SERVER, "utf8");
+  return server;
 }
 
-const mcpCall =
+/**
+ * The config a case adds for the server: its one target is `file` in the case's workspace,
+ * fixed here by the harness. Codex starts it under its default settings: no tool approval mode
+ * is set, so Codex's own MCP approval policy applies as it would in use.
+ */
+const mcpTouch =
   (file: string) =>
-  (workspace: string): Step => ({ tool: "touch", namespace: "mcp__t", args: { file: join(workspace, file) } });
+  async (base: string, workspace: string): Promise<Record<string, unknown>> => {
+    const server = await writeMcpTouch(base);
+    // A model Codex does not defer MCP tools for, so the scripted model can call one directly.
+    return { model: "gpt-5", mcp_servers: { t: { command: process.execPath, args: [server, join(workspace, file)] } } };
+  };
+
+/** The scripted model's call: the tool, with no arguments. */
+const MCP_CALL: Step = { tool: "touch", namespace: "mcp__t", args: {} };
 
 const CASES: Case[] = [
   {
@@ -169,19 +192,19 @@ const CASES: Case[] = [
   },
   {
     id: "mcp-allow",
-    action: "mcp: t.touch mcp-allowed.txt",
+    action: "mcp: t.touch (its one target: mcp-allowed.txt)",
     rule: { match: { titlePattern: "^t: touch$" }, decision: "allow" },
-    step: mcpCall("mcp-allowed.txt"),
+    step: MCP_CALL,
     expect: { "mcp-allowed.txt": "mcp" },
-    codex: mcpTouch,
+    codex: mcpTouch("mcp-allowed.txt"),
   },
   {
     id: "mcp-deny",
-    action: "mcp: t.touch mcp-denied.txt",
+    action: "mcp: t.touch (its one target: mcp-denied.txt)",
     rule: { match: { titlePattern: "^t: touch$" }, decision: "deny" },
-    step: mcpCall("mcp-denied.txt"),
+    step: MCP_CALL,
     expect: {},
-    codex: mcpTouch,
+    codex: mcpTouch("mcp-denied.txt"),
   },
 ];
 
@@ -223,6 +246,56 @@ function git(...args: string[]): string | null {
   }
 }
 
+describe("the MCP fixture writes only the target the harness names", () => {
+  it("refuses another tool or any argument without writing, and writes its target once", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orca-1026-mcp-touch-"));
+    try {
+      const server = await writeMcpTouch(dir);
+      const target = join(dir, "work", "target.txt");
+      const elsewhere = join(dir, "elsewhere.txt");
+      await mkdir(join(dir, "work"));
+      const child = spawn(process.execPath, [server, target], { stdio: ["pipe", "pipe", "inherit"] });
+      const replies = new Map<number, Record<string, unknown>>();
+      const waiting = new Map<number, () => void>();
+      createInterface({ input: child.stdout }).on("line", (line) => {
+        const m = JSON.parse(line) as Record<string, unknown> & { id: number };
+        replies.set(m.id, m);
+        waiting.get(m.id)?.();
+      });
+      let id = 0;
+      const call = async (method: string, params: unknown) => {
+        const n = ++id;
+        const replied = new Promise<void>((resolve) => waiting.set(n, resolve));
+        child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: n, method, params }) + "\n");
+        await replied;
+        return replies.get(n)!;
+      };
+      try {
+        await call("initialize", { protocolVersion: "2025-06-18" });
+        for (const params of [
+          { name: "touch", arguments: { file: elsewhere } },
+          { name: "touch", arguments: { extra: 1 } },
+          { name: "touch", arguments: [] },
+          { name: "other", arguments: {} },
+        ])
+          expect(await call("tools/call", params)).toHaveProperty("error");
+        expect(await readFile(target, "utf8").catch(() => undefined)).toBeUndefined();
+        expect(await readFile(elsewhere, "utf8").catch(() => undefined)).toBeUndefined();
+        expect(await call("tools/call", { name: "touch", arguments: {} })).toHaveProperty("result");
+        expect(await readFile(target, "utf8")).toBe("mcp");
+        // Never overwritten: a second call is refused and leaves the file as it was.
+        expect(await call("tools/call", { name: "touch", arguments: {} })).toHaveProperty("error");
+        expect(await readdir(dir)).toEqual(expect.arrayContaining(["mcp-touch.mjs", "work"]));
+        expect((await readdir(dir)).length).toBe(2);
+      } finally {
+        child.kill();
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe.skipIf(ADAPTER === undefined)("installed-session evidence for Codex's hook route (#1026)", () => {
   let model: ModelStandIn;
   let hookScript: string;
@@ -251,7 +324,7 @@ describe.skipIf(ADAPTER === undefined)("installed-session evidence for Codex's h
     const workspace = join(base, "work");
     const codexHome = join(base, "codex-home");
     for (const dir of [configDir, workspace, codexHome]) await mkdir(dir, { recursive: true });
-    const added = (await extra?.(base)) ?? {};
+    const added = (await extra?.(base, workspace)) ?? {};
     // A native approval that reaches the person is recorded and refused: the test never acts
     // as the person to let a call through.
     const personAsked: { title: string; answer: string | undefined }[] = [];
