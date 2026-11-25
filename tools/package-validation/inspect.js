@@ -235,14 +235,17 @@ export function daemonVersion(bytes) {
 
 /**
  * A structural check of Claude's tool-call hook (#704) beside the daemon: a node script whose
- * bundle names the hook entry module (`// packages/agents/dist/bin/claude-pre-tool-hook.js`,
- * which esbuild writes for an unminified bundle) exactly once, and that carries no daemon
- * version stamp, so it is not a second copy of the daemon. It does not verify the hook's
- * behaviour or bind its contents to that entry; like everything here, it is not provenance.
+ * bundle names the hook entry module exactly once, and that carries no daemon version stamp, so
+ * it is not a second copy of the daemon. esbuild writes the entry's comment for an unminified
+ * bundle relative to its working directory: `// ../agents/dist/bin/claude-pre-tool-hook.js`
+ * from `packages/app` (the release build, `pnpm --filter @orca/app run build:daemon`), or
+ * `// packages/agents/dist/bin/claude-pre-tool-hook.js` from the repository root. Either form
+ * counts, and exactly one such line in all. It does not verify the hook's behaviour or bind its
+ * contents to that entry; like everything here, it is not provenance.
  */
 export function claudeHook(bytes) {
   const text = bytes.toString("utf8");
-  const entries = text.match(/^\/\/ packages\/agents\/dist\/bin\/claude-pre-tool-hook\.js$/gm) ?? [];
+  const entries = text.match(/^\/\/ (?:packages|\.\.)\/agents\/dist\/bin\/claude-pre-tool-hook\.js$/gm) ?? [];
   if (!text.startsWith("#!/usr/bin/env node\n") || entries.length !== 1)
     fail("bundled_hook_unrecognized", `${entries.length} hook entry modules`);
   if (/\b(?:var ORCA_VERSION = |function readOrcaVersion\(\) \{)/.test(text))
