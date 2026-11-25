@@ -31,6 +31,7 @@ import { copyFile, cp, mkdir, mkdtemp, readdir, readFile, stat, writeFile } from
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { promisify } from "node:util";
+import { STORE_FORMAT_ROW } from "./store-format-row.js";
 
 const execute = promisify(execFile);
 
@@ -236,7 +237,7 @@ test(`the candidate (${TO}) installs over it and opens the same store in place`,
   const { version, exe } = await installed();
   expect(version).toBe(TO);
   const format = await cli(exe, bundleOf(exe), WORKSPACE, ["store", "format"]);
-  const epoch = /^this ORCA\s+(\S+)/m.exec(format.stdout)?.[1];
+  const epoch = STORE_FORMAT_ROW.exec(format.stdout)?.[1];
   expect(
     epoch,
     `the candidate's store format is the previous release's (${FROM_EPOCH}); a format change needs #897 and a new check`,
