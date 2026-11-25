@@ -456,7 +456,7 @@ jobs:
   hand-off:
     name: dispatch the attach for this signed run
     needs: [resolve, sign]
-    if: github.ref == 'refs/heads/main' && vars.ORCA_RELEASE_AUTO_SIGN == 'true'
+    if: github.ref == 'refs/heads/main' && (vars.ORRERY_RELEASE_AUTO_SIGN || vars.ORCA_RELEASE_AUTO_SIGN) == 'true'
     continue-on-error: true
     runs-on: ubuntu-24.04
     permissions:

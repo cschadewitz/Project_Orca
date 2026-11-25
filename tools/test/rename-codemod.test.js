@@ -27,6 +27,15 @@ describe("rename rules", () => {
     ["https://github.com/cschadewitz/Project_Orca/pull/1", "https://github.com/cschadewitz/Orrery/pull/1"],
     ["cschadewitz/Project_Orca_Infra", "cschadewitz/Orrery-Infra"],
     ['"\\norca"', '"\\norrery"'],
+    // Only the two host-key fixtures are base64 kept as is; a long path is still renamed.
+    ["packages/engine/src/a/OrcaThing.ts", "packages/engine/src/a/OrreryThing.ts"],
+    ["c2VjcmV0c2VjcmV0c2VjcmV0/OrcaBlob", "c2VjcmV0c2VjcmV0c2VjcmV0/OrreryBlob"],
+    // The legacy half of a workflow variable fallback stays; everything else on the line is renamed.
+    [
+      "ORCA_JUDGE_URL: ${{ vars.ORRERY_JUDGE_URL || vars.ORCA_JUDGE_URL }}",
+      "ORRERY_JUDGE_URL: ${{ vars.ORRERY_JUDGE_URL || vars.ORCA_JUDGE_URL }}",
+    ],
+    ["if: vars.ORCA_FEED_BUCKET != ''", "if: vars.ORRERY_FEED_BUCKET != ''"],
   ])("%s", (from, to) => {
     expect(rename(from)).toBe(to);
   });
@@ -39,6 +48,7 @@ describe("rename rules", () => {
     "${{ secrets.ORCA_FEED_ACCESS_KEY_ID }}",
     'TOKEN_PREFIX = "orca1"',
     "AAAAC3NzaC1lZDI1NTE5AAAAIOrcaServerKeyOne0000",
+    'const OTHER = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOrcaServerKeyTwo000000000000000000000000";',
     "header ORCADP01",
     "orrery and Orrery are already renamed",
     '      "note": "targets not verified by ORCA",',

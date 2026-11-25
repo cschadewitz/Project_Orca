@@ -29,14 +29,14 @@ permissions:
 jobs:
   dispatch:
     name: feed published, signed versions
-    if: vars.ORCA_FEED_AUTO == 'true' && vars.ORCA_FEED_BUCKET != ''
+    if: (vars.ORRERY_FEED_AUTO || vars.ORCA_FEED_AUTO) == 'true' && (vars.ORRERY_FEED_BUCKET || vars.ORCA_FEED_BUCKET) != ''
     runs-on: ubuntu-24.04
     steps:
       # ORCA_FEED_PAUSE=true means nothing new is offered (docs/UPDATING.md, "Pulling a bad
       # build"); this then dispatches nothing, and says so.
       - name: Skip while the feed is paused
         id: pause
-        if: vars.ORCA_FEED_PAUSE == 'true'
+        if: (vars.ORRERY_FEED_PAUSE || vars.ORCA_FEED_PAUSE) == 'true'
         run: echo "The feed is paused (ORCA_FEED_PAUSE=true); nothing dispatched." | tee -a "$GITHUB_STEP_SUMMARY"
 
       # The script comes from main, whatever commit triggered the event.

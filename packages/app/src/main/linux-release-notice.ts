@@ -13,8 +13,21 @@ import { existsSync } from "node:fs";
 import type { LinuxUpdateNotice } from "../linux-update-contract.js";
 
 const REPOSITORY = "cschadewitz/Project_Orca";
-export const RELEASES_URL = `https://api.github.com/repos/${REPOSITORY}/releases?per_page=30`;
-export const releasePage = (tag: string) => `https://github.com/${REPOSITORY}/releases/tag/${encodeURIComponent(tag)}`;
+const PACKAGE_PREFIX = "ORCA";
+/**
+ * The Orrery rename bridge (v0.8.1): after the rename the releases are published by the renamed
+ * repository, and their packages carry the new product name. For one release both are read: the
+ * repositories in this order, the first that answers, and either package name.
+ */
+// rename-keep-start: both names, so an install on either side of the rename sees the next release
+const REPOSITORIES = [...new Set([REPOSITORY, "cschadewitz/Project_Orca", "cschadewitz/Orrery"])];
+const PACKAGE_PREFIXES = [...new Set([PACKAGE_PREFIX, "ORCA", "Orrery"])];
+// rename-keep-end
+const releasesApi = (repository: string) => `https://api.github.com/repos/${repository}/releases?per_page=30`;
+export const RELEASES_URL = releasesApi(REPOSITORY);
+export const RELEASES_URLS = REPOSITORIES.map(releasesApi);
+export const releasePage = (tag: string, repository = REPOSITORY) =>
+  `https://github.com/${repository}/releases/tag/${encodeURIComponent(tag)}`;
 /** Where the package installs its binary (electron-builder.yml) and its dpkg file list. */
 const DEB_EXECUTABLE = "/opt/ORCA/orca-desktop";
 const DEB_FILE_LIST = "/var/lib/dpkg/info/orca-desktop.list";
@@ -62,8 +75,13 @@ export function compareVersions(a: Version, b: Version): number {
 }
 
 export function debAsset(version: string, arch: string): string | undefined {
+  return debAssets(version, arch)[0];
+}
+
+/** Every name this machine's `.deb` may have (the rename bridge), the current one first. */
+export function debAssets(version: string, arch: string): string[] {
   const debArch = DEB_ARCH[arch];
-  return debArch ? `ORCA-${version}-linux-${debArch}.deb` : undefined;
+  return debArch ? PACKAGE_PREFIXES.map((prefix) => `${prefix}-${version}-linux-${debArch}.deb`) : [];
 }
 
 /**
@@ -76,6 +94,7 @@ export function newerRelease(
   current: string,
   arch: string,
   env: NodeJS.ProcessEnv = process.env,
+  repository: string = REPOSITORY,
 ): LinuxUpdateNotice | undefined {
   const installed = parseVersion(current);
   if (!installed || !Array.isArray(releases)) return undefined;
@@ -91,19 +110,30 @@ export function newerRelease(
     // The rule `acceptsVersion` applies to the Windows feed.
     if (pre && env.ORCA_UPDATE_PRERELEASE !== "1") continue;
     if (compareVersions(version, installed) <= 0) continue;
-    const asset = debAsset(text, arch);
-    if (!asset || !Array.isArray(assets)) continue;
-    if (!assets.some((item) => item && typeof item === "object" && (item as { name?: unknown }).name === asset))
-      continue;
+    if (!Array.isArray(assets)) continue;
+    const names = new Set(
+      assets.map((item: unknown) => (item && typeof item === "object" ? (item as { name?: unknown }).name : undefined)),
+    );
+    const asset = debAssets(text, arch).find((name) => names.has(name));
+    if (!asset) continue;
     if (!best || compareVersions(version, best.version) > 0) best = { version, text, tag, asset };
   }
   if (!best) return undefined;
   return {
     current,
     version: best.text,
-    releaseUrl: releasePage(best.tag),
+    releaseUrl: releasePage(best.tag, repository),
     installCommand: `sudo apt install ./${best.asset}`,
   };
+}
+
+/** The release lists to ask, in order: the first that answers is the answer (the rename bridge). */
+export function releasesUrls(env: NodeJS.ProcessEnv = process.env): string[] {
+  if (env.ORCA_RELEASES_URL) {
+    const override = releasesUrl(env);
+    return override ? [override] : [];
+  }
+  return RELEASES_URLS;
 }
 
 /** A test may point the check at a local server; a real override must still be HTTPS. */
@@ -170,23 +200,35 @@ export class LinuxReleaseWatch {
   /** One check. Every failure keeps the last answer and says nothing. */
   async check(): Promise<void> {
     const env = this.options.env ?? process.env;
-    const url = releasesUrl(env);
-    if (this.running || this.stopped || !url) return;
+    const urls = releasesUrls(env);
+    if (this.running || this.stopped || !urls.length) return;
     this.running = true;
     try {
-      const response = await this.options.fetch(url, {
-        headers: { Accept: "application/vnd.github+json", "User-Agent": "ORCA-desktop" },
-        signal: AbortSignal.timeout(this.options.timeoutMs ?? 10_000),
-        // The HTTPS-or-loopback rule holds for the URL asked, so no hop may move it
-        // elsewhere: a redirect fails the check, silently, like any other failure.
-        redirect: "error",
-      });
-      if (!response.ok) return;
+      let response: Awaited<ReturnType<ReleaseWatchOptions["fetch"]>> | undefined;
+      let index = 0;
+      // The first repository that answers (the rename bridge). Before the rename the new one
+      // does not answer; after it the old one redirects, which fails like any other refusal.
+      for (; index < urls.length && !response; index++) {
+        try {
+          const answer = await this.options.fetch(urls[index]!, {
+            headers: { Accept: "application/vnd.github+json", "User-Agent": "ORCA-desktop" },
+            signal: AbortSignal.timeout(this.options.timeoutMs ?? 10_000),
+            // The HTTPS-or-loopback rule holds for the URL asked, so no hop may move it
+            // elsewhere: a redirect fails the check, silently, like any other failure.
+            redirect: "error",
+          });
+          if (answer.ok) response = answer;
+        } catch {
+          // Try the next repository; when none answers, the check is silent.
+        }
+      }
+      if (!response) return;
       const body: unknown = await response.json();
       // Only a release list is an answer. Any other shape is a malformed check, which keeps
       // the last answer; an empty list is a real answer and clears it.
       if (!Array.isArray(body)) return;
-      const notice = newerRelease(body, this.options.current, this.options.arch, env);
+      const repository = env.ORCA_RELEASES_URL ? REPOSITORY : REPOSITORIES[index - 1]!;
+      const notice = newerRelease(body, this.options.current, this.options.arch, env, repository);
       if (this.stopped) return;
       if (JSON.stringify(notice) !== JSON.stringify(this.notice)) {
         this.notice = notice;

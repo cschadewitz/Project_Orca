@@ -1,5 +1,5 @@
-# Frozen historical review artifacts; preserve their recorded bytes and checksums.
-Current_State/
+# Frozen historical record (Current_State and the archived docs); preserve their recorded bytes and checksums.
+docs/archive/
 
 # Generated or vendored.
 node_modules/

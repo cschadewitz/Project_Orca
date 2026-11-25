@@ -13,17 +13,42 @@
  * the unit tests: they inject a verifier instead.
  */
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { loadMap, renameText } from "../rename/lib.mjs";
 
 export const REPOSITORY = "cschadewitz/Project_Orca";
 /** The only workflow whose signature makes a receipt count. */
-export const RECEIPTS_WORKFLOW = `${REPOSITORY}/.github/workflows/guard-receipts.yml`;
+export const receiptsWorkflow = (repository) => `${repository}/.github/workflows/guard-receipts.yml`;
+export const RECEIPTS_WORKFLOW = receiptsWorkflow(REPOSITORY);
+/**
+ * The repository names a receipt may be attested under, this one first. A certificate records
+ * the name at signing time, so receipts attested before the Orrery rename name the old one: it
+ * is the same repository, and they keep counting under it, with its own exact signer.
+ */
+export const REPOSITORIES = [...new Set([REPOSITORY, "cschadewitz/Project_Orca"])]; // rename-keep: receipts from before the rename
 /** Refs a receipt may be produced from: main, or a release line (docs/RELEASING.md). */
 export const RECEIPT_REFS = [/^refs\/heads\/main$/, /^refs\/heads\/release\/\d+\.\d+$/];
 
 /** Where a receipt's Sigstore bundle is committed. */
 export const bundlePathFor = (receiptPath) => `${receiptPath}.sigstore.json`;
+
+/**
+ * The Orrery rename rewrote the committed receipts' text (tools/rename/codemod.mjs), but their
+ * signatures are over the bytes as attested. tools/rename/post-codemod.mjs keeps those bytes beside
+ * each receipt it changed; the attestation is verified on them, and the receipt counts only when
+ * it is exactly their rename. For one release: v0.10.0 drops this with re-run receipts.
+ */
+export const preRenamePathFor = (receiptPath) => `${receiptPath}.pre-rename`;
+
+function attestedSubject(repoRoot, receiptPath) {
+  const original = preRenamePathFor(receiptPath);
+  if (!existsSync(join(repoRoot, original))) return { path: receiptPath };
+  const renamed = renameText(loadMap(), readFileSync(join(repoRoot, original), "utf8")).text;
+  if (renamed !== readFileSync(join(repoRoot, receiptPath), "utf8"))
+    return { problem: `${receiptPath} is not the rename of its attested ${original}` };
+  return { path: original };
+}
 
 /**
  * Why the receipt at `receiptPath` (repository-relative) is not bound to a trusted run. Empty
@@ -36,30 +61,39 @@ export function attestationProblems(repoRoot, receiptPath, receipt, run = runGh)
   const bundle = bundlePathFor(receiptPath);
   if (!existsSync(join(repoRoot, bundle))) return [`no attestation bundle ${bundle}`];
   if (!/^[0-9a-f]{40}$/.test(receipt?.build ?? "")) return ["names no exact build to verify against"];
+  const subject = attestedSubject(repoRoot, receiptPath);
+  if (subject.problem) return [subject.problem];
   let out;
-  try {
-    out = run(
-      [
-        "attestation",
-        "verify",
-        join(repoRoot, receiptPath),
-        "--bundle",
-        join(repoRoot, bundle),
-        "--repo",
-        REPOSITORY,
-        "--signer-workflow",
-        RECEIPTS_WORKFLOW,
-        "--source-digest",
-        receipt.build,
-        "--deny-self-hosted-runners",
-        "--format",
-        "json",
-      ],
-      repoRoot,
-    );
-  } catch (error) {
-    return [`attestation does not verify: ${firstLine(error)}`];
+  let workflow;
+  let refusal;
+  for (const repository of REPOSITORIES) {
+    try {
+      out = run(
+        [
+          "attestation",
+          "verify",
+          join(repoRoot, subject.path),
+          "--bundle",
+          join(repoRoot, bundle),
+          "--repo",
+          repository,
+          "--signer-workflow",
+          receiptsWorkflow(repository),
+          "--source-digest",
+          receipt.build,
+          "--deny-self-hosted-runners",
+          "--format",
+          "json",
+        ],
+        repoRoot,
+      );
+      workflow = receiptsWorkflow(repository);
+      break;
+    } catch (error) {
+      refusal ??= error;
+    }
   }
+  if (!workflow) return [`attestation does not verify: ${firstLine(refusal)}`];
   let results;
   try {
     results = JSON.parse(out);
@@ -79,7 +113,7 @@ export function attestationProblems(repoRoot, receiptPath, receipt, run = runGh)
     // The signer, checked here exactly rather than by gh's --signer-workflow alone: this
     // workflow file, at the ref the receipt was produced from, at the receipt's own commit,
     // so the signer that ran is the revision reviewed with the code it certified.
-    const signer = `https://github.com/${RECEIPTS_WORKFLOW}@${cert.sourceRepositoryRef}`;
+    const signer = `https://github.com/${workflow}@${cert.sourceRepositoryRef}`;
     if (cert.buildSignerURI !== signer)
       problems.push(`signed by ${cert.buildSignerURI ?? "an unknown workflow"}, not ${signer}`);
     if (cert.buildSignerDigest !== receipt.build)

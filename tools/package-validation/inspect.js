@@ -1,6 +1,6 @@
 /**
  * Offline, static inspection of Windows/Linux release artifacts against an explicit
- * candidate manifest (#772). Plan and procedures: docs/preparation/windows-linux-release-artifacts/.
+ * candidate manifest (#772). Plan and procedures: docs/archive/preparation/windows-linux-release-artifacts/.
  *
  *   node tools/package-validation/inspect.js --candidate <manifest.json> --source <checkout> \
  *     --artifact <file> [--artifact <file> ...] [--allow-partial] [--out <report.json>]

@@ -69,11 +69,11 @@ it("loads the Noble 1.x blake2.js backend and agrees with an independent BLAKE2b
   const dir = await directory();
   const input = join(dir, "payload");
   const output = join(dir, "payload.blockmap");
-  const bytes = Buffer.from("ORCA blockmap fixture");
+  const bytes = Buffer.from("ORCA blockmap fixture"); // rename-keep: the known answer below is for these bytes
   await writeFile(input, bytes);
   const info = await buildBlockMap(input, "gzip", output);
   const map = JSON.parse(gunzipSync(await readFile(output)));
-  // CPython hashlib.blake2b(b"ORCA blockmap fixture", digest_size=18), base64 encoded.
+  // CPython hashlib.blake2b(b"ORCA blockmap fixture", digest_size=18), base64 encoded. rename-keep
   expect(map.files[0].checksums).toEqual(["eT9yupzwjTY9MkXzrgI56elk"]);
   expect(map.files[0].sizes).toEqual([bytes.length]);
   expect(info.sha512).toBe(createHash("sha512").update(bytes).digest("base64"));

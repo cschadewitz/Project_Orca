@@ -65,7 +65,7 @@ const scratch = mkdtempSync(join(values.scratch ? resolve(values.scratch) : tmpd
  * file (the artifact index). Anything else is not counted as a refusal.
  */
 const REFUSAL =
-  /protected execution record or key is missing, invalid or unreadable|EEXIST: file already exists, mkdir|ENOTDIR|EISDIR|is not iterable|orcaStore/;
+  /protected execution record or key is missing, invalid or unreadable|EEXIST: file already exists, mkdir|ENOTDIR|EISDIR|is not iterable|orcaStore/; // rename-keep: released builds print orcaStore
 /** A command the release does not have, or arguments it does not take: not a baseline. */
 const UNUSABLE = /unknown command|unknown flag|CONFIG_INVALID|EADDRINUSE/i;
 

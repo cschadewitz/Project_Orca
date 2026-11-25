@@ -4,7 +4,7 @@ The previous release carries the contract v0.6.0 shipped; the candidate carries 
 checkout's release-compatibility.json. No service, network, credential, operator store or
 real release pointer is touched: systemctl, health, the admission barrier and process
 inspection are recorders, and exec is patched. The rows are the M-rows of
-docs/preparation/store-compatibility-rehearsal/README.md.
+docs/archive/preparation/store-compatibility-rehearsal/README.md.
 
 ORCA_REHEARSAL_ADAPTER runs the same rows against another orca-release.py - for example the
 v0.6.0 blob (`git show v0.6.0:tools/deploy/orca-release.py`), which is the adapter an

@@ -25,7 +25,13 @@
 import { RINGS, isVersion, validateRings, versionFor } from "./rings.js";
 
 const CHANNEL = /^latest-(x64|arm64)\.yml$/;
-const PAYLOAD = /^ORCA-(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)-win-(x64|arm64)\.exe(?:\.blockmap)?$/;
+// The Orrery rename bridge: for one release a ring may still offer a version from before the
+// rename, so installers and server bundles are served under either name, and the servers' stop
+// is sent under both header names (old servers read the first, renamed ones the second).
+// rename-keep-start: both names on purpose
+const PAYLOAD = /^(?:ORCA|Orrery)-(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)-win-(x64|arm64)\.exe(?:\.blockmap)?$/;
+const SERVER_STOP = { "X-Orca-Feed-Stop": "servers", "X-Orrery-Feed-Stop": "servers" };
+// rename-keep-end
 /**
  * Architectures the feed can serve at all, matching `FEED_ARCHES` in feed-publish.yml;
  * anything else answers 404 even if the bucket holds it. Which of them one version serves is
@@ -38,7 +44,7 @@ const LEGACY_ARCHES = Object.freeze(["x64"]);
 const TOKEN = /^Bearer ([A-Za-z0-9_-]{32,256})$/;
 const SERVER_CHANNEL = "server/latest-linux-x64.yml";
 const SERVER_PAYLOAD =
-  /^server\/(orca-server-(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)-linux-x64\.(?:tar\.xz|manifest\.json|manifest\.json\.sigstore\.json))$/;
+  /^server\/((?:orca|orrery)-server-(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)-linux-x64\.(?:tar\.xz|manifest\.json|manifest\.json\.sigstore\.json))$/; // rename-keep: either name
 
 function respond(status, extra = {}, body = null) {
   return new Response(body, { status, headers: { "Cache-Control": "no-store", ...extra } });
@@ -213,7 +219,7 @@ export async function handle(request, env) {
     }
     // The servers' stop switch (#878): no server may activate anything, even a version it was
     // offered before; the updater only ever activates what a fresh channel file names.
-    if (rings?.serverStop === true) return respond(503, { "X-Orca-Feed-Stop": "servers", "Retry-After": "3600" });
+    if (rings?.serverStop === true) return respond(503, { ...SERVER_STOP, "Retry-After": "3600" });
     const version = rings && (await versionFor(rings, caller.ring, caller.hash, "server"));
     if (!version || !(await serverPublished(env.FEED, version))) return respond(404);
     return serve(env.FEED, `server/${version}/latest-linux-x64.yml`, name, request);

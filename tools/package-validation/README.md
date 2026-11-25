@@ -2,7 +2,7 @@
 
 Offline, static inspection of release artifacts against an explicit candidate manifest.
 The test plan, inputs and runtime procedures are in
-[docs/preparation/windows-linux-release-artifacts](../../docs/preparation/windows-linux-release-artifacts/README.md).
+[docs/archive/preparation/windows-linux-release-artifacts](../../docs/archive/preparation/windows-linux-release-artifacts/README.md).
 
 ```sh
 node tools/package-validation/inspect.js --candidate candidate.json --source <checkout-at-commit> \

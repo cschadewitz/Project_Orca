@@ -15,4 +15,4 @@ request or installed-provider discovery happens during the test.
 
 This witnesses irreversible presentation loss. It does not implement evidence
 validation, authenticate a native request, or prove installed/actual-Cal delivery.
-See the [decision proposal](../../../../docs/implementation/594-provider-evidence-contract.md).
+See the [decision proposal](../../../../docs/archive/implementation/594-provider-evidence-contract.md).

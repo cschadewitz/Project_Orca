@@ -19,6 +19,14 @@
     "docs/session-logs/**",
     "docs/v0.5.2-*",
     "examples/m10-plugin/candidate/**",
+    "tools/deploy/private-mcp-service/render-agent01.js",
+    "tools/deploy/private-mcp-service/orca-daemon.service.template",
+    "tools/deploy/private-mcp-service/orca-tunnel.service.template",
+    "tools/deploy/private-mcp-service/tunnel-profile.live-launcher.yaml.template",
+    "tools/deploy/test_agent01_*.py",
+    "tools/test/agent01-*.test.js",
+    "tools/test/private-candidate-onboarding.test.js",
+    "tools/guard-qualification/receipts/*.pre-rename",
     "examples/beta-first-job/template/**",
     "packages/app/test/fixtures/store-v*/**"
   ],
@@ -56,14 +64,18 @@
       "pattern": "secrets\\.ORCA_[A-Z0-9_]+",
       "reason": "Actions secret names stay until the next key rotation (values cannot be read back)"
     },
+    {
+      "pattern": "\\|\\| vars\\.ORCA_[A-Z0-9_]+",
+      "reason": "Workflows read `vars.ORRERY_X || vars.ORCA_X` for one release: the cutover copies the Actions variables (tools/rename/github.sh --settings) and v0.10.0 drops the legacy half"
+    },
     { "pattern": "ORCADP01", "reason": "Persisted DPAPI wrapper header on Windows diagnostics" },
     {
       "pattern": "(?<![A-Za-z])orca1(?![0-9])",
       "reason": "Daemon credential prefix orca1.<id>.<secret>; issued tokens live on remote machines"
     },
     {
-      "pattern": "[A-Za-z0-9+/]{20,}Orca[A-Za-z0-9+/=]*",
-      "reason": "Base64 fixture keys that merely contain the letters"
+      "pattern": "AAAAC3NzaC1lZDI1NTE5AAAAIOrcaServerKey(?:One|Two)0*(?![A-Za-z0-9+/=])",
+      "reason": "The two ed25519 host-key fixtures in packages/cli/test/remote-add.test.ts, whose base64 merely contains the letters"
     },
     {
       "pattern": "\"note\": \"targets not verified by ORCA\"",

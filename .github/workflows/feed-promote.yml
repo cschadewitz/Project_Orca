@@ -52,7 +52,7 @@ permissions:
 jobs:
   promote:
     name: promote ${{ inputs.channel }} ${{ inputs.version }} in ${{ inputs.ring }}
-    if: github.ref == 'refs/heads/main' && vars.ORCA_FEED_BUCKET != ''
+    if: github.ref == 'refs/heads/main' && (vars.ORRERY_FEED_BUCKET || vars.ORCA_FEED_BUCKET) != ''
     runs-on: ubuntu-24.04
     environment: desktop-feed
     steps:
@@ -61,7 +61,7 @@ jobs:
       # halting is how a bad rollout is stopped; nothing can be offered to anyone.
       - name: Refuse while the feed is paused
         env:
-          PAUSE: ${{ vars.ORCA_FEED_PAUSE }}
+          PAUSE: ${{ vars.ORRERY_FEED_PAUSE || vars.ORCA_FEED_PAUSE }}
           PERCENT: ${{ inputs.percent }}
         run: |
           if [ "$PAUSE" = "true" ] && [ "$PERCENT" != "0" ]; then
@@ -81,8 +81,8 @@ jobs:
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.ORCA_FEED_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.ORCA_FEED_SECRET_ACCESS_KEY }}
-          FEED_ACCOUNT_ID: ${{ vars.ORCA_FEED_ACCOUNT_ID }}
-          FEED_BUCKET: ${{ vars.ORCA_FEED_BUCKET }}
+          FEED_ACCOUNT_ID: ${{ vars.ORRERY_FEED_ACCOUNT_ID || vars.ORCA_FEED_ACCOUNT_ID }}
+          FEED_BUCKET: ${{ vars.ORRERY_FEED_BUCKET || vars.ORCA_FEED_BUCKET }}
           RING: ${{ inputs.ring }}
           VERSION: ${{ inputs.version }}
           PERCENT: ${{ inputs.percent }}

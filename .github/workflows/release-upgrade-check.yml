@@ -153,7 +153,7 @@ jobs:
       - name: Both installers are the expected bytes, validly signed by the publisher
         shell: pwsh
         env:
-          EXPECTED: ${{ vars.ORCA_FEED_PUBLISHER_CN }}
+          EXPECTED: ${{ vars.ORRERY_FEED_PUBLISHER_CN || vars.ORCA_FEED_PUBLISHER_CN }}
           EXE: ${{ needs.target.outputs.exe }}
           FROM_EXE: ${{ needs.target.outputs.from_exe }}
         run: |
@@ -244,7 +244,7 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-          EXPECTED: ${{ vars.ORCA_FEED_PUBLISHER_CN }}
+          EXPECTED: ${{ vars.ORRERY_FEED_PUBLISHER_CN || vars.ORCA_FEED_PUBLISHER_CN }}
         run: |
           $ErrorActionPreference = 'Stop'
           $tag = gh release view --repo $env:GITHUB_REPOSITORY --json tagName --jq .tagName

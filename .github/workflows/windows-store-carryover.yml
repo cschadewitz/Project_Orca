@@ -100,7 +100,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $name = 'orcaprobe'
+          $name = 'orca_probe'
           $bytes = [byte[]]::new(24); [System.Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
           $plain = 'Aa1!' + [Convert]::ToBase64String($bytes)
           $secret = ConvertTo-SecureString $plain -AsPlainText -Force

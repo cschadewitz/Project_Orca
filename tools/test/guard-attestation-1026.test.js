@@ -11,9 +11,11 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   RECEIPTS_WORKFLOW,
+  REPOSITORIES,
   REPOSITORY,
   attestationProblems,
   bundlePathFor,
+  preRenamePathFor,
   staleProblems,
 } from "../guard-qualification/attestation.js";
 import { REPO_ROOT, releaseProblems } from "../guard-qualification/check-support-matrix.js";
@@ -63,6 +65,52 @@ describe("a receipt counts only when its attestation verifies", () => {
     expect(flag("--signer-workflow")).toBe(RECEIPTS_WORKFLOW);
     expect(flag("--source-digest")).toBe(build);
     expect(seen).toContain("--deny-self-hosted-runners");
+  });
+
+  it("keeps a receipt attested before the Orrery rename counting, under the old name's own signer", () => {
+    // rename-keep-start: the identity receipts from before the rename carry
+    const legacy = "cschadewitz/Project_Orca";
+    const signer = `https://github.com/${legacy}/.github/workflows/guard-receipts.yml@refs/heads/main`;
+    // rename-keep-end
+    expect(REPOSITORIES[0]).toBe(REPOSITORY);
+    expect(REPOSITORIES).toContain(legacy);
+    const asked = [];
+    const old = (args) => {
+      if (args[0] === "--version") return "gh version 2.102.0";
+      const repository = args[args.indexOf("--repo") + 1];
+      asked.push(repository);
+      if (repository !== legacy) throw Object.assign(new Error("exit 1"), { stderr: "✗ Verification failed" });
+      expect(args[args.indexOf("--signer-workflow") + 1]).toBe(`${legacy}/.github/workflows/guard-receipts.yml`);
+      return gh(certificate({ buildSignerURI: signer }))(args);
+    };
+    expect(attestationProblems(repo(), file, receipt, old)).toEqual([]);
+    expect(asked).toEqual([...new Set([REPOSITORY, legacy])]);
+    // The old name's signer is not accepted for a certificate verified under the current name.
+    if (REPOSITORY !== legacy)
+      expect(attestationProblems(repo(), file, receipt, gh(certificate({ buildSignerURI: signer })))[0]).toMatch(
+        /^signed by/,
+      );
+  });
+
+  it("verifies a receipt the rename rewrote on its attested bytes, and only when it is exactly their rename", () => {
+    // rename-keep-start: the receipt as attested before the rename
+    const original = JSON.stringify({ ...receipt, note: "ORCA ran this" });
+    const renamed = original.replace("ORCA ran", "Orrery ran").replace("orca-enforcement", "orrery-enforcement");
+    // rename-keep-end
+    const root = repo();
+    writeFileSync(join(root, file), renamed);
+    writeFileSync(join(root, preRenamePathFor(file)), original);
+    let seen;
+    const problems = attestationProblems(root, file, receipt, (args) => {
+      if (args[0] !== "--version") seen = args;
+      return gh(certificate())(args);
+    });
+    expect(problems).toEqual([]);
+    expect(seen[2]).toBe(join(root, preRenamePathFor(file)));
+    writeFileSync(join(root, file), renamed.replace("ran", "edited"));
+    expect(attestationProblems(root, file, receipt, gh(certificate()))).toEqual([
+      `${file} is not the rename of its attested ${preRenamePathFor(file)}`,
+    ]);
   });
 
   it("accepts a release line as well as main", () => {

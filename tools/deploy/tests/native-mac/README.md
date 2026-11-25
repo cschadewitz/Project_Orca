@@ -48,8 +48,8 @@ no production switch, unsigned fallback or promotion output.
 
 The original baseline is `e94bf699d9f3000de8822ed3434c1dce92b6ce19`, reconciled with
 main at `94a02bd3f5421991f4a8b7a5c6f352151dc5fbbb`. The field names and
-semantics come exclusively from the [delivery v1 artifact contract](../../../../docs/preparation/native-mac-delivery/artifact-contract.md).
-The [testing fixture contract](../../../../docs/preparation/native-mac-testing/fixture-contracts.md)
+semantics come exclusively from the [delivery v1 artifact contract](../../../../docs/archive/preparation/native-mac-delivery/artifact-contract.md).
+The [testing fixture contract](../../../../docs/archive/preparation/native-mac-testing/fixture-contracts.md)
 supplies negative cases. There is no second delivery manifest or extension field.
 The separate `--fixture-app` input is a test-side observation, not a manifest field.
 

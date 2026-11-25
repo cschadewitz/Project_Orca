@@ -25,4 +25,4 @@ mapping. Do not enable unused-patch allowances merely to make an upgrade install
 1.8.0 patch targeted `dist/jsonrpc.js`; it was ported to 2.8.0 when the SDK moved to 2.x
 (replacing Dependabot PR #799).
 
-Evidence and limits: [8 November investigation](../docs/reviews/2026-11-08-acp-diagnostic-privacy.md).
+Evidence and limits: [8 November investigation](../docs/archive/reviews/2026-11-08-acp-diagnostic-privacy.md).

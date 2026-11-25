@@ -52,7 +52,8 @@ jobs:
           # Check curl's own status: a timeout after partial output must not count
           # No health URL configured counts as zero idle runners, like any other failure
           if [[ "$FORCE_HOSTED" != "true" && -n "$HEALTH_URL" ]] && body=$(curl -fsS --max-time 5 "$HEALTH_URL"); then
-            idle=$(jq -r '.Project_Orca // 0' <<<"$body" 2>/dev/null) || idle=0
+            # The health endpoint keys idle runners by repository name: either side of the rename.
+            idle=$(jq -r '.Orrery // .Project_Orca // 0' <<<"$body" 2>/dev/null) || idle=0 # rename-keep: both names
           fi
           [[ "$idle" =~ ^[0-9]+$ ]] || idle=0
           if (( idle > 0 )); then

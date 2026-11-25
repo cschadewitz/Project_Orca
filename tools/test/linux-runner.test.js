@@ -19,6 +19,12 @@ describe("chooseLinuxRunner", () => {
     expect(chooseLinuxRunner({ body }).runner).toBe(HOSTED);
   });
 
+  it("reads the count under either side of the Orrery rename", () => {
+    const current = "Project_Orca";
+    expect(chooseLinuxRunner({ body: { [current]: 2 } }).runner).toEqual(TYLER);
+    expect(chooseLinuxRunner({ body: { Project_Orca: 2 } }).runner).toEqual(TYLER); // rename-keep: the legacy key
+  });
+
   it("CI_FORCE_HOSTED wins over idle runners", () => {
     expect(chooseLinuxRunner({ forceHosted: true, body: { Project_Orca: 5 } }).runner).toBe(HOSTED);
   });

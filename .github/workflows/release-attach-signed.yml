@@ -95,7 +95,7 @@ jobs:
         if: steps.find.outputs.id != ''
         shell: pwsh
         env:
-          EXPECTED: ${{ vars.ORCA_FEED_PUBLISHER_CN }}
+          EXPECTED: ${{ vars.ORRERY_FEED_PUBLISHER_CN || vars.ORCA_FEED_PUBLISHER_CN }}
           VERSION: ${{ steps.find.outputs.version }}
         run: |
           $ErrorActionPreference = 'Stop'
@@ -171,7 +171,7 @@ jobs:
     name: re-dispatch attachments still missing
     if: >-
       github.ref == 'refs/heads/main' &&
-      ((github.event_name == 'schedule' && vars.ORCA_RELEASE_AUTO_SIGN == 'true') ||
+      ((github.event_name == 'schedule' && (vars.ORRERY_RELEASE_AUTO_SIGN || vars.ORCA_RELEASE_AUTO_SIGN) == 'true') ||
        (github.event_name == 'workflow_dispatch' && inputs.signed_run_id == ''))
     runs-on: ubuntu-24.04
     concurrency:

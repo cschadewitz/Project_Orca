@@ -48,7 +48,7 @@ export const PROBES = Object.freeze([
   }),
   Object.freeze({
     name: "malformed-fixture",
-    authorization: "Bearer orca-negative-fixture-392-not-a-credential",
+    authorization: "Bearer orca-negative-fixture-392-not-a-credential", // rename-keep: the prepared packet in docs/preparation (not renamed) names this exact fixture
     expect: Object.freeze({ code: "AUTH_INVALID", auditReason: "malformed" }),
   }),
   Object.freeze({

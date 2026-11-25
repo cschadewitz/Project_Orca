@@ -8,6 +8,7 @@ import { classifyCollection, collect, main } from "../claude-704-readiness/colle
 import {
   loadMergedClassifier,
   MERGED_REGION_SHA256,
+  RENAMED_REGION_SHA256,
   mergedRegions,
 } from "../claude-704-readiness/merged-classifier.mjs";
 
@@ -175,8 +176,9 @@ const at = (inv, kind) => (event) => event.inv === inv && event.kind === kind;
 describe("reuse of the merged completion classifier", () => {
   it("runs the merged regions unchanged, pinned by SHA-256", () => {
     const regions = mergedRegions();
-    expect(Object.fromEntries(Object.entries(regions).map(([name, { sha256 }]) => [name, sha256]))).toEqual(
-      MERGED_REGION_SHA256,
+    // The merged digests, or the same regions after the Orrery rename.
+    expect([MERGED_REGION_SHA256, RENAMED_REGION_SHA256]).toContainEqual(
+      Object.fromEntries(Object.entries(regions).map(([name, { sha256 }]) => [name, sha256])),
     );
     expect(regions.classifier.source).toContain("function classifyExperiment(record, manifest");
     expect(regions.classifier.source).toContain('incomplete.add("post-revocation-not-blocked-at-guard")');
@@ -184,9 +186,8 @@ describe("reuse of the merged completion classifier", () => {
   });
 
   it("refuses to load when the merged classifier no longer matches its pin", () => {
-    expect(() => loadMergedClassifier({ pins: { ...MERGED_REGION_SHA256, classifier: "0".repeat(64) } })).toThrow(
-      /changed .*review it and update the pin/,
-    );
+    const zero = { ...MERGED_REGION_SHA256, classifier: "0".repeat(64) };
+    expect(() => loadMergedClassifier({ pins: zero, renamed: zero })).toThrow(/changed .*review it and update the pin/);
   });
 
   it("still classifies the committed installed record as NO-EVIDENCE", () => {

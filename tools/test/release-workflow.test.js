@@ -193,7 +193,7 @@ it("signs a final's commit right after staging its draft, and only a final", () 
   const sign = workflow("release-publish.yml").jobs.sign;
   expect(sign.needs).toEqual(["check", "publish"]);
   expect(sign.if).toBe(
-    "${{ !inputs.dry_run && !contains(needs.check.outputs.version, '-') && vars.ORCA_RELEASE_AUTO_SIGN == 'true' }}",
+    "${{ !inputs.dry_run && !contains(needs.check.outputs.version, '-') && (vars.ORRERY_RELEASE_AUTO_SIGN || vars.ORCA_RELEASE_AUTO_SIGN) == 'true' }}",
   );
   expect(sign.steps.some((s) => s.uses)).toBe(false);
   expect(sign.steps[0].run).toContain(
@@ -210,7 +210,9 @@ it("attaches only re-verified signed x64 and arm64 installers, through the re-va
   expect(text).not.toMatch(/^\s+workflow_run:/m);
   const handOff = workflow("windows-signed.yml").jobs["hand-off"];
   expect(handOff.needs).toEqual(["resolve", "sign"]);
-  expect(handOff.if).toBe("github.ref == 'refs/heads/main' && vars.ORCA_RELEASE_AUTO_SIGN == 'true'");
+  expect(handOff.if).toBe(
+    "github.ref == 'refs/heads/main' && (vars.ORRERY_RELEASE_AUTO_SIGN || vars.ORCA_RELEASE_AUTO_SIGN) == 'true'",
+  );
   expect(handOff.permissions).toEqual({ actions: "write" });
   // A failed dispatch never fails the signing run, so select and reconcile still accept it.
   expect(handOff["continue-on-error"]).toBe(true);
@@ -250,7 +252,9 @@ it("attaches only re-verified signed x64 and arm64 installers, through the re-va
   expect(accept.steps[0].run).toContain(
     'gh workflow run release-accept-arm64.yml --repo "$GITHUB_REPOSITORY" --ref main -f release_id="$ID"',
   );
-  expect(wf.jobs.reconcile.if).toContain("github.event_name == 'schedule' && vars.ORCA_RELEASE_AUTO_SIGN == 'true'");
+  expect(wf.jobs.reconcile.if).toContain(
+    "github.event_name == 'schedule' && (vars.ORRERY_RELEASE_AUTO_SIGN || vars.ORCA_RELEASE_AUTO_SIGN) == 'true'",
+  );
   const steps = wf.jobs.attach.steps.map((s) => s.name ?? s.uses);
   const verify = steps.indexOf("Verify both installers' signatures, timestamps and publisher");
   const attachStep = steps.findIndex((n) => n?.startsWith("Attach it to the draft by id"));

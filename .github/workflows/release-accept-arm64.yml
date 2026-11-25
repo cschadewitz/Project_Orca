@@ -138,7 +138,7 @@ jobs:
     env:
       VERSION: ${{ needs.select.outputs.version }}
       PREVIOUS: ${{ needs.select.outputs.previous }}
-      EXPECTED: ${{ vars.ORCA_FEED_PUBLISHER_CN }}
+      EXPECTED: ${{ vars.ORRERY_FEED_PUBLISHER_CN || vars.ORCA_FEED_PUBLISHER_CN }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

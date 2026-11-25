@@ -1,6 +1,6 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   compareVersions,
   isDebInstall,
@@ -8,7 +8,9 @@ import {
   newerRelease,
   parseVersion,
   releasesUrl,
+  releasesUrls,
   RELEASES_URL,
+  RELEASES_URLS,
   type ReleaseWatchOptions,
 } from "../src/main/linux-release-notice.js";
 
@@ -231,3 +233,61 @@ it("refuses to follow a redirect, so a hop cannot move the check off the allowed
     server.close();
   }
 });
+
+// The Orrery rename bridge (v0.8.1). rename-keep-start: both names on purpose
+describe("across the Orrery rename", () => {
+  const renamed = (tag: string) => {
+    const version = tag.replace(/^v/, "");
+    return { tag_name: tag, draft: false, prerelease: false, assets: [{ name: `Orrery-${version}-linux-amd64.deb` }] };
+  };
+
+  it("offers a release whose package carries either name", () => {
+    expect(newerRelease([renamed("v0.9.0")], "0.8.1", "x64", {})?.installCommand).toBe(
+      "sudo apt install ./Orrery-0.9.0-linux-amd64.deb",
+    );
+    expect(newerRelease([release("v0.8.2")], "0.8.1", "x64", {})?.installCommand).toBe(
+      "sudo apt install ./ORCA-0.8.2-linux-amd64.deb",
+    );
+    expect(newerRelease([renamed("v0.9.0")], "0.8.1", "arm64", {})).toBeUndefined();
+    const other = { ...renamed("v0.9.0"), assets: [{ name: "Kepler-0.9.0-linux-amd64.deb" }] };
+    expect(newerRelease([other], "0.8.1", "x64", {})).toBeUndefined();
+  });
+
+  it("asks both repositories, and nothing else", () => {
+    expect(new Set(RELEASES_URLS)).toEqual(
+      new Set([
+        "https://api.github.com/repos/cschadewitz/Project_Orca/releases?per_page=30",
+        "https://api.github.com/repos/cschadewitz/Orrery/releases?per_page=30",
+      ]),
+    );
+    expect(RELEASES_URLS[0]).toBe(RELEASES_URL);
+    expect(releasesUrls({})).toEqual(RELEASES_URLS);
+    expect(releasesUrls({ ORCA_RELEASES_URL: "http://127.0.0.1:1/r" })).toEqual(["http://127.0.0.1:1/r"]);
+    expect(releasesUrls({ ORCA_RELEASES_URL: "http://mirror.example/r" })).toEqual([]);
+  });
+
+  it("falls through to the other repository when the first refuses or redirects, and links the one that answered", async () => {
+    for (const refusal of [
+      () => Promise.reject(new TypeError("fetch failed: redirect mode is set to error")),
+      () => Promise.resolve({ ok: false, json: () => Promise.reject(new Error("404")) }),
+    ]) {
+      const fetch = fakeFetch((url) => (url === RELEASES_URLS[0] ? refusal() : ok([renamed("v0.9.0")])));
+      const { w } = watch(fetch);
+      await w.check();
+      expect(fetch.mock.calls.map((call) => call[0])).toEqual(RELEASES_URLS);
+      const second = RELEASES_URLS[1]!
+        .replace("https://api.github.com/repos/", "")
+        .replace("/releases?per_page=30", "");
+      expect(w.notice?.releaseUrl).toBe(`https://github.com/${second}/releases/tag/v0.9.0`);
+    }
+  });
+
+  it("stays silent when neither repository answers", async () => {
+    const fetch = fakeFetch(() => Promise.reject(new TypeError("fetch failed")));
+    const { w, changed } = watch(fetch);
+    await w.check();
+    expect(fetch).toHaveBeenCalledTimes(RELEASES_URLS.length);
+    expect(changed).not.toHaveBeenCalled();
+  });
+});
+// rename-keep-end

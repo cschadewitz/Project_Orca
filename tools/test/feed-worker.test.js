@@ -154,6 +154,22 @@ describe("channel resolution", () => {
 });
 
 describe("payload files", () => {
+  it("serves installers under either side of the Orrery rename, and no other name", async () => {
+    // rename-keep-start: both names on purpose
+    const e = env(RINGS, {
+      "0.7.0/ORCA-0.7.0-win-x64.exe": "0123456789",
+      "0.7.0/Orrery-0.7.0-win-x64.exe": "renamed!!!",
+      "0.7.0/Kepler-0.7.0-win-x64.exe": "other",
+    });
+    for (const [path, body] of [
+      ["/ORCA-0.7.0-win-x64.exe", "0123456789"],
+      ["/Orrery-0.7.0-win-x64.exe", "renamed!!!"],
+    ])
+      expect(await (await handle(get(path, { token: TOKENS.stable }), e)).text()).toBe(body);
+    expect((await handle(get("/Kepler-0.7.0-win-x64.exe", { token: TOKENS.stable }), e)).status).toBe(404);
+    // rename-keep-end
+  });
+
   it("serves installers and old blockmaps by the version in their name, with HEAD", async () => {
     const e = env(RINGS);
     const whole = await handle(get("/ORCA-0.7.0-win-x64.exe", { token: TOKENS.stable }), e);
@@ -511,7 +527,9 @@ describe("server bundle channel (#877)", () => {
     for (const token of [TOKENS.internal, TOKENS.preview, TOKENS.stable, SERVER_TOKEN]) {
       const response = await handle(get("/server/latest-linux-x64.yml", { token }), e);
       expect(response.status).toBe(503);
-      expect(response.headers.get("X-Orca-Feed-Stop")).toBe("servers");
+      // Both names, for one release: servers on either side of the Orrery rename stop.
+      expect(response.headers.get("X-Orca-Feed-Stop")).toBe("servers"); // rename-keep: the old name, on purpose
+      expect(response.headers.get("X-Orrery-Feed-Stop")).toBe("servers");
       expect(response.headers.get("Retry-After")).toBe("3600");
     }
     // Still only for authenticated callers, and the desktop channel is untouched.

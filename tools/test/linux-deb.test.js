@@ -59,6 +59,11 @@ it("has the Debian control fields fpm requires, under a lowercase package name",
   // so apt would take this for a version of it. Nor a declared relationship with it.
   expect(config.deb.packageName).toBe("orca-desktop");
   for (const key of ["conflicts", "replaces", "provides", "breaks"]) expect(config.deb[key]).toBeUndefined();
+  // Across the rename the package replaces and conflicts with the v0.8 package, and nothing
+  // else (#1091 adds it; until then there is no fpm option at all).
+  const PRE_RENAME_PACKAGE = "orca-desktop"; // rename-keep: the package name up to v0.8
+  if (config.deb.fpm !== undefined)
+    expect(config.deb.fpm).toEqual([`--replaces=${PRE_RENAME_PACKAGE}`, `--conflicts=${PRE_RENAME_PACKAGE}`]);
   expect(config.deb.maintainer).toBeTruthy();
   expect(metadata.homepage).toMatch(/^https:\/\//);
   // The install path the builder's scripts and profile name, and the binary a tester runs.

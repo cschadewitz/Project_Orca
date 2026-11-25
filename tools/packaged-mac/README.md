@@ -44,12 +44,12 @@ packaged executable and record actual app/daemon architecture and production
 bootstrap. If more GUI context is required, identify and review that exact need;
 do not spread the parent environment. This module deliberately does not freeze
 first-run UI, profile arguments, runtime endpoints, agent support or automation
-fuse/entitlement decisions. Those remain in the [existing harness design](../../docs/preparation/native-mac-testing/harness-design.md).
+fuse/entitlement decisions. Those remain in the [existing harness design](../../docs/archive/preparation/native-mac-testing/harness-design.md).
 
 Tests use mocked native system observations and disposable environment canaries.
 They are source evidence only. The CLI's Linux blocker is an actual local result;
 all synthetic macOS versions/builds are invented, not supported-matrix evidence.
-See the [current readiness ledger](../../docs/preparation/native-mac-beta-readiness/readiness.md)
+See the [current readiness ledger](../../docs/archive/preparation/native-mac-beta-readiness/readiness.md)
 for owner-required native gates.
 
 ## Source-bound staging plan
@@ -78,13 +78,13 @@ use each exact vector from the repository root after authorization. Do not conca
 untrusted values into shell commands. The staging package is not for invited-user
 distribution or Gatekeeper acceptance. For signing sequence, native read-only checks,
 both format oracles and Casey's timed action list, use the
-[candidate execution packet](../../docs/preparation/native-mac-beta-readiness/candidate-execution.md).
+[candidate execution packet](../../docs/archive/preparation/native-mac-beta-readiness/candidate-execution.md).
 
 ## Bounded acceptance command packet
 
 `node tools/packaged-mac/acceptance-packet.js --source-commit <full-clean-SHA>`
 plus the seven explicit local path selections documented in the
-[acceptance runbook](../../docs/preparation/native-mac-beta-readiness/acceptance-runbook.md)
+[acceptance runbook](../../docs/archive/preparation/native-mac-beta-readiness/acceptance-runbook.md)
 generates command vectors only. It reuses the source/staging policy and minimal app
 environment; it does not read artifacts, credentials or ambient environment, run
 native commands, launch an app, extract containers or publish anything. CLI execution/
