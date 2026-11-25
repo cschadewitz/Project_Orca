@@ -77,6 +77,8 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
+          # No automatic npm cache detected from the checked-out package.json (it may be a rehearsed ref's).
+          package-manager-cache: false
       # Linux packaging runs GitHub-hosted for now: Tyler's hosts run out of disk building the
       # x64 and arm64 archives (ENOSPC on tyler-1/2/3, Nov 2026). To go back to Tyler's runners
       # when one is idle (tools/linux-runner.js), restore
@@ -122,6 +124,8 @@ jobs:
           # One version: this is about producing an artifact, not about Node support.
           # `mise.toml` pins 24, so that is what a developer reproduces locally.
           node-version: 24
+          # No automatic npm cache detected from the checked-out package.json (it may be a rehearsed ref's).
+          package-manager-cache: false
           # Off for a caller that builds an untrusted ref (see the `caches` input).
           cache: ${{ inputs.caches != false && 'pnpm' || '' }}
 

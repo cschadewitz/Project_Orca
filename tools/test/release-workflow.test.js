@@ -570,4 +570,15 @@ it("restores and saves no Actions cache while rehearsing an arbitrary ref, in an
       }
     expect(setups, name).toBeGreaterThan(0);
   }
+  // An empty `cache` lets setup-node detect npm from the checked-out package.json and cache it,
+  // so every setup-node in verify and both callees turns that off explicitly.
+  const setupsIn = (jobs) =>
+    Object.values(jobs).flatMap(({ steps = [] }) => steps.filter((s) => s.uses?.startsWith("actions/setup-node@")));
+  const all = [
+    ...setupsIn({ verify: file.jobs.verify }),
+    ...setupsIn(workflow("desktop.yml").jobs),
+    ...setupsIn(workflow("app-smoke.yml").jobs),
+  ];
+  expect(all.length).toBeGreaterThanOrEqual(6);
+  for (const step of all) expect(step.with["package-manager-cache"]).toBe(false);
 });
