@@ -634,6 +634,29 @@ it("observes an actively leased boundary but surfaces unexpected store failures"
   expect(await f.http("inputs.list", { runId: "owned" })).toMatchObject({ ok: false, error: { code: "STORE_WRITE" } });
 });
 
+it("observes a busy run again, and reports one that never settles as an omission, not a failure (#1213)", async () => {
+  const f = await fixture();
+  const moved = () =>
+    new OrcaError("RUN_STATE", "Event observation history changed", { reason: "observation-changed" });
+  // Twice moved under the read, then still: the third observation answers.
+  f.readBoundaries.mockRejectedValueOnce(moved()).mockRejectedValueOnce(moved());
+  const settled = InputsListResultSchema.parse(result(await f.http("inputs.list", { runId: "owned" })));
+  expect(settled.inputs[0]?.revision?.target).toEqual(f.boundary.target);
+  expect(settled.pendingRevisions).toMatchObject({ incomplete: false });
+
+  // Never still: the row keeps no revision enrichment and discovery names the run as omitted.
+  f.readBoundaries.mockRejectedValue(moved());
+  try {
+    const busy = InputsListResultSchema.parse(result(await f.http("inputs.list", { runId: "owned" })));
+    expect(busy.inputs).toHaveLength(1);
+    expect(busy.inputs[0]).not.toHaveProperty("revision");
+    expect(busy.pendingRevisions).toMatchObject({ incomplete: true });
+  } finally {
+    f.readBoundaries.mockReset();
+    f.readBoundaries.mockImplementation((runId: string) => f.adapter.readBoundaries(runId));
+  }
+});
+
 it("rechecks the original credential after a protected boundary read", async () => {
   const f = await fixture();
   f.readBoundaries.mockImplementationOnce(async (runId) => {

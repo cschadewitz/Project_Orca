@@ -207,7 +207,7 @@ export class InMemoryEventStore extends BaseEventStore {
       events,
       verifyUnchanged: async () => {
         if (digest(this.observationEvents(runId, bounds)) !== expected)
-          throw new OrcaError("RUN_STATE", "Event observation history changed");
+          throw new OrcaError("RUN_STATE", "Event observation history changed", { reason: "observation-changed" });
       },
     };
   }

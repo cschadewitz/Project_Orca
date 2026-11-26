@@ -377,7 +377,10 @@ export class DaemonSubscription {
        compares `undefined` with `undefined` and passes, which would fold `undefined` into
        the cursor the moment a cursor-less notification arrived. */
     const { runId, seq } = notification.params as { runId?: string; seq?: number };
-    if (runId === this.opts.params.runId && typeof seq === "number") {
+    // And only on a subscription that has a run: `plan.changed` carries the *plan journal's*
+    // seq and no `runId`, which on a store-wide stream compared undefined with undefined and
+    // put a plan sequence number in the status bar as "event 79" (#1213).
+    if (this.opts.params.runId !== undefined && runId === this.opts.params.runId && typeof seq === "number") {
       this.cursor = this.cursor === undefined ? seq : Math.max(this.cursor, seq);
     }
     this.opts.onNotification(notification);
