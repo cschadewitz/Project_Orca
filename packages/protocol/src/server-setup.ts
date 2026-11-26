@@ -74,7 +74,10 @@ export function setupCommand(
   version: string,
   port: number,
   confirmed: ConfirmedServer,
-  /** A directory on the server holding the bundle the client pushed (#1234), for a host with no internet access. */
+  /**
+   * A directory on the server holding the bundle the client carried (#1234), with the pinned
+   * cosign and trusted root, for a host with no internet access: an offline stage.
+   */
   bundleDir?: string,
 ): string[] {
   if (bundleDir !== undefined && (!SERVER_DIR.test(bundleDir) || bundleDir.split("/").includes("..")))
@@ -98,7 +101,8 @@ export function setupCommand(
     confirmed.root,
     "--expect-current",
     confirmed.current ?? "none",
-    ...(bundleDir !== undefined ? ["--bundle", bundleDir] : []),
+    // Only the courier passes a directory, and it carries cosign and the pinned trusted root too.
+    ...(bundleDir !== undefined ? ["--bundle", bundleDir, "--offline-bundle"] : []),
   ];
 }
 

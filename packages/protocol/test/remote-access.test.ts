@@ -1349,7 +1349,9 @@ describe("tailnet profiles and login approval (#1226, #1228)", () => {
 
   it.each([
     ["# To authenticate, visit: https://login.tailscale.com/a/l1a2b3c4", "https://login.tailscale.com/a/l1a2b3c4"],
-    ["To authenticate, visit: https://headscale.example.org/check/abc\r", "https://headscale.example.org/check/abc"],
+    // Any server can print a banner: a page anywhere but the control plane is not an approval link.
+    ["To authenticate, visit: https://headscale.example.org/check/abc\r", undefined],
+    ["# To authenticate, visit: https://login.tailscale.com.evil.example/a/x", undefined],
     ["# To authenticate, visit: http://login.tailscale.com/a/x", undefined],
     ["# To authenticate, visit: https://user:pw@login.tailscale.com/a/x", undefined],
     ["# To authenticate, visit: javascript:alert(1)", undefined],
@@ -1357,6 +1359,12 @@ describe("tailnet profiles and login approval (#1226, #1228)", () => {
     ["# Tailscale SSH requires an additional check.", undefined],
   ])("reads the approval link in %j", (line, url) => {
     expect(loginApprovalUrl(line.replace(/\r$/, ""))).toBe(url);
+  });
+
+  it("takes another control plane's page only by explicit policy", () => {
+    const line = "# To authenticate, visit: https://headscale.example.org/check/abc";
+    expect(loginApprovalUrl(line, ["https://headscale.example.org"])).toBe("https://headscale.example.org/check/abc");
+    expect(loginApprovalUrl(line, ["https://headscale.example.org:8443"])).toBeUndefined();
   });
 
   it("shows a check-mode approval link and waits for it past the ordinary timeout", async () => {
@@ -1385,5 +1393,16 @@ describe("tailnet profiles and login approval (#1226, #1228)", () => {
       readyTimeoutMs: 20,
     });
     await expect(unasked.tunnel.open()).rejects.toMatchObject({ code: "timeout" });
+  });
+
+  it("passes on no link from a server whose banner names another origin, and keeps the ordinary timeout", async () => {
+    const links: string[] = [];
+    const spoof = fakeTunnel((ssh) => ssh.say("# To authenticate, visit: https://phish.example/a/l1a2b3c4"), {
+      readyTimeoutMs: 20,
+      approvalTimeoutMs: 1_000,
+      onLoginApproval: (url: string) => links.push(url),
+    });
+    await expect(spoof.tunnel.open()).rejects.toMatchObject({ code: "timeout" });
+    expect(links).toEqual([]);
   });
 });

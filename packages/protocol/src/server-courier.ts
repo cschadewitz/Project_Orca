@@ -17,7 +17,7 @@
  *
  * Behind the incubating `tailnet-hosts` flag: nothing calls it while the flag is off.
  */
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import {
   createReadStream,
   existsSync,
@@ -40,6 +40,14 @@ export const COSIGN_PINS: Readonly<Record<string, { name: string; sha256: string
 };
 /** Must match `PUSHED_TRUSTED_ROOT` in tools/deploy/orca-release.py. */
 export const TRUSTED_ROOT_FILE = "trusted_root.json";
+/**
+ * The Sigstore trusted roots this release carries, by sha256: the host trusts a carried root only
+ * by this pin (`TRUSTED_ROOT_SHA256` in tools/deploy/orca-release.py, which must match), so the
+ * client refuses to carry any other. A release adds the digest of a new root Sigstore publishes.
+ */
+export const TRUSTED_ROOT_PINS: readonly string[] = [
+  "6494e21ea73fa7ee769f85f57d5a3e6a08725eae1e38c755fc3517c9e6bc0b66",
+];
 /** Sigstore's public-good TUF repository, which cosign itself reads. */
 export const SIGSTORE_TUF = "https://tuf-repo-cdn.sigstore.dev";
 
@@ -229,6 +237,11 @@ async function trustedRootFile(cacheDir: string, get: CourierFetch): Promise<Cou
   const length = at(target, "length");
   if (typeof digest !== "string" || !SHA256.test(digest) || typeof length !== "number" || length > LIMITS.trustedRoot)
     throw new CourierRefused("Sigstore's targets do not describe a trusted root");
+  // The host would refuse any other: say so here, before anything is carried.
+  if (!TRUSTED_ROOT_PINS.includes(digest))
+    throw new CourierRefused(
+      "Sigstore lists a trusted root this version of ORCA does not pin yet. Update ORCA, or set the machine up with internet access.",
+    );
   const file = await cached(join(cacheDir, "sigstore"), TRUSTED_ROOT_FILE, digest, async () => {
     const data = await get(`${SIGSTORE_TUF}/targets/${digest}.${TRUSTED_ROOT_FILE}`, LIMITS.trustedRoot);
     if (data.length !== length) throw new CourierRefused("Sigstore's trusted root is not the listed length");
@@ -261,8 +274,22 @@ export async function prepareCourier(options: PrepareCourierOptions): Promise<Co
   return { version: options.version, files: [...bundle, cosign, root] };
 }
 
-/** A scratch directory `mktemp -d` printed on the host: `/tmp/tmp.XXXXXXXXXX` or under `$TMPDIR`. */
-const SCRATCH = /^\/[A-Za-z0-9._/-]{1,200}$/;
+/**
+ * The parent of every directory the courier makes on a host, relative to the account's home
+ * (ssh runs remote commands there). Each push makes a new child with a name only this computer
+ * chose, so the courier only ever writes into, and removes, a directory it created.
+ */
+export const COURIER_PARENT = ".cache/orca-courier";
+/** An absolute path on the host, as `realpath` prints one, in characters that are one remote word. */
+const ABSOLUTE = /^\/[A-Za-z0-9._/-]{1,400}$/;
+
+/** A directory a push made on the host: its path from the home, and the same path resolved. */
+export interface CourierScratch {
+  /** `.cache/orca-courier/<random>`: chosen here, never read back from the host. */
+  relative: string;
+  /** Its absolute path, for `orca-server-setup.py --bundle`, checked to end with `relative`. */
+  path: string;
+}
 
 /** What `push` needs from an open, pinned tunnel (`SshTunnel.exec` and `SshTunnel.upload`). */
 export interface CourierTransport {
@@ -274,41 +301,50 @@ export interface CourierTransport {
 export const PUSH_TIMEOUT_MS = 30 * 60_000;
 
 /**
- * Send the package into a new scratch directory on the host and check every file arrived intact
- * there (`sha256sum`). Returns the directory, for `orca-server-setup.py --bundle`. The host's own
- * signature check comes after, in the setup.
+ * Send the package into a new directory on the host and check every file arrived intact there.
+ * The directory is `COURIER_PARENT/<random>`, made with plain `mkdir` (which fails if it exists),
+ * so this push owns it. The checksum must run successfully and list every file at its digest.
+ * The host's own signature check comes after, in the setup.
  */
-export async function pushCourier(transport: CourierTransport, pkg: CourierPackage): Promise<string> {
-  const made = await transport.exec(["mktemp", "-d"]);
-  const dir = made.stdout.trim();
-  if (made.code !== 0 || !SCRATCH.test(dir) || dir.split("/").includes(".."))
+export async function pushCourier(transport: CourierTransport, pkg: CourierPackage): Promise<CourierScratch> {
+  const relative = `${COURIER_PARENT}/${randomBytes(16).toString("hex")}`;
+  if ((await transport.exec(["mkdir", "-p", "-m", "700", "--", COURIER_PARENT])).code !== 0)
     throw new CourierRefused("Could not make a scratch directory on the server");
+  if ((await transport.exec(["mkdir", "-m", "700", "--", relative])).code !== 0)
+    throw new CourierRefused("Could not make a scratch directory on the server");
+  const scratch = { relative, path: "" };
   try {
-    for (const file of pkg.files) await transport.upload(file.path, `${dir}/${file.name}`, PUSH_TIMEOUT_MS);
-    const sums = await transport.exec(["sha256sum", "--", ...pkg.files.map((file) => `${dir}/${file.name}`)]);
+    const resolved = await transport.exec(["realpath", "-e", "--", relative]);
+    const path = resolved.stdout.endsWith("\n") ? resolved.stdout.slice(0, -1) : resolved.stdout;
+    if (resolved.code !== 0 || !ABSOLUTE.test(path) || path.split("/").includes("..") || !path.endsWith(`/${relative}`))
+      throw new CourierRefused("The server's scratch directory is not where it was made");
+    scratch.path = path;
+    for (const file of pkg.files) await transport.upload(file.path, `${relative}/${file.name}`, PUSH_TIMEOUT_MS);
+    const sums = await transport.exec(["sha256sum", "--", ...pkg.files.map((file) => `${relative}/${file.name}`)]);
+    if (sums.code !== 0) throw new CourierRefused("The server could not check what arrived");
     const found = new Map(
       sums.stdout
         .split("\n")
-        .map((line) => /^([0-9a-f]{64})\s+\*?(.+)$/.exec(line.trim()))
+        .map((line) => /^([0-9a-f]{64}) [ *](.+)$/.exec(line))
         .filter((match) => match !== null)
         .map((match) => [match[2]!, match[1]!] as const),
     );
     for (const file of pkg.files)
-      if (found.get(`${dir}/${file.name}`) !== file.sha256)
+      if (found.get(`${relative}/${file.name}`) !== file.sha256)
         throw new CourierRefused(`${file.name} did not arrive intact on the server`);
-    return dir;
+    return scratch;
   } catch (error) {
-    await dropCourier(transport, dir);
+    await dropCourier(transport, scratch);
     throw error;
   }
 }
 
-/** Remove a scratch directory `pushCourier` made. Best effort: it is under the host's temp dir. */
-export async function dropCourier(transport: CourierTransport, dir: string): Promise<void> {
-  if (!SCRATCH.test(dir) || dir.split("/").includes("..")) return;
+/** Remove a directory `pushCourier` made, by the path this computer chose. Best effort. */
+export async function dropCourier(transport: CourierTransport, scratch: CourierScratch): Promise<void> {
+  if (!/^\.cache\/orca-courier\/[0-9a-f]{32}$/.test(scratch.relative)) return;
   try {
-    await transport.exec(["rm", "-r", "-f", "--", dir]);
+    await transport.exec(["rm", "-r", "-f", "--", scratch.relative]);
   } catch {
-    // Left for the host's temp cleanup.
+    // Left on the host; a later push makes another.
   }
 }

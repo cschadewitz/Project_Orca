@@ -114,6 +114,13 @@ describe("tailnet profiles", () => {
     await expect(options.resolveHost!()).resolves.toBe("100.101.102.103");
     options.onLoginApproval!("https://login.tailscale.com/a/x");
     expect(links).toEqual([["build-1", "https://login.tailscale.com/a/x"]]);
+    expect(options.approvalOrigins).toEqual(["https://login.tailscale.com"]);
+    // An ordinary SSH profile's banners are never offered as approval pages.
+    profiles.save({ name: "Lab", destination: "casey@lab" });
+    const plain = (profiles as unknown as { tunnelOptions(p: unknown): SshTunnelOptions }).tunnelOptions(
+      profiles.get("lab"),
+    );
+    expect(plain.onLoginApproval).toBeUndefined();
   });
 
   it("refuse to dial a node that is gone, or a name now held by another node", async () => {

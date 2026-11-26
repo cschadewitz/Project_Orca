@@ -33,7 +33,13 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { isIP } from "node:net";
 import { dirname } from "node:path";
 import { featureEnabled, type FeatureContext } from "@orca/core";
-import { markPinEnrolled, pinState, TunnelRefusal, type TailnetBinding } from "./remote-access.js";
+import {
+  markPinEnrolled,
+  pinState,
+  TAILSCALE_LOGIN_ORIGINS,
+  TunnelRefusal,
+  type TailnetBinding,
+} from "./remote-access.js";
 
 export type { TailnetBinding } from "./remote-access.js";
 
@@ -395,6 +401,24 @@ export function resolveTailnetBinding(snapshot: TailnetSnapshot, binding: Tailne
     host: isIP(address) === 6 ? `[${address}]` : address,
     renamed: peer.dnsName !== binding.name.toLowerCase(),
   };
+}
+
+/**
+ * Whose approval pages a tailnet connection passes on (#1228): Tailscale's coordination server,
+ * or, for a self-hosted control plane such as Headscale, the one https origin named explicitly in
+ * `ORCA_TAILNET_LOGIN_ORIGIN`. Nothing is taken from a server's own banner.
+ */
+export function tailnetLoginOrigins(env: Record<string, string | undefined> = process.env): string[] {
+  const named = env.ORCA_TAILNET_LOGIN_ORIGIN?.trim();
+  if (!named) return [...TAILSCALE_LOGIN_ORIGINS];
+  try {
+    const url = new URL(named);
+    if (url.protocol === "https:" && !url.username && !url.password && url.origin === named.replace(/\/$/, ""))
+      return [url.origin];
+  } catch {
+    // Not an origin: fall back to Tailscale's own.
+  }
+  return [...TAILSCALE_LOGIN_ORIGINS];
 }
 
 /**

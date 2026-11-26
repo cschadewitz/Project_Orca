@@ -3,4 +3,5 @@
   different machine that took its name. Its host key can be pinned from the keys the machine
   advertises when it runs Tailscale SSH (#1227). A Tailscale SSH login that waits for approval
   in your browser (check mode) now shows the approval link and waits for it, instead of timing
-  out (#1228).
+  out (#1228). Only for a machine on your tailnet, and only a page on Tailscale's coordination
+  server, or on the control plane named in `ORCA_TAILNET_LOGIN_ORIGIN`.

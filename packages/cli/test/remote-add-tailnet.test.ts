@@ -154,6 +154,7 @@ describe("orca remote add --tailnet", () => {
       tailnet: { node: "nBuild1", name: "build-1.example-tailnet.ts.net" },
     });
     await expect(opened[0]!.resolveHost!()).resolves.toBe("100.101.102.103");
+    expect(opened[0]!.approvalOrigins).toEqual(["https://login.tailscale.com"]);
     // The scratch pin held the advertised key before ssh connected.
     expect(lines.join("\n")).toMatch(
       /Host key: ssh-ed25519 SHA256:\S+ \(advertised by your tailnet's coordination server\)/,
@@ -195,6 +196,13 @@ describe("orca remote add --tailnet", () => {
     expect(errs.join("\n")).toContain("shared from another tailnet");
     expect(lines.join("\n")).toMatch(/\(not pinned yet\)/);
     expect(lines.join("\n")).not.toContain("advertised");
+  });
+
+  it("offers no approval page for an ordinary SSH host", async () => {
+    const { make, opened } = fakeServer();
+    const { context } = ctx(["add", "dev@lab"], {});
+    await remoteCommand(context, { tunnel: make, scripts: scripts(), version: "0.9.0", tailnet: tailnet({}) });
+    expect(opened[0]!.onLoginApproval).toBeUndefined();
   });
 
   it.each([

@@ -52,6 +52,7 @@ import {
   readTailnet,
   tailnetEnabled,
   tailnetHostResolver,
+  tailnetLoginOrigins,
   type ReadTailnetOptions,
   type TailnetPeer,
 } from "@orca/protocol/tailnet";
@@ -146,7 +147,14 @@ export async function remoteCommand(
     profile,
     knownHostsFile: join(pinsDir(), profile.id),
     ...(profile.tailnet ? { resolveHost: tailnetHostResolver(profile.tailnet, deps.tailnet) } : {}),
-    onLoginApproval: (url: string) => ctx.err(`Approve this login in your browser, then wait here: ${url}`),
+    // Only for a machine on the tailnet, and only a page on its control plane (#1228).
+    ...(profile.tailnet
+      ? {
+          onLoginApproval: (url: string) =>
+            ctx.err(`Tailscale asks you to approve this login. Open this page, then wait here: ${url}`),
+          approvalOrigins: tailnetLoginOrigins(),
+        }
+      : {}),
   };
   const make = deps.tunnel ?? ((options: ConstructorParameters<typeof SshTunnel>[0]) => new SshTunnel(options));
   const program = setupProgram(scripts);
@@ -238,7 +246,7 @@ export async function remoteCommand(
       outcome = confirmedResult(
         readSetup(
           await tunnel.exec(
-            setupCommand(version, profile.remotePort, { account, root, current }, scratch),
+            setupCommand(version, profile.remotePort, { account, root, current }, scratch?.path),
             SETUP_TIMEOUT_MS,
             program,
           ),

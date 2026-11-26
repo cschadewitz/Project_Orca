@@ -74,6 +74,14 @@ COSIGN_SHA256 = {
 # account over the ssh login that pushed it.
 PUSHED_TRUSTED_ROOT = "trusted_root.json"
 TRUSTED_ROOT_MAX = 1 << 20
+# The Sigstore public-good trusted roots this release accepts when one is carried to a host that
+# cannot reach Sigstore (#1234): sha256 of `trusted_root.json` as Sigstore's TUF targets list it.
+# A carried root is trusted only by this pin, never by its shape. When Sigstore publishes a new
+# root, a release adds its digest; until then an offline setup refuses and an online one is
+# unaffected. Must match `TRUSTED_ROOT_PINS` in packages/protocol/src/server-courier.ts.
+TRUSTED_ROOT_SHA256 = (
+    "6494e21ea73fa7ee769f85f57d5a3e6a08725eae1e38c755fc3517c9e6bc0b66",
+)
 SOURCE_ENTRY = "packages/cli/dist/main.js"
 # A bundle's runtime and entry are fixed, inside the release; nothing from a manifest or a
 # record can point them anywhere else.
@@ -306,18 +314,14 @@ def select(root, release):
 
 
 def pushed_trusted_root(directory):
-    """The Sigstore trusted root pushed beside a bundle (#1234), checked for shape, or None."""
+    """The Sigstore trusted root carried beside a bundle for an offline setup (#1234): a regular
+    file within its size limit (checked before it is read) whose digest this release pins.
+    Required: an offline setup has no other root, and never takes one on its shape."""
     path = directory / PUSHED_TRUSTED_ROOT
-    if not path.exists() and not path.is_symlink():
-        return None
     if path.is_symlink() or not path.is_file() or path.stat().st_size > TRUSTED_ROOT_MAX:
-        raise RuntimeError("Pushed trusted root is not a regular file within its size limit")
-    try:
-        media = json.loads(path.read_text()).get("mediaType", "")
-    except (ValueError, AttributeError, UnicodeDecodeError):
-        raise RuntimeError("Pushed trusted root is not JSON") from None
-    if not str(media).startswith("application/vnd.dev.sigstore.trustedroot"):
-        raise RuntimeError("Pushed trusted root is not a Sigstore trusted root")
+        raise RuntimeError("Pushed trusted root is missing, or not a regular file within its size limit")
+    if file_sha256(path) not in TRUSTED_ROOT_SHA256:
+        raise RuntimeError("Pushed trusted root is not one this release trusts; update ORCA, or set up with internet access")
     return path
 
 
@@ -638,7 +642,8 @@ class BundleSource:
         cosign = self.cosign()
         tuf = self.root / "tools" / "sigstore"
         tuf.mkdir(mode=0o700, parents=True, exist_ok=True)
-        trust = pushed_trusted_root(directory)
+        # Only an offline stage carries a root, and it was checked against the pin when copied.
+        trust = pushed_trusted_root(directory) if getattr(self, "pushed", None) is not None else None
         result = self.typed_process(subprocess.run, [
             str(cosign), "verify-blob", str(manifest_path),
             "--bundle", str(directory / signature),
@@ -849,11 +854,17 @@ class Deployment(BundleSource):
         return release.resolve()
 
     @typed_operation("update")
-    def stage_bundle(self, source):
+    def stage_bundle(self, source, offline=False):
         """Stage a prebuilt signed server bundle: a published version (X.Y.Z, or X.Y.Z-rc.N
         for a release candidate) to download from its release page, or a directory holding the
         three release files. Needs Python 3 and
-        util-linux only (no gh, git, mise or pnpm); cosign is fetched pinned."""
+        util-linux only (no gh, git, mise or pnpm); cosign is fetched pinned.
+
+        `offline` (a directory only, asked for explicitly, #1234): the directory also carries the
+        pinned cosign and a Sigstore trusted root this release pins, and neither is fetched.
+        Without it, anything else in the directory is ignored."""
+        if offline and (os.sep not in source and not source.startswith(".")):
+            raise RuntimeError("An offline stage takes a bundle directory")
         assertion = self.typed_guard("update")
         self.retain_typed_inspection(assertion)
         if platform.system() != "Linux" or platform.machine() != "x86_64":
@@ -885,12 +896,11 @@ class Deployment(BundleSource):
                     if (local / name).is_symlink() or not (local / name).is_file():
                         raise RuntimeError(f"Bundle file missing: {name}")
                     shutil.copyfile(local / name, downloads / name)
-                # What the client pushed with it, for a host with no internet access (#1234).
-                if (local / PUSHED_TRUSTED_ROOT).exists() or (local / PUSHED_TRUSTED_ROOT).is_symlink():
-                    if (local / PUSHED_TRUSTED_ROOT).is_symlink():
-                        raise RuntimeError("Pushed trusted root is not a regular file within its size limit")
-                    shutil.copyfile(local / PUSHED_TRUSTED_ROOT, downloads / PUSHED_TRUSTED_ROOT)
-                self.pushed = local
+                # What the client carried with it, for a host with no internet access (#1234):
+                # checked (type, size, pinned digest) before it is copied, and checked again there.
+                if offline:
+                    shutil.copyfile(pushed_trusted_root(local), downloads / PUSHED_TRUSTED_ROOT)
+                    self.pushed = local
             try:
                 manifest = self.verify_bundle(downloads, version)
             finally:
@@ -1369,6 +1379,10 @@ def main():
             bundle = args[:1] == ["--bundle"]
             if bundle:
                 args = args[1:]
+            # Explicit only: a carried trusted root and cosign are never used on file presence.
+            offline = bundle and args[:1] == ["--offline"]
+            if offline:
+                args = args[1:]
             if len(args) != 1:
                 raise RuntimeError("Supply one published release tag" + (" or bundle directory" if bundle else ""))
             if deploy.pending.exists():
@@ -1378,7 +1392,7 @@ def main():
                 metadata(existing)
                 candidate = existing.resolve()
             elif bundle:
-                candidate = deploy.stage_bundle(args[0])
+                candidate = deploy.stage_bundle(args[0], offline=offline)
             else:
                 candidate = deploy.stage(args[0])
             if options.action == "update":

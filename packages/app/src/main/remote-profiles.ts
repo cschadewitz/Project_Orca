@@ -65,6 +65,7 @@ import {
   resolveTailnetBinding,
   tailnetEnabled,
   tailnetHostResolver,
+  tailnetLoginOrigins,
   writeAdvertisedPin,
   type ReadTailnetOptions,
   type TailnetRead,
@@ -448,8 +449,13 @@ export class RemoteProfiles {
       onState: (state) => this.deps.onTunnelState?.(profile.id, state),
       // A tailnet profile dials its node's current address, read on every connect (#1226).
       ...(profile.tailnet ? { resolveHost: tailnetHostResolver(profile.tailnet, this.deps.tailnet) } : {}),
-      ...(this.deps.onLoginApproval
-        ? { onLoginApproval: (url: string) => this.deps.onLoginApproval?.(profile.id, url) }
+      // Only a connection to a machine on the tailnet passes an approval page on, and only
+      // from the tailnet's control plane (#1228): any other banner stays the server's text.
+      ...(profile.tailnet && this.deps.onLoginApproval
+        ? {
+            onLoginApproval: (url: string) => this.deps.onLoginApproval?.(profile.id, url),
+            approvalOrigins: tailnetLoginOrigins(),
+          }
         : {}),
     };
   }
@@ -910,7 +916,7 @@ export class RemoteProfiles {
         await tunnel.open();
         const scratch = courier ? await pushCourier(tunnel, courier) : undefined;
         try {
-          const command = setupCommand(options.version, profile.remotePort, pending, scratch);
+          const command = setupCommand(options.version, profile.remotePort, pending, scratch?.path);
           // Only the setup that was confirmed counts: what the server reports must match it.
           setup = confirmedResult(readSetup(await tunnel.exec(command, SETUP_TIMEOUT_MS, program)), {
             version: options.version,

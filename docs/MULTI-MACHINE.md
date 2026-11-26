@@ -236,7 +236,11 @@ already runs a daemon.
   ID). The profile is bound to that machine's stable node ID: ssh dials its current Tailscale
   address on every connect, and a name that now belongs to a different machine is refused.
 - **Login approval.** Tailscale's default rule for your own devices asks you to approve an SSH
-  login in your browser (check mode). ORCA prints the approval link and waits for you.
+  login in your browser (check mode). ORCA shows the approval link and waits for you. Only for a
+  machine on your tailnet, and only a page on Tailscale's coordination server
+  (`https://login.tailscale.com`): any server can print a login banner, so a link anywhere else is
+  never offered. With a self-hosted control plane such as Headscale, name its https origin in
+  `ORCA_TAILNET_LOGIN_ORIGIN`.
 - **Host keys.** A machine running Tailscale SSH advertises its SSH host keys to your tailnet.
   ORCA checks the server against exactly those keys, so you do not compare a fingerprint by
   hand; you still confirm the setup. These keys are vouched for by your tailnet's coordination
@@ -245,7 +249,11 @@ already runs a daemon.
   tailnet, uses the ordinary confirm-the-fingerprint flow; ORCA prints `sudo tailscale set --ssh`
   for the first case.
 - **No internet on the host.** `--push-bundle` makes your machine fetch the signed server bundle,
-  the pinned cosign and Sigstore's trusted root, and copy them over the pinned SSH connection.
+  the pinned cosign and Sigstore's trusted root, and copy them over the pinned SSH connection
+  into a new directory under `~/.cache/orca-courier/` on the host, removed afterwards. The host
+  takes the carried trusted root only if this ORCA release pins its digest. When Sigstore
+  publishes a new root, an offline setup refuses until you update ORCA; one with internet access
+  is unaffected.
   The host still checks the bundle's signature itself. Such a host is updated from the app, not
   by its own timer.
 

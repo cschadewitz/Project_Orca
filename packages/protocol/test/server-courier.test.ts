@@ -13,10 +13,12 @@ import {
   COSIGN_PINS,
   COSIGN_VERSION,
   CourierRefused,
+  dropCourier,
   prepareCourier,
   pushCourier,
   SIGSTORE_TUF,
   TRUSTED_ROOT_FILE,
+  TRUSTED_ROOT_PINS,
   type CourierFetch,
   type CourierTransport,
 } from "../src/server-courier.js";
@@ -113,18 +115,24 @@ describe("the courier's pins", () => {
     expect(adapter).toContain(`PUSHED_TRUSTED_ROOT = "${TRUSTED_ROOT_FILE}"`);
     for (const [machine, pin] of Object.entries(COSIGN_PINS))
       expect(adapter).toContain(`"${machine}": ("${pin.name}", "${pin.sha256}")`);
+    const pinned = /TRUSTED_ROOT_SHA256 = \(([^)]*)\)/.exec(adapter)![1]!;
+    expect([...pinned.matchAll(/"([0-9a-f]{64})"/g)].map((match) => match[1])).toEqual([...TRUSTED_ROOT_PINS]);
   });
 });
 
 describe("prepareCourier", () => {
-  // The fake cosign cannot match the real pin, so the cosign step is checked on its own below.
-  const withPin = async <T>(run: () => Promise<T>): Promise<T> => {
+  // The fake cosign and trusted root cannot match the real pins, so each pin is checked on its own below.
+  const withPin = async <T>(run: () => Promise<T>, root = trustedRoot): Promise<T> => {
     const real = { ...COSIGN_PINS.x86_64! };
+    const roots = TRUSTED_ROOT_PINS as string[];
+    const realRoots = [...roots];
     (COSIGN_PINS as Record<string, { name: string; sha256: string }>).x86_64 = { name: real.name, sha256: sha(cosign) };
+    roots.splice(0, roots.length, sha(root));
     try {
       return await run();
     } finally {
       (COSIGN_PINS as Record<string, { name: string; sha256: string }>).x86_64 = real;
+      roots.splice(0, roots.length, ...realRoots);
     }
   };
 
@@ -174,6 +182,14 @@ describe("prepareCourier", () => {
     ).rejects.toThrow(message);
   });
 
+  it("refuses to carry a trusted root this version does not pin, before fetching it", async () => {
+    const net = internet();
+    await expect(
+      withPin(() => prepareCourier({ version: VERSION, cacheDir: tmp(), fetch: net.get }), Buffer.from("another root")),
+    ).rejects.toThrow(/does not pin yet/);
+    expect(net.calls.some((url) => url.includes("/targets/"))).toBe(false);
+  });
+
   it("refuses a trusted root that is not the one Sigstore's targets list", async () => {
     await expect(
       withPin(() =>
@@ -191,18 +207,20 @@ describe("prepareCourier", () => {
 });
 
 describe("pushCourier", () => {
-  function host(options: { corrupt?: string; mktemp?: string } = {}) {
+  function host(options: { corrupt?: string; realpath?: string; sumsCode?: number; mkdirCode?: number } = {}) {
     const commands: string[][] = [];
     const uploads: [string, string][] = [];
     const remote = new Map<string, Buffer>();
     const transport: CourierTransport = {
       exec: (command) => {
         commands.push([...command]);
-        if (command[0] === "mktemp")
-          return Promise.resolve({ code: 0, stdout: `${options.mktemp ?? "/tmp/tmp.Ab12Cd"}\n` });
+        if (command[0] === "mkdir" && command.length === 5)
+          return Promise.resolve({ code: options.mkdirCode ?? 0, stdout: "" });
+        if (command[0] === "realpath")
+          return Promise.resolve({ code: 0, stdout: `${options.realpath ?? `/home/casey/${command[3]}`}\n` });
         if (command[0] === "sha256sum")
           return Promise.resolve({
-            code: 0,
+            code: options.sumsCode ?? 0,
             stdout: command
               .slice(2)
               .map((path) => `${sha(remote.get(path) ?? "")}  ${path}`)
@@ -228,37 +246,61 @@ describe("pushCourier", () => {
       }),
     };
   };
+  const OWN = /^\.cache\/orca-courier\/[0-9a-f]{32}$/;
 
-  it("pushes every file into a fresh scratch directory and checks each arrived intact", async () => {
+  it("pushes every file into a directory it made, by a name it chose, and checks each arrived intact", async () => {
     const { transport, commands, uploads } = host();
-    await expect(pushCourier(transport, pkg())).resolves.toBe("/tmp/tmp.Ab12Cd");
+    const scratch = await pushCourier(transport, pkg());
+    expect(scratch.relative).toMatch(OWN);
+    expect(scratch.path).toBe(`/home/casey/${scratch.relative}`);
+    // Plain mkdir: it fails if the directory is there already, so the push owns it.
+    expect(commands[1]).toEqual(["mkdir", "-m", "700", "--", scratch.relative]);
     expect(uploads.map(([, remote]) => remote)).toEqual([
-      "/tmp/tmp.Ab12Cd/a.tar.xz",
-      `/tmp/tmp.Ab12Cd/${TRUSTED_ROOT_FILE}`,
+      `${scratch.relative}/a.tar.xz`,
+      `${scratch.relative}/${TRUSTED_ROOT_FILE}`,
     ]);
-    expect(commands[0]).toEqual(["mktemp", "-d"]);
-    expect(commands[1]![0]).toBe("sha256sum");
+    expect(commands.some((command) => command[0] === "mktemp")).toBe(false);
   });
 
-  it("refuses and cleans up when a file arrives changed", async () => {
-    const { transport, commands } = host({ corrupt: "a.tar.xz" });
-    await expect(pushCourier(transport, pkg())).rejects.toThrow(/a.tar.xz did not arrive intact/);
-    expect(commands.at(-1)).toEqual(["rm", "-r", "-f", "--", "/tmp/tmp.Ab12Cd"]);
+  it("refuses and removes only its own directory when a file arrives changed or the check fails", async () => {
+    for (const options of [{ corrupt: "a.tar.xz" }, { sumsCode: 1 }]) {
+      const { transport, commands } = host(options);
+      await expect(pushCourier(transport, pkg())).rejects.toThrow(/did not arrive intact|could not check/);
+      const removed = commands.at(-1)!;
+      expect(removed.slice(0, 4)).toEqual(["rm", "-r", "-f", "--"]);
+      expect(removed[4]).toMatch(OWN);
+    }
   });
 
-  it("refuses a scratch directory it cannot use as one remote word", async () => {
-    const { transport, uploads } = host({ mktemp: "/tmp/a b" });
+  it("refuses a directory that resolves anywhere but where it was made, and never removes a path the host printed", async () => {
+    const { transport, commands, uploads } = host({ realpath: "/etc" });
+    await expect(pushCourier(transport, pkg())).rejects.toThrow(/not where it was made/);
+    expect(uploads).toEqual([]);
+    expect(commands.at(-1)![4]).toMatch(OWN);
+    expect(commands.flat()).not.toContain("/etc");
+  });
+
+  it("refuses when the directory cannot be made, before anything is copied", async () => {
+    const { transport, uploads } = host({ mkdirCode: 1 });
     await expect(pushCourier(transport, pkg())).rejects.toThrow(/scratch directory/);
     expect(uploads).toEqual([]);
+  });
+
+  it("removes nothing but a directory of its own shape", async () => {
+    const { transport, commands } = host();
+    await dropCourier(transport, { relative: "/", path: "/" });
+    await dropCourier(transport, { relative: ".cache/orca-courier/../..", path: "/" });
+    expect(commands).toEqual([]);
   });
 });
 
 describe("setupCommand with a pushed bundle", () => {
   const confirmed = { account: "casey", root: "/home/casey/.local/share/orca-server", current: null };
-  it("passes the scratch directory as --bundle, and refuses anything else", () => {
-    expect(setupCommand(VERSION, 6722, confirmed, "/tmp/tmp.Ab12Cd").slice(-2)).toEqual([
+  it("passes the scratch directory as an offline --bundle, and refuses anything else", () => {
+    expect(setupCommand(VERSION, 6722, confirmed, "/tmp/tmp.Ab12Cd").slice(-3)).toEqual([
       "--bundle",
       "/tmp/tmp.Ab12Cd",
+      "--offline-bundle",
     ]);
     expect(setupCommand(VERSION, 6722, confirmed)).not.toContain("--bundle");
     expect(() => setupCommand(VERSION, 6722, confirmed, "/tmp/../etc")).toThrow(/bundle directory/);

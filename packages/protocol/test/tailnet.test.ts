@@ -23,6 +23,7 @@ import {
   writeAdvertisedPin,
   type TailnetPeer,
   type TailnetSnapshot,
+  tailnetLoginOrigins,
 } from "../src/tailnet.js";
 
 const ON = { env: { ORCA_INCUBATING: "tailnet-hosts" } };
@@ -465,5 +466,16 @@ describe("advertisedEnrollmentKeys (#1229)", () => {
     const found = advertisedEnrollmentKeys(snapshot, destination);
     expect(found.ok).toBe(false);
     expect(found.ok ? "" : found.message).toMatch(message);
+  });
+});
+
+describe("tailnetLoginOrigins", () => {
+  it("is Tailscale's own, or exactly one https origin named explicitly", () => {
+    expect(tailnetLoginOrigins({})).toEqual(["https://login.tailscale.com"]);
+    expect(tailnetLoginOrigins({ ORCA_TAILNET_LOGIN_ORIGIN: "https://hs.example.org" })).toEqual([
+      "https://hs.example.org",
+    ]);
+    for (const value of ["http://hs.example.org", "https://hs.example.org/path", "https://u:p@hs.example.org", "nope"])
+      expect(tailnetLoginOrigins({ ORCA_TAILNET_LOGIN_ORIGIN: value })).toEqual(["https://login.tailscale.com"]);
   });
 });

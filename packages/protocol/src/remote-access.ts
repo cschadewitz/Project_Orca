@@ -296,9 +296,18 @@ export interface SshTunnelOptions {
    * instead of its ordinary timeout. Without it, such a login times out as before.
    */
   onLoginApproval?: (url: string) => void;
+  /**
+   * The control planes whose approval pages are passed on, as https origins: the default is
+   * Tailscale's own (`TAILSCALE_LOGIN_ORIGINS`). A banner naming any other origin is the
+   * server's untrusted text, never an approval link. Only with `onLoginApproval`.
+   */
+  approvalOrigins?: readonly string[];
   /** How long a login may wait for approval once its link was shown. Default 10 minutes. */
   approvalTimeoutMs?: number;
 }
+
+/** Tailscale's coordination server, where its SSH check mode sends the person to approve. */
+export const TAILSCALE_LOGIN_ORIGINS: readonly string[] = ["https://login.tailscale.com"];
 
 /** A failure that a restart cannot fix: it needs the person. */
 const PERMANENT: ReadonlySet<TunnelRefusalCode> = new Set([
@@ -318,15 +327,20 @@ const APPROVAL_TIMEOUT_MS = 10 * 60_000;
  * The approval link in a Tailscale SSH check-mode banner (#1228), or `undefined` for any other
  * line. The server holds a login under a `check` rule and sends, before authentication:
  * `# Tailscale SSH requires an additional check.` then `# To authenticate, visit: <url>`. ssh
- * prints banners on stderr. Only an https URL with no credentials in it is taken; it is shown to
- * the person to open, never opened or fetched by ORCA.
+ * prints banners on stderr, and any server can print one, so the banner proves nothing: only an
+ * https URL with no credentials whose origin is one of `origins` (the tailnet's control plane,
+ * an explicit policy) is taken. It is offered to the person to open, never opened or fetched by
+ * ORCA on its own.
  */
-export function loginApprovalUrl(line: string): string | undefined {
+export function loginApprovalUrl(
+  line: string,
+  origins: readonly string[] = TAILSCALE_LOGIN_ORIGINS,
+): string | undefined {
   const match = /^#?\s*To authenticate, visit:\s*(https:\/\/\S{1,2000})\s*$/.exec(line);
   if (!match) return undefined;
   try {
     const url = new URL(match[1]!);
-    if (url.protocol !== "https:" || url.username || url.password) return undefined;
+    if (url.protocol !== "https:" || url.username || url.password || !origins.includes(url.origin)) return undefined;
     return url.href;
   } catch {
     return undefined;
@@ -957,7 +971,7 @@ export class SshTunnel {
     let shown = false;
     return (line) => {
       if (shown || !this.options.onLoginApproval) return false;
-      const url = loginApprovalUrl(line);
+      const url = loginApprovalUrl(line, this.options.approvalOrigins ?? TAILSCALE_LOGIN_ORIGINS);
       if (!url) return false;
       shown = true;
       rearm(this.options.approvalTimeoutMs ?? APPROVAL_TIMEOUT_MS);

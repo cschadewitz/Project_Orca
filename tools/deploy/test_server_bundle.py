@@ -6,6 +6,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import re
 import os
 from pathlib import Path
 import platform
@@ -103,32 +104,55 @@ class ServerBundleTests(unittest.TestCase):
         self.assertEqual(self.manifest["compatibility"],
                          json.loads((Path(__file__).parents[2] / "release-compatibility.json").read_text()))
 
-    def test_a_pushed_trusted_root_is_used_for_an_offline_host(self):
-        # #1234: the client pushed the Sigstore trusted root beside the bundle; cosign is told
-        # to use it instead of fetching one, and the signature is still checked here.
-        root = {"mediaType": "application/vnd.dev.sigstore.trustedroot+json;version=0.1", "tlogs": []}
-        (self.files / release.PUSHED_TRUSTED_ROOT).write_text(json.dumps(root))
-        self.deployment.stage_bundle(str(self.files))
+    def pin_root(self, data):
+        """Pin `data` as the one trusted root this release accepts, for the test's length."""
+        (self.files / release.PUSHED_TRUSTED_ROOT).write_bytes(data)
+        patcher = patch.object(release, "TRUSTED_ROOT_SHA256", (hashlib.sha256(data).hexdigest(),))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_an_offline_stage_uses_a_carried_root_this_release_pins(self):
+        # #1234: asked for explicitly, the carried root is checked against the pin and cosign is
+        # told to use it instead of fetching one; the signature is still checked here.
+        self.pin_root(b'{"mediaType": "application/vnd.dev.sigstore.trustedroot+json;version=0.1"}')
+        self.deployment.stage_bundle(str(self.files), offline=True)
         args = self.cosign_log.read_text().splitlines()
         self.assertIn("--trusted-root", args)
         self.assertTrue(args[args.index("--trusted-root") + 1].endswith(release.PUSHED_TRUSTED_ROOT))
         self.assertIsNone(self.deployment.pushed)
 
-    def test_a_pushed_trusted_root_of_another_shape_is_refused_before_cosign(self):
-        for text in ("not json", json.dumps({"mediaType": "application/json"}), json.dumps([1])):
-            with self.subTest(text=text):
-                (self.files / release.PUSHED_TRUSTED_ROOT).write_text(text)
-                with self.assertRaisesRegex(RuntimeError, "Pushed trusted root"):
-                    self.deployment.stage_bundle(str(self.files))
-                self.assertFalse(self.cosign_log.exists())
-        (self.files / release.PUSHED_TRUSTED_ROOT).unlink()
-        (self.files / release.PUSHED_TRUSTED_ROOT).symlink_to(self.archive())
-        with self.assertRaisesRegex(RuntimeError, "Pushed trusted root"):
-            self.deployment.stage_bundle(str(self.files))
+    def test_an_offline_stage_refuses_a_root_this_release_does_not_pin_before_cosign(self):
+        # The right shape is not enough: only the pinned digest is trusted.
+        self.pin_root(b'{"mediaType": "application/vnd.dev.sigstore.trustedroot+json;version=0.1"}')
+        (self.files / release.PUSHED_TRUSTED_ROOT).write_text(
+            json.dumps({"mediaType": "application/vnd.dev.sigstore.trustedroot+json;version=0.1", "tlogs": []}))
+        with self.assertRaisesRegex(RuntimeError, "not one this release trusts"):
+            self.deployment.stage_bundle(str(self.files), offline=True)
+        self.assertFalse(self.cosign_log.exists())
 
-    def test_without_a_pushed_trusted_root_cosign_fetches_its_own(self):
+    def test_an_offline_stage_refuses_a_missing_oversized_or_linked_root_before_reading_it(self):
+        with self.assertRaisesRegex(RuntimeError, "Pushed trusted root is missing"):
+            self.deployment.stage_bundle(str(self.files), offline=True)
+        (self.files / release.PUSHED_TRUSTED_ROOT).symlink_to(self.archive())
+        with self.assertRaisesRegex(RuntimeError, "Pushed trusted root is missing"):
+            self.deployment.stage_bundle(str(self.files), offline=True)
+        (self.files / release.PUSHED_TRUSTED_ROOT).unlink()
+        (self.files / release.PUSHED_TRUSTED_ROOT).write_bytes(b" " * (release.TRUSTED_ROOT_MAX + 1))
+        with patch.object(release, "file_sha256", side_effect=AssertionError("read")):
+            with self.assertRaisesRegex(RuntimeError, "Pushed trusted root is missing"):
+                release.pushed_trusted_root(self.files)
+        self.assertFalse(self.cosign_log.exists())
+
+    def test_an_ordinary_local_stage_ignores_a_carried_root_and_cosign(self):
+        # Without the explicit offline opt-in, files beside the bundle change nothing.
+        self.pin_root(b'{"mediaType": "application/vnd.dev.sigstore.trustedroot+json;version=0.1"}')
+        (self.files / "cosign-linux-amd64").write_bytes(b"not the pinned cosign")
         self.deployment.stage_bundle(str(self.files))
         self.assertNotIn("--trusted-root", self.cosign_log.read_text().splitlines())
+        self.assertIsNone(self.deployment.pushed)
+
+    def test_the_pinned_root_is_the_one_sigstore_lists_today(self):
+        self.assertTrue(all(re.fullmatch(r"[0-9a-f]{64}", pin) for pin in release.TRUSTED_ROOT_SHA256))
 
     def test_stages_a_verified_bundle_with_relative_runtime(self):
         staged = self.deployment.stage_bundle(str(self.files))
