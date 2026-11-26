@@ -92,6 +92,12 @@ linux:
   # and orca.desktop (#853 review). Every Linux identity derived from this (the .deb's
   # /usr/bin link, AppArmor profile and desktop entry) is therefore `orca-desktop` too.
   executableName: orca-desktop
+  # The dock matches a window to its launcher by WM_CLASS (X11) or app_id (Wayland), and
+  # Electron takes both from package.json's `desktopName`. Without it the window's class was
+  # "ORCA" and the launcher's file `orca-desktop.desktop`, so GNOME showed a generic gear
+  # for the running app (#1109). `desktopName` is `orca-desktop.desktop`, and this keeps the
+  # entry's name and StartupWMClass in step with it.
+  syncDesktopName: true
   target:
     # AppImage for x64 only. Building an arm64 AppImage on an x64 runner needs an arm64
     # appimagetool to run there, which is the one cross-build in this file that does not

@@ -21,6 +21,7 @@ import {
   applyStepChanged,
   buildTree,
   descendants,
+  TERMINAL_STEP_EVENTS,
   filterAttention,
   type TreeRow,
 } from "./tree-rows.js";
@@ -78,6 +79,42 @@ export function useRunTree(roots: readonly RunSummaryView[]): RunTree {
     };
   }, [generation]);
 
+  /* The projections as last rendered, for the re-read below, which runs outside a render. */
+  const held = useRef(details);
+  held.current = details;
+  /* Runs with a re-read in flight, and those that moved again while it was out. */
+  const rereading = useRef(new Map<string, boolean>());
+
+  /*
+   * A fresh `runs.get` for a run already held. The notifications carry status, not data: a
+   * step that finishes and sets a variable says "completed", and the projection's `vars` (the
+   * step detail's Variables) kept what the first read saw until the run was selected again
+   * (#1109). So when a step of a held run settles, or the run itself changes, the projection is
+   * read again and replaces the held one if it is not older. One read per run at a time; a
+   * change while one is out asks for one more.
+   */
+  const reread = useCallback((runId: string): void => {
+    if (!held.current.has(runId)) return;
+    if (rereading.current.has(runId)) {
+      rereading.current.set(runId, true);
+      return;
+    }
+    rereading.current.set(runId, false);
+    const requestEpoch = epoch.current;
+    void window.orca.runs.get({ runId }).then((result) => {
+      if (requestEpoch !== epoch.current) return;
+      const again = rereading.current.get(runId) === true;
+      rereading.current.delete(runId);
+      if (result.ok)
+        setDetails((prev) => {
+          const current = prev.get(runId);
+          if (!current || current.lastSeq > result.result.lastSeq) return prev;
+          return new Map(prev).set(runId, result.result);
+        });
+      if (again) reread(runId);
+    });
+  }, []);
+
   const all = useMemo(() => buildTree({ roots, details, expanded }), [roots, details, expanded]);
   const rows = useMemo(() => (attentionOnly ? filterAttention(all) : all), [all, attentionOnly]);
 
@@ -129,18 +166,20 @@ export function useRunTree(roots: readonly RunSummaryView[]): RunTree {
         params.runId,
         params.seq,
       );
+      if (TERMINAL_STEP_EVENTS.includes(params.event)) reread(params.runId);
     });
     /* A run's own row *and* its row as somebody's child: the same run can be a root here
        and a `child-run` under a `parallel` step, and both have to repaint. */
-    const offRun = stream.on("run.changed", (params) =>
-      patch((detail) => applyRunChangedToDetail(detail, params), params.runId, params.seq),
-    );
+    const offRun = stream.on("run.changed", (params) => {
+      patch((detail) => applyRunChangedToDetail(detail, params), params.runId, params.seq);
+      reread(params.runId);
+    });
 
     return () => {
       offStep();
       offRun();
     };
-  }, [stream]);
+  }, [stream, reread]);
 
   const toggle = useCallback((key: string) => {
     setExpanded((prev) => {

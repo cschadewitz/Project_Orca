@@ -332,10 +332,26 @@ describe("the run tree", () => {
     await openParent();
     expect(within(rows()[6]!).getByText(STATUS_PRESENTATION.running.word)).toBeTruthy();
 
+    act(() => fake.notify(stepChanged({ stepRunId: "s-fan", status: "waiting", event: "step.waiting" })));
+
+    await waitFor(() => expect(within(rows()[6]!).getByText(STATUS_PRESENTATION.waiting.word)).toBeTruthy());
+    expect(fake.calls.filter((c) => c.method === "runs.get")).toHaveLength(1);
+  });
+
+  /* A settled step may have set variables, and no notification carries them: the step
+     detail's Variables kept the first read's until the run was selected again (#1109). The
+     status is folded at once; the one re-read follows. */
+  it("re-reads the open run once a step settles, after folding its status", async () => {
+    await openParent();
+
     act(() => fake.notify(stepChanged({ stepRunId: "s-fan", status: "failed", event: "step.failed" })));
 
     await waitFor(() => expect(within(rows()[6]!).getByText(STATUS_PRESENTATION.failed.word)).toBeTruthy());
-    expect(fake.calls.filter((c) => c.method === "runs.get")).toHaveLength(1);
+    await waitFor(() => expect(fake.calls.filter((c) => c.method === "runs.get")).toHaveLength(2));
+    expect(fake.calls.filter((c) => c.method === "runs.get").at(-1)).toEqual({
+      method: "runs.get",
+      params: { runId: "run-parent" },
+    });
   });
 
   it("draws a step it has never seen, from the step.scheduled that introduces it", async () => {

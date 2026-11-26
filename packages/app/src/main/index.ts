@@ -84,6 +84,7 @@ import { PreferencesFile } from "../preferences/preferences-file.js";
 import type { Preferences, ThemePreference } from "../preferences/schema.js";
 import { appMenuTemplate } from "./app-menu.js";
 import { hasTitleBarOverlay, titleBarOverlay, windowChrome } from "./window-chrome.js";
+import { gtkThemeFor } from "./linux-gtk-theme.js";
 import { createAlerts, type AlertTier } from "./alerts.js";
 import { ConnectionMachine } from "./connection-state.js";
 import { DeepLinkQueue, ORCA_SCHEME, protocolClientArgs, urlFromArgv } from "./deep-link.js";
@@ -201,6 +202,11 @@ async function offerUpdateProtectionReset(startup: NonNullable<typeof macReplace
 }
 
 const preferences = new PreferencesFile(join(app.getPath("userData"), "preferences.json"));
+{
+  // Before the app is ready, while GTK can still take it: the menu bar's theme (#1109).
+  const gtkTheme = gtkThemeFor(process.platform, preferences.read().theme, process.env);
+  if (gtkTheme) process.env.GTK_THEME = gtkTheme;
+}
 /** Saved SSH profiles, their pinned host keys and sealed credentials (#874). Main only. */
 const remoteProfiles = new RemoteProfiles({
   dir: join(app.getPath("userData"), "remote-daemons"),

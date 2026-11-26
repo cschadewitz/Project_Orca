@@ -524,6 +524,8 @@ jobs:
           test "$(readlink -f /usr/bin/orca-desktop)" = /opt/ORCA/orca-desktop
           test "$(readlink -f "$(command -v orca-desktop)")" = /opt/ORCA/orca-desktop
           grep -qx 'Exec=/opt/ORCA/orca-desktop %U' /usr/share/applications/orca-desktop.desktop
+          # The window's class must name this entry, or the dock shows a generic icon (#1109).
+          grep -qx 'StartupWMClass=orca-desktop' /usr/share/applications/orca-desktop.desktop
           if grep -q '^MimeType=' /usr/share/applications/orca-desktop.desktop; then
             echo "::error::the desktop entry declares MIME types this package does not document"; exit 1
           fi
