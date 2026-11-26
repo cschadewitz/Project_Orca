@@ -23,7 +23,8 @@ const workflow = load(read(".github/workflows/desktop.yml"));
 describe("packaging", () => {
   it("ships the Linux launcher in resources/bin and the .deb's /usr/bin/orca-cli as a package file", () => {
     expect(config.linux.extraResources).toContainEqual({ from: "build/cli/orca-cli", to: "bin/orca-cli" });
-    expect(config.deb.fpm).toEqual(["build/linux/orca-cli=/usr/bin/orca-cli"]);
+    // The rest of fpm's arguments are the rename's package relationships (linux-deb.test.js).
+    expect(config.deb.fpm.filter((arg) => !arg.startsWith("--"))).toEqual(["build/linux/orca-cli=/usr/bin/orca-cli"]);
     // Not through the maintainer scripts: the postinst and postrm never name it.
     expect(read("packages/app/build/linux/after-install.tpl")).not.toContain("orca-cli");
     expect(config.deb.afterRemove).toBeUndefined();
@@ -198,7 +199,7 @@ describe("the Windows launcher and PATH edit", () => {
 it("gives new app profiles orca-cli, keeps an omitted command meaning orca, and installs both names", () => {
   const protocol = read("packages/protocol/src/remote-access.ts");
   expect(protocol).toContain('export const DEFAULT_SERVER_COMMAND = "orca-cli";');
-  expect(protocol).toContain('export const LEGACY_SERVER_COMMAND = "orca";');
+  expect(protocol).toContain('export const LEGACY_SERVER_COMMAND = "orca";'); // rename-keep: an omitted command keeps naming the old CLI
   const cli = JSON.parse(read("packages/cli/package.json"));
   expect(cli.bin).toEqual({ orca: "./dist/main.js", "orca-cli": "./dist/main.js" });
   // An omitted command resolves to the legacy name only, through the one constant, never a literal.
