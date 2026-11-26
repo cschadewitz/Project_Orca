@@ -14,6 +14,7 @@ import {
   codexStopReason,
   LocalHost,
   openCodexAppServerSession,
+  startupTermination,
   stripShellPrefix,
   wrapAgentProcess,
   type AgentHost,
@@ -1672,6 +1673,46 @@ describe("asks through ORCA's policy (#1159)", () => {
       await expect(open(s.host)).rejects.toMatchObject({ details: { reason: "codex-foreign-environment" } });
       expect(s.peer.received.map((m) => m.method)).not.toContain("turn/start");
       expect(s.kill).toHaveBeenCalled();
+    });
+
+    it("refuses the open on a connection reported during its account re-read, keeping the exit", async () => {
+      let reads = 0;
+      const s = scriptedHost({
+        ...BASE,
+        "account/read": (msg, peer) => {
+          // the second read is the re-read the account update below calls for
+          if (++reads === 2) connected("devbox")(peer);
+          return BASE["account/read"]!(msg, peer);
+        },
+        "thread/start": (_msg, peer) => (
+          peer.notify("account/updated", { authMode: "apikey", planType: null, reason: null }),
+          THREAD()
+        ),
+      });
+      s.kill.mockImplementation(() => undefined);
+      const error = await open(s.host, { exitGraceMs: 10 }).then(
+        () => expect.unreachable("the session opened"),
+        (e: unknown) => e as OrcaError,
+      );
+      expect(reads).toBe(2);
+      expect(error.details).toMatchObject({ reason: "codex-foreign-environment" });
+      expect(s.peer.received.map((m) => m.method)).not.toContain("turn/start");
+      // the stop was not seen to finish: the exit stays attached for whoever waits on it
+      expect(startupTermination(error)).toBeInstanceOf(Promise);
+      expect(s.kill.mock.calls.map((c) => (c as unknown[])[0])).toEqual(["SIGTERM", "SIGKILL"]);
+    });
+
+    it("does not resume a thread on a connection already fenced", async () => {
+      const s = scriptedHost({
+        ...BASE,
+        "account/read": (msg, peer) => (connected("devbox")(peer), BASE["account/read"]!(msg, peer)),
+      });
+      await expect(open(s.host, { resumeThreadId: "thr_old" })).rejects.toMatchObject({
+        details: { reason: "codex-foreign-environment" },
+      });
+      const sent = s.peer.received.map((m) => m.method);
+      expect(sent).not.toContain("thread/resume");
+      expect(sent).not.toContain("thread/start");
     });
 
     it("stops on another thread's connection, or a report it cannot read", async () => {
