@@ -109,7 +109,7 @@ export async function remoteCommand(
   if (sub !== "add" || !destination || extra.length)
     throw new OrcaError(
       "CONFIG_INVALID",
-      "usage: orca remote add [user@]host [--tailnet] [--ssh-port N] [--identity FILE] [--port N] [--push-bundle] [--confirm CODE], or orca remote enroll <id> [--host-key SHA256:...]",
+      "usage: orca remote add [user@]host [--tailnet] [--ssh-port N] [--identity FILE] [--port N] [--push-bundle] [--confirm CODE], or orca remote enroll <id> [--host-key SHA256:... | --tailnet]",
     );
   const scripts = deps.scripts ?? setupScripts();
   if (!scripts)

@@ -433,6 +433,33 @@ export function findTailnetPeer(snapshot: TailnetSnapshot, name: string): Tailne
   return matches.length === 1 ? matches[0] : undefined;
 }
 
+/**
+ * The host-key fingerprints to enroll a delegation remote with (#1229), from what the tailnet
+ * advertises for the machine its `destination` names: in place of fingerprints read off the
+ * worker's console. Refuses a machine that is unknown, shared in from another tailnet, or
+ * advertises no keys (no Tailscale SSH): those keep the `--host-key` route.
+ */
+export function advertisedEnrollmentKeys(
+  snapshot: TailnetSnapshot,
+  destination: string,
+): { ok: true; peer: TailnetPeer; fingerprints: string[] } | { ok: false; message: string } {
+  const host = destination.slice(destination.lastIndexOf("@") + 1);
+  const peer = findTailnetPeer(snapshot, host);
+  if (!peer) return { ok: false, message: `No single machine named ${host} on your tailnet.` };
+  if (peer.sharedIn)
+    return {
+      ok: false,
+      message: `${peer.dnsName} is shared from another tailnet; pass its fingerprint with --host-key instead.`,
+    };
+  const keys = peer.sshHostKeys.filter((key) => parseAdvertisedHostKey(key) === key);
+  if (!keys.length)
+    return {
+      ok: false,
+      message: `${peer.dnsName} advertises no SSH host keys (it does not run Tailscale SSH); pass its fingerprint with --host-key instead.`,
+    };
+  return { ok: true, peer, fingerprints: keys.map(hostKeyFingerprint) };
+}
+
 /** The binding to save for a peer picked from the list. */
 export function bindingFor(peer: TailnetPeer): TailnetBinding {
   return { node: peer.nodeId, name: peer.dnsName };
