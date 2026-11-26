@@ -4,7 +4,7 @@
  * at several window sizes and 150% zoom. Each capture also records an in-page layout audit
  * (overlapping, covered, clipped and off-window controls) in audit.json.
  *
- * Opt-in and slow (about 8 minutes), so it runs only when SWEEP_OUT is set:
+ * Opt-in and slow (a few minutes), so it runs only when SWEEP_OUT is set:
  *   node tools/demo-seed/build.mjs
  *   SWEEP_OUT=/tmp/sweep pnpm exec playwright test --config packages/app/test/smoke/playwright.config.ts \
  *     --project=linux-native visual-sweep
@@ -321,13 +321,21 @@ async function deepViews(page: Page, prefix: string) {
     await page.getByRole("treeitem").first().click({ timeout: 5000 });
     await click(/^Filter by status/, false);
     await page.getByRole("menuitem", { name: "All statuses" }).click({ timeout: 5000 });
+    await timeUntil(`${prefix}-Runs rows after clearing the filter`, () =>
+      page.getByRole("treeitem").first().waitFor({ timeout: 30_000 }),
+    );
   });
   await step("runs-expand-program", "Runs", async () => {
     const row = page.getByRole("treeitem").filter({ hasText: "Platform upgrade" }).first();
     await row.click({ timeout: 5000 });
     await page.keyboard.press("ArrowRight");
   });
-  await step("runs-board", "Runs", () => click("Board"));
+  await step("runs-board", "Runs", async () => {
+    await click("Board");
+    await timeUntil(`${prefix}-Board cards loaded`, () =>
+      expect(page.locator("main").getByText("Loading", { exact: true })).toHaveCount(0, { timeout: 30_000 }),
+    );
+  });
   await step("runs-search", "Runs", async () => {
     await click("Search");
     await page.keyboard.type("export");
@@ -341,14 +349,17 @@ async function deepViews(page: Page, prefix: string) {
     "Parallel security audit",
     "Hotfix with a nested release train",
   ])
-    await step(`workflow-${name}`, "Workflows", () =>
-      page
+    await step(`workflow-${name}`, "Workflows", async () => {
+      await page
         .getByRole("row")
         .filter({ hasText: name })
         .first()
         .getByRole("button", { name: "Open" })
-        .click({ timeout: 5000 }),
-    );
+        .click({ timeout: 5000 });
+      await timeUntil(`${prefix}-workflow ${name} loaded`, () =>
+        expect(page.getByText("Loading the workflow")).toHaveCount(0, { timeout: 30_000 }),
+      );
+    });
   await step("workflow-edit-wide", "Workflows", () =>
     page
       .getByRole("row")
@@ -383,12 +394,41 @@ async function deepViews(page: Page, prefix: string) {
   await closeOverlays(page);
 }
 
+/**
+ * How long a loading state lasts: from now until `ready` holds, written to load-times.json.
+ * A loading screen in a capture is only a finding if it lasts; this says whether it does.
+ */
+async function timeUntil(label: string, ready: () => Promise<unknown>) {
+  const started = Date.now();
+  let ms: number | string;
+  try {
+    await ready();
+    ms = Date.now() - started;
+  } catch {
+    ms = `>${Date.now() - started}`;
+  }
+  await appendFile(join(OUT, "load-times.json"), `${JSON.stringify({ label, ms })}\n`);
+}
+
 async function everySurface(page: Page, prefix: string) {
   for (const surface of SURFACES)
     await attempt(`${prefix}-${surface}`, async () => {
       await openSurface(page, surface);
+      // Runs shows a loading state first; the capture is of its data, so wait for a row.
+      if (surface === "Runs")
+        await timeUntil(`${prefix}-Runs rows`, () => page.getByRole("treeitem").first().waitFor({ timeout: 30_000 }));
       await capture(page, `${prefix}-${surface}`);
     });
+}
+
+/** Switches the whole app to `theme` the way a person does: ⌘⇧L / Ctrl+⇧L cycles system → light → dark. */
+async function chooseTheme(page: Page, theme: "light" | "dark") {
+  const current = () => page.evaluate(() => document.documentElement.getAttribute("data-theme"));
+  for (let press = 0; press < 3 && (await current()) !== theme; press++) {
+    await page.keyboard.press("Control+Shift+KeyL");
+    await expect.poll(current).not.toBeNull();
+  }
+  expect(await current()).toBe(theme);
 }
 
 sweep("seed a fresh install and capture every surface", async () => {
@@ -455,5 +495,23 @@ sweep("seed a fresh install and capture every surface", async () => {
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.webContents.setZoomFactor(1.5));
   await everySurface(page, "zoom150");
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.webContents.setZoomFactor(1));
+  // The same surfaces, detail views and overlays in the dark theme, at full size and at 800×600.
+  await attempt("dark-theme", () => chooseTheme(page, "dark"));
+  await everySurface(page, "dark-1280");
+  await deepViews(page, "dark-deep");
+  await attempt("dark-palette", async () => {
+    await openSurface(page, "Runs");
+    await page.keyboard.press("Control+K");
+    await capture(page, "dark-commands-palette");
+    await closeOverlays(page);
+  });
+  await attempt("dark-connect-dialog", async () => {
+    await page.getByRole("button", { name: /Connect to a daemon/ }).click({ timeout: 3000 });
+    await capture(page, "dark-connect-dialog");
+    await closeOverlays(page);
+  });
+  await setSize(app, 800, 600);
+  await everySurface(page, "dark-800");
+  await setSize(app, 1280, 900);
   expect(failures, "sweep steps that failed (see error-*.txt in SWEEP_OUT)").toEqual([]);
 });
