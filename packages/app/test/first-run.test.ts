@@ -4,6 +4,7 @@ import { chmod, mkdtemp, mkdir, readFile, readdir, rename, rm, symlink, writeFil
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { parse as parseYaml } from "yaml";
 import { PROTOCOL_VERSION, type HelloResult } from "@orca/protocol";
 import type { DaemonClient } from "../src/client/daemon-client.js";
 import { FIRST_RUN_SAMPLE, FIRST_RUN_SAMPLE_FILES } from "../src/first-run-sample.js";
@@ -233,7 +234,12 @@ describe.skipIf(typeof process.getuid !== "function")("dedicated first-run proje
     expect(f.prepareConnection).not.toHaveBeenCalled();
     if (selected.state !== "review") throw new Error("expected review");
     expect(await f.setup.prepare(selected.review.id, f.assertCurrent)).toMatchObject({ state: "prepared" });
-    const config = JSON.parse(await readFile(join(f.workspace, "orca.config.yaml"), "utf8")) as Record<string, unknown>;
+    const configText = await readFile(join(f.workspace, "orca.config.yaml"), "utf8");
+    // Block YAML, never a JSON document in a `.yaml` file (#1200).
+    expect(configText.trimStart().startsWith("{")).toBe(false);
+    expect(configText).toMatch(/^version: 1$/m);
+    expect(configText).toMatch(/^humanInput:\n {2}mode: pause$/m);
+    const config = parseYaml(configText) as Record<string, unknown>;
     expect(config).toMatchObject({
       agents: [],
       roles: {},
@@ -441,7 +447,7 @@ async function configurationRig() {
   });
   owner.verify(f.hello);
   const path = join(f.workspace, "orca.config.yaml");
-  const before = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
+  const before = parseYaml(await readFile(path, "utf8")) as Record<string, unknown>;
   const config: Record<string, unknown> & {
     agents: { id: string; command: string; env: Record<string, string> }[];
     roles: Record<string, string>;
@@ -650,7 +656,7 @@ it("explicitly binds Save-before-Bind after app recreation, without a live daemo
   const { reserveFirstRunOwnership, inspectFirstRunOwnership } = await import("../src/main/first-run/ownership.js");
   reserveFirstRunOwnership(f.workspace);
   const path = join(f.workspace, "orca.config.yaml");
-  const config = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
+  const config = parseYaml(await readFile(path, "utf8")) as Record<string, unknown>;
   config.agents = [
     {
       id: "offline-agent",

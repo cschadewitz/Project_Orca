@@ -21,6 +21,7 @@
     "app:admission-intents": "playwright test --config packages/app/test/smoke/playwright.config.ts --project=admission-intents",
     "app:revision-workflow": "playwright test --config packages/app/test/smoke/playwright.config.ts --project=revision-workflow",
     "app:linux-native": "playwright test --config packages/app/test/smoke/playwright.config.ts --project=linux-native",
+    "app:layout": "playwright test --config packages/app/test/smoke/playwright.config.ts --project=layout",
     "app:windows-update": "playwright test --config packages/app/test/smoke/playwright.config.ts --project=windows-update",
     "app:windows-store-upgrade": "playwright test --config packages/app/test/smoke/playwright.config.ts --project=windows-store-upgrade",
     "app:type-proof:update": "playwright test --config packages/app/test/smoke/playwright.config.ts --project=type-proof --update-snapshots",
