@@ -102,6 +102,7 @@ function scriptedHost(answers: Record<string, Responder>) {
 }
 
 const NO_ANSWER = Symbol("no answer");
+const settle = () => new Promise((r) => setTimeout(r, 20));
 
 const THREAD = (over: Record<string, unknown> = {}) => ({
   thread: { id: "thr_1" },
@@ -282,6 +283,175 @@ describe("account and usage limits (#1164)", () => {
       await vi.waitFor(() => expect(s.kill).toHaveBeenCalled());
       await expect(session.prompt("go")).rejects.toMatchObject({ code: "AGENT_PROTOCOL" });
     }
+  });
+
+  const failedOnLimit = (peer: Peer, turnId: string) =>
+    peer.notify("turn/completed", {
+      threadId: "thr_1",
+      turn: {
+        id: turnId,
+        status: "failed",
+        error: { message: "limit", codexErrorInfo: "usageLimitExceeded", additionalDetails: null },
+      },
+    });
+  const window = (usedPercent: number, windowDurationMins = 300) => ({
+    usedPercent,
+    windowDurationMins,
+    resetsAt: 1_795_000_000,
+  });
+
+  it("keeps each limit bucket apart, and names no window when two buckets are at their limit", async () => {
+    const limits: { limitId: string | null }[] = [];
+    let both = false;
+    const s = scriptedHost(
+      turns(
+        (peer, turnId) => {
+          peer.notify("account/rateLimits/updated", {
+            rateLimits: { ...SNAPSHOT, limitId: "codex", primary: window(100) },
+          });
+          if (both)
+            peer.notify("account/rateLimits/updated", {
+              rateLimits: { ...SNAPSHOT, limitId: "codex_other", primary: window(100, 60) },
+            });
+          failedOnLimit(peer, turnId);
+        },
+        {
+          "account/read": () => CHATGPT(),
+          "account/rateLimits/read": () => ({
+            rateLimits: SNAPSHOT,
+            rateLimitsByLimitId: {
+              codex: SNAPSHOT,
+              codex_other: { ...SNAPSHOT, limitId: "codex_other", primary: window(7, 60) },
+            },
+          }),
+        },
+      ),
+    );
+    const session = await open(s.host, { onRateLimits: (l) => limits.push(l) });
+    await vi.waitFor(() => expect(limits.map((l) => l.limitId)).toEqual(["codex", "codex_other"]));
+    // one bucket at its limit during the turn names its window
+    const one = (await session.prompt("go").catch((e: unknown) => e)) as OrcaError;
+    expect(one.message).toContain("the 5-hour window is 100% used");
+    // the other bucket's update does not overwrite the first: the evidence now names two windows
+    both = true;
+    const two = (await session.prompt("again").catch((e: unknown) => e)) as OrcaError;
+    expect(two.message).toContain("Codex reported no single window at its limit for this turn");
+    expect(two.details).toMatchObject({ reason: "codex-usage-limit", window: null });
+    expect(limits.filter((l) => l.limitId === "codex_other").at(-1)).toMatchObject({ primary: window(100, 60) });
+    await session.close();
+  });
+
+  it("names no window from before the turn", async () => {
+    const limits: unknown[] = [];
+    const s = scriptedHost(
+      turns(failedOnLimit, {
+        "account/read": () => CHATGPT(),
+        "account/rateLimits/read": () => ({ rateLimits: { ...SNAPSHOT, primary: window(100) } }),
+      }),
+    );
+    const session = await open(s.host, { onRateLimits: (l) => limits.push(l) });
+    await vi.waitFor(() => expect(limits).toHaveLength(1));
+    const error = (await session.prompt("go").catch((e: unknown) => e)) as OrcaError;
+    expect(error.message).toContain("Codex reported no single window at its limit for this turn");
+    await session.close();
+  });
+
+  it("never lets a usage-limit read overwrite an update Codex sent after it began", async () => {
+    const limits: { primary: unknown }[] = [];
+    let readId: unknown;
+    const s = scriptedHost({
+      ...BASE,
+      "account/read": () => CHATGPT(),
+      "account/rateLimits/read": (msg) => ((readId = msg.id), NO_ANSWER),
+    });
+    const session = await open(s.host, { onRateLimits: (l) => limits.push(l) });
+    await vi.waitFor(() => expect(readId).toBeDefined());
+    s.peer.notify("account/rateLimits/updated", { rateLimits: { ...SNAPSHOT, primary: window(90) } });
+    await vi.waitFor(() => expect(limits).toHaveLength(1));
+    // the read answers late, with what Codex knew before its update
+    s.peer.say({ id: readId as number, result: { rateLimits: { ...SNAPSHOT, primary: window(10) } } });
+    await settle();
+    expect(limits).toEqual([expect.objectContaining({ primary: window(90) })]);
+    await session.close();
+  });
+
+  it("holds new turns while the account is read again, and runs them once it is the same", async () => {
+    let held: Msg | undefined;
+    let reads = 0;
+    const s = scriptedHost(
+      turns(completed, {
+        "account/read": (msg) => (++reads === 1 ? CHATGPT() : ((held = msg), NO_ANSWER)),
+      }),
+    );
+    const session = await open(s.host);
+    s.peer.notify("account/updated", { authMode: "chatgpt", planType: "pro", reason: null });
+    await vi.waitFor(() => expect(held).toBeDefined());
+    const turn = session.prompt("go");
+    await settle();
+    expect(s.peer.received.some((m) => m.method === "turn/start")).toBe(false);
+    s.peer.say({ id: held!.id as number, result: CHATGPT() });
+    await expect(turn).resolves.toMatchObject({ stopReason: "end_turn" });
+    await session.close();
+  });
+
+  it("refuses new turns when the account cannot be read again, until a read succeeds", async () => {
+    let fail = false;
+    const s = scriptedHost(
+      turns(completed, {
+        "account/read": (msg, peer) => {
+          if (!fail) return CHATGPT();
+          peer.say({ id: msg.id as number, error: { code: -32603, message: "internal" } });
+          return NO_ANSWER;
+        },
+      }),
+    );
+    const session = await open(s.host);
+    fail = true;
+    s.peer.notify("account/updated", { authMode: "chatgpt", planType: "pro", reason: null });
+    await expect(session.prompt("go")).rejects.toMatchObject({
+      code: "NOT_SUPPORTED",
+      details: { reason: "codex-account-unconfirmed" },
+    });
+    expect(s.peer.received.some((m) => m.method === "turn/start")).toBe(false);
+    fail = false;
+    s.peer.notify("account/updated", { authMode: "chatgpt", planType: "pro", reason: null });
+    await vi.waitFor(() => expect(s.peer.received.filter((m) => m.method === "account/read")).toHaveLength(3));
+    await expect(session.prompt("again")).resolves.toMatchObject({ stopReason: "end_turn" });
+    await session.close();
+  });
+
+  it("refuses new turns when the account re-read times out", async () => {
+    let reads = 0;
+    const s = scriptedHost(turns(completed, { "account/read": () => (++reads === 1 ? CHATGPT() : NO_ANSWER) }));
+    const session = await open(s.host, { requestTimeoutMs: 50 });
+    s.peer.notify("account/updated", { authMode: "chatgpt", planType: "pro", reason: null });
+    await expect(session.prompt("go")).rejects.toMatchObject({ details: { reason: "codex-account-unconfirmed" } });
+    expect(s.peer.received.some((m) => m.method === "turn/start")).toBe(false);
+    await session.close();
+  });
+
+  it("reads an account update Codex sent during the open before the session starts", async () => {
+    let account: unknown = CHATGPT("user-1");
+    const accounts: unknown[] = [];
+    const answers = (after: unknown) => ({
+      ...BASE,
+      "account/read": () => account,
+      "thread/start": (_msg: Msg, peer: Peer) => {
+        account = after;
+        peer.notify("account/updated", { authMode: null, planType: null, reason: null });
+        return THREAD();
+      },
+    });
+    // signed out while the thread started: the open is refused
+    const out = scriptedHost(answers({ account: null, userId: null, requiresOpenaiAuth: true }));
+    await expect(open(out.host)).rejects.toMatchObject({ details: { reason: "codex-login-required" } });
+    // another account: the session starts on the account Codex reports now
+    account = CHATGPT("user-1");
+    const other = scriptedHost(answers(CHATGPT("user-2")));
+    const session = await open(other.host, { onAccount: (a) => accounts.push(a) });
+    expect(accounts).toHaveLength(1);
+    expect(other.peer.received.filter((m) => m.method === "account/read")).toHaveLength(2);
+    await session.close();
   });
 });
 

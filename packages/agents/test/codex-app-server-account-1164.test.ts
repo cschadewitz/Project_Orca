@@ -11,8 +11,9 @@ import {
   codexRateLimitsProblem,
   codexStopReason,
   codexUsageLimitFailure,
+  codexAccountContinuity,
+  codexResetTime,
   mergeCodexRateLimits,
-  sameCodexAccount,
   type CodexRateLimits,
 } from "../src/index.js";
 
@@ -58,7 +59,7 @@ describe("the account Codex reports", () => {
       expect(codexAccountIdentity(answer)).toBeUndefined();
   });
 
-  it("is the same account only with the same kind and user", () => {
+  it("is the same account only with the same kind and a matching user id", () => {
     const a = codexAccountIdentity({
       account: { type: "chatgpt", planType: "pro" },
       userId: "u1",
@@ -75,9 +76,24 @@ describe("the account Codex reports", () => {
       requiresOpenaiAuth: true,
     })!;
     const d = codexAccountIdentity({ account: { type: "apiKey" }, userId: "u1", requiresOpenaiAuth: true })!;
-    expect(sameCodexAccount(a, b)).toBe(true);
-    expect(sameCodexAccount(a, c)).toBe(false);
-    expect(sameCodexAccount(a, d)).toBe(false);
+    expect(codexAccountContinuity(a, b)).toBe("same");
+    expect(codexAccountContinuity(a, c)).toBe("different");
+    expect(codexAccountContinuity(a, d)).toBe("different");
+  });
+
+  it("does not claim the same account when Codex reports no user id", () => {
+    const key = codexAccountIdentity({ account: { type: "apiKey" }, userId: null, requiresOpenaiAuth: true })!;
+    const chatgpt = codexAccountIdentity({
+      account: { type: "chatgpt", planType: "pro" },
+      userId: "u1",
+      requiresOpenaiAuth: true,
+    })!;
+    const anonymous = { ...chatgpt, userId: null };
+    expect(codexAccountContinuity(key, key)).toBe("unverifiable");
+    expect(codexAccountContinuity(chatgpt, anonymous)).toBe("unverifiable");
+    expect(codexAccountContinuity(anonymous, chatgpt)).toBe("unverifiable");
+    // another kind of login is another account, id or not
+    expect(codexAccountContinuity(key, anonymous)).toBe("different");
   });
 });
 
@@ -106,7 +122,7 @@ describe("usage limits", () => {
   });
 
   it("names the window that ran out and its reset time on a usage-limit failure", () => {
-    const error = codexUsageLimitFailure("codex", "usageLimitExceeded", LIMITS)!;
+    const error = codexUsageLimitFailure("codex", "usageLimitExceeded", [LIMITS])!;
     expect(error.message).toBe(
       `agent codex: Codex stopped the turn because the usage limit of its login is reached: the 5-hour window is 100% used and resets at ${new Date(RESET * 1000).toISOString()}.`,
     );
@@ -118,13 +134,62 @@ describe("usage limits", () => {
     const weekly = mergeCodexRateLimits(undefined, {
       primary: { usedPercent: 100, windowDurationMins: 10_080, resetsAt: null },
     });
-    expect(codexUsageLimitFailure("codex", "rateLimitExceeded", weekly)!.message).toContain(
+    expect(codexUsageLimitFailure("codex", "rateLimitExceeded", [weekly])!.message).toContain(
       "the rate limit of its login is reached: the weekly window is 100% used, and Codex reported no reset time.",
     );
-    expect(codexUsageLimitFailure("codex", "usageLimitExceeded", undefined)!.message).toContain(
-      "Codex reported no window or reset time",
+    const none = codexUsageLimitFailure("codex", "usageLimitExceeded", [])!;
+    expect(none.message).toContain("Codex reported no single window at its limit for this turn");
+    expect(none.details).toMatchObject({ reason: "codex-usage-limit", window: null });
+    expect(codexUsageLimitFailure("codex", "contextWindowExceeded", [LIMITS])).toBeUndefined();
+  });
+
+  it("names no window when the evidence names more than one, across buckets too", () => {
+    const other = mergeCodexRateLimits(undefined, {
+      limitId: "codex_other",
+      primary: { usedPercent: 100, windowDurationMins: 60, resetsAt: RESET },
+    });
+    const both = codexUsageLimitFailure("codex", "usageLimitExceeded", [LIMITS, other])!;
+    expect(both.message).toContain("Codex reported no single window at its limit for this turn");
+    expect(both.details).toMatchObject({ window: null });
+    // a bucket with no window at its limit adds nothing
+    const calm = mergeCodexRateLimits(undefined, {
+      limitId: "codex_other",
+      primary: { usedPercent: 10, windowDurationMins: 60, resetsAt: RESET },
+    });
+    expect(codexUsageLimitFailure("codex", "usageLimitExceeded", [LIMITS, calm])!.message).toContain(
+      "the 5-hour window is 100% used",
     );
-    expect(codexUsageLimitFailure("codex", "contextWindowExceeded", LIMITS)).toBeUndefined();
+  });
+
+  it("keeps a snapshot apart from another bucket's", () => {
+    const other = mergeCodexRateLimits(LIMITS, {
+      limitId: "codex_other",
+      primary: { usedPercent: 5, windowDurationMins: 60, resetsAt: null },
+    });
+    expect(other).toEqual({
+      limitId: "codex_other",
+      limitName: null,
+      primary: { usedPercent: 5, windowDurationMins: 60, resetsAt: null },
+      secondary: null,
+      planType: null,
+      rateLimitReachedType: null,
+    });
+  });
+
+  it("leaves out a reset time no date can hold, and keeps the reason", () => {
+    expect(codexResetTime(1e20)).toBeUndefined();
+    expect(codexResetTime(null)).toBeUndefined();
+    expect(codexResetTime(RESET)).toBe(new Date(RESET * 1000).toISOString());
+    const far = mergeCodexRateLimits(undefined, {
+      primary: { usedPercent: 100, windowDurationMins: 300, resetsAt: 1e20 },
+    });
+    const error = codexUsageLimitFailure("codex", "usageLimitExceeded", [far])!;
+    expect(error.message).toContain("the 5-hour window is 100% used, and Codex reported no reset time.");
+    expect(error.details).toEqual({
+      agentId: "codex",
+      reason: "codex-usage-limit",
+      window: { durationMins: 300, usedPercent: 100, resetsAt: null },
+    });
   });
 
   it("is what a failed turn ends with", () => {
@@ -132,7 +197,7 @@ describe("usage limits", () => {
       codexStopReason(
         "codex",
         { id: "t", status: "failed", error: { message: "limit", codexErrorInfo: "usageLimitExceeded" } },
-        LIMITS,
+        [LIMITS],
       ),
     ).toThrow(/the 5-hour window is 100% used and resets at/);
     expect(() =>

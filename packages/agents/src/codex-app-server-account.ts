@@ -6,10 +6,13 @@
  *
  * - **Account:** the kind of login (`apiKey`, `chatgpt`, ...) and, for ChatGPT, the plan. The
  *   user id Codex reports is compared to notice a switched account, never logged; the email
- *   and workspace name are never read.
- * - **Usage limits:** the snapshot Codex reports (each window's used percent, length and reset
- *   time), merged with Codex's sparse updates. A turn Codex fails with `usageLimitExceeded` or
- *   `rateLimitExceeded` names the window and its reset time when Codex reported them.
+ *   and workspace name are never read. Codex reports a user id only for ChatGPT logins, so for
+ *   other logins of the same kind the account's continuity cannot be verified
+ *   (`codexAccountContinuity`), and ORCA does not claim it.
+ * - **Usage limits:** the snapshots Codex reports per limit bucket (each window's used percent,
+ *   length and reset time), each merged only with Codex's sparse updates to the same bucket. A
+ *   turn Codex fails with `usageLimitExceeded` or `rateLimitExceeded` names the window and its
+ *   reset time when what Codex reported during that turn names exactly one window at its limit.
  */
 import { OrcaError } from "@orca/core";
 
@@ -52,9 +55,30 @@ export function codexAccountIdentity(answer: unknown): CodexAccountIdentity | un
   };
 }
 
-/** Whether two `account/read` answers name the same account. */
-export const sameCodexAccount = (a: CodexAccountIdentity, b: CodexAccountIdentity) =>
-  a.status.kind === b.status.kind && a.userId === b.userId;
+/**
+ * Whether `now` is the account a session started on (`then`): `different` when the kind of login
+ * or a reported user id differs, `same` only when both carry the same user id, and
+ * `unverifiable` otherwise. Codex 0.171.0 reports a user id only for ChatGPT logins, so two API-key
+ * (or other) logins of the same kind cannot be told apart: ORCA does not claim they are the same.
+ */
+export function codexAccountContinuity(
+  now: CodexAccountIdentity,
+  then: CodexAccountIdentity,
+): "same" | "different" | "unverifiable" {
+  if (now.status.kind !== then.status.kind) return "different";
+  if (now.userId !== null && then.userId !== null) return now.userId === then.userId ? "same" : "different";
+  return "unverifiable";
+}
+
+/** The bucket a snapshot belongs to: its `limitId`, Codex's own `codex` when it names none. */
+export const codexLimitBucket = (limits: { limitId: string | null }) => limits.limitId ?? "codex";
+
+/** Unix seconds as an ISO time, or `undefined` for a time a JS date cannot hold. */
+export function codexResetTime(seconds: number | null): string | undefined {
+  if (seconds === null || !Number.isFinite(seconds)) return undefined;
+  const date = new Date(seconds * 1000);
+  return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
+}
 
 /** One usage-limit window as Codex reports it. */
 export interface CodexRateLimitWindow {
@@ -104,11 +128,13 @@ const readWindow = (w: unknown): CodexRateLimitWindow | null =>
 const str = (v: unknown) => (typeof v === "string" ? v : null);
 
 /**
- * A checked snapshot (`codexRateLimitsProblem` first) merged into the last one: Codex's updates
- * are sparse, so a field it leaves null keeps what was known.
+ * A checked snapshot (`codexRateLimitsProblem` first) merged into the last one of the same
+ * bucket: Codex's updates are sparse, so a field it leaves null keeps what was known. A previous
+ * snapshot of another bucket contributes nothing.
  */
 export function mergeCodexRateLimits(previous: CodexRateLimits | undefined, snapshot: unknown): CodexRateLimits {
   const s = snapshot as Record<string, unknown>;
+  if (previous && codexLimitBucket(previous) !== codexLimitBucket({ limitId: str(s.limitId) })) previous = undefined;
   return {
     limitId: str(s.limitId) ?? previous?.limitId ?? null,
     limitName: str(s.limitName) ?? previous?.limitName ?? null,
@@ -128,29 +154,35 @@ function windowName(mins: number | null): string {
   return `${mins}-minute window`;
 }
 
-/** The window that ran out: the fuller of the two, when Codex reported any. */
-function limitingWindow(limits: CodexRateLimits | undefined): CodexRateLimitWindow | undefined {
-  const windows = [limits?.primary, limits?.secondary].filter((w): w is CodexRateLimitWindow => !!w);
-  return windows.sort((a, b) => b.usedPercent - a.usedPercent)[0];
+/**
+ * The window that ran out, when the evidence names exactly one: among the snapshots Codex
+ * reported during the turn, the one window at or over 100%. Several, or none, name no window.
+ */
+function limitingWindow(reported: readonly CodexRateLimits[]): CodexRateLimitWindow | undefined {
+  const full = reported
+    .flatMap((l) => [l.primary, l.secondary])
+    .filter((w): w is CodexRateLimitWindow => !!w && w.usedPercent >= 100);
+  return full.length === 1 ? full[0] : undefined;
 }
 
 /**
  * The failure for a turn Codex ended because a usage or rate limit was reached, naming the window
- * and its reset time when Codex reported them; `undefined` for any other failure.
+ * and its reset time when what Codex reported during the turn names exactly one; `undefined` for
+ * any other failure. `reported` is the snapshots Codex sent during the turn, never older ones.
  */
 export function codexUsageLimitFailure(
   agentId: string,
   codexErrorInfo: unknown,
-  limits: CodexRateLimits | undefined,
+  reported: readonly CodexRateLimits[],
 ): OrcaError | undefined {
   const kind =
     codexErrorInfo === "usageLimitExceeded" ? "usage" : codexErrorInfo === "rateLimitExceeded" ? "rate" : undefined;
   if (!kind) return undefined;
-  const w = limitingWindow(limits);
-  const resets = w?.resetsAt != null ? new Date(w.resetsAt * 1000).toISOString() : undefined;
+  const w = limitingWindow(reported);
+  const resets = w ? codexResetTime(w.resetsAt) : undefined;
   const what =
     w === undefined
-      ? `Codex reported no window or reset time`
+      ? `Codex reported no single window at its limit for this turn`
       : `the ${windowName(w.windowDurationMins)} is ${Math.round(w.usedPercent)}% used` +
         (resets ? ` and resets at ${resets}` : ", and Codex reported no reset time");
   return new OrcaError(
