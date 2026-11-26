@@ -6,6 +6,7 @@ import { StructuredEditorSession, type EditorSnapshot } from "./structured-form/
 import { atPath, projectEdits } from "./structured-form/collection-model.js";
 import type { EditIntent } from "./structured-form/contracts.js";
 import { reconcileConfigurationEdits } from "./reconciliation.js";
+import { bindSavedConfigurationForReopening, type ReopenBinding } from "../first-run/reopen-binding.js";
 import {
   ConfigurationAdapter,
   ConfigurationRefusal,
@@ -93,6 +94,8 @@ export class ConfigurationStudio {
   private rawSequence = 0;
   private rawState: EditorSnapshot = { phase: "editing", sequence: 0, edits: [], errors: [], changes: [] };
   private saved: { revision: string; generation: string } | undefined;
+  private reopen: ReopenBinding | undefined;
+  private reopenSequence = 0;
   private disposed = false;
   mode: "form" | "raw" = "form";
   constructor(
@@ -271,6 +274,25 @@ export class ConfigurationStudio {
     this.saved = result.generation
       ? { revision: result.document.revision, generation: result.generation.activeGeneration }
       : undefined;
+    this.bindForReopening(result.document);
+  }
+  /** What keeping this workspace reopenable after the last save came to (#1192); undefined when nothing applied. */
+  get reopenBinding(): ReopenBinding | undefined {
+    return this.reopen;
+  }
+  private bindForReopening(document: { revision: string; path: string }): void {
+    const bridge = this.bridge.firstRun;
+    if (!bridge?.reviewConfiguration || !bridge.bindConfiguration) return;
+    const sequence = ++this.reopenSequence;
+    this.reopen = undefined;
+    const settle = (result: ReopenBinding | undefined) => {
+      if (this.disposed || sequence !== this.reopenSequence) return;
+      this.reopen = result;
+      this.emit();
+    };
+    void bindSavedConfigurationForReopening(bridge, { revision: document.revision, path: document.path }, () =>
+      settle({ state: "binding" }),
+    ).then(settle, () => settle({ state: "refused", reason: "Project setup could not be reached." }));
   }
   private acceptApply(result: ConfigApplyResult): void {
     this.data = { ...this.data, generation: result.status };

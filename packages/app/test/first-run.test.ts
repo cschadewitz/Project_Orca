@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { PROTOCOL_VERSION, type HelloResult } from "@orca/protocol";
 import type { DaemonClient } from "../src/client/daemon-client.js";
 import { FIRST_RUN_SAMPLE, FIRST_RUN_SAMPLE_FILES } from "../src/first-run-sample.js";
-import { FirstRunSetup, type FirstRunDeps } from "../src/main/first-run/setup.js";
+import { FirstRunSetup, UNBOUND_CONFIGURATION, type FirstRunDeps } from "../src/main/first-run/setup.js";
 import { ownedDirectory } from "../src/main/first-run/directories.js";
 import { syntheticFirstRunWriter } from "./fixtures/synthetic-first-run-writer.js";
 import { FirstRunOwnershipRefusal } from "../src/main/first-run/ownership.js";
@@ -544,6 +544,28 @@ it("explicitly binds a private saved real-agent config, reopens it and preserves
   );
   expect(binding).not.toContain("synthetic private value");
   expect(binding).toContain("reviewed-config-read");
+  f.exit();
+  expect(f.owner.complete()).toBe(true);
+  const { reserveFirstRunOwnership } = await import("../src/main/first-run/ownership.js");
+  expect(() => reserveFirstRunOwnership(f.workspace)).not.toThrow();
+});
+it("names an unbound Config save as the reason the workspace will not reopen, and binding it reopens (#1192)", async () => {
+  const f = await configurationRig();
+  const status = await f.setup.status();
+  expect(status).toEqual({
+    state: "selection-required",
+    reason: UNBOUND_CONFIGURATION,
+    changedConfiguration: { workspace: f.workspace },
+  });
+  // A fresh selection that never verified says nothing about a changed configuration.
+  const fresh = new FirstRunSetup({ ...f.deps, receiptPath: join(f.home, "no-such-receipt.json") });
+  expect(await fresh.status()).not.toHaveProperty("changedConfiguration");
+  // What Config's save now does: review, then bind exactly that revision while the owner is live.
+  const reviewed = await f.setup.reviewConfiguration(f.assertCurrent);
+  if (reviewed.state !== "configuration-review") throw new Error("Expected config review");
+  expect(reviewed.review.revision).toBe(f.hash(JSON.stringify(f.config) + "\n"));
+  expect((await f.setup.bindConfiguration(reviewed.review.id, f.assertCurrent)).state).toBe("prepared");
+  expect((await new FirstRunSetup(f.deps).status()).state).toBe("prepared");
   f.exit();
   expect(f.owner.complete()).toBe(true);
   const { reserveFirstRunOwnership } = await import("../src/main/first-run/ownership.js");

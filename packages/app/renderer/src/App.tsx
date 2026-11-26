@@ -330,6 +330,7 @@ export function App(): JSX.Element {
               connection={connection.state}
               feed={attention}
               onOpenRun={(runId) => navigate(runUrl(runId))}
+              onOpenConfig={() => selectSurface("config")}
             />
           ) : activeSurface.id === "runs" ? (
             /* A `run` route selects the row; an `artifact` route names the run that

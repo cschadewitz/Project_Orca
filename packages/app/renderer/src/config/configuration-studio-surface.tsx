@@ -23,6 +23,7 @@ import { JudgeSetup } from "./judge-setup.js";
 import { agentPolicies } from "./config-model.js";
 import { DiagnosticsSection } from "../diagnostics/diagnostics-section.js";
 import { FirstRunSection } from "../first-run/first-run-section.js";
+import type { ReopenBinding } from "../first-run/reopen-binding.js";
 import { TemplateStudioSurface } from "../template-authoring/surface.js";
 import { useTemplateStudio } from "../template-authoring/context.js";
 import { configurationReferenceChoices } from "./reference-choices.js";
@@ -221,6 +222,7 @@ export function ConfigurationStudioSurface({
             {state && (
               <section aria-label="Configuration review and activation" className="orca-config__section">
                 {state.message && <Text style="body">{state.message}</Text>}
+                {studio.reopenBinding && <ReopenBindingNotice binding={studio.reopenBinding} />}
                 {state.errors.length > 0 && (
                   <ul>
                     {state.errors.map((error, index) => (
@@ -376,6 +378,21 @@ export function ConfigurationStudioSurface({
         <StorageSection />
         <PreferencesSection surfaces={SURFACES.map((surface) => ({ id: surface.id, label: surface.label }))} />
       </div>
+    </div>
+  );
+}
+
+/** Whether this workspace still reopens after the save (#1192). A refusal says what to do before quitting. */
+function ReopenBindingNotice({ binding }: { binding: ReopenBinding }): JSX.Element {
+  return (
+    <div role="status" data-reopen-binding={binding.state}>
+      <Text style="caption" as="p">
+        {binding.state === "binding"
+          ? "Binding the saved configuration so this workspace reopens with it."
+          : binding.state === "bound"
+            ? "Saved configuration bound for reopening. The app starts this workspace with it next time."
+            : `Saved, but not bound for reopening: ${binding.reason} Before quitting, open Project setup above and choose Review saved configuration for reopening, then bind it.`}
+      </Text>
     </div>
   );
 }
