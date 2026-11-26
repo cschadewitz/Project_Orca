@@ -70,6 +70,8 @@ export function ConfigurationStudioSurface({
   save.current = () => {
     void studio?.save(policyConfirmed);
   };
+  // Every disabled state of Apply names its own reason, never a stale "save first" (#1210).
+  const applyBlocked = studio ? (studio.busyReason ?? studio.reason("apply")) : undefined;
   const canSave = !launch && studio?.review !== undefined && !studio.busy && studio.reason("save") === undefined;
   useEffect(() => {
     if (!canSave || templates) return;
@@ -315,8 +317,8 @@ export function ConfigurationStudioSurface({
                 )}
                 {state.phase === "saved" && (
                   <Button
-                    disabled={studio.busy || !!studio.reason("apply")}
-                    {...(studio.reason("apply") ? { disabledReason: studio.reason("apply")! } : {})}
+                    disabled={applyBlocked !== undefined}
+                    {...(applyBlocked ? { disabledReason: applyBlocked } : {})}
                     onClick={() => {
                       void studio.apply();
                     }}
