@@ -5,8 +5,9 @@
 
 ORCA runs Claude over ACP today, through the `claude-agent-acp` adapter. `driver:
 claude-agent-sdk` is a second, opt-in way: ORCA drives the Claude Agent SDK itself, which lets it
-see and decide more of what Claude does (#1153 lists what each slice adds). Today ORCA checks the
-launch and then refuses the session; the session driver is the next slice (#1120).
+see and decide more of what Claude does (#1153 lists what each slice adds). ORCA checks the launch,
+then runs the session through the SDK (#1120). Until ORCA answers Claude's permission asks
+(#1122), a session can read but not change anything: see [What a session may do](#what-a-session-may-do-for-now).
 
 ## 1. Install Claude Code and sign in yourself
 
@@ -66,3 +67,37 @@ names: no error or log carries text the CLI printed.
 
 The agent must run on ORCA's own machine for now (SSH hosts: #1130). It takes no `args` (the SDK
 builds Claude's arguments), and neither `nativeToolHook` nor `codexExecGate`.
+
+## The session
+
+One session is one Claude Code process, started by the SDK from the executable checked above,
+with your login and the environment described in section 1. ORCA starts it in its own process
+group and ends that group when the session closes, so nothing Claude started outlives it.
+
+ORCA starts Claude with a fixed setup:
+
+- **No settings files** (`settingSources: []`): your user, project and local Claude settings,
+  hooks and permission rules are not loaded. Your login is still used.
+- **No MCP servers** (`--strict-mcp-config` with none) and **no session files**
+  (`persistSession: false`).
+- Claude Code's own system prompt, and permission mode `default`.
+
+Each ORCA turn is one message to Claude; the turn ends with Claude's result. Cancelling a step,
+or a turn timeout, interrupts Claude; a turn that has not ended within the agent's
+`cancelGraceMs` after that is failed and the process stopped. Claude's text, thinking, tool calls
+and results, and its to-do list (as a plan) show in the run like any other agent's. Errors name
+what happened, never text Claude printed.
+
+Model and effort choices, and resuming a session, are not there yet (#1120 follow-ups).
+
+## What a session may do, for now
+
+ORCA does not answer Claude's permission asks yet (#1122), so:
+
+- **Read, Glob and Grep** run, on paths ORCA does not keep from agents (its credential and key
+  folders). A Glob pattern must stay below its search path.
+- **TodoWrite** runs.
+- **Everything else is denied before it runs**: edits, writes, Bash, web fetches, subagents and
+  any other tool, also where Claude's own rules would have allowed it.
+- **Every permission ask is answered no**, for example a read outside the working directory.
+

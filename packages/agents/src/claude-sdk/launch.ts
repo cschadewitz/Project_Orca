@@ -414,18 +414,3 @@ function failureDetails(r: BoundedResult): Record<string, unknown> {
     // Nothing the CLI printed: its output is untrusted and may carry anything.
   };
 }
-
-/**
- * Open a session on the Claude Agent SDK driver. For now the launch checks run and then the
- * open is refused: the session itself is the next slice (#1120), and nothing half-built may run
- * a turn.
- */
-export async function refuseClaudeSdkSessionUntilDriver(options: ClaudeSdkPreflightOptions): Promise<never> {
-  const preflight = await claudeSdkPreflight(options);
-  throw new OrcaError(
-    "NOT_SUPPORTED",
-    `agent ${options.agent.id} has driver: claude-agent-sdk. Its Claude Code (${preflight.version}, ${preflight.executable}) is ` +
-      `signed in, but the Claude Agent SDK session driver is not built yet (#1120); remove driver to run it over ACP.`,
-    { agentId: options.agent.id, executable: preflight.executable, version: preflight.version },
-  );
-}

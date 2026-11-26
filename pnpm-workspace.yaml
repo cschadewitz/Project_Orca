@@ -33,3 +33,14 @@ patchedDependencies:
 #   when merging a mac `universal` arch, which electron-builder.yml does not build (x64/arm64).
 overrides:
   "minimatch@>=7.0.0 <11.0.1": "^11.0.9"
+  # The Claude Agent SDK's per-platform packages each carry a bundled `claude` binary. ORCA runs
+  # only the person's own installed, unmodified `claude` (`pathToClaudeCodeExecutable`, #1118),
+  # so none of them is installed and none can reach the daemon bundle (#1120).
+  "@anthropic-ai/claude-agent-sdk-linux-x64": "-"
+  "@anthropic-ai/claude-agent-sdk-linux-arm64": "-"
+  "@anthropic-ai/claude-agent-sdk-linux-x64-musl": "-"
+  "@anthropic-ai/claude-agent-sdk-linux-arm64-musl": "-"
+  "@anthropic-ai/claude-agent-sdk-darwin-x64": "-"
+  "@anthropic-ai/claude-agent-sdk-darwin-arm64": "-"
+  "@anthropic-ai/claude-agent-sdk-win32-x64": "-"
+  "@anthropic-ai/claude-agent-sdk-win32-arm64": "-"

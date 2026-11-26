@@ -510,7 +510,7 @@ the agent is told `cancelled` and the *tool call* fails while the run carries on
 `agent.permission` event records which it was (`ask:allow`, `ask:deny`, `ask:cancelled`,
 `ask:no-answerer`).
 
-#### Claude through the Claude Agent SDK (`driver: claude-agent-sdk`, in progress, refused for now)
+#### Claude through the Claude Agent SDK (`driver: claude-agent-sdk`, in progress, read-only for now)
 
 A second way to run Claude (#1118, tracking #1153), on the `feature/claude-agent-sdk` branch
 only: ORCA drives the Claude Agent SDK itself against your own installed, unmodified `claude`,
@@ -523,10 +523,11 @@ credentials. Setup and limits: [docs/agents/claude-agent-sdk.md](agents/claude-a
     # command: /path/to/claude   # optional; `claude` on PATH when left out
 ```
 
-ORCA checks the executable and the login (two short local `claude` processes, no SDK session
-and no model turn), then **refuses the session**:
-the session driver itself is the next slice (#1120). Leave `driver` out to run Claude over ACP
-as before.
+ORCA checks the executable and the login (two short local `claude` processes), then runs the
+session through the SDK (#1120): one Claude Code process per session, with no settings files, no
+MCP servers and no session files. Until ORCA answers Claude's permission asks (#1122), only
+`Read`, `Glob`, `Grep` (on paths ORCA does not protect) and `TodoWrite` run; every other tool
+call and every ask is denied. Leave `driver` out to run Claude over ACP as before.
 
 ## Completion policies (agent steps)
 

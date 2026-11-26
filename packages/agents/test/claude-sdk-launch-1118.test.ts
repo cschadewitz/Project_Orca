@@ -18,7 +18,6 @@ import {
   isClaudeCredentialVariable,
   openAcpSession,
   parseAuthStatus,
-  refuseClaudeSdkSessionUntilDriver,
   resolveClaudeExecutable,
   LocalHost,
 } from "../src/index.js";
@@ -317,12 +316,7 @@ describe.runIf(posix)("login (#1118)", () => {
     );
     const ok = await claudeSdkPreflight({ agent: agent({ command: odd }), cwd: dir, baseEnv: {} });
     expect(ok).toMatchObject({ version: "2.1.332", authMethod: "unknown", apiProvider: "firstParty" });
-    const refusal = await refuseClaudeSdkSessionUntilDriver({
-      agent: agent({ command: odd }),
-      cwd: dir,
-      baseEnv: {},
-    }).catch((x: unknown) => x as OrcaError);
-    expect(refusal.message + JSON.stringify(refusal.details)).not.toContain(SENTINEL);
+    expect(JSON.stringify(ok)).not.toContain(SENTINEL);
 
     const noVersion = await fakeClaude(
       join(dir, "noversion"),
@@ -339,13 +333,6 @@ describe.runIf(posix)("login (#1118)", () => {
     )) as OrcaError;
     expect(versionError.message).toMatch(/printed no Claude Code version/);
     expect(versionError.message + JSON.stringify(versionError.details)).not.toContain(SENTINEL);
-  });
-
-  it("refuses the session after the checks, naming the driver issue", async () => {
-    const bin = await fakeClaude(join(dir, "claude"), LOGGED_IN);
-    await expect(
-      refuseClaudeSdkSessionUntilDriver({ agent: agent({ command: bin }), cwd: dir, baseEnv: {} }),
-    ).rejects.toThrow(/session driver is not built yet \(#1120\)/);
   });
 });
 
