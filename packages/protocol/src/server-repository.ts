@@ -163,9 +163,20 @@ export async function pushRepository(
     throw new RepositoryRefused("git is not installed on the server. Install it there, then push again.");
   if ((await run(transport, ["mkdir", "-p", "--", `${root}/repos`, `${root}/checkouts`])).code !== 0)
     throw new RepositoryRefused("Could not make the repository directories on the server.");
-  // Idempotent: an existing bare repository is left as it is.
-  if ((await run(transport, ["git", "init", "--bare", "-q", hub])).code !== 0)
-    throw new RepositoryRefused(`Could not make ${hub} on the server.`);
+  // Both parents must be the managed root's own directories, not links elsewhere, before
+  // anything is made or changed under them.
+  for (const parent of [`${root}/repos`, `${root}/checkouts`])
+    if ((await run(transport, ["realpath", "-e", "--", parent])).stdout.trim() !== parent)
+      throw new RepositoryRefused(
+        `${parent} on the server is not a directory of the ORCA server's own. Nothing was changed.`,
+      );
+  // An existing hub is used only if it is exactly that bare repository; a new one is made there.
+  if ((await run(transport, ["test", "-e", hub])).code === 0) await assertHub(transport, hub);
+  else {
+    if ((await run(transport, ["git", "init", "--bare", "-q", hub])).code !== 0)
+      throw new RepositoryRefused(`Could not make ${hub} on the server.`);
+    await assertHub(transport, hub);
+  }
 
   const scratch = await pushCourier(transport, {
     version: "repository",
@@ -203,6 +214,22 @@ export async function pushRepository(
   if (branch) await run(transport, ["git", "-C", hub, "symbolic-ref", "HEAD", branch]);
   const checkoutState = await updateCheckout(transport, hub, checkout, branch);
   return { name: options.name, hub, checkout, refs: [...options.refs], checkoutState };
+}
+
+/** Refuse unless `hub` is itself a bare repository, where it was made, with nothing redirecting Git. */
+async function assertHub(transport: CourierTransport, hub: string): Promise<void> {
+  const resolved = await run(transport, ["realpath", "-e", "--", hub]);
+  const gitDir = await run(transport, ["git", "-C", hub, "rev-parse", "--absolute-git-dir"]);
+  const bare = await run(transport, ["git", "-C", hub, "rev-parse", "--is-bare-repository"]);
+  if (
+    resolved.stdout.trim() !== hub ||
+    gitDir.code !== 0 ||
+    gitDir.stdout.trim() !== hub ||
+    bare.stdout.trim() !== "true"
+  )
+    throw new RepositoryRefused(
+      `${hub} on the server is not the bare repository a push made there. Nothing was changed.`,
+    );
 }
 
 /**

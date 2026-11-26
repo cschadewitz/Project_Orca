@@ -4,7 +4,7 @@
  * its words, so real git does the bundling, fetching and cloning on both sides.
  */
 import { execFileSync, spawnSync } from "node:child_process";
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -142,6 +142,36 @@ describe("pushRepository", () => {
     expect(host.commands.some((c) => c.includes(pushed.checkout) && (c.includes("fetch") || c.includes("merge")))).toBe(
       false,
     );
+  });
+
+  it.each([
+    ["the checkouts directory is a link", "checkouts"],
+    ["the repositories directory is a link", "repos"],
+    ["the bare repository is a link", "repos/app.git"],
+  ])("changes nothing when %s", async (_, linked) => {
+    const local = repo();
+    const host = server();
+    const elsewhere = tmp();
+    if (linked === "repos/app.git") {
+      mkdirSync(join(host.root, "repos"), { recursive: true });
+      git(elsewhere, "init", "-q", "--bare");
+    }
+    const before = readdirSync(elsewhere).sort();
+    symlinkSync(elsewhere, join(host.root, linked));
+    host.commands.length = 0;
+    await expect(push(local, host.transport)).rejects.toThrow(/Nothing was changed/);
+    expect(host.commands.some((c) => ["init", "clone", "fetch"].includes(c[1]!) || c[3] === "fetch")).toBe(false);
+    expect(readdirSync(elsewhere).sort()).toEqual(before);
+    if (linked === "repos/app.git")
+      expect(() => git(elsewhere, "rev-parse", "--verify", "-q", "refs/heads/main")).toThrow();
+  });
+
+  it("refuses an existing hub that is a plain directory inside another repository", async () => {
+    const local = repo();
+    const host = server();
+    git(host.root, "init", "-q");
+    mkdirSync(join(host.root, "repos/app.git"), { recursive: true });
+    await expect(push(local, host.transport)).rejects.toThrow(/not the bare repository/);
   });
 
   it("never works on an enclosing checkout that Git finds above a plain directory", async () => {
