@@ -858,13 +858,15 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
         refused: accountProblem?.details?.["reason"] ?? null,
       });
       opts.onAccount?.(now.status);
-      // Allowed again: its usage limits are read anew once this check is over.
-      if (!accountProblem) setImmediate(() => void readRateLimits(c));
     })();
+    const gen = accountGen;
     accountCheck = check.finally(() => {
       if (accountCheck === settled) accountCheck = undefined;
     });
     const settled = accountCheck;
+    // Allowed again: its usage limits are read anew, bound to this check. Chained on it, so no
+    // other update can come in between; and refused by readRateLimits once anything moved.
+    void settled.then(() => readRateLimits(c, gen));
     return settled;
   };
   /**
@@ -872,9 +874,11 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
    * in the background, since the read goes to OpenAI, and only as diagnostics. Every bucket Codex
    * answers with is kept apart, and none overwrites an update Codex sent after the read began.
    */
-  const readRateLimits = async (c: Connection) => {
-    if (c.account.status.kind !== "chatgpt") return;
-    const read = { since: limitSeq, gen: accountGen };
+  const readRateLimits = async (c: Connection, gen = accountGen) => {
+    // Only for the live connection's confirmed, allowed account, as of `gen`.
+    const current = () => conn === c && gen === accountGen && !pendingAccountCheck() && !accountProblem;
+    if (!current() || c.account.status.kind !== "chatgpt") return;
+    const read = { since: limitSeq, gen };
     let answer: unknown;
     try {
       answer = await c.client.request(
@@ -889,7 +893,7 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
       return;
     }
     // Begun before the account was read again or another app-server took over: dropped unread.
-    if (conn !== c || read.gen !== accountGen) return;
+    if (!current()) return;
     const a = isObject(answer) ? answer : {};
     const byId = a.rateLimitsByLimitId;
     const snapshots =

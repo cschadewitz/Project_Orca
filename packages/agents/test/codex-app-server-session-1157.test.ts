@@ -473,6 +473,35 @@ describe("account and usage limits (#1164)", () => {
     await session.close();
   });
 
+  it("drops the refresh one account check scheduled once another account update came in", async () => {
+    const limits: unknown[] = [];
+    const reads: Msg[] = [];
+    const accountReads: Msg[] = [];
+    const s = scriptedHost({
+      ...BASE,
+      "account/read": (msg) => (accountReads.push(msg), accountReads.length === 3 ? NO_ANSWER : CHATGPT()),
+      "account/rateLimits/read": (msg) => (reads.push(msg), NO_ANSWER),
+    });
+    const session = await open(s.host, { onRateLimits: (l) => limits.push(l) });
+    await vi.waitFor(() => expect(reads).toHaveLength(1));
+    // the first update: confirmed at once, and its refresh is sent and held
+    s.peer.notify("account/updated", { authMode: "chatgpt", planType: "pro", reason: null });
+    await vi.waitFor(() => expect(reads).toHaveLength(2));
+    // a second update before the refresh answers: its re-read is held
+    s.peer.notify("account/updated", { authMode: "chatgpt", planType: "pro", reason: null });
+    await vi.waitFor(() => expect(accountReads).toHaveLength(3));
+    s.peer.say({ id: reads[1]!.id as number, result: { rateLimits: { ...SNAPSHOT, primary: window(99) } } });
+    await settle();
+    // no refresh goes out while the second check is pending
+    expect(reads).toHaveLength(2);
+    s.peer.say({ id: accountReads[2]!.id as number, result: CHATGPT() });
+    // the first refresh's answer stays dropped once the second check settles; the second refreshes
+    await vi.waitFor(() => expect(reads).toHaveLength(3));
+    s.peer.say({ id: reads[2]!.id as number, result: { rateLimits: { ...SNAPSHOT, primary: window(12) } } });
+    await vi.waitFor(() => expect(limits).toEqual([expect.objectContaining({ primary: window(12) })]));
+    await session.close();
+  });
+
   it("never takes a usage-limit read that answers during a turn as evidence about it", async () => {
     const limits: unknown[] = [];
     let readId: unknown;
