@@ -242,6 +242,42 @@ describe("an app-server that exits", () => {
     expect(s.spawnAgent).toHaveBeenCalledTimes(1);
   });
 
+  it("stops the session when a refused replacement cannot be seen gone, starting no third app-server", async () => {
+    const s = scriptedHost(
+      (i) => ({
+        ...BASE,
+        ...(i === 1 ? { "thread/resume": () => thread("thr_1", { approvalsReviewer: "auto_review" }) } : {}),
+      }),
+      (i) => ({ hang: i === 1 }),
+    );
+    const session = await open(s.host, { exitGraceMs: 10 });
+    s.procs[0]!.crash();
+    await settle();
+    const error = (await session.prompt("go").catch((e: unknown) => e)) as OrcaError;
+    expect(error.code).toBe("AGENT_TRANSPORT");
+    expect(error.message).toMatch(/app-server ORCA was starting could not be confirmed gone/);
+    expect(s.procs[1]!.kill.mock.calls.map((c) => c[0])).toEqual(["SIGTERM", "SIGKILL"]);
+    await expect(session.prompt("again")).rejects.toBe(error);
+    expect(s.spawnAgent).toHaveBeenCalledTimes(2);
+  });
+
+  it("stops the session when a replacement cancelled in its resume cannot be seen gone, starting no third app-server", async () => {
+    const s = scriptedHost(
+      (i) => (i === 1 ? { ...BASE, "thread/resume": () => NO_ANSWER } : BASE),
+      (i) => ({ hang: i === 1 }),
+    );
+    const session = await open(s.host, { requestTimeoutMs: 60_000, exitGraceMs: 10 });
+    s.procs[0]!.crash();
+    await settle();
+    const turn = session.prompt("go");
+    await vi.waitFor(() => expect(s.procs[1]?.received.some((m) => m.method === "thread/resume")).toBe(true));
+    void session.cancel();
+    const error = (await turn.catch((e: unknown) => e)) as OrcaError;
+    expect(error.message).toMatch(/app-server ORCA was starting could not be confirmed gone/);
+    await expect(session.prompt("again")).rejects.toBe(error);
+    expect(s.spawnAgent).toHaveBeenCalledTimes(2);
+  });
+
   it("stops a replacement stalled in its handshake when the session closes, and terminates once both are gone", async () => {
     const s = scriptedHost((i) => (i === 1 ? { ...BASE, initialize: () => NO_ANSWER } : BASE));
     const session = await open(s.host, { requestTimeoutMs: 60_000 });

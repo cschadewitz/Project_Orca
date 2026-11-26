@@ -963,6 +963,25 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
   const isBroken = (): OrcaError | undefined => broken;
   /** A restart given up because its prompt was cancelled: not a crash, and the prompt ends cancelled. */
   class RestartCancelled extends Error {}
+  /**
+   * Wait for `c`'s process to be gone. When its exit cannot be confirmed, Codex may still be
+   * running on the thread, so the session stops and takes no further prompt.
+   */
+  const confirmGone = async (c: Connection, which: string) => {
+    try {
+      await c.cleanup();
+    } catch {
+      breakSession(
+        new OrcaError(
+          "AGENT_TRANSPORT",
+          `agent ${agent.id}: the Codex app-server ${which} could not be confirmed gone, so ORCA does not ` +
+            `start another on its thread and stops the session`,
+          { agentId: agent.id, stderr: c.proc.stderrTail() },
+        ),
+      );
+      throw isBroken()!;
+    }
+  };
   const restart = async (turn: ActiveTurn): Promise<Connection> => {
     const stopped = () =>
       isBroken() ??
@@ -975,21 +994,7 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
     const early = stopped();
     if (early) throw early;
     // Two app-servers never own the thread: the last one has to be seen gone first.
-    if (lost) {
-      try {
-        await lost.cleanup();
-      } catch {
-        breakSession(
-          new OrcaError(
-            "AGENT_TRANSPORT",
-            `agent ${agent.id}: the Codex app-server that exited could not be confirmed gone, so ORCA does not ` +
-              `start another on its thread and stops the session`,
-            { agentId: agent.id, stderr: lost.proc.stderrTail() },
-          ),
-        );
-        throw isBroken()!;
-      }
-    }
+    if (lost) await confirmGone(lost, "that exited");
     let c: Connection | undefined;
     try {
       c = await connect(true, stopped);
@@ -1002,11 +1007,12 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
       logger.info("Codex app-server restarted on the same thread", { threadId, crashes: crashes.length });
       return c;
     } catch (error) {
-      if (c) {
-        c.client.close("closed after a failed restart");
-        await c.cleanup().catch(() => undefined);
-      } else if (starting) {
-        await starting.cleanup().catch(() => undefined);
+      // A replacement that failed or was cancelled is stopped, and has to be seen gone like an
+      // exited one: otherwise the next prompt could start a third app-server beside it.
+      const replacement = c ?? starting;
+      if (replacement) {
+        replacement.client?.close("closed after a failed restart");
+        await confirmGone(replacement, "ORCA was starting");
       }
       const why = stopped();
       if (why) throw why;
