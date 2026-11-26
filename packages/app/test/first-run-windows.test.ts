@@ -26,11 +26,20 @@ import {
   acquireFirstRunFence,
 } from "@orca/protocol/first-run-fence";
 import { FirstRunSetup } from "../src/main/first-run/setup.js";
+import { windowsWorkspaceParent } from "../src/main/first-run/directories.js";
+import { refusalMessage } from "../src/main/first-run/ipc.js";
+import { untrustedWriterReason } from "../src/first-run-windows-reasons.js";
 import { verifyFirstRunSampleAssets } from "../src/main/first-run/sample-assets.js";
 import { inspectFirstRunOwnership, reserveFirstRunOwnership } from "../src/main/first-run/ownership.js";
 const roots: string[] = [];
 // Test-only fixture selection: managed Temp ACLs can correctly fail safe ancestry.
 const fixtureParent = process.env.ORCA_WINDOWS_TEST_PARENT ?? tmpdir();
+/** Whether the fixture drive's root grants Authenticated Users Modify on the root itself, as Windows does for data drives. */
+const stockDataDriveRoot =
+  process.platform === "win32" &&
+  execFileSync("icacls", [`${fixtureParent.slice(0, 2)}\\`], { encoding: "utf8", windowsHide: true, stdio: "pipe" })
+    .split(/\r?\n/)
+    .some((line) => /Authenticated Users:\(M\)\s*$/.test(line));
 afterEach(async () => {
   for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
 });
@@ -142,6 +151,60 @@ describe.skipIf(process.platform !== "win32")("native Windows first-run", () => 
     ])
       expect(() => windowsDirectory(path)).toThrow();
     expect(() => windowsWrite(join(f.project, "outside.txt"), "never")).toThrow();
+  });
+  it("refuses a folder another account can change, by its own code (#1217)", async () => {
+    const f = await fixture();
+    // A new fixture folder, granted Modify to Authenticated Users on itself only; its child inherits nothing from that.
+    const shared = join(f.root, "shared");
+    windowsPrivateChild(shared);
+    execFileSync("icacls", [shared, "/grant", "*S-1-5-11:(M)"], { windowsHide: true, stdio: "pipe" });
+    const inner = join(shared, "inner");
+    await mkdir(inner);
+    for (const path of [shared, inner]) {
+      for (const mode of ["project", "parent"] as const)
+        expect(() => windowsDirectory(path, mode)).toThrow(
+          expect.objectContaining({ code: "FIRST_RUN_WINDOWS_UNTRUSTED_WRITER" }),
+        );
+    }
+  });
+  it("labels only a confirmed writer: read-only grants pass and unknown refusals stay generic, through to the screen's text (#1217)", async () => {
+    const f = await fixture();
+    // Read and execute for another account is not a writer: the selection passes.
+    const readable = join(f.root, "readable");
+    windowsPrivateChild(readable);
+    execFileSync("icacls", [readable, "/grant", "*S-1-5-11:(RX)"], { windowsHide: true, stdio: "pipe" });
+    expect(windowsDirectory(readable, "project").path).toBe(readable);
+    // A private folder with that same grant is refused, but not as a writer: the cause is not one to act on.
+    expect(() => windowsDirectory(readable, "directory")).toThrow(
+      expect.objectContaining({ code: "FIRST_RUN_WINDOWS_UNAVAILABLE" }),
+    );
+    // An unsupported namespace is unknown, never labelled.
+    expect(() => windowsDirectory("\\\\server\\share\\workspace", "parent")).toThrow(
+      expect.objectContaining({ code: "FIRST_RUN_WINDOWS_UNAVAILABLE" }),
+    );
+    // The native code reaches the screen as the specific reason only for a confirmed writer.
+    const shared = join(f.root, "shared-parent");
+    windowsPrivateChild(shared);
+    execFileSync("icacls", [shared, "/grant", "*S-1-5-11:(M)"], { windowsHide: true, stdio: "pipe" });
+    const screen = (path: string) => {
+      try {
+        windowsWorkspaceParent(path);
+      } catch (error) {
+        return refusalMessage(error);
+      }
+      throw new Error("expected a refusal");
+    };
+    expect(screen(shared)).toBe(untrustedWriterReason(false));
+    const unknown = screen("\\\\server\\share\\workspace");
+    expect(unknown).not.toBe(untrustedWriterReason(false));
+    expect(unknown).not.toContain("another account");
+  });
+  // A data drive's stock root grants Authenticated Users Modify on the root itself. A root cannot be renamed or
+  // deleted, so that alone no longer refuses everything on the drive. Runs where the fixture's drive has that root.
+  it.skipIf(!stockDataDriveRoot)("accepts a project on a drive whose root carries the stock Modify grant", async () => {
+    const f = await fixture();
+    expect(windowsDirectory(f.project, "project").path).toBe(f.project);
+    expect(windowsDirectory(f.root, "parent").path).toBe(f.root);
   });
   it("refuses physical workspace replacement and uncertified legacy Windows receipts", async () => {
     const f = await fixture();

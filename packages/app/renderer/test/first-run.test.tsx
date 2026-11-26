@@ -8,6 +8,7 @@ import { FirstRunSection } from "../src/first-run/first-run-section.js";
 import { useEscapeClosesTopLayer } from "../src/layers-context.js";
 import { fakeBridge } from "./fake-bridge.js";
 import { harness } from "./harness.js";
+import { untrustedWriterReason } from "../../src/first-run-windows-reasons.js";
 const teardown: (() => void)[] = [];
 /** The one global `Esc`, which the chrome registers in the app and a section test must add. */
 function Escape(): null {
@@ -89,6 +90,21 @@ it("keeps the selected review after a refused write and shows the reason main ga
   expect(screen.getByText("Main reason needle.")).toBeTruthy();
   expect(screen.getByRole("button", { name: "Create reviewed sample files" })).toBeTruthy();
   expect(f.firstRun.connect).not.toHaveBeenCalled();
+});
+
+it("says which folder Windows refused and why, not the generic could-not-verify text (#1217)", async () => {
+  // The text main sends for the native check's untrusted-writer refusal (asserted on main's side in
+  // first-run-windows-refusal.test.ts).
+  const reason = untrustedWriterReason(true);
+  const f = setup();
+  await screen.findByText("Explicit owned directories required.");
+  f.firstRun.choose.mockResolvedValueOnce({ ok: false, error: { code: "AGENT_TRANSPORT", message: reason } });
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "Choose project and empty workspace" })));
+  expect(screen.getByText(/Setup was refused/)).toBeTruthy();
+  expect(
+    screen.getByText(/The project folder, or a folder above it, can be changed or deleted by another account\./),
+  ).toBeTruthy();
+  expect(screen.queryByText(/could not verify the selected directories/)).toBeNull();
 });
 
 it("keeps keyboard focus in the section when choosing directories replaces the Choose button", async () => {

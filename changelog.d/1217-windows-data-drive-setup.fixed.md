@@ -1,0 +1,1 @@
+- **app:** On Windows, project setup no longer refuses every folder on a secondary data drive because of the drive root's stock "Authenticated Users: Modify" permission, and a refused folder now says which folder failed and why instead of "could not verify the selected directories" (#1217).
