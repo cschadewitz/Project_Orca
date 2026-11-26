@@ -55,9 +55,14 @@ async function fakeDaemon(handlers, respond) {
       const message = JSON.parse(body);
       calls.push({ method: message.method, params: message.params, auth: req.headers.authorization });
       const handler = table.get(message.method);
-      const result = typeof handler === "function" ? handler(message.params, calls) : (handler ?? {});
       res.setHeader("content-type", "application/json");
-      res.end(JSON.stringify({ kind: "response", id: message.id, ok: true, result }));
+      try {
+        const result = typeof handler === "function" ? handler(message.params, calls) : (handler ?? {});
+        res.end(JSON.stringify({ kind: "response", id: message.id, ok: true, result }));
+      } catch (error) {
+        // A handler that throws `{ code, message }` answers as the daemon refuses a request.
+        res.end(JSON.stringify({ kind: "response", id: message.id, ok: false, error }));
+      }
     });
   });
   await new Promise((done) => server.listen(0, "127.0.0.1", done));
@@ -194,6 +199,47 @@ it("never submits a program into an existing plan, and writes only to plans it m
   expect(planWrites.map((call) => call.params.planId)).toEqual(["plan-new-search"]);
   expect(planWrites.map((call) => call.params.key)).toEqual(["hosted-cost"]);
   for (const call of daemon.calls) expect(call.auth).toBe(`Bearer ${TOKEN}`);
+}, 30_000);
+
+it("sends a submission the store refused under contention again, with the same key, and nothing else (#1284)", async () => {
+  const selected = workspace();
+  let refusals = 2;
+  let n = 0;
+  const handlers = {
+    "config.get": { config: { path: join(selected, "orca.config.yaml") } },
+    "requests.submit": () => {
+      if (refusals-- > 0) throw { code: "STORE_LOCK_TIMEOUT", message: "lock catalog.lock still held after 100ms" };
+      n++;
+      return { state: "accepted", admissionId: `adm-${n}`, requestId: `req-${n}`, runId: `run-${n}` };
+    },
+    "plans.list": { plans: [] },
+    "decisions.list": { decisions: [] },
+    "inputs.list": { inputs: [] },
+    "runs.list": { runs: [] },
+    "runs.cancel": {},
+  };
+  const daemon = await fakeDaemon(handlers);
+  const args = ["--workspace", selected, "--url", daemon.url, "--phase", "populate", "--settle", "11"];
+  const { code, output } = await seed(args);
+  expect(code, output).toBe(0);
+  const keys = daemon.calls.filter((call) => call.method === "requests.submit").map((c) => c.params.idempotencyKey);
+  // The first item went three times under one key; every later item once.
+  expect(keys[0]).toBe(keys[1]);
+  expect(keys[1]).toBe(keys[2]);
+  expect(new Set(keys).size).toBe(keys.length - 2);
+
+  // Any other refusal is not retried.
+  const other = workspace();
+  const refusing = await fakeDaemon({
+    ...handlers,
+    "config.get": { config: { path: join(other, "orca.config.yaml") } },
+    "requests.submit": () => {
+      throw { code: "RUN_STATE", message: "no" };
+    },
+  });
+  const failed = await seed(["--workspace", other, "--url", refusing.url, "--phase", "populate", "--settle", "11"]);
+  expect(failed.code).not.toBe(0);
+  expect(refusing.calls.filter((call) => call.method === "requests.submit")).toHaveLength(1);
 }, 30_000);
 
 it("with --config-out, prepare writes the config to the file and saves nothing through the daemon", async () => {
