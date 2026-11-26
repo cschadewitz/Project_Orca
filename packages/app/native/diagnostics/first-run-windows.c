@@ -6,8 +6,20 @@ typedef struct { chain ancestry; HANDLE fd; int lifetime; } first_lock;
 static const napi_type_tag lock_tag={UINT64_C(0x4c9642687ab561fd),UINT64_C(0xad810d530931efda)};
 static unsigned lifetime_count=0;
 
+/* Why the last selection was refused, for a message the person can act on. Paths are never echoed. */
+enum { REFUSED_UNKNOWN, REFUSED_WRITER, REFUSED_OWNER };
+static int selection_refusal=REFUSED_UNKNOWN;
 static napi_value refused(napi_env env) {
   napi_throw_error(env,"FIRST_RUN_WINDOWS_UNAVAILABLE","Windows first-run identity unavailable");
+  return NULL;
+}
+static napi_value refused_selection(napi_env env) {
+  int reason=selection_refusal; selection_refusal=REFUSED_UNKNOWN;
+  if(reason==REFUSED_WRITER)
+    napi_throw_error(env,"FIRST_RUN_WINDOWS_UNTRUSTED_WRITER","Windows first-run folder writable by another account");
+  else if(reason==REFUSED_OWNER)
+    napi_throw_error(env,"FIRST_RUN_WINDOWS_NOT_OWNER","Windows first-run folder owned by another account");
+  else return refused(env);
   return NULL;
 }
 static int text_arg(napi_env env,napi_value value,char *target,size_t capacity) {
@@ -31,15 +43,22 @@ static int canonical(HANDLE fd,const char *path) {
   return length>4 && length<1024 && !wcsncmp(actual,L"\\\\?\\",4) && wide(path,expected,1024) && !wcscmp(actual+4,expected);
 }
 static int selected(const char *path,int private_root,int owned,chain *held) {
+  selection_refusal=REFUSED_UNKNOWN;
   if(strlen(path)<4 || path[1]!=':' || path[2]!='\\')return 0;
   wchar_t drive[4]={(wchar_t)path[0],L':',L'\\',0};
-  if(GetDriveTypeW(drive)!=DRIVE_FIXED || !directory(path,0,private_root,held))return 0;
+  if(GetDriveTypeW(drive)!=DRIVE_FIXED)return 0;
+  if(!directory(path,0,private_root,held)) { if(ancestry_writer_refused)selection_refusal=REFUSED_WRITER; return 0; }
   for(unsigned i=0;i<held->count;++i) {
     win_stat st;
-    if(!info(held->fd[i],&st) || st.kind!=2 || !st.st_ino || !safe_acl(held->fd[i],private_root && i==held->count-1))goto fail;
+    if(!info(held->fd[i],&st) || st.kind!=2 || !st.st_ino)goto fail;
+    if(!safe_acl_at(held->fd[i],private_root && i==held->count-1,i==0)) {
+      if(!(private_root && i==held->count-1))selection_refusal=REFUSED_WRITER;
+      goto fail;
+    }
   }
   HANDLE fd=held->fd[held->count-1];
-  if(!canonical(fd,path) || (owned && !current_owner(fd)))goto fail;
+  if(!canonical(fd,path))goto fail;
+  if(owned && !current_owner(fd)) { selection_refusal=REFUSED_OWNER; goto fail; }
   return 1;
 fail:
   close_chain(held); return 0;
@@ -140,7 +159,7 @@ static napi_value call(napi_env env,napi_callback_info cb) {
     napi_create_string_utf8(env,text,NAPI_AUTO_LENGTH,&result); return result;
   }
   if(!strcmp(op,"project") || !strcmp(op,"parent") || !strcmp(op,"directory")) {
-    if(!selected(path,!strcmp(op,"directory"),strcmp(op,"parent")!=0,&held))return refused(env);
+    if(!selected(path,!strcmp(op,"directory"),strcmp(op,"parent")!=0,&held))return refused_selection(env);
     result=observation(env,held.fd[held.count-1],path); close_chain(&held);
     return result?result:refused(env);
   }

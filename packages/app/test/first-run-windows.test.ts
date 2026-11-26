@@ -31,6 +31,12 @@ import { inspectFirstRunOwnership, reserveFirstRunOwnership } from "../src/main/
 const roots: string[] = [];
 // Test-only fixture selection: managed Temp ACLs can correctly fail safe ancestry.
 const fixtureParent = process.env.ORCA_WINDOWS_TEST_PARENT ?? tmpdir();
+/** Whether the fixture drive's root grants Authenticated Users Modify on the root itself, as Windows does for data drives. */
+const stockDataDriveRoot =
+  process.platform === "win32" &&
+  execFileSync("icacls", [`${fixtureParent.slice(0, 2)}\\`], { encoding: "utf8", windowsHide: true, stdio: "pipe" })
+    .split(/\r?\n/)
+    .some((line) => /Authenticated Users:\(M\)\s*$/.test(line));
 afterEach(async () => {
   for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
 });
@@ -142,6 +148,28 @@ describe.skipIf(process.platform !== "win32")("native Windows first-run", () => 
     ])
       expect(() => windowsDirectory(path)).toThrow();
     expect(() => windowsWrite(join(f.project, "outside.txt"), "never")).toThrow();
+  });
+  it("refuses a folder another account can change, by its own code (#1217)", async () => {
+    const f = await fixture();
+    // A new fixture folder, granted Modify to Authenticated Users on itself only; its child inherits nothing from that.
+    const shared = join(f.root, "shared");
+    windowsPrivateChild(shared);
+    execFileSync("icacls", [shared, "/grant", "*S-1-5-11:(M)"], { windowsHide: true, stdio: "pipe" });
+    const inner = join(shared, "inner");
+    await mkdir(inner);
+    for (const path of [shared, inner]) {
+      for (const mode of ["project", "parent"] as const)
+        expect(() => windowsDirectory(path, mode)).toThrow(
+          expect.objectContaining({ code: "FIRST_RUN_WINDOWS_UNTRUSTED_WRITER" }),
+        );
+    }
+  });
+  // A data drive's stock root grants Authenticated Users Modify on the root itself. A root cannot be renamed or
+  // deleted, so that alone no longer refuses everything on the drive. Runs where the fixture's drive has that root.
+  it.skipIf(!stockDataDriveRoot)("accepts a project on a drive whose root carries the stock Modify grant", async () => {
+    const f = await fixture();
+    expect(windowsDirectory(f.project, "project").path).toBe(f.project);
+    expect(windowsDirectory(f.root, "parent").path).toBe(f.root);
   });
   it("refuses physical workspace replacement and uncertified legacy Windows receipts", async () => {
     const f = await fixture();

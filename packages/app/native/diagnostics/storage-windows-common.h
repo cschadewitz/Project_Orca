@@ -111,7 +111,13 @@ static int trusted_sid(PSID sid, const identities *ids, int private_object) {
   return IsValidSid(sid) && (EqualSid(sid,((const TOKEN_USER*)ids->token)->User.Sid) ||
     EqualSid(sid,(PSID)ids->system) || (!private_object && (EqualSid(sid,(PSID)ids->admin) || EqualSid(sid,(PSID)ids->installer))));
 }
-static int safe_acl(HANDLE fd, int private_object) {
+/* A volume root cannot be renamed or deleted, and replacing one of its children needs DELETE on that
+   child (checked on the child itself) or FILE_DELETE_CHILD here. Windows gives a data drive's root
+   "Authenticated Users: Modify" by default, so at the root only, untrusted write, delete and attribute
+   rights are tolerated; rights that reach children or the root's own security are still refused. */
+#define ROOT_REFUSED_RIGHTS (GENERIC_ALL|WRITE_DAC|WRITE_OWNER|FILE_DELETE_CHILD)
+#define ANCESTRY_REFUSED_RIGHTS (GENERIC_ALL|GENERIC_WRITE|DELETE|WRITE_DAC|WRITE_OWNER|FILE_DELETE_CHILD|FILE_WRITE_ATTRIBUTES|FILE_WRITE_EA)
+static int safe_acl_at(HANDLE fd, int private_object, int volume_root) {
   identities ids;
   unsigned char bytes[8192]; DWORD required = 0;
   PSID owner; BOOL defaulted, present; PACL acl;
@@ -133,10 +139,11 @@ static int safe_acl(HANDLE fd, int private_object) {
     PSID sid = &ace->SidStart;
     if (!IsValidSid(sid) || sizeof(ACCESS_ALLOWED_ACE)-sizeof(DWORD)+GetLengthSid(sid)>header->AceSize) return 0;
     if (!trusted_sid(sid,&ids,private_object) &&
-        (private_object || (ace->Mask & (GENERIC_ALL|GENERIC_WRITE|DELETE|WRITE_DAC|WRITE_OWNER|FILE_DELETE_CHILD|FILE_WRITE_ATTRIBUTES|FILE_WRITE_EA)))) return 0;
+        (private_object || (ace->Mask & (volume_root ? ROOT_REFUSED_RIGHTS : ANCESTRY_REFUSED_RIGHTS)))) return 0;
   }
   return 1;
 }
+static int safe_acl(HANDLE fd, int private_object) { return safe_acl_at(fd, private_object, 0); }
 static int new_security(SECURITY_DESCRIPTOR *descriptor, unsigned char *acl_bytes, identities *ids) {
   PSID user = ((TOKEN_USER*)ids->token)->User.Sid;
   return InitializeSecurityDescriptor(descriptor,SECURITY_DESCRIPTOR_REVISION) &&
@@ -164,7 +171,10 @@ static int file_safe(HANDLE fd, win_stat *st) {
   if(!info(fd,st) || st->kind!=1 || st->st_nlink!=1 || st->st_size>MAX_BYTES || !safe_acl(fd,1)) return 0;
   return 1;
 }
+/* Set when directory() refused a component because another account can change it (not for other failures). */
+static int ancestry_writer_refused = 0;
 static int directory(const char *path, int create, int private_root, chain *out) {
+  ancestry_writer_refused = 0;
   wchar_t copy[1024];
   if (!wide(path,copy,1024) || wcslen(copy)<4 || copy[1]!=L':' || copy[2]!=L'\\' ||
       !((copy[0]>=L'A'&&copy[0]<=L'Z')||(copy[0]>=L'a'&&copy[0]<=L'z'))) { errno=EACCES; return 0; }
@@ -195,7 +205,8 @@ static int directory(const char *path, int create, int private_root, chain *out)
     if (next==INVALID_HANDLE_VALUE) goto refused;
     out->fd[out->count++]=next;
     win_stat st;
-    if (!info(next,&st) || st.kind!=2 || !safe_acl(next,private_root && !end)) { errno=EACCES; goto refused; }
+    if (!info(next,&st) || st.kind!=2) { errno=EACCES; goto refused; }
+    if (!safe_acl(next,private_root && !end)) { ancestry_writer_refused = !(private_root && !end); errno=EACCES; goto refused; }
     if (!end) break;
     part=end+1;
   }

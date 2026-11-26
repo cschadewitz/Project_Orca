@@ -7,6 +7,7 @@ import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 
 import { windowsDirectory, windowsFile } from "@orca/protocol/first-run-fence";
 import { FirstRunRefusal } from "./refusal.js";
+import { notOwnerReason, untrustedWriterReason } from "../../first-run-windows-reasons.js";
 const execute = promisify(execFile);
 export interface DirectoryIdentity {
   path: string;
@@ -44,9 +45,31 @@ function reservedFolder(canonical: string, home: string, project: boolean): Firs
   return undefined;
 }
 
+/** The Windows check's specific refusals, in words a person can act on. Anything else stays the check's own error. */
+export function windowsSelectionFailure(error: unknown, project: boolean): FirstRunRefusal | undefined {
+  const code = typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
+  if (code === "FIRST_RUN_WINDOWS_UNTRUSTED_WRITER") return selectionFailure(untrustedWriterReason(project));
+  if (code === "FIRST_RUN_WINDOWS_NOT_OWNER") return selectionFailure(notOwnerReason(project));
+  return undefined;
+}
+
+/** On Windows the app workspace is a new private child of this folder; it is checked like any selection. */
+export function windowsWorkspaceParent(path: string): DirectoryIdentity {
+  try {
+    return windowsDirectory(path, "parent");
+  } catch (error) {
+    throw windowsSelectionFailure(error, false) ?? error;
+  }
+}
+
 export async function ownedDirectory(path: string, home: string, project = false): Promise<DirectoryIdentity> {
   if (process.platform === "win32") {
-    const identity = windowsDirectory(path, project ? "project" : "directory");
+    let identity;
+    try {
+      identity = windowsDirectory(path, project ? "project" : "directory");
+    } catch (error) {
+      throw windowsSelectionFailure(error, project) ?? error;
+    }
     const reserved = reservedFolder(path, await realpath(home), project);
     if (reserved) throw reserved;
     return identity;

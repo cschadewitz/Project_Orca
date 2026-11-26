@@ -39,6 +39,7 @@ import {
   emptyDirectory,
   selectionFailure,
   verifyRuntimeDirectories,
+  windowsWorkspaceParent,
 } from "./directories.js";
 
 const changedSetupFiles = () =>
@@ -282,7 +283,7 @@ export class FirstRunSetup {
       const workspacePath = await this.deps.choose("workspace");
       assertCurrent();
       if (!workspacePath) return this.status();
-      const parent = process.platform === "win32" ? windowsDirectory(workspacePath, "parent") : undefined;
+      const parent = process.platform === "win32" ? windowsWorkspaceParent(workspacePath) : undefined;
       const workspace = parent
         ? { ...parent, path: join(parent.path, `orca-workspace-${randomUUID()}`) }
         : await ownedDirectory(workspacePath, this.deps.home);
@@ -312,7 +313,7 @@ export class FirstRunSetup {
       if (!selection || selection.review.id !== id) throw staleReview();
       assertCurrent();
       const project = await preparedProject(selection.project.path, this.deps.home);
-      const parent = selection.parent ? windowsDirectory(selection.parent.path, "parent") : undefined;
+      const parent = selection.parent ? windowsWorkspaceParent(selection.parent.path) : undefined;
       const workspaceBefore = parent
         ? selection.workspace
         : await ownedDirectory(selection.workspace.path, this.deps.home);
