@@ -100,6 +100,15 @@ workflows from outside collaborators' forks run (Settings, Actions, General; it
 appears once the repository is public). Before approving a fork's run, check whether
 it changes anything under `.github/`.
 
+## Release lines and feature branches
+
+`ci.yml` also runs on `release/X.Y` and `feature/**` branches and pull requests into them, with
+the same picker. That adds no new trust level: those branches live in this repository, so only
+collaborators with write access (or the release App, for `backport/*` and `feature-sync/*`)
+can push them, exactly as for a same-repository pull request into `main`. The fork rule above
+keys on the head repository, not the base, so a fork's pull request into a feature branch gets
+GitHub-hosted runners too.
+
 ## What the self-hosted runners can reach
 
 The runner stack lives outside this repository, and its isolation details are kept

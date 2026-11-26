@@ -5,8 +5,12 @@
 #
 # For each `feature/*` branch that does not already contain main, it merges main into a
 # `feature-sync/<name>` branch and opens (or refreshes) one pull request into the feature branch.
-# On a later run, a sync pull request whose head is still current and whose checks all passed
-# is merged with a merge commit, so the feature branch keeps its own history. A merge that
+# On a later run, a sync pull request whose head is exactly the bot's clean merge of the current
+# feature head and main, and on which CI's `check (node 24)` job passed, is merged with a merge
+# commit, so the feature branch keeps its own history. A head that is current but not that merge
+# is reported on the pull request and never merged. Unattended merging stays off until the
+# repository variable FEATURE_SYNC_AUTO_MERGE is `true`, which is set only once the `feature/*`
+# ruleset (pull request and `check (node 24)` required) is in place as a second layer. A merge that
 # conflicts opens nothing: one issue per branch, labelled `sync-conflict`, lists the files for
 # the workstream's owner, and is closed by the next clean sync.
 #
@@ -41,6 +45,7 @@ jobs:
       pull-requests: write
       issues: write
       checks: read
+      actions: read
     steps:
       - name: Release bot token (optional)
         id: app
@@ -60,4 +65,6 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app.outputs.token || github.token }}
           REPO: ${{ github.repository }}
+          # Unattended merging is off until the `feature/*` ruleset is in place (docs/WORKSTREAMS.md).
+          AUTO_MERGE: ${{ vars.FEATURE_SYNC_AUTO_MERGE }}
         run: bash tools/feature-sync.sh
