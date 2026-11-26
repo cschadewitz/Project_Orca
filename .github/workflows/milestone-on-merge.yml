@@ -1,0 +1,63 @@
+# Every pull request that ships carries a milestone (Casey, 2026-11-25), including the small,
+# dark ones workstreams merge to main behind an incubating flag (docs/WORKSTREAMS.md, #1239).
+# Nobody has to remember: a pull request merged into main without a milestone gets the one it
+# ships in, the earliest open minor (`X.Y.0`; tools/workstreams.js). A milestone someone set is
+# never changed, and line releases' record pull requests (`release-sync/*`) are left alone.
+#
+# `pull_request_target`, so it runs main's copy and none of the pull request's code; it only
+# reads milestones and sets one.
+name: Milestone on merge
+
+on:
+  pull_request_target:
+    branches: [main]
+    types: [closed]
+
+permissions:
+  contents: read
+
+jobs:
+  milestone:
+    name: set the milestone it ships in
+    if: >-
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.milestone == null &&
+      !startsWith(github.event.pull_request.head.ref, 'release-sync/')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+          sparse-checkout: tools
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: Set the earliest open minor milestone
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          gh api --paginate "repos/$REPO/milestones?state=open&per_page=100" --jq '.[]' | jq -s '.' > "$RUNNER_TEMP/milestones.json"
+          milestone=$(node tools/workstreams.js milestone "$RUNNER_TEMP/milestones.json")
+          if [ -z "$milestone" ]; then
+            echo "No open minor milestone; #$NUMBER left without one." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          # Read again: a person may have set one while this ran.
+          current=$(gh api "repos/$REPO/issues/$NUMBER" --jq '.milestone.number // ""')
+          if [ -n "$current" ]; then
+            echo "#$NUMBER already has milestone $current." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          gh api -X PATCH "repos/$REPO/issues/$NUMBER" -F milestone="$milestone" --jq '"#\(.number) -> \(.milestone.title)"' |
+            tee -a "$GITHUB_STEP_SUMMARY"

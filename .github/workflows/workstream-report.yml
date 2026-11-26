@@ -1,0 +1,67 @@
+# The weekly workstream report (docs/WORKSTREAMS.md, #1239): feature branches with no commit for
+# 14 days, incubating flags whose tracking issue was quiet for 30 days, and open sync conflicts,
+# written into one issue labelled `workstream-report` (created the first time, then edited in
+# place, so it never piles up comments). Read-only apart from that issue.
+name: Workstream report
+
+on:
+  schedule:
+    - cron: "11 7 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  report:
+    name: write the workstream report
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: Gather and write
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          branches=$(git for-each-ref --format='%(refname:lstrip=3)%09%(committerdate:iso-strict)' 'refs/remotes/origin/feature/' |
+            jq -R -s 'split("\n") | map(select(length > 0) | split("\t") | {name: .[0], committedAt: .[1]})')
+          # Node 24 reads the dependency-free registry directly (type stripping).
+          flags='[]'
+          if [ -f packages/core/src/features.ts ]; then
+            flags=$(node --input-type=module -e '
+              const { FEATURES } = await import(process.cwd() + "/packages/core/src/features.ts");
+              console.log(JSON.stringify(FEATURES.filter((f) => f.stage === "incubating")));
+            ')
+          fi
+          flags=$(jq -c '.[]' <<<"$flags" | while read -r flag; do
+            updated=$(gh api "repos/$REPO/issues/$(jq -r .issue <<<"$flag")" --jq .updated_at)
+            jq -c --arg u "$updated" '{name, issue, updatedAt: $u}' <<<"$flag"
+          done | jq -s '.')
+          conflicts=$(gh issue list --repo "$REPO" --state open --label sync-conflict --json number,title)
+          jq -n --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --argjson b "$branches" --argjson f "$flags" --argjson c "$conflicts" \
+            '{now: $now, branches: $b, flags: $f, conflicts: $c}' > "$RUNNER_TEMP/inputs.json"
+          node tools/workstreams.js report "$RUNNER_TEMP/inputs.json" > "$RUNNER_TEMP/report.md"
+          cat "$RUNNER_TEMP/report.md" >> "$GITHUB_STEP_SUMMARY"
+          gh label create workstream-report --repo "$REPO" --force --color 0e8a16 \
+            --description "The weekly workstream report" >/dev/null || true
+          issue=$(gh issue list --repo "$REPO" --state open --label workstream-report --json number --jq '.[0].number // ""')
+          if [ -n "$issue" ]; then
+            gh issue edit "$issue" --repo "$REPO" --body-file "$RUNNER_TEMP/report.md" >/dev/null
+          else
+            gh issue create --repo "$REPO" --title "Workstream report" --label workstream-report \
+              --body-file "$RUNNER_TEMP/report.md" >/dev/null
+          fi
