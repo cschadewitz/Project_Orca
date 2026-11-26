@@ -31,11 +31,14 @@ static int field(napi_env env,napi_value object,const char *name,const char *tex
   napi_value value;
   return napi_create_string_utf8(env,text,NAPI_AUTO_LENGTH,&value)==napi_ok && napi_set_named_property(env,object,name,value)==napi_ok;
 }
+/* OWNER_OTHER only when the owner was read and is a valid SID that is not the user; any failed read is OWNER_UNKNOWN. */
+enum { OWNER_UNKNOWN, OWNER_SELF, OWNER_OTHER };
 static int current_owner(HANDLE fd) {
   identities ids; unsigned char bytes[8192]; DWORD needed=0; PSID owner; BOOL defaulted;
-  return user_identities(&ids) && GetKernelObjectSecurity(fd,OWNER_SECURITY_INFORMATION,bytes,sizeof(bytes),&needed) &&
-    needed<=sizeof(bytes) && GetSecurityDescriptorOwner(bytes,&owner,&defaulted) && IsValidSid(owner) &&
-    EqualSid(owner,((TOKEN_USER*)ids.token)->User.Sid);
+  if(!user_identities(&ids) || !GetKernelObjectSecurity(fd,OWNER_SECURITY_INFORMATION,bytes,sizeof(bytes),&needed) ||
+    needed>sizeof(bytes) || !IsValidSecurityDescriptor(bytes) || !GetSecurityDescriptorOwner(bytes,&owner,&defaulted) ||
+    !owner || !IsValidSid(owner))return OWNER_UNKNOWN;
+  return EqualSid(owner,((TOKEN_USER*)ids.token)->User.Sid) ? OWNER_SELF : OWNER_OTHER;
 }
 static int canonical(HANDLE fd,const char *path) {
   wchar_t actual[1024],expected[1024];
@@ -51,14 +54,15 @@ static int selected(const char *path,int private_root,int owned,chain *held) {
   for(unsigned i=0;i<held->count;++i) {
     win_stat st;
     if(!info(held->fd[i],&st) || st.kind!=2 || !st.st_ino)goto fail;
-    if(!safe_acl_at(held->fd[i],private_root && i==held->count-1,i==0)) {
-      if(!(private_root && i==held->count-1))selection_refusal=REFUSED_WRITER;
-      goto fail;
-    }
+    int acl=safe_acl_at(held->fd[i],private_root && i==held->count-1,i==0);
+    if(acl!=ACL_SAFE) { if(acl==ACL_WRITER)selection_refusal=REFUSED_WRITER; goto fail; }
   }
   HANDLE fd=held->fd[held->count-1];
   if(!canonical(fd,path))goto fail;
-  if(owned && !current_owner(fd)) { selection_refusal=REFUSED_OWNER; goto fail; }
+  if(owned) {
+    int owner=current_owner(fd);
+    if(owner!=OWNER_SELF) { if(owner==OWNER_OTHER)selection_refusal=REFUSED_OWNER; goto fail; }
+  }
   return 1;
 fail:
   close_chain(held); return 0;

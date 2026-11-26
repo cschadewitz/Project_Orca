@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <errno.h>
 #include <wchar.h>
+#include "acl-policy.h"
 #define MAX_BYTES 1064960
 #define MAX_FILES 4
 #define MAX_ENTRIES 16
@@ -111,12 +112,9 @@ static int trusted_sid(PSID sid, const identities *ids, int private_object) {
   return IsValidSid(sid) && (EqualSid(sid,((const TOKEN_USER*)ids->token)->User.Sid) ||
     EqualSid(sid,(PSID)ids->system) || (!private_object && (EqualSid(sid,(PSID)ids->admin) || EqualSid(sid,(PSID)ids->installer))));
 }
-/* A volume root cannot be renamed or deleted, and replacing one of its children needs DELETE on that
-   child (checked on the child itself) or FILE_DELETE_CHILD here. Windows gives a data drive's root
-   "Authenticated Users: Modify" by default, so at the root only, untrusted write, delete and attribute
-   rights are tolerated; rights that reach children or the root's own security are still refused. */
-#define ROOT_REFUSED_RIGHTS (GENERIC_ALL|WRITE_DAC|WRITE_OWNER|FILE_DELETE_CHILD)
-#define ANCESTRY_REFUSED_RIGHTS (GENERIC_ALL|GENERIC_WRITE|DELETE|WRITE_DAC|WRITE_OWNER|FILE_DELETE_CHILD|FILE_WRITE_ATTRIBUTES|FILE_WRITE_EA)
+/* What an ACL read showed. Only ACL_WRITER is a positively identified cause a person can act on; an ACL that
+   could not be read, validated or understood, an untrusted owner, or a non-private private folder is ACL_UNKNOWN. */
+enum { ACL_UNKNOWN = 0, ACL_SAFE = 1, ACL_WRITER = 2 };
 static int safe_acl_at(HANDLE fd, int private_object, int volume_root) {
   identities ids;
   unsigned char bytes[8192]; DWORD required = 0;
@@ -126,24 +124,27 @@ static int safe_acl_at(HANDLE fd, int private_object, int volume_root) {
       !IsValidSecurityDescriptor(bytes) || !GetSecurityDescriptorOwner(bytes,&owner,&defaulted) ||
       !GetSecurityDescriptorDacl(bytes,&present,&acl,&defaulted) || !present || !acl || !IsValidAcl(acl) ||
       acl->AceCount>128 || !IsValidSid(owner) ||
-      (private_object ? !EqualSid(owner,((TOKEN_USER*)ids.token)->User.Sid) : !trusted_sid(owner,&ids,0))) return 0;
+      (private_object ? !EqualSid(owner,((TOKEN_USER*)ids.token)->User.Sid) : !trusted_sid(owner,&ids,0))) return ACL_UNKNOWN;
   /* Ancestor ownership can be TrustedInstaller; its effective DACL must still forbid
-     untrusted mutation of existing children/ancestry. New-child creation alone is OK. */
+     untrusted mutation of existing children/ancestry. New-child creation alone is OK.
+     Every ACE is read before a writer is reported, so an unreadable ACL is never labelled. */
+  int writer = 0;
   for (unsigned i=0; i<acl->AceCount; ++i) {
     ACE_HEADER *header;
-    if (!GetAce(acl,i,(void**)&header) || header->AceSize<sizeof(ACCESS_ALLOWED_ACE)) return 0;
+    if (!GetAce(acl,i,(void**)&header) || header->AceSize<sizeof(ACCESS_ALLOWED_ACE)) return ACL_UNKNOWN;
     if (header->AceFlags & INHERIT_ONLY_ACE) continue;
     if (header->AceType == ACCESS_DENIED_ACE_TYPE) continue;
-    if (header->AceType != ACCESS_ALLOWED_ACE_TYPE) return 0;
+    if (header->AceType != ACCESS_ALLOWED_ACE_TYPE) return ACL_UNKNOWN;
     ACCESS_ALLOWED_ACE *ace = (ACCESS_ALLOWED_ACE*)header;
     PSID sid = &ace->SidStart;
-    if (!IsValidSid(sid) || sizeof(ACCESS_ALLOWED_ACE)-sizeof(DWORD)+GetLengthSid(sid)>header->AceSize) return 0;
-    if (!trusted_sid(sid,&ids,private_object) &&
-        (private_object || (ace->Mask & (volume_root ? ROOT_REFUSED_RIGHTS : ANCESTRY_REFUSED_RIGHTS)))) return 0;
+    if (!IsValidSid(sid) || sizeof(ACCESS_ALLOWED_ACE)-sizeof(DWORD)+GetLengthSid(sid)>header->AceSize) return ACL_UNKNOWN;
+    if (trusted_sid(sid,&ids,private_object)) continue;
+    if (private_object) return ACL_UNKNOWN;
+    if (orca_untrusted_rights_refused((uint32_t)ace->Mask,volume_root)) writer = 1;
   }
-  return 1;
+  return writer ? ACL_WRITER : ACL_SAFE;
 }
-static int safe_acl(HANDLE fd, int private_object) { return safe_acl_at(fd, private_object, 0); }
+static int safe_acl(HANDLE fd, int private_object) { return safe_acl_at(fd, private_object, 0) == ACL_SAFE; }
 static int new_security(SECURITY_DESCRIPTOR *descriptor, unsigned char *acl_bytes, identities *ids) {
   PSID user = ((TOKEN_USER*)ids->token)->User.Sid;
   return InitializeSecurityDescriptor(descriptor,SECURITY_DESCRIPTOR_REVISION) &&
@@ -206,7 +207,8 @@ static int directory(const char *path, int create, int private_root, chain *out)
     out->fd[out->count++]=next;
     win_stat st;
     if (!info(next,&st) || st.kind!=2) { errno=EACCES; goto refused; }
-    if (!safe_acl(next,private_root && !end)) { ancestry_writer_refused = !(private_root && !end); errno=EACCES; goto refused; }
+    int verdict = safe_acl_at(next,private_root && !end,0);
+    if (verdict != ACL_SAFE) { ancestry_writer_refused = verdict == ACL_WRITER; errno=EACCES; goto refused; }
     if (!end) break;
     part=end+1;
   }

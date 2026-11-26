@@ -26,6 +26,9 @@ import {
   acquireFirstRunFence,
 } from "@orca/protocol/first-run-fence";
 import { FirstRunSetup } from "../src/main/first-run/setup.js";
+import { windowsWorkspaceParent } from "../src/main/first-run/directories.js";
+import { refusalMessage } from "../src/main/first-run/ipc.js";
+import { untrustedWriterReason } from "../src/first-run-windows-reasons.js";
 import { verifyFirstRunSampleAssets } from "../src/main/first-run/sample-assets.js";
 import { inspectFirstRunOwnership, reserveFirstRunOwnership } from "../src/main/first-run/ownership.js";
 const roots: string[] = [];
@@ -163,6 +166,38 @@ describe.skipIf(process.platform !== "win32")("native Windows first-run", () => 
           expect.objectContaining({ code: "FIRST_RUN_WINDOWS_UNTRUSTED_WRITER" }),
         );
     }
+  });
+  it("labels only a confirmed writer: read-only grants pass and unknown refusals stay generic, through to the screen's text (#1217)", async () => {
+    const f = await fixture();
+    // Read and execute for another account is not a writer: the selection passes.
+    const readable = join(f.root, "readable");
+    windowsPrivateChild(readable);
+    execFileSync("icacls", [readable, "/grant", "*S-1-5-11:(RX)"], { windowsHide: true, stdio: "pipe" });
+    expect(windowsDirectory(readable, "project").path).toBe(readable);
+    // A private folder with that same grant is refused, but not as a writer: the cause is not one to act on.
+    expect(() => windowsDirectory(readable, "directory")).toThrow(
+      expect.objectContaining({ code: "FIRST_RUN_WINDOWS_UNAVAILABLE" }),
+    );
+    // An unsupported namespace is unknown, never labelled.
+    expect(() => windowsDirectory("\\\\server\\share\\workspace", "parent")).toThrow(
+      expect.objectContaining({ code: "FIRST_RUN_WINDOWS_UNAVAILABLE" }),
+    );
+    // The native code reaches the screen as the specific reason only for a confirmed writer.
+    const shared = join(f.root, "shared-parent");
+    windowsPrivateChild(shared);
+    execFileSync("icacls", [shared, "/grant", "*S-1-5-11:(M)"], { windowsHide: true, stdio: "pipe" });
+    const screen = (path: string) => {
+      try {
+        windowsWorkspaceParent(path);
+      } catch (error) {
+        return refusalMessage(error);
+      }
+      throw new Error("expected a refusal");
+    };
+    expect(screen(shared)).toBe(untrustedWriterReason(false));
+    const unknown = screen("\\\\server\\share\\workspace");
+    expect(unknown).not.toBe(untrustedWriterReason(false));
+    expect(unknown).not.toContain("another account");
   });
   // A data drive's stock root grants Authenticated Users Modify on the root itself. A root cannot be renamed or
   // deleted, so that alone no longer refuses everything on the drive. Runs where the fixture's drive has that root.

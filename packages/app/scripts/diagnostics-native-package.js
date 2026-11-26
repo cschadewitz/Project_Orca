@@ -38,6 +38,7 @@ function sourceDigest(root, platform = "darwin") {
         "clock.c",
         "storage-windows.c",
         "storage-windows-common.h",
+        "acl-policy.h",
         "first-run-windows.c",
         "keys-windows.c",
         "windows-delay-load.c",
