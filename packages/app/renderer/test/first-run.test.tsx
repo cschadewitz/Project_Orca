@@ -332,6 +332,34 @@ it.each([
     expect(screen.getByText(/installed identity is unverified/)).toBeTruthy();
   },
 );
+it.each([
+  [{ state: "pinned", version: "0.171.0" } as const, /match Codex 0\.171\.0, a build ORCA pinned/],
+  [{ state: "unpinned" } as const, /not a Codex build ORCA pinned for this platform, so ORCA will not start it/],
+  [{ state: "unreadable" } as const, /could not be read to the end/],
+])("labels the Codex app-server driver experimental and shows its caveats and pin (%o)", async (pin, pinText) => {
+  const check = toolCheck("handshake-required");
+  const review = configReview();
+  if (review.state !== "configuration-review") throw new Error("unreachable");
+  review.review.checks = [
+    { ...check, evidence: { ...check.evidence, configuredRoute: "codex-app-server-candidate", codexPin: pin } },
+  ];
+  setup({ status: async () => ({ ok: true, result: review }), bindConfiguration: vi.fn() });
+  await screen.findByText(/driver: codex-app-server, which is experimental and not yet available/);
+  expect(screen.getByText(/ORCA refuses to open a session on it until the route is qualified/)).toBeTruthy();
+  expect(screen.getByText(/sign in with `codex login` yourself/)).toBeTruthy();
+  expect(screen.getByText(pinText)).toBeTruthy();
+  // the caveats come with the driver, before anyone relies on it
+  const caveats = screen.getByText(/^Experimental\./);
+  expect(caveats.textContent).toMatch(/a unix socket, a local\s+port or a named pipe/);
+  expect(caveats.textContent).toMatch(/lets a call through\s+when the hook fails/);
+  expect(caveats.textContent).toMatch(/Cancelling a turn does not prove a running command stopped/);
+});
+it("shows no Codex app-server caveats for another route", async () => {
+  setup({ status: async () => ({ ok: true, result: configReview() }), bindConfiguration: vi.fn() });
+  await screen.findByText(/Executable file observed/);
+  expect(screen.queryByText(/^Experimental\./)).toBeNull();
+  expect(screen.queryByText(/Codex pin:/)).toBeNull();
+});
 it("cancels a configuration review without binding or connecting and restores section focus", async () => {
   const cancelConfigurationReview = vi.fn(async () => ({
     ok: true as const,

@@ -25,6 +25,7 @@ Every entry says how it is known, as in the hook coverage page:
 | GitHub Copilot CLI 1.0.114, the npm builds for Linux x64 and macOS arm64 only (pinned by SHA-256), on the daemon's own computer, with a profile ORCA has inspected | **Yes** (installed) | **Yes, for the routes marked installed below** | No, after #706 | None yet: refused |
 | OpenCode 1.19.4 (`opencode acp`), the npm builds for Linux x64 and macOS arm64 only (pinned by SHA-256), on the daemon's own computer, with an isolated profile ORCA has inspected | **Yes** (installed) | **Yes, with the limits listed** (installed) | No, after #706 | None: no supported hook, refused |
 | Cline CLI 3.0.75, the npm build for Linux x64 (pinned by SHA-256 per platform), on the daemon's own computer, with a config directory ORCA has inspected | **Yes** (installed) | **Yes, for the routes marked installed below** | No, after #706 | None: no Cline hook adapter |
+| Codex 0.171.0 through `codex app-server` (`driver: codex-app-server`, experimental), the native Linux x64 build (pinned by SHA-256), on the daemon's own computer, on the user's own `codex login` | No: every session is refused until the route is qualified (#1165) | No | No | Keeps Codex's fail-open hook runner, refused with this driver for now. See [codex-app-server.md](agents/codex-app-server.md) |
 
 ## GitHub Copilot CLI
 

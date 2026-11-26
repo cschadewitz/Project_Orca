@@ -1,13 +1,22 @@
-/** Local executable availability only: no shell, agent handshake, sign-in, version probe or provider operation. */
+/**
+ * Local executable availability only: no shell, agent handshake, sign-in, version probe or
+ * provider operation. For `driver: codex-app-server` (#1167) the executable's bytes are also
+ * compared by digest with the Codex builds ORCA pinned; it is still never executed.
+ */
+import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { access, lstat, open, realpath } from "node:fs/promises";
 import { delimiter, isAbsolute, join, win32 } from "node:path";
 import type { FirstRunAgentCheck } from "../../first-run-contract.js";
+import { pinnedCodexVersion } from "./codex-pins.js";
 /** Configured basename is a routing hint, never executable/artifact/source correspondence. */
 function configuredRoute(
   command: string,
   args: readonly string[] = [],
+  driver?: string,
 ): FirstRunAgentCheck["evidence"]["configuredRoute"] {
+  // The driver the config names decides the route, whatever the command is called.
+  if (driver === "codex-app-server") return "codex-app-server-candidate";
   const name = win32.basename(command).replace(/\.exe$/i, "");
   if (name === "claude-code-acp") return "claude-code-acp-candidate";
   if (name === "codex-acp") return "codex-acp-candidate";
@@ -25,23 +34,54 @@ export function machOArchitectureMismatch(header: Buffer, platform: string, arch
   const cpu = header.readUInt32LE(4);
   return cpu !== (arch === "arm64" ? 0x100000c : 0x1000007);
 }
-export async function inspectLocalTool(agent: {
-  id: string;
-  command: string;
-  args?: readonly string[];
-  env: Record<string, string>;
-}): Promise<FirstRunAgentCheck> {
-  const result = (state: FirstRunAgentCheck["state"]): FirstRunAgentCheck => ({
+/** Reads the open file to its end through `file` and compares its digest with the pins. */
+async function codexPin(
+  file: import("node:fs/promises").FileHandle,
+  target: string,
+  pins?: Readonly<Record<string, Readonly<Record<string, string>>>>,
+): Promise<NonNullable<FirstRunAgentCheck["evidence"]["codexPin"]>> {
+  try {
+    const hash = createHash("sha256");
+    const chunk = Buffer.alloc(1 << 20);
+    for (let position = 0; ;) {
+      const { bytesRead } = await file.read(chunk, 0, chunk.length, position);
+      if (bytesRead === 0) break;
+      hash.update(chunk.subarray(0, bytesRead));
+      position += bytesRead;
+    }
+    const version = pinnedCodexVersion(hash.digest("hex"), target, pins);
+    return version ? { state: "pinned", version } : { state: "unpinned" };
+  } catch {
+    return { state: "unreadable" };
+  }
+}
+export async function inspectLocalTool(
+  agent: {
+    id: string;
+    command: string;
+    args?: readonly string[];
+    driver?: string | undefined;
+    env: Record<string, string>;
+  },
+  /** This machine's pin key, and the pins: for tests only. */
+  codex: { target?: string; pins?: Readonly<Record<string, Readonly<Record<string, string>>>> } = {},
+): Promise<FirstRunAgentCheck> {
+  const target = codex.target ?? `${process.platform}-${process.arch}`;
+  const result = (
+    state: FirstRunAgentCheck["state"],
+    pin?: FirstRunAgentCheck["evidence"]["codexPin"],
+  ): FirstRunAgentCheck => ({
     agentId: agent.id,
     state,
     evidence: {
-      configuredRoute: configuredRoute(agent.command, agent.args),
+      configuredRoute: configuredRoute(agent.command, agent.args, agent.driver),
       support: "unknown",
       version: "unknown",
       architecture: state === "architecture" ? "mismatch" : "unknown",
       acp: "not-checked",
       signIn: "unknown",
       exactCommand: "unsupported",
+      ...(pin ? { codexPin: pin } : {}),
     },
   });
   const candidates = isAbsolute(agent.command)
@@ -77,7 +117,10 @@ export async function inspectLocalTool(agent: {
         }
         if (machOArchitectureMismatch(header.subarray(0, bytesRead), process.platform, process.arch))
           return result("architecture");
-        return result("handshake-required");
+        return result(
+          "handshake-required",
+          agent.driver === "codex-app-server" ? await codexPin(file, target, codex.pins) : undefined,
+        );
       } finally {
         await file.close();
       }

@@ -142,3 +142,37 @@ it("names OpenCode's ACP route only for its acp subcommand (#710)", async () => 
     "unverified",
   );
 });
+it("for driver codex-app-server, compares the executable's bytes with the pinned Codex builds without running it", async () => {
+  const { createHash } = await import("node:crypto");
+  const f = await fixture();
+  const command = join(f.bin, "codex");
+  const sentinel = join(f.root, "not-executed");
+  const bytes = `#!/bin/sh\nprintf 'executed' > '${sentinel}'\n`;
+  await writeFile(command, bytes);
+  await chmod(command, 0o700);
+  const sha = createHash("sha256").update(bytes).digest("hex");
+  const agent = { id: "codex", command, driver: "codex-app-server", env: {} };
+  const pinned = await inspectLocalTool(agent, { target: "test-x64", pins: { "9.9.9": { "test-x64": sha } } });
+  expect(pinned).toMatchObject({
+    state: "handshake-required",
+    evidence: {
+      configuredRoute: "codex-app-server-candidate",
+      codexPin: { state: "pinned", version: "9.9.9" },
+      support: "unknown",
+      signIn: "unknown",
+    },
+  });
+  // the same bytes on another platform, or other bytes, are not pinned
+  expect(
+    (await inspectLocalTool(agent, { target: "other-x64", pins: { "9.9.9": { "test-x64": sha } } })).evidence,
+  ).toMatchObject({ codexPin: { state: "unpinned" } });
+  expect((await inspectLocalTool(agent)).evidence).toMatchObject({ codexPin: { state: "unpinned" } });
+  await expect(readFile(sentinel)).rejects.toMatchObject({ code: "ENOENT" });
+  expect(JSON.stringify(pinned)).not.toContain(f.root);
+  // a missing Codex reports missing, with no pin claim
+  const missing = await inspectLocalTool({ ...agent, command: join(f.bin, "nope") });
+  expect(missing.state).toBe("missing");
+  expect(missing.evidence.codexPin).toBeUndefined();
+  // without the driver, a command named codex gets no pin check
+  expect((await inspectLocalTool({ id: "codex", command, env: {} })).evidence.codexPin).toBeUndefined();
+});
