@@ -207,6 +207,34 @@ try {
     $null = Register-ScheduledTask -TaskPath "\ORCA\" -TaskName "orca-server" -Xml $xml -Force
   }
 
+  Case "a setup directory reached through a junction is refused before anything there or its task is touched"
+  $snapshot = {
+    $files = Get-ChildItem -LiteralPath $root -Force -File | Sort-Object Name | ForEach-Object { "$($_.Name)=$((Get-FileHash -Algorithm SHA256 $_.FullName).Hash)" }
+    ($files -join ";") + "|" + [string](Export-ScheduledTask -TaskPath "\ORCA\" -TaskName "orca-server")
+  }
+  $before = & $snapshot
+  # The directory itself a junction to the managed one, marker and all; and a junction above it.
+  $linked = Join-Path $base "linked-root"
+  $null = New-Item -ItemType Junction -Path $linked -Target $root
+  $above = Join-Path $base "linked-parent"
+  $null = New-Item -ItemType Junction -Path $above -Target $base
+  try {
+    foreach ($at in @($linked, (Join-Path $above "orca-server"))) {
+      foreach ($more in @(@(), @("-Inspect"))) {
+        $run = Invoke-Setup "trust" $at -more $more
+        Assert ($run.code -eq 2) "$at exits $($run.code), not 2"
+        Assert-Step $run "inventory" "refused" "link or junction"
+        Assert (@($run.steps | Where-Object { $_.step -in @("fence", "recover", "journal", "cleanup") }).Count -eq 0) "$at got past the inventory"
+      }
+    }
+    Assert ((& $snapshot) -ceq $before) "the managed directory or its task changed"
+    Assert ([string](Get-Task).State -eq "Running") "the daemon was stopped"
+  } finally {
+    cmd /c rmdir "$linked"
+    cmd /c rmdir "$above"
+  }
+  Assert (Test-Path (Join-Path $root "current.txt")) "removing the junctions removed what they led to"
+
   Case "a setup confirmed as a first install refuses a repair, and changes nothing"
   $run = Invoke-Setup "trust" -more @("-ExpectCurrent", "none")
   Assert ($run.code -eq 2) "exit $($run.code), not 2"

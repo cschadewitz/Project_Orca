@@ -422,7 +422,24 @@ function Test-OrcaPlatform($s) {
   Send-Step "platform" "ok" "Windows $($os.Major).$($os.Minor).$($os.Build) x64, PowerShell $($PSVersionTable.PSVersion)"
 }
 
+function Test-OrcaRootPath($s) {
+  # The setup directory is a path on a local drive, and neither it nor any directory above it is
+  # a link, junction or other reparse point: what the person confirmed is where every write goes.
+  # Checked before anything else reads or writes there, marker or no marker: a marker says only
+  # who wrote a directory, not where its path leads.
+  if ($s.Root -notmatch '^[A-Za-z]:\\[^\\]') { Refuse "The setup directory $($s.Root) is not on a local drive. Nothing was changed." }
+  $path = $s.Root
+  while ($path) {
+    if ((Test-Present $path) -and (Test-Reparse $path)) {
+      Refuse "The setup directory $($s.Root) leads through $path, which is a link or junction to somewhere else. Set up in a plain directory. Nothing was changed."
+    }
+    if ((Test-Present $path) -and -not [IO.Directory]::Exists($path)) { Refuse "$path is not a directory. Nothing was changed." }
+    $path = [IO.Path]::GetDirectoryName($path)
+  }
+}
+
 function Test-OrcaInventory($s) {
+  Test-OrcaRootPath $s
   $found = New-Object System.Collections.Generic.List[string]
   $marker = Get-RootPath $s ".orca-setup.json"
   if ((Test-Present $s.Root) -and -not (Test-PlainFile $marker)) {
