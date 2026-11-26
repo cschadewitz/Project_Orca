@@ -166,9 +166,11 @@ function onLane(sha, version) {
 /**
  * A dry run's look at the lane gate, which a dry run otherwise skips: what `verify` would say
  * about this commit as a release of `version`, without refusing anything. A commit already on its
- * protected line passes as it stands; a release pull request head that is up to date with its
- * line (the line's head is an ancestor) passes once merged. Prints one line and exits 0, so a
- * rehearsal reports the gate without depending on it.
+ * protected line passes as it stands. For a release pull request head that is up to date with its
+ * line (the line's head is an ancestor) it reports only that ancestry and protection preflight:
+ * the merged pull request, the exact-head line check and the same-tree requirement that
+ * publication enforces are not checked here. Prints one line and exits 0, so a rehearsal
+ * reports the gate without depending on it.
  */
 function rehearse(sha, version) {
   let lane;
@@ -197,7 +199,8 @@ function rehearse(sha, version) {
   if (isAncestor(sha, head)) return console.log(`lane gate would accept: ${sha} (v${version}) is on ${lane}`);
   if (isAncestor(head, sha))
     return console.log(
-      `lane gate would accept once merged: ${sha} (v${version}) is up to date with ${lane} at ${head}`,
+      `lane gate preflight passed (ancestry and protection only): ${sha} (v${version}) is up to date with protected ${lane} at ${head}; ` +
+        "publication still requires the merged release pull request, its exact-head line check and the same tree",
     );
   console.log(`lane gate would refuse: ${sha} (v${version}) is neither on ${lane} nor up to date with it (${head})`);
 }

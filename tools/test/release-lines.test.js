@@ -102,6 +102,15 @@ describe("recording a line release on main", () => {
     write("line.md", header + section("0.9.0", "final") + "\n" + section("0.8.0", "minor"));
     release(work, "sync", "0.9.0", "line.md");
     expect(version()).toBe("0.9.0");
+    // Candidates order numerically: rc.10 raises main past rc.9, and rc.9's record after it does not lower it.
+    write("package.json", `${JSON.stringify({ name: "orca", version: "0.10.0-rc.9" }, null, 2)}\n`);
+    write("line.md", header + section("0.10.0-rc.10", "candidate") + "\n" + section("0.9.0", "final"));
+    release(work, "sync", "0.10.0-rc.10", "line.md");
+    expect(version()).toBe("0.10.0-rc.10");
+    write("line.md", header + section("0.10.0-rc.9", "candidate") + "\n" + section("0.9.0", "final"));
+    release(work, "sync", "0.10.0-rc.9", "line.md");
+    expect(version()).toBe("0.10.0-rc.10");
+    write("package.json", `${JSON.stringify({ name: "orca", version: "0.9.0" }, null, 2)}\n`);
     // An older minor's record, after main has moved on, leaves the version alone.
     write("line.md", header + section("0.8.0", "minor"));
     release(work, "sync", "0.8.0", "line.md");
@@ -706,12 +715,12 @@ describe("a real release's reviewed-commit check", () => {
       expect(readFileSync(join(work, "summary"), "utf8")).toContain("Rehearsed lane gate would refuse");
     });
 
-    it("accepts a final's release pull request head that is up to date with its line, once merged", () => {
+    it("reports only a preflight for a release pull request head that is up to date with its line", () => {
       git(clone, "checkout", "-q", "--detach", commits.candidate);
       writeFileSync(join(clone, "package.json"), manifest("0.9.0"));
       git(clone, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qam", "release: v0.9.0");
       expect(rehearse(git(clone, "rev-parse", "HEAD"))).toMatch(
-        /would accept once merged: .* \(v0\.9\.0\) is up to date with release\/0\.9/,
+        /preflight passed \(ancestry and protection only\): .* \(v0\.9\.0\) is up to date with protected release\/0\.9.*same tree/,
       );
     });
   });
@@ -904,7 +913,7 @@ describe("the patch path through the workflows", () => {
     const resolve = prepare.find((s) => s.id === "resolve").run;
     expect(resolve).toContain('node "$tools/release-plan.js" plan --bump "$bump" --pin "$pin" --title "$title"');
     // Nothing is pushed before the plan has passed.
-    expect(resolve.indexOf("release-plan.js\" plan")).toBeLessThan(resolve.indexOf("git push"));
+    expect(resolve.indexOf('release-plan.js" plan')).toBeLessThan(resolve.indexOf("git push"));
     expect(resolve).toMatch(/holds minor\/major work/);
     // The App token, when configured, is what lets CI and the guard run on that pull request.
     expect(prepare[0].uses).toMatch(/^actions\/create-github-app-token@[0-9a-f]{40}$/);

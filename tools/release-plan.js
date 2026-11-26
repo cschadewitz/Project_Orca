@@ -28,7 +28,30 @@ export function compare(a, b) {
   if (x.pre === y.pre) return 0;
   if (x.pre === undefined) return 1;
   if (y.pre === undefined) return -1;
-  return x.pre < y.pre ? -1 : 1;
+  return comparePrerelease(x.pre, y.pre);
+}
+
+/**
+ * SemVer 2.0.0 section 11: dot-separated identifiers compared left to right; numeric ones as
+ * numbers (`rc.9` < `rc.10`) and below alphanumeric ones; a shorter list sorts first when all
+ * its identifiers are equal.
+ */
+function comparePrerelease(a, b) {
+  const xs = a.split(".");
+  const ys = b.split(".");
+  const numeric = /^\d+$/;
+  for (let i = 0; i < Math.max(xs.length, ys.length); i++) {
+    if (xs[i] === undefined) return -1;
+    if (ys[i] === undefined) return 1;
+    if (xs[i] === ys[i]) continue;
+    const xn = numeric.test(xs[i]);
+    const yn = numeric.test(ys[i]);
+    if (xn && yn) return Number(xs[i]) - Number(ys[i]);
+    if (xn) return -1;
+    if (yn) return 1;
+    return xs[i] < ys[i] ? -1 : 1;
+  }
+  return 0;
 }
 
 /**

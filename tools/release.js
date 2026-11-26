@@ -22,7 +22,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { FRAGMENT_DIR, deleteFragments, readFragments, renderEntries } from "./changelog.js";
 import { laneOf } from "./release-lane.js";
-import { nextVersion as nextFor } from "./release-plan.js";
+import { compare, nextVersion as nextFor } from "./release-plan.js";
 
 const PKG = "package.json";
 const CHANGELOG = "CHANGELOG.md";
@@ -141,17 +141,6 @@ function prepare(version) {
       `${fragments.length} fragment(s), which are now deleted`,
   );
 }
-
-const compare = (a, b) => {
-  const x = parse(a);
-  const y = parse(b);
-  for (const key of ["major", "minor", "patch"]) if (x[key] !== y[key]) return x[key] - y[key];
-  // A prerelease sorts below its final (0.7.1-rc.1 < 0.7.1); two prereleases by text.
-  if (x.pre === y.pre) return 0;
-  if (x.pre === undefined) return 1;
-  if (y.pre === undefined) return -1;
-  return x.pre < y.pre ? -1 : 1;
-};
 
 /** A version's `## X.Y.Z - date` section as lines (heading included), or undefined. */
 function sectionOf(lines, version) {

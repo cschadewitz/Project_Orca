@@ -685,8 +685,9 @@ after merge, which leaves a bump on the line with no tag. Dry runs before #950 l
 
 A rehearsal skips the lane gate a real release applies, so it also reports what that gate
 would say about the rehearsed ref (`release-lane.js rehearse`, `main`'s copy): accepted (on its
-protected line), accepted once merged (a release pull request head up to date with its line),
-or refused with the reason. It never fails the rehearsal. Together with a **Release (prepare)**
+protected line), a preflight pass for a release pull request head up to date with its protected
+line (ancestry and protection only: the merged pull request, its exact-head line check and the
+same-tree requirement are checked at publication, not here), or refused with the reason. It never fails the rehearsal. Together with a **Release (prepare)**
 `dry_run`, that rehearses a candidate-to-final path end to end without writing anything.
 ## Doing it by hand
 

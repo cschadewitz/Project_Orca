@@ -6,7 +6,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { nextVersion, planRelease } from "../release-plan.js";
+import { compare, nextVersion, planRelease } from "../release-plan.js";
 
 describe("the next version for a bump", () => {
   it.each([
@@ -23,6 +23,21 @@ describe("the next version for a bump", () => {
     ["2.0.0-rc.1", "minor", "2.0.0"],
   ])("%s + %s is %s", (current, bump, next) => {
     expect(nextVersion(current, bump)).toBe(next);
+  });
+});
+
+describe("version order", () => {
+  it.each([
+    ["0.9.0-rc.9", "0.9.0-rc.10"],
+    ["0.9.0-rc.2", "0.9.0-rc.11"],
+    ["0.9.0-rc.10", "0.9.0"],
+    ["0.9.0-alpha", "0.9.0-alpha.1"],
+    ["0.9.0-alpha.1", "0.9.0-alpha.beta"],
+    ["0.9.0-beta.11", "0.9.0-rc.1"],
+    ["0.9.0", "0.10.0-rc.1"],
+  ])("puts %s before %s (SemVer precedence)", (a, b) => {
+    expect(compare(a, b)).toBeLessThan(0);
+    expect(compare(b, a)).toBeGreaterThan(0);
   });
 });
 
@@ -54,6 +69,19 @@ describe("the plan", () => {
       base: "release/0.8",
       cut: "v0.8.0",
     });
+  });
+
+  it("orders a line's candidates numerically, in both directions", () => {
+    const at = (version) =>
+      repo({ lines: { ...repo().lines, 0.9: { version } }, tags: [...repo().tags, `v${version}`] });
+    expect(planRelease({ bump: "minor", pin: "0.9.0-rc.10" }, at("0.9.0-rc.9"))).toEqual({
+      version: "0.9.0-rc.10",
+      base: "release/0.9",
+      cut: "",
+    });
+    expect(() => planRelease({ bump: "minor", pin: "0.9.0-rc.9" }, at("0.9.0-rc.10"))).toThrow(
+      /v0\.9\.0-rc\.9 is not after 0\.9\.0-rc\.10/,
+    );
   });
 
   it.each([
