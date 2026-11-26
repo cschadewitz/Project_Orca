@@ -8,7 +8,7 @@ import { realpathSync } from "node:fs";
 import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import type * as acp from "@agentclientprotocol/sdk";
-import { AgentSpecSchema, silentLogger, type OrcaError } from "@orca/core";
+import { AgentSpecSchema, OrcaError as OrcaErrorClass, silentLogger, type OrcaError } from "@orca/core";
 import {
   codexItemUpdate,
   codexPlanUpdate,
@@ -29,6 +29,9 @@ import {
   WRITE_SANDBOX,
   PINNED_IMAGE,
   VERIFIED_IMAGE,
+  HOOKED_CONFIG_ANSWERS,
+  HOOK_COMMAND,
+  ORCA_HOOK_LISTED,
 } from "./codex-config-fixture.js";
 
 const CWD = process.cwd();
@@ -979,6 +982,54 @@ describe("the Codex image ORCA starts (#1162)", () => {
     const error = (await open(t.host).catch((e: unknown) => e)) as OrcaError;
     expect(error.code).toBe("NOT_SUPPORTED");
     expect(error.message).toMatch(/Codex 0\.170\.0/);
+    expect(t.peer.received.map((m) => m.method)).not.toContain("thread/start");
+  });
+});
+
+describe("ORCA's hook on this route (#1161)", () => {
+  const FLAGS = ["-c", "hooks.PreToolUse=[]", "-c", "hooks.state={}", "-c", 'web_search="disabled"'];
+  const HOOKED = { ...BASE, ...HOOKED_CONFIG_ANSWERS };
+
+  it("installs it through the session flags, after ORCA's policy flags, and admits the very process before any thread", async () => {
+    const t = scriptedHost(HOOKED);
+    const order: string[] = [];
+    const admit = vi.fn(async (pid: number | undefined) => {
+      order.push(`admit ${pid}`, ...t.peer.received.map((m) => m.method ?? "answer"));
+    });
+    const session = await open(t.host, { nativeToolHook: { sessionFlags: FLAGS, command: HOOK_COMMAND, admit } });
+    const spec = t.spawnAgent.mock.calls[0]![0] as { args: string[] };
+    expect(spec.args.slice(-FLAGS.length - 1)).toEqual([...FLAGS, "app-server"]);
+    expect(spec.args.indexOf("hooks.PreToolUse=[]")).toBeGreaterThan(
+      spec.args.indexOf('sandbox_mode="workspace-write"'),
+    );
+    expect(admit).toHaveBeenCalledWith(4242);
+    expect(order[0]).toBe("admit 4242");
+    expect(order).not.toContain("thread/start");
+    expect(t.peer.received.map((m) => m.method)).toContain("thread/start");
+    await session.close();
+  });
+
+  it("refuses the session, before any thread, when the hook is not admitted", async () => {
+    const t = scriptedHost(HOOKED);
+    const refusal = new OrcaErrorClass("NOT_SUPPORTED", "the hook did not block a call it must block");
+    const error = (await open(t.host, {
+      nativeToolHook: { sessionFlags: FLAGS, command: HOOK_COMMAND, admit: async () => Promise.reject(refusal) },
+    }).catch((e: unknown) => e)) as OrcaError;
+    expect(error.code).toBe("NOT_SUPPORTED");
+    expect(error.message).toMatch(/did not block/);
+    expect(t.peer.received.map((m) => m.method)).not.toContain("thread/start");
+    expect(t.kill).toHaveBeenCalled();
+  });
+
+  it("refuses the session when Codex does not list ORCA's hook as trusted", async () => {
+    const untrusted = structuredClone(ORCA_HOOK_LISTED);
+    untrusted.data[0]!.hooks[0]!.trustStatus = "untrusted";
+    const t = scriptedHost({ ...HOOKED, "hooks/list": () => untrusted });
+    const error = (await open(t.host, {
+      nativeToolHook: { sessionFlags: FLAGS, command: HOOK_COMMAND, admit: async () => {} },
+    }).catch((e: unknown) => e)) as OrcaError;
+    expect(error.code).toBe("NOT_SUPPORTED");
+    expect(error.message).toMatch(/Codex does not trust ORCA's hook/);
     expect(t.peer.received.map((m) => m.method)).not.toContain("thread/start");
   });
 });

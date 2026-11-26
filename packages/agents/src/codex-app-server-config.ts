@@ -16,8 +16,10 @@
  *   file would run outside ORCA's view.
  * - `configRequirements/read`: managed requirements that do not allow ORCA's approval policy or
  *   sandbox are refused.
- * - `hooks/list`: any enabled hook (user, project, plugin or managed) is refused. ORCA's own
- *   hook is not offered on this driver, and another hook would run in Codex's own runner.
+ * - `hooks/list`: any enabled hook (user, project, plugin or managed) is refused: it would run
+ *   in Codex's own runner, outside ORCA's view. With ORCA's own hook (#1161), every directory
+ *   listed must show exactly that hook, from ORCA's session flags, trusted and enabled
+ *   (`codexHookListProblem`), and the effective `web_search` must be `disabled`.
  *
  * The check reads only the keys above. The raw config, which can carry an MCP server's
  * environment and its secrets, is never logged, returned or put in an error.
@@ -30,6 +32,7 @@
 import { realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { OrcaError } from "@orca/core";
+import { CODEX_HOOK_KEY, codexHookListProblem } from "./native-tool-hook-session.js";
 
 /** The policy ORCA runs a Codex thread with. */
 export interface CodexThreadPolicy {
@@ -130,6 +133,7 @@ const KNOWN_VALUES: Record<string, readonly string[]> = {
   sandbox_mode: ["read-only", "workspace-write", "danger-full-access"],
   allowedApprovalPolicies: ["untrusted", "on-request", "never"],
   allowedSandboxModes: ["read-only", "workspace-write", "danger-full-access"],
+  web_search: ["disabled", "cached", "live"],
 };
 /** `value` as it may appear in an error: a known enum value quoted, otherwise a summary. */
 function shown(setting: string, value: unknown): string {
@@ -182,6 +186,8 @@ export function codexConfigCheck(
   agentId: string,
   policy: CodexThreadPolicy,
   answers: { config: unknown; requirements: unknown; hooks: unknown },
+  /** ORCA's own hook's command, when the session installs it (#1161). */
+  ownHook?: string,
 ): CodexVerifiedConfig {
   const malformed = (method: string) =>
     new OrcaError(
@@ -254,6 +260,13 @@ export function codexConfigCheck(
     }
   }
 
+  // Hosted web search runs at the model provider, where no hook sees it (#1161).
+  if (ownHook !== undefined && read.config.web_search !== "disabled")
+    throw refuse(
+      `Codex would run with web_search = ${shown("web_search", read.config.web_search)}, not "disabled", which ORCA's hook needs`,
+      { setting: "web_search", value: detail("web_search", read.config.web_search) },
+    );
+
   const mcp = read.config.mcp_servers;
   if (mcp !== undefined && mcp !== null) {
     if (!isObject(mcp)) throw malformed("config/read");
@@ -291,11 +304,18 @@ export function codexConfigCheck(
   const listed = answers.hooks;
   if (!isObject(listed) || !Array.isArray(listed.data)) throw malformed("hooks/list");
   const hooks: string[] = [];
+  if (ownHook !== undefined && listed.data.length === 0)
+    throw refuse("Codex listed no hooks, so ORCA's hook is not in force", { setting: "hooks" });
   for (const entry of listed.data) {
     if (!isObject(entry) || !Array.isArray(entry.hooks)) throw malformed("hooks/list");
+    if (ownHook !== undefined) {
+      const problem = codexHookListProblem({ hooks: entry.hooks }, ownHook);
+      if (problem !== undefined) throw refuse(problem, { setting: "hooks" });
+    }
     for (const hook of entry.hooks) {
       if (!isObject(hook) || typeof hook.enabled !== "boolean") throw malformed("hooks/list");
-      if (hook.enabled) {
+      const ours = ownHook !== undefined && hook.key === CODEX_HOOK_KEY && hook.source === "sessionFlags";
+      if (hook.enabled && !ours) {
         const event =
           typeof hook.eventName === "string" && HOOK_EVENTS.includes(hook.eventName) ? hook.eventName : "a hook";
         const source =

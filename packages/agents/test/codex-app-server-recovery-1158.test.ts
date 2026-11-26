@@ -7,7 +7,7 @@
  */
 import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
-import { AgentSpecSchema, silentLogger, type OrcaError } from "@orca/core";
+import { AgentSpecSchema, OrcaError as OrcaErrorClass, silentLogger, type OrcaError } from "@orca/core";
 import {
   codexHistoryUpdates,
   LocalHost,
@@ -17,7 +17,15 @@ import {
   type CodexSessionContinuity,
   type SessionUpdateEvent,
 } from "../src/index.js";
-import { CONFIG_ANSWERS, configRead, WRITE_SANDBOX, PINNED_IMAGE, VERIFIED_IMAGE } from "./codex-config-fixture.js";
+import {
+  CONFIG_ANSWERS,
+  configRead,
+  WRITE_SANDBOX,
+  PINNED_IMAGE,
+  VERIFIED_IMAGE,
+  HOOKED_CONFIG_ANSWERS,
+  HOOK_COMMAND,
+} from "./codex-config-fixture.js";
 
 const CWD = process.cwd();
 const INIT = { userAgent: "orca/0.171.0 (test)", codexHome: "/h/.codex", platformFamily: "unix", platformOs: "linux" };
@@ -488,6 +496,23 @@ describe("an app-server that exits", () => {
     expect(imageDigest.mock.calls.map((c) => c[0])).toEqual([4000, 4001]);
     expect(s.procs[1]!.received).toEqual([]);
     expect(s.procs[1]!.kill).toHaveBeenCalled();
+    await expect(session.prompt("again")).rejects.toBe(error);
+    expect(s.spawnAgent).toHaveBeenCalledTimes(2);
+  });
+
+  it("ends the session when ORCA's hook cannot be admitted on a restarted app-server (#1161)", async () => {
+    const s = scriptedHost(() => ({ ...BASE, ...HOOKED_CONFIG_ANSWERS }));
+    const admit = vi.fn(async (pid: number | undefined) => {
+      if (pid !== 4000) throw new OrcaErrorClass("NOT_SUPPORTED", "the hook did not block a call it must block");
+    });
+    const session = await open(s.host, { nativeToolHook: { sessionFlags: [], command: HOOK_COMMAND, admit } });
+    s.procs[0]!.crash();
+    await settle();
+    const error = (await session.prompt("go").catch((e: unknown) => e)) as OrcaError;
+    expect(error.code).toBe("NOT_SUPPORTED");
+    expect(admit.mock.calls.map((c) => c[0])).toEqual([4000, 4001]);
+    expect(methods(s.procs[1]!)).not.toContain("thread/resume");
+    expect(methods(s.procs[1]!)).not.toContain("turn/start");
     await expect(session.prompt("again")).rejects.toBe(error);
     expect(s.spawnAgent).toHaveBeenCalledTimes(2);
   });

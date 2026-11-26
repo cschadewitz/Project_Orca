@@ -612,6 +612,14 @@ login, not that it is the same account, and says so in its log rather than claim
 running app-server does not notice a `codex logout` run elsewhere (Codex keeps the login it
 started with), so this covers what Codex itself reports.
 
+ORCA's pre-tool hook (`nativeToolHook: experimental`, #705) has an app-server form (#1161): the
+same hook, installed through ORCA's own session flags, required by the config check as the only
+hook (trusted and enabled, with hosted web search off), and admitted with the same fail-closed
+line and probe against each app-server ORCA starts, before any thread. Config still refuses
+`nativeToolHook` on this driver, and the factory refuses the driver, until qualification. See
+[agent-hook-coverage.md](agent-hook-coverage.md) for what the hook does and does not cover.
+Codex's runner still lets a call through when the hook fails to run.
+
 Codex's command and file change asks (`item/commandExecution/requestApproval`,
 `item/fileChange/requestApproval`) are decided by ORCA's permission policy, as on the ACP
 route: the agent's rules and sidecars, ORCA's protected paths, the run's answerer and, when

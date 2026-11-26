@@ -64,3 +64,36 @@ export const VERIFIED_IMAGE = {
   imageFile: async () => PINNED_IMAGE,
   imageDigest: async () => PINNED_IMAGE,
 };
+
+/** The command a fake app-server lists for ORCA's hook (#1161). */
+export const HOOK_COMMAND = "orca-hook-command";
+/** `hooks/list` showing exactly ORCA's hook, trusted, from its session flags (#1161). */
+export const ORCA_HOOK_LISTED = {
+  data: [
+    {
+      cwd: "/",
+      hooks: [
+        {
+          key: "/<session-flags>/config.toml:pre_tool_use:0:0",
+          eventName: "preToolUse",
+          handlerType: "command",
+          command: HOOK_COMMAND,
+          async: false,
+          matcher: "*",
+          source: "sessionFlags",
+          enabled: true,
+          trustStatus: "trusted",
+          currentHash: "sha256:x",
+        },
+      ],
+      warnings: [],
+      errors: [],
+    },
+  ],
+};
+/** Config answers of a Codex running ORCA's hook (#1161): web search off, ORCA's hook listed. */
+export const HOOKED_CONFIG_ANSWERS = {
+  "config/read": () => configRead({}, { config: { web_search: "disabled" } }),
+  "configRequirements/read": () => NO_REQUIREMENTS,
+  "hooks/list": () => ORCA_HOOK_LISTED,
+};

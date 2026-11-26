@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OrcaError } from "@orca/core";
 import {
+  CODEX_HOOK_KEY,
   codexConfigCheck,
   codexSessionFlags,
   codexWritableRoots,
@@ -319,5 +320,80 @@ describe("a thread's writable roots", () => {
     expect(codexWritableRootsProblem(["/home/u/.orca/work"], ["/home/u/.orca"])).toMatch(
       /could write \/home\/u\/\.orca\/work/,
     );
+  });
+});
+
+describe("ORCA's own hook in the config check (#1161)", () => {
+  const COMMAND = "orca-hook-command";
+  const ours = (over: Record<string, unknown> = {}) => ({
+    key: CODEX_HOOK_KEY,
+    eventName: "preToolUse",
+    handlerType: "command",
+    command: COMMAND,
+    async: false,
+    matcher: "*",
+    source: "sessionFlags",
+    enabled: true,
+    trustStatus: "trusted",
+    currentHash: "sha256:x",
+    ...over,
+  });
+  const listed = (...hooks: unknown[]) => ({ data: [{ cwd: "/w", hooks, warnings: [], errors: [] }] });
+  const withHook = (answers: Parameters<typeof check>[0] = {}) => {
+    try {
+      return codexConfigCheck(
+        "codex",
+        POLICY,
+        {
+          config: configRead({}, { config: { web_search: "disabled" } }),
+          requirements: NO_REQUIREMENTS,
+          hooks: listed(ours()),
+          ...answers,
+        },
+        COMMAND,
+      );
+    } catch (error) {
+      return error as OrcaError;
+    }
+  };
+
+  it("accepts exactly ORCA's hook, trusted and enabled, with hosted web search off", () => {
+    expect(withHook()).toMatchObject({ approvalPolicy: "on-request" });
+  });
+
+  it.each([
+    ["missing", listed(), /Codex does not list ORCA's hook/],
+    ["no directory listed", { data: [] }, /Codex listed no hooks, so ORCA's hook is not in force/],
+    ["untrusted", listed(ours({ trustStatus: "untrusted" })), /Codex does not trust ORCA's hook/],
+    ["turned off", listed(ours({ enabled: false })), /Codex lists ORCA's hook as turned off/],
+    ["another command", listed(ours({ command: "other" })), /Codex lists a different hook where ORCA's should be/],
+    [
+      "another hook beside it",
+      listed(ours(), ours({ key: "/u/config.toml:post_tool_use:0:0", eventName: "postToolUse", source: "user" })),
+      /Codex would run the hook postToolUse \(user\)/,
+    ],
+  ])("refuses a hook list where ORCA's hook is %s", (_, hooks, message) => {
+    const error = withHook({ hooks }) as OrcaError;
+    expect(error.code).toBe("NOT_SUPPORTED");
+    expect(error.message).toMatch(message);
+    expect(error.details).toMatchObject({ setting: "hooks" });
+  });
+
+  it("refuses ORCA's hook's key from another source than ORCA's session flags", () => {
+    const error = withHook({ hooks: listed(ours(), ours({ source: "user", key: CODEX_HOOK_KEY })) }) as OrcaError;
+    expect(error.code).toBe("NOT_SUPPORTED");
+  });
+
+  it("refuses hosted web search left on, naming only a known value", () => {
+    for (const value of ["live", "cached", undefined, { x: "secret-ish" }]) {
+      const error = withHook({ config: configRead({}, { config: { web_search: value } }) }) as OrcaError;
+      expect(error.code).toBe("NOT_SUPPORTED");
+      expect(error.details).toMatchObject({ setting: "web_search" });
+      expect(error.message).not.toContain("secret-ish");
+    }
+  });
+
+  it("still refuses ORCA's hook in a session that does not install it", () => {
+    expect(refusal({ hooks: listed(ours()) }).message).toMatch(/Codex would run the hook preToolUse \(sessionFlags\)/);
   });
 });

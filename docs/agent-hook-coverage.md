@@ -84,6 +84,28 @@ replaces the hook, which runs before them.
 | Agent's own `CODEX_CONFIG` sets hooks | Refused: ORCA does not reorder somebody else's hooks | installed |
 | Adapter runs another Codex (`CODEX_PATH`) | Refused before the session is created: ORCA finds the Codex app-server among the agent's own processes and hashes the image it runs, accepting only the digest pinned for the adapter (`CODEX_HOOK_VERIFIED_PAIRS`). Nothing it finds is executed | installed (0.170.0 refused) |
 
+### On the Codex app-server driver (#1161, refused for now)
+
+The same hook, with the same command, fail-closed line, trust hash, probe and context file, also
+goes into a Codex that ORCA starts itself as `codex app-server` (`driver: codex-app-server`). There is no adapter
+there, so ORCA installs it through its own `-c` session flags (with `hooks.state` trust and
+`web_search = "disabled"`), placed after the agent's own arguments. Before a thread starts or
+resumes on each app-server process it starts, ORCA checks the following, and refuses the
+session if any fails:
+
+- the app-server's `hooks/list` must show exactly ORCA's hook in every directory it lists,
+  trusted and enabled;
+- no other hook may be enabled;
+- the effective `web_search` must be `disabled`;
+- the fail-closed line and the probe must pass, run in the environment of that very process
+  (ORCA's own child, its image already attested, #1162).
+
+The driver does **not** fix the hook route's known weakness: Codex's own hook runner still lets a
+call through when a hook fails to run, as in the table above, and the fail-closed line narrows
+that in the same way. No tier or scoped claim changes. The session factory still refuses the driver,
+so this route is reached only by tests until qualification (#1165). MCP servers are not offered
+on this driver yet (#1163), so MCP tool calls are not part of its acceptance cases.
+
 ### The IPC caveat
 
 The standing caveat, stated before you opt in, is in
