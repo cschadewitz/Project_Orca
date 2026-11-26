@@ -224,6 +224,28 @@ describe("tools/backport.sh", () => {
     expect(readFileSync(log, "utf8")).toMatch(/pr comment 1300 [\s\S]*could not be established/);
   });
 
+  it("refuses to infer the range when the change holds a binary file", () => {
+    git(origin, "checkout", "-q", "-b", "pr");
+    writeFileSync(join(origin, "logo.bin"), Buffer.from([0, 1, 2, 3, 0, 255]));
+    git(origin, "add", "-A");
+    git(origin, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "logo");
+    git(origin, "update-ref", "refs/pull/1300/head", "pr");
+    git(origin, "checkout", "-q", "main");
+    git(origin, "branch", "-q", "-D", "pr");
+    // On main the same path carries different bytes: `git diff` prints both as "Binary files differ".
+    writeFileSync(join(origin, "logo.bin"), Buffer.from([0, 9, 9, 9, 0, 255]));
+    git(origin, "add", "-A");
+    git(origin, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "logo (#1300)");
+    const sha = git(origin, "rev-parse", "HEAD");
+    git(clone, "fetch", "-q", "origin", "main");
+    const result = run(sha, ["backport:0.9"]);
+    expect(result.status, result.stderr).toBe(0);
+    expect(git(origin, "branch", "--list", "backport/*")).toBe("");
+    const calls = readFileSync(log, "utf8");
+    expect(calls).not.toContain("pr create");
+    expect(calls).toMatch(/pr comment 1300 [\s\S]*could not be established/);
+  });
+
   it("refuses when the pull request head is not the one the merge recorded", () => {
     const sha = merged();
     const result = run(sha, ["backport:0.9"], { COMMITS: 3, HEAD_SHA: "a".repeat(40) });
