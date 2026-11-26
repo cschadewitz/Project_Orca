@@ -256,6 +256,7 @@ if (process.env.C15_SOURCE) {
       "clock.c",
       "storage-windows.c",
       "storage-windows-common.h",
+      "acl-policy.h",
       "first-run-windows.c",
       "keys-windows.c",
       "windows-delay-load.c",

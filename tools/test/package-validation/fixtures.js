@@ -24,6 +24,7 @@ const WINDOWS_NATIVE_SOURCES = [
   "clock.c",
   "storage-windows.c",
   "storage-windows-common.h",
+  "acl-policy.h",
   "first-run-windows.c",
   "keys-windows.c",
   "windows-delay-load.c",
