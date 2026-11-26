@@ -2726,6 +2726,71 @@ describe("whether a cancel ended the turn's commands (#1299)", () => {
     await session.close();
   });
 
+  it.each(["inProgress", "somethingNew"])(
+    "a report with the nonterminal or unknown status %s does not settle a command",
+    async (status) => {
+      const t = drivenTurn();
+      const s = scriptedHost(t.answers);
+      const session = await open(s.host, { cancelGraceMs: 100 });
+      const turn = startAndCancel(session, s.peer);
+      await new Promise((r) => setTimeout(r, 30));
+      t.say("item/completed", "c1", status);
+      await expect(turn).resolves.toMatchObject({ cancel: "unconfirmed" });
+      await expect(session.prompt("again")).rejects.toMatchObject({ details: { reason: "codex-cancel-unconfirmed" } });
+      // a terminal report still settles it
+      t.say("item/completed", "c1", "failed");
+      await vi.waitFor(async () => {
+        const next = session.prompt("again");
+        await vi.waitFor(() => expect(s.peer.received.filter((m) => m.method === "turn/start")).toHaveLength(2));
+        await session.cancel();
+        await next;
+      });
+      await session.close();
+    },
+  );
+
+  it("a late start in an earlier cancelled turn stays that turn's fence while a later cancel settles", async () => {
+    let peer!: Peer;
+    let n = 0;
+    const s = scriptedHost({
+      ...BASE,
+      "turn/start": (_msg, p) => {
+        peer = p;
+        const turnId = `turn_${++n}`;
+        setImmediate(() => p.notify("item/started", { threadId: "thr_1", turnId, item: cmd(`c${n}`, "inProgress") }));
+        return { turn: { id: turnId, status: "inProgress" } };
+      },
+      "turn/interrupt": (msg, p) => {
+        setImmediate(() =>
+          p.notify("turn/completed", {
+            threadId: "thr_1",
+            turn: { id: msg.params!["turnId"], status: "interrupted", error: null },
+          }),
+        );
+        return {};
+      },
+    });
+    const say = (turnId: string, method: "item/started" | "item/completed", id: string, status: string) =>
+      peer.notify(method, { threadId: "thr_1", turnId, item: cmd(id, status) });
+    const session = await open(s.host, { cancelGraceMs: 2_000 });
+    const first = startAndCancel(session, s.peer);
+    await new Promise((r) => setTimeout(r, 30));
+    say("turn_1", "item/completed", "c1", "failed");
+    await expect(first).resolves.toMatchObject({ cancel: "confirmed" });
+    const second = session.prompt("again");
+    await vi.waitFor(() => expect(s.peer.received.filter((m) => m.method === "turn/start")).toHaveLength(2));
+    await new Promise((r) => setTimeout(r, 10));
+    await session.cancel();
+    await new Promise((r) => setTimeout(r, 30));
+    // during turn_2's settling, Codex reports a start in turn_1: turn_1's fence, not turn_2's
+    say("turn_1", "item/started", "c9", "inProgress");
+    say("turn_2", "item/completed", "c2", "failed");
+    await expect(second).resolves.toMatchObject({ cancel: "confirmed" });
+    await expect(session.prompt("third")).rejects.toMatchObject({ details: { reason: "codex-cancel-unconfirmed" } });
+    expect(s.peer.received.filter((m) => m.method === "turn/start")).toHaveLength(2);
+    await session.close();
+  });
+
   it("a command started in a cancelled turn after it returned is fenced, and one reported completed fences for good", async () => {
     const t = drivenTurn();
     const s = scriptedHost(t.answers);

@@ -735,6 +735,9 @@ interface ActiveTurn {
   fail: (error: Error) => void;
 }
 
+/** The command statuses that report a command ended (#1299); `completed` means it ran to its end. */
+const TERMINAL_COMMAND_STATUSES: ReadonlySet<string> = new Set(["completed", "failed", "declined"]);
+
 /** How long ORCA watches for Codex's own exit once its connection closed during the handshake. */
 const STARTUP_EXIT_WAIT_MS = 1_000;
 
@@ -1374,12 +1377,20 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
               openCommands.add(key);
               // A command started once its turn's cancel was asked for, or after that turn
               // returned, is the cancel's to account for too.
-              if (active?.cancelReason) active.cancelOwned.add(key);
-              else if (turnId !== undefined && cancelledTurns.has(turnId)) {
+              // Owned by the turn the event names: a later cancel never shadows an earlier one's fence.
+              if (turnId !== undefined && cancelledTurns.has(turnId) && active?.turnId !== turnId) {
                 unsettled.add(key);
                 logger.warn("Codex started a command in a turn ORCA cancelled", { agentId: agent.id, item: item.id });
-              }
+              } else if (active?.cancelReason && (active.turnId === undefined || active.turnId === turnId))
+                active.cancelOwned.add(key);
             }
+          } else if (!TERMINAL_COMMAND_STATUSES.has(item.status)) {
+            // Only a recognized terminal report settles a command: any other keeps it tracked.
+            logger.warn("Codex reported a command finished with a status that does not end it", {
+              agentId: agent.id,
+              item: item.id,
+              status: item.status,
+            });
           } else {
             openCommands.delete(key);
             if (active?.cancelOwned.has(key)) active.cancelEnded.set(key, item.status);
