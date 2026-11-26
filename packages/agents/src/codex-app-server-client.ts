@@ -325,13 +325,14 @@ export class CodexAppServerClient {
     const error = message.error;
     // A malformed error is not Codex refusing the request: it is a protocol error of ORCA's own
     // finding, so callers never read it as a definite refusal (`CodexRpcError` is only that).
-    if (!isObject(error) || typeof error.code !== "number" || typeof error.message !== "string")
+    // JSON-RPC 2.0 §5.1: the code is an integer.
+    if (!isObject(error) || !Number.isSafeInteger(error.code) || typeof error.message !== "string")
       return waiting.reject(
         new OrcaError("AGENT_PROTOCOL", `codex app-server answered ${waiting.method} with a malformed error`, {
           method: waiting.method,
         }),
       );
-    waiting.reject(new CodexRpcError(error.code, error.message, error.data));
+    waiting.reject(new CodexRpcError(error.code as number, error.message, error.data));
   }
 
   private async answer(id: string | number, method: string, params: unknown): Promise<void> {

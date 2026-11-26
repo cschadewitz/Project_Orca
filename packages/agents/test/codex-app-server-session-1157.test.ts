@@ -446,11 +446,14 @@ describe("a turn", () => {
     await session.close();
   });
 
-  it("ends the session when turn/start answers with a malformed error, which is no refusal", async () => {
+  it.each([
+    ["a string code", "-32602"],
+    ["a fractional code", -32602.5],
+  ])("ends the session when turn/start answers with %s, a malformed error and no refusal", async (_name, code) => {
     const s = scriptedHost({
       ...turnPlaying(() => undefined, "none"),
       "turn/start": (msg, peer) => {
-        peer.say({ id: msg.id, error: { code: "-32602", message: "bad input" } });
+        peer.say({ id: msg.id, error: { code, message: "bad input" } });
         return NO_ANSWER;
       },
     });
