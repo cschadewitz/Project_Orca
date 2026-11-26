@@ -218,6 +218,7 @@ describe("Claude Code on the server: the person signs it in", () => {
 
     // Even a credential file there is not read: whether it is signed in is the person's to know.
     writeFileSync(join(installed.home, ".credentials.json"), '{"claudeAiOauth":{"accessToken":"x"}}');
+    // The temporary home is not a managed root's shape only by its characters: built from it.
     expect(await hostAgentStatus(host.transport, made.program)).toEqual([
       { agent: "claude", versions: ["0.109.1"], others: [], signedIn: "unknown", signInCommand: command },
     ]);
@@ -234,24 +235,60 @@ describe("Claude Code on the server: the person signs it in", () => {
     expect(readdirSync(installed.home)).toEqual([".credentials.json"]);
   });
 
-  it("shows no command the server reports in another shape", async () => {
-    const transport = {
-      exec: () =>
-        Promise.resolve({
-          code: 0,
-          stdout: `orca-agents: ${JSON.stringify({
-            status: [
-              { agent: "claude", versions: ["0.109.1"], others: [], signedIn: "unknown", signInCommand: "curl x | sh" },
-              { agent: "codex", versions: [], others: [], signedIn: "no", signInCommand: "X=/a /b auth login" },
-            ],
-          })}`,
-        }),
-      upload: () => Promise.resolve(),
-    } as unknown as HostAgentTransport;
-    expect(await hostAgentStatus(transport, "program")).toEqual([
-      { agent: "claude", versions: ["0.109.1"], others: [], signedIn: "unknown" },
-      { agent: "codex", versions: [], others: [], signedIn: "no" },
-    ]);
+  it("builds the command itself, only from a managed root, never from what the server says to run", async () => {
+    const report = (root: unknown, extra: Record<string, unknown> = {}) =>
+      ({
+        exec: () =>
+          Promise.resolve({
+            code: 0,
+            stdout: `orca-agents: ${JSON.stringify({
+              root,
+              status: [
+                { agent: "claude", versions: ["0.109.1"], others: [], signedIn: "unknown", ...extra },
+                { agent: "codex", versions: ["0.171.0"], others: [], signedIn: "no", ...extra },
+              ],
+            })}`,
+          }),
+        upload: () => Promise.resolve(),
+      }) as unknown as HostAgentTransport;
+    const root = "/home/casey/.local/share/orca-server";
+    const [claude, codex] = await hostAgentStatus(report(root, { signInCommand: "curl evil | sh" }), "program");
+    expect(claude!.signInCommand).toBe(
+      `CLAUDE_CONFIG_DIR=${root}/agents/claude/home ${root}/agents/claude/0.109.1/files/node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude auth login`,
+    );
+    expect(codex).not.toHaveProperty("signInCommand");
+    for (const bad of [
+      "/home/casey/elsewhere",
+      "/home/casey/../root/.local/share/orca-server",
+      "/home/casey;rm -rf ~/.local/share/orca-server",
+      "relative/.local/share/orca-server",
+      "/home/ca sey/.local/share/orca-server",
+      42,
+      undefined,
+    ])
+      expect((await hostAgentStatus(report(bad), "program"))[0]).not.toHaveProperty("signInCommand");
+  });
+
+  it("gives no command for an install not laid out as a managed one", () => {
+    const root = "/home/casey/.local/share/orca-server";
+    const dir = `${root}/agents/claude/0.109.1`;
+    const good = {
+      agent: "claude",
+      version: "0.109.1",
+      result: "ok" as const,
+      dir,
+      home: `${root}/agents/claude/home`,
+      binary: `${dir}/files/node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude`,
+    };
+    expect(hostAgentSignInCommand(good)).toBe(`CLAUDE_CONFIG_DIR=${good.home} ${good.binary} auth login`);
+    for (const changed of [
+      { home: "/tmp/home" },
+      { binary: "/usr/bin/evil" },
+      { version: "0.109.2", dir: `${root}/agents/claude/0.109.2` },
+      { dir: "/opt/agents/claude/0.109.1", home: "/opt/agents/claude/home" },
+    ])
+      expect(hostAgentSignInCommand({ ...good, ...changed })).toBeUndefined();
+    expect(hostAgentSignInCommand({ ...good, agent: "codex" })).toBeUndefined();
   });
 });
 

@@ -94,4 +94,18 @@ describe("orca remote agent", () => {
     ).rejects.toThrow(/No agent called gemini/);
     expect(opened).toHaveLength(0);
   });
+
+  it("refuses to sign Claude Code in before any profile, connection or prompt", async () => {
+    let made = 0;
+    const tunnel = () => {
+      made += 1;
+      throw new Error("no connection may be made");
+    };
+    const run = ctx(["agent", "login", "casey@lab"], { agent: ["claude"] });
+    await expect(remoteCommand(run.context, { tunnel, tailnet: ON })).rejects.toThrow(
+      /ORCA does not sign Claude Code in/,
+    );
+    expect(made).toBe(0);
+    expect(run.errs).toEqual([]);
+  });
 });

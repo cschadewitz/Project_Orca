@@ -1567,6 +1567,8 @@ ipcMain.handle("orca:profiles.signInHostAgent", (event, id: unknown, agent: unkn
   profileResult(async () => {
     const profileId = ProfileIdSchema.parse(id);
     const agentId = AgentIdSchema.parse(agent);
+    // Refused before any sign-in attempt or connection for an agent the person signs in themselves.
+    remoteProfiles.signInOffered(agentId);
     // The page is kept in main and opened only on a click in the window that asked; that window
     // learns its host and the code to enter, never the URL, and no other window learns anything.
     await agentSignIns.run(event.sender, profileId, agentId, (onPrompt, signal) =>

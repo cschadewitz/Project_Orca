@@ -61,6 +61,8 @@ export interface HostAgent {
    * part (Claude Code: the unmodified binary, the person's own account).
    */
   signIn: "device-code" | "yourself";
+  /** For `yourself`: the executable inside the install (`files/…`) whose own sign-in the person runs. */
+  executable?: string;
 }
 
 export const HOST_AGENTS: Readonly<Record<string, HostAgent>> = {
@@ -84,6 +86,7 @@ export const HOST_AGENTS: Readonly<Record<string, HostAgent>> = {
     version: HOST_AGENT_LOCK.claude!.version,
     loginOrigins: [],
     signIn: "yourself",
+    executable: "node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude",
   },
 };
 
@@ -287,12 +290,36 @@ export interface HostAgentStatus {
   signedIn: "yes" | "no" | "unknown";
   /** Why the pinned version there cannot be used (changed since install, say). */
   problem?: string;
-  /** For an agent the person signs in themselves: what to run on the server to do it. */
+  /**
+   * For an agent the person signs in themselves, installed: what to run on the server to do it.
+   * Built here, never taken from the server: only from the root it reports, and only when that
+   * is a managed root (see `managedRoot`).
+   */
   signInCommand?: string;
 }
 
-/** A sign-in command as the server reports it: `NAME=<path> <path> auth login`, nothing else. */
-const SIGN_IN_COMMAND = /^[A-Z_]{1,32}=\/[A-Za-z0-9._/-]{1,512} \/[A-Za-z0-9._/@-]{1,1024} auth login$/;
+/**
+ * The server root as the server reports it, when it is one a setup makes:
+ * `<absolute home>/.local/share/orca-server`, in plain path characters, with no `.` or `..`
+ * component. Anything else is not used to build a command.
+ */
+function managedRoot(value: unknown): string | undefined {
+  if (typeof value !== "string" || value.length > 512) return undefined;
+  if (!/^(?:\/[A-Za-z0-9._-]+)+$/.test(value)) return undefined;
+  if (!value.endsWith("/.local/share/orca-server")) return undefined;
+  if (value.split("/").some((part) => part === "." || part === "..")) return undefined;
+  return value;
+}
+
+/**
+ * What the person runs on the server to sign an agent in themselves: the agent's own sign-in, on
+ * its profile, from the install this ORCA pins under `root`. Every part is fixed here.
+ */
+function signInCommandFor(agent: HostAgent, root: string): string | undefined {
+  if (agent.signIn !== "yourself" || !agent.executable) return undefined;
+  const base = `${root}/agents/${agent.id}`;
+  return `CLAUDE_CONFIG_DIR=${base}/home ${base}/${agent.version}/files/${agent.executable} auth login`;
+}
 
 /** Every known agent's state on the server, from one run of the program there. */
 export async function hostAgentStatus(transport: HostAgentTransport, program: string): Promise<HostAgentStatus[]> {
@@ -304,7 +331,7 @@ export async function hostAgentStatus(transport: HostAgentTransport, program: st
   if (ran.code !== 0 || !list) throw new HostAgentRefused("The server could not report its agents.");
   return list.flatMap((item): HostAgentStatus[] => {
     if (!item || typeof item !== "object") return [];
-    const { agent, versions, others, signedIn, problem, signInCommand } = item as Record<string, unknown>;
+    const { agent, versions, others, signedIn, problem } = item as Record<string, unknown>;
     if (typeof agent !== "string" || !Object.hasOwn(HOST_AGENTS, agent)) return [];
     const list = (value: unknown) =>
       Array.isArray(value) ? value.filter((v): v is string => typeof v === "string" && /^\d+\.\d+\.\d+$/.test(v)) : [];
@@ -315,14 +342,17 @@ export async function hostAgentStatus(transport: HostAgentTransport, program: st
         others: list(others),
         signedIn: signedIn === "yes" || signedIn === "no" ? signedIn : "unknown",
         ...(typeof problem === "string" ? { problem: problem.slice(0, 2000) } : {}),
-        ...(HOST_AGENTS[agent]!.signIn === "yourself" &&
-        typeof signInCommand === "string" &&
-        SIGN_IN_COMMAND.test(signInCommand)
-          ? { signInCommand }
-          : {}),
+        ...(command(agent, list(versions)) ?? {}),
       },
     ];
   });
+  function command(id: string, versions: readonly string[]): { signInCommand: string } | undefined {
+    const agent = HOST_AGENTS[id]!;
+    const root = managedRoot(found.find((record) => Array.isArray(record.status))?.root);
+    if (!root || !versions.includes(agent.version)) return undefined;
+    const made = signInCommandFor(agent, root);
+    return made ? { signInCommand: made } : undefined;
+  }
 }
 
 /** What the person needs to approve a sign-in: the link to open, and the code to enter there. */
@@ -440,9 +470,16 @@ export async function signInHostAgent(
 /** For an agent the person signs in themselves: what to run on the server, from where it was installed. */
 export function hostAgentSignInCommand(installed: HostAgentInstalled): string | undefined {
   const agent = hostAgent(installed.agent);
-  if (agent.signIn !== "yourself") return undefined;
-  const command = `CLAUDE_CONFIG_DIR=${installed.home} ${installed.binary} auth login`;
-  return SIGN_IN_COMMAND.test(command) ? command : undefined;
+  if (agent.signIn !== "yourself" || !agent.executable || installed.version !== agent.version) return undefined;
+  // Only an install laid out exactly as a managed one is: the version under the agent's directory
+  // in a managed root, its profile beside it, its executable inside it. Otherwise no command.
+  const suffix = `/agents/${agent.id}/${agent.version}`;
+  if (!installed.dir.endsWith(suffix)) return undefined;
+  const root = managedRoot(installed.dir.slice(0, -suffix.length));
+  if (!root) return undefined;
+  if (installed.home !== `${root}/agents/${agent.id}/home`) return undefined;
+  if (installed.binary !== `${installed.dir}/files/${agent.executable}`) return undefined;
+  return signInCommandFor(agent, root);
 }
 
 /** The YAML for the server's own config that runs an installed agent, under `agents:`. */

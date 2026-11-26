@@ -398,6 +398,11 @@ async function agentCommand(ctx: CommandContext, action: string, destination: st
     throw new OrcaError("CONFIG_INVALID", `--agent names the agent: ${Object.keys(HOST_AGENTS).join(" or ")}.`);
   try {
     const agent = action === "status" ? undefined : hostAgent(agentFlag as string);
+    // Refused before any profile, connection or prompt: ORCA offers no sign-in for it.
+    if (agent && action === "login" && agent.signIn === "yourself")
+      throw new HostAgentRefused(
+        `ORCA does not sign ${agent.name} in. Sign it in on ${destination} yourself: orca remote agent status ${destination} names the command to run there.`,
+      );
     const program = hostAgentsProgram(scripts);
     const { base } = await profileFor(ctx, destination, deps);
     // Only through a host key `remote add` already pinned, as for push-repo.

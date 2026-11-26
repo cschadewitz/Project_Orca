@@ -133,6 +133,18 @@ describe("agents on a profile's server", () => {
   });
 });
 
+describe("Claude Code on a profile's server", () => {
+  it("offers no sign-in: refused before any connection, even with the profile ready", async () => {
+    const { profiles, opened, pin } = store();
+    pin();
+    await expect(profiles.signInHostAgent("lab", "claude", scripts, () => {})).rejects.toThrow(
+      /does not sign Claude Code in/,
+    );
+    expect(() => profiles.signInOffered("claude")).toThrow(/does not sign Claude Code in/);
+    expect(opened).toEqual([]);
+  });
+});
+
 describe("agent work on a profile", () => {
   /** A fetch that waits until the test lets it go. */
   function heldFetch() {

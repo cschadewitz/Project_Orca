@@ -23,15 +23,17 @@ on the server to run it. It works only under the server root the setup made,
                           interrupted install left is never touched (its owner is not provable).
                           An install already there is accepted only if it is exactly this lock
                           entry and its tree is exactly its record; nothing else is replaced.
-  status                  One line: each known agent's verified installed versions, any that
-                          are not what was installed, and whether its profile is signed in.
+  status                  One line: the server root, each known agent's verified installed
+                          versions, any that are not what was installed, and whether its
+                          profile is signed in.
   login --agent ID        Run the agent's own sign-in on its profile, with no terminal, so it
                           uses a device code: its link and code are printed for the client to
                           show the person, who approves it in their own browser. The credential
                           is written by the agent, on this server, in `agents/<agent>/home`.
                           Claude Code is never signed in by ORCA: the person runs its own
-                          `auth login` on this server themselves, with the command `status`
-                          names, and ORCA never reads what it writes.
+                          `auth login` on this server themselves (the client builds that
+                          command from the root `status` reports), and ORCA never reads what
+                          it writes.
 
 Nothing installed is run (status, sign-in) unless its tree is exactly its record, every
 directory from the home down is this account's own and closed to other writers, and the
@@ -491,25 +493,17 @@ def status():
         found, others, problem = installed(root, lock, agent)
         item = {"agent": agent, "versions": [lock[agent]["version"]] if found else [], "others": others,
                 "signedIn": signed_in(root, agent, found[1]) if found else "no"}
-        if found and AGENTS[agent]["login"] is None:
-            item["signInCommand"] = sign_in_command(root, agent, found[1])
         if problem:
             item["problem"] = problem
         agents.append(item)
-    emit({"status": agents})
-
-
-def sign_in_command(root, agent, binary):
-    """What the person runs on this server to sign the agent in themselves."""
-    return f"{AGENTS[agent]['home']}={root / 'agents' / agent / 'home'} {binary} auth login"
+    emit({"status": agents, "root": str(root)})
 
 
 def login(agent):
     if agent not in AGENTS:
         raise Refused(f"No agent called {agent!r} can be signed in here.")
     if AGENTS[agent]["login"] is None:
-        raise Refused(f"ORCA does not sign {agent} in. Sign it in on this server yourself: `status` names the "
-                      "command to run.")
+        raise Refused(f"ORCA does not sign {agent} in. Sign it in on this server yourself.")
     lock = load_lock()
     root = server_root()
     found, _, problem = installed(root, lock, agent)

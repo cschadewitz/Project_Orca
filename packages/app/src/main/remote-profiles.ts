@@ -1052,7 +1052,7 @@ export class RemoteProfiles {
     onPrompt: (prompt: HostAgentLoginPrompt) => void,
     signal?: AbortSignal,
   ): Promise<void> {
-    const agent = this.knownAgent(agentId);
+    const agent = this.signInOffered(agentId);
     await this.agentWork(id, (target) =>
       this.withAgentTunnel(target, (tunnel) =>
         signInHostAgent(
@@ -1065,6 +1065,17 @@ export class RemoteProfiles {
         ),
       ),
     );
+  }
+
+  /**
+   * The agent, if ORCA offers its sign-in: refused before any connection or prompt for one the
+   * person signs in themselves (Claude Code).
+   */
+  signInOffered(agentId: string) {
+    const agent = this.knownAgent(agentId);
+    if (agent.signIn === "yourself")
+      throw new ConnectionRefusal(`ORCA does not sign ${agent.name} in. Sign it in on that machine yourself.`);
+    return agent;
   }
 
   private knownAgent(agentId: string) {
