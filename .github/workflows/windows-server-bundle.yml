@@ -1,0 +1,81 @@
+# The Windows x64 server bundle (#1238), proven on Windows before any release uses it.
+#
+# On a GitHub-hosted Windows machine this builds the checkout, assembles
+# orca-server-X.Y.Z-win-x64.zip with tools/deploy/server-bundle.py (`runtime/node.exe` is the
+# runner's Node 24, the one the build was tested with), unpacks it with Windows' own
+# Expand-Archive, as a host's setup will, and runs it with tools/deploy/server-bundle-smoke.mjs:
+# the bundle's own node.exe runs the CLI's version, the scripted demo, `validate` of the shipped
+# workflows and a temporary daemon whose hello must carry the release's version, protocol and
+# capabilities. Nothing is signed or published here; the release workflow for this bundle signs
+# and attaches it.
+name: Windows server bundle
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - tools/deploy/server-bundle.py
+      - tools/deploy/server-bundle-smoke.mjs
+      - packages/app/scripts/build-daemon.js
+      - release-compatibility.json
+      - pnpm-lock.yaml
+      - .github/workflows/windows-server-bundle.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-server-bundle-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bundle:
+    name: assemble and run the Windows server bundle
+    runs-on: windows-2025
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      - name: Build
+        run: pnpm exec tsc -b tsconfig.build.json
+
+      - name: Assemble the Windows bundle
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $daemon = Join-Path $env:RUNNER_TEMP "daemon"
+          node packages/app/scripts/build-daemon.js --outfile (Join-Path $daemon "orca-daemon.mjs") --server
+          if ($LASTEXITCODE -ne 0) { throw "build-daemon failed" }
+          $version = node -p "require('./package.json').version"
+          $env:SOURCE_DATE_EPOCH = git log -1 --format=%ct HEAD
+          python tools/deploy/server-bundle.py assemble --platform win-x64 `
+            --version $version --sha (git rev-parse HEAD) `
+            --node (Get-Command node).Source --node-version (node --version) `
+            --daemon-dir $daemon --out (Join-Path $env:RUNNER_TEMP "bundle")
+          if ($LASTEXITCODE -ne 0) { throw "server-bundle.py failed" }
+          Get-ChildItem (Join-Path $env:RUNNER_TEMP "bundle") | Format-Table Name, Length
+
+      - name: Unpack it as a host would and run it
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $bundle = Join-Path $env:RUNNER_TEMP "bundle"
+          $manifest = Get-Content (Get-ChildItem $bundle -Filter *.manifest.json).FullName -Raw | ConvertFrom-Json
+          $zip = Join-Path $bundle $manifest.archive.name
+          if ((Get-FileHash -Algorithm SHA256 $zip).Hash.ToLowerInvariant() -ne $manifest.archive.sha256) {
+            throw "the archive does not match its manifest"
+          }
+          $unpacked = Join-Path $env:RUNNER_TEMP "unpacked"
+          Expand-Archive -LiteralPath $zip -DestinationPath $unpacked
+          node tools/deploy/server-bundle-smoke.mjs (Join-Path $unpacked $manifest.root)
+          if ($LASTEXITCODE -ne 0) { throw "the bundle does not run" }

@@ -15,6 +15,7 @@ import sys
 import tarfile
 import tempfile
 import unittest
+import zipfile
 from unittest.mock import patch
 
 
@@ -103,6 +104,45 @@ class ServerBundleTests(unittest.TestCase):
         self.assertTrue(any(name.startswith(stem + "templates/") for name in members))
         self.assertEqual(self.manifest["compatibility"],
                          json.loads((Path(__file__).parents[2] / "release-compatibility.json").read_text()))
+
+    def test_the_windows_bundle_is_a_deterministic_zip_with_node_exe(self):
+        runtime = self.tmp / "node-win"
+        runtime.mkdir()
+        (runtime / "node.exe").write_bytes(b"MZ")
+        (runtime / "LICENSE").write_text("node licence\n")
+        manifest = bundle.assemble("0.9.0", SHA, runtime / "node.exe", self.tmp / "daemon", self.tmp / "win",
+                                   1700000000, "v24.1.0", "win-x64")
+        again = bundle.assemble("0.9.0", SHA, runtime / "node.exe", self.tmp / "daemon", self.tmp / "win-again",
+                                1700000000, "v24.1.0", "win-x64")
+        self.assertEqual(again["archive"]["sha256"], manifest["archive"]["sha256"])
+        self.assertEqual(manifest["platform"], "win-x64")
+        self.assertEqual(manifest["archive"]["name"], "orca-server-0.9.0-win-x64.zip")
+        self.assertEqual(manifest["node"], {"path": "runtime/node.exe", "version": "v24.1.0"})
+        self.assertEqual(manifest["root"], "orca-server-0.9.0-win-x64")
+        self.assertTrue((self.tmp / "win" / "orca-server-0.9.0-win-x64.manifest.json").is_file())
+        stem = "orca-server-0.9.0-win-x64/"
+        with zipfile.ZipFile(self.tmp / "win" / "orca-server-0.9.0-win-x64.zip") as archive:
+            members = {member.filename: member for member in archive.infolist()}
+            inside = json.loads(archive.read(stem + "orca-server.json"))
+            self.assertEqual(archive.read(stem + "runtime/node.exe"), b"MZ")
+            self.assertEqual(archive.read(stem + "runtime/LICENSE"), b"node licence\n")
+        self.assertEqual(inside["node"], "runtime/node.exe")
+        self.assertEqual(inside["platform"], "win-x64")
+        names = list(members)
+        self.assertEqual(names[0], stem)
+        self.assertIn(stem + "runtime/", names)
+        self.assertNotIn(stem + "runtime/bin/node", names)
+        for name in ("orca-daemon.mjs", "native-io-worker.js", "claude-pre-tool-hook.mjs", "scripted-agent/main.js",
+                     "workflows/ai-sdlc.yaml", "release-compatibility.json", "package.json", "LICENSE"):
+            self.assertIn(stem + name, members)
+        self.assertEqual(members[stem + "runtime/node.exe"].external_attr >> 16, 0o100755)
+        self.assertEqual(members[stem + "orca-daemon.mjs"].external_attr >> 16, 0o100644)
+        self.assertTrue(all(m.date_time == (2023, 11, 14, 22, 13, 20) for m in members.values()))
+
+    def test_an_unknown_platform_is_refused(self):
+        with self.assertRaisesRegex(RuntimeError, "platform must be one of"):
+            bundle.assemble("0.9.0", SHA, self.tmp / "node-runtime" / "bin" / "node", self.tmp / "daemon",
+                            self.tmp / "mac", 1700000000, "v24.1.0", "darwin-arm64")
 
     def pin_root(self, data):
         """Pin `data` as the one trusted root this release accepts, for the test's length."""
