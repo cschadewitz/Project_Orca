@@ -22,6 +22,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { FRAGMENT_DIR, deleteFragments, readFragments, renderEntries } from "./changelog.js";
 import { laneOf } from "./release-lane.js";
+import { nextVersion as nextFor } from "./release-plan.js";
 
 const PKG = "package.json";
 const CHANGELOG = "CHANGELOG.md";
@@ -62,21 +63,15 @@ const currentVersion = () => {
 };
 
 /**
- * Pre-1.0 (major === 0) a `major` bump is deliberately treated as a minor one: under
- * semver 0.x promises nothing, and reaching 1.0.0 should be a decision rather than the
- * side effect of one label. Pin the version on the milestone to go to 1.0.0.
+ * The next version for a label bump (tools/release-plan.js): pre-1.0 a `major` bump counts as a
+ * minor one, and a candidate is finalized by its own level's bump (0.9.0-rc.1 + minor = 0.9.0).
  */
 function nextVersion(current, bump) {
-  const { major, minor, patch } = parse(current);
-  if (major === 0) {
-    if (bump === "major" || bump === "minor") return `0.${minor + 1}.0`;
-    if (bump === "patch") return `0.${minor}.${patch + 1}`;
-  } else {
-    if (bump === "major") return `${major + 1}.0.0`;
-    if (bump === "minor") return `${major}.${minor + 1}.0`;
-    if (bump === "patch") return `${major}.${minor}.${patch + 1}`;
+  try {
+    return nextFor(current, bump);
+  } catch (err) {
+    return die(err.message);
   }
-  return die(`unknown bump: ${bump} (expected major, minor or patch)`);
 }
 
 /** The `## Unreleased` body, and the line range it occupies, from a CHANGELOG's lines. */

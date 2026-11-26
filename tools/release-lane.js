@@ -17,6 +17,8 @@
 //   node tools/release-lane.js on-lane <sha> <version>     -> "<lane>", from `gh api` alone (no
 //                                                             checkout): the commit is on its
 //                                                             protected lane
+//   node tools/release-lane.js rehearse <sha> <version>    -> what `verify` would say, for a dry
+//                                                             run; reports, never refuses
 //   node tools/release-lane.js release-pr <event.json>     -> checks a merged release pull
 //                                                             request before it is published
 //   node tools/release-lane.js guard-evidence <pr> <base> <head>
@@ -159,6 +161,45 @@ function onLane(sha, version) {
   if (status !== "ahead" && status !== "identical")
     die(`${sha} (v${version}) is not on ${lane} (${status}), the only branch it may come from`);
   console.log(lane);
+}
+
+/**
+ * A dry run's look at the lane gate, which a dry run otherwise skips: what `verify` would say
+ * about this commit as a release of `version`, without refusing anything. A commit already on its
+ * protected line passes as it stands; a release pull request head that is up to date with its
+ * line (the line's head is an ancestor) passes once merged. Prints one line and exits 0, so a
+ * rehearsal reports the gate without depending on it.
+ */
+function rehearse(sha, version) {
+  let lane;
+  try {
+    lane = laneOf(version);
+  } catch (error) {
+    return console.log(`lane gate would refuse: ${error.message}`);
+  }
+  let head;
+  try {
+    head = git("rev-parse", "--verify", `refs/remotes/origin/${lane}^{commit}`);
+  } catch {
+    return console.log(
+      isNewLine(version)
+        ? `lane gate: ${lane} does not exist yet; preparing v${version} cuts it from main, and the gate then requires the release commit on it`
+        : `lane gate would refuse: ${lane}, the only branch v${version} may come from, does not exist`,
+    );
+  }
+  let problems;
+  try {
+    problems = protectionProblems(ghJson(`repos/${repo()}/rules/branches/${lane}`));
+  } catch {
+    problems = ["its rules could not be read"];
+  }
+  if (problems.length) return console.log(`lane gate would refuse: ${lane} is not protected: ${problems.join("; ")}`);
+  if (isAncestor(sha, head)) return console.log(`lane gate would accept: ${sha} (v${version}) is on ${lane}`);
+  if (isAncestor(head, sha))
+    return console.log(
+      `lane gate would accept once merged: ${sha} (v${version}) is up to date with ${lane} at ${head}`,
+    );
+  console.log(`lane gate would refuse: ${sha} (v${version}) is neither on ${lane} nor up to date with it (${head})`);
 }
 
 export const GUARD_WORKFLOW = ".github/workflows/release-line-guard.yml";
@@ -349,10 +390,11 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     }
   } else if (command === "verify") verify(args[0], args[1]);
   else if (command === "on-lane") onLane(args[0], args[1]);
+  else if (command === "rehearse") rehearse(args[0], args[1]);
   else if (command === "release-pr") releasePr(args[0], args[1]);
   else if (command === "guard-evidence") guardEvidence({ number: Number(args[0]), base: args[1], head: args[2] });
   else
     die(
-      "usage: node tools/release-lane.js lane <version> | verify <sha> <version> | on-lane <sha> <version> | release-pr <event.json> <sha> | guard-evidence <pr> <base> <head>",
+      "usage: node tools/release-lane.js lane <version> | verify <sha> <version> | on-lane <sha> <version> | rehearse <sha> <version> | release-pr <event.json> <sha> | guard-evidence <pr> <base> <head>",
     );
 }

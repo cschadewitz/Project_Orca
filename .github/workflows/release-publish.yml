@@ -154,6 +154,29 @@ jobs:
           echo "releasing $SHA (v$version) from $lane"
           echo "Released v$version from \`$lane\`." >> "$GITHUB_STEP_SUMMARY"
 
+      # A dry run skips the gate above, so it would never show that a candidate or final is
+      # accepted from its line (#1240 review). This reports what the gate would say about the
+      # rehearsed ref, with main's policy, and never fails the rehearsal.
+      - name: Rehearse the lane gate (report only)
+        if: ${{ inputs.dry_run }}
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          SHA: ${{ steps.sha.outputs.sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          policy="$RUNNER_TEMP/release-lane.js"
+          git show "refs/remotes/origin/$DEFAULT_BRANCH:tools/release-lane.js" > "$policy"
+          version=$(git show "$SHA:package.json" | node -p 'JSON.parse(require("fs").readFileSync(0, "utf8")).version')
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "lane gate: package.json version is not semver" | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          result=$(node "$policy" rehearse "$SHA" "$version" || echo "lane gate: could not be rehearsed")
+          echo "$result"
+          echo "Rehearsed $result" >> "$GITHUB_STEP_SUMMARY"
+          case "$result" in *"would refuse"*) echo "::warning::$result" ;; esac
+
       # Read once, here, and passed to every job below, so that the version the desktop
       # artifacts are stamped with and the version that gets tagged cannot disagree.
       - name: The version being released

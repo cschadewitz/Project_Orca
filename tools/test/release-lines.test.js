@@ -676,6 +676,46 @@ describe("a real release's reviewed-commit check", () => {
     return file;
   };
 
+  describe("a dry run's look at the gate", () => {
+    const rehearsal = workflow("release-publish.yml").jobs.check.steps.find(
+      (s) => s.name === "Rehearse the lane gate (report only)",
+    );
+    const rehearse = (sha) =>
+      execFileSync("bash", ["-c", rehearsal.run], {
+        cwd: clone,
+        env: {
+          ...process.env,
+          PATH: `${bin}:${process.env.PATH}`,
+          DEFAULT_BRANCH: "main",
+          SHA: sha,
+          RULES: protectedRules,
+          GITHUB_REPOSITORY: "o/r",
+          RUNNER_TEMP: work,
+          GITHUB_STEP_SUMMARY: join(work, "summary"),
+        },
+        encoding: "utf8",
+        stdio: "pipe",
+      });
+
+    it("runs only in a dry run, and reports without refusing", () => {
+      expect(rehearsal.if).toBe("${{ inputs.dry_run }}");
+      expect(rehearse(commits.candidate)).toMatch(/would accept: .* \(v0\.9\.0-rc\.1\) is on release\/0\.9/);
+      expect(rehearse(commits.main)).toMatch(
+        /would refuse: .* \(v0\.7\.0\) is neither on release\/0\.7 nor up to date/,
+      );
+      expect(readFileSync(join(work, "summary"), "utf8")).toContain("Rehearsed lane gate would refuse");
+    });
+
+    it("accepts a final's release pull request head that is up to date with its line, once merged", () => {
+      git(clone, "checkout", "-q", "--detach", commits.candidate);
+      writeFileSync(join(clone, "package.json"), manifest("0.9.0"));
+      git(clone, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qam", "release: v0.9.0");
+      expect(rehearse(git(clone, "rev-parse", "HEAD"))).toMatch(
+        /would accept once merged: .* \(v0\.9\.0\) is up to date with release\/0\.9/,
+      );
+    });
+  });
+
   it("accepts a new minor's candidate on its own line, cut from main", () => {
     expect(run({ sha: commits.candidate })).toMatch(/v0\.9\.0-rc\.1\) from release\/0\.9/);
   });
@@ -862,7 +902,9 @@ describe("the patch path through the workflows", () => {
     expect(open.env.BASE).toBe("${{ steps.resolve.outputs.base }}");
     expect(open.run).toContain('gh pr create --base "$BASE"');
     const resolve = prepare.find((s) => s.id === "resolve").run;
-    expect(resolve).toContain('base=$(node "$tools/release.js" line "$target")');
+    expect(resolve).toContain('node "$tools/release-plan.js" plan --bump "$bump" --pin "$pin" --title "$title"');
+    // Nothing is pushed before the plan has passed.
+    expect(resolve.indexOf("release-plan.js\" plan")).toBeLessThan(resolve.indexOf("git push"));
     expect(resolve).toMatch(/holds minor\/major work/);
     // The App token, when configured, is what lets CI and the guard run on that pull request.
     expect(prepare[0].uses).toMatch(/^actions\/create-github-app-token@[0-9a-f]{40}$/);
@@ -928,7 +970,7 @@ describe("Release (sync main) on a rerun", () => {
     mkdirSync(join(origin, "tools"), { recursive: true });
     mkdirSync(join(origin, "changelog.d"));
     git(origin, "init", "-q", "-b", "main");
-    for (const tool of ["release.js", "changelog.js", "release-lane.js"])
+    for (const tool of ["release.js", "changelog.js", "release-lane.js", "release-plan.js"])
       writeFileSync(join(origin, "tools", tool), readFileSync(new URL(`../${tool}`, import.meta.url), "utf8"));
     writeFileSync(join(origin, "CHANGELOG.md"), header + section("0.7.0", "first"));
     writeFileSync(join(origin, "changelog.d", "12-crash.fixed.md"), "- app: no crash\n");

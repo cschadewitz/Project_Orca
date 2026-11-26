@@ -438,7 +438,18 @@ signing source or needs anyone to hold. A fix that the candidate needs merges to
 and is then cherry-picked into the line, as for a patch. Until `vX.Y.0` is tagged the line is
 **stabilizing**: the guard accepts issues in the `X.Y.0` milestone (with the `release:minor`
 or `release:major` label they ship with) as well as patch milestones. Once the `.0` is tagged,
-only patch milestones count. A line counts as protected
+only patch milestones count.
+
+**Candidate to final.** The same `X.Y.0` milestone, reopened and closed again, prepares the
+next candidate (pin `Release: vX.Y.0-rc.N`) or the final. The final needs no pin: a candidate
+is finalized by its own bump, so `0.9.0-rc.1` with `release:minor` labels gives `0.9.0`, from the
+existing line, whether the milestone's title is `0.9.0` or anything else and whether or not
+`main` has recorded the candidate yet. Prepare decides the version, the line and any cut first
+(`tools/release-plan.js`), and pushes nothing until that passes. It refuses to cut a new minor
+while an older minor's line is still stabilizing (cut, with no `.0` tagged), so a milestone
+closed early cannot cut `0.10` from a `main` that already holds work the `0.9.0` final does not.
+A **Release (prepare)** dispatch with `dry_run` reports that decision for any milestone, open
+or closed, and writes nothing. A line counts as protected
 when the rules API reports, for that branch, a pull request requirement, no force pushes, no
 deletion, both `check (node 24)` and `release line check` as required checks that only GitHub
 Actions may satisfy, and branches kept up to date before merging; prepare, publish and signing all check that before they open, build or sign anything from a line.
@@ -671,6 +682,12 @@ release graph before it lands. A failure costs nothing, unlike a failed `release
 after merge, which leaves a bump on the line with no tag. Dry runs before #950 left a
 `vX.Y.Z-dryrun.N (dry run)` draft each; newer ones leave none. Learned from T3 Code's preview release train (#863).
 
+
+A rehearsal skips the lane gate a real release applies, so it also reports what that gate
+would say about the rehearsed ref (`release-lane.js rehearse`, `main`'s copy): accepted (on its
+protected line), accepted once merged (a release pull request head up to date with its line),
+or refused with the reason. It never fails the rehearsal. Together with a **Release (prepare)**
+`dry_run`, that rehearses a candidate-to-final path end to end without writing anything.
 ## Doing it by hand
 
 The workflow is a wrapper around `tools/release.js`, which is offline and has no
