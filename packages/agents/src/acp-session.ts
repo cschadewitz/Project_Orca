@@ -59,6 +59,7 @@ import * as acpUnstable from "@agentclientprotocol/sdk/unstable";
 import { createMcpRelay, type McpRelay, type McpRelayCall, type McpRelayDispatch } from "./mcp-relay.js";
 import { nativeToolHookRefused } from "./native-tool-hook-session.js";
 import { codexExecGateRefused } from "./codex-exec-gate-session.js";
+import { codexAppServerRefused } from "./codex-app-server.js";
 import { normalizeConfigOption, normalizeSessionConfig } from "./config-options.js";
 import { isHostFileMissing, type AgentHost, type AgentProcessHandle } from "./host.js";
 import {
@@ -367,6 +368,10 @@ export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSes
   // metadata or without: metadata is not an admission.
   const gateRefused = codexExecGateRefused(opts.agent, "launch");
   if (gateRefused) throw gateRefused;
+  // The Codex app-server driver (#1154) is not ACP: this launch would start the Codex CLI as an
+  // ACP agent, so it starts none, whatever the session metadata.
+  const driverRefused = codexAppServerRefused(opts.agent, "launch");
+  if (driverRefused) throw driverRefused;
   // An agent that asked for ORCA's tool hook is opened only by the session factory that
   // installs it (`sessionMeta`); any other caller (a probe, a tool) would run it unguarded.
   if (opts.sessionMeta === undefined) {

@@ -1207,6 +1207,16 @@ export const AgentSpecSchema = z
      */
     codexExecGate: z.enum(["off", "experimental"]).optional(),
     /**
+     * How ORCA talks to the agent (#1154). `acp`, the meaning of leaving it out, starts
+     * `command` as an ACP agent, today's route for every agent. `codex-app-server` is
+     * **experimental and refused for now**: `command` then names the user's installed Codex CLI
+     * (`codex`, or a path to it), which ORCA is to start as `codex app-server` on the user's own
+     * `codex login` and `CODEX_HOME`, with no sign-in of ORCA's own. ORCA refuses every session
+     * that asks for it until the driver is built (#1157), on any host but ORCA's own (#1166),
+     * and together with `nativeToolHook` (#1161) or `codexExecGate` (#1171).
+     */
+    driver: z.enum(["acp", "codex-app-server"]).optional(),
+    /**
      * MCP servers passed in `session/new`. The legacy inline form: each one is on for this
      * agent, as if it were in the catalog and enabled here. `capabilities` below selects from
      * the shared catalog instead (#335).
@@ -1258,9 +1268,30 @@ export const AgentSpecSchema = z
         path: ["codexExecGate"],
         message: "codexExecGate and nativeToolHook are separate routes; an agent takes one of them",
       });
+    if (agent.driver === "codex-app-server") {
+      if (agent.nativeToolHook === "on" || agent.nativeToolHook === "experimental")
+        ctx.addIssue({
+          code: "custom",
+          path: ["driver"],
+          message: "driver: codex-app-server does not take nativeToolHook yet (#1161); an agent takes one of them",
+        });
+      if (agent.codexExecGate === "experimental")
+        ctx.addIssue({
+          code: "custom",
+          path: ["driver"],
+          message: "driver: codex-app-server does not take codexExecGate yet (#1171); an agent takes one of them",
+        });
+    }
     if (agent.type === "acp") {
       if (agent.command.length === 0)
-        ctx.addIssue({ code: "custom", path: ["command"], message: "an ACP agent needs the command that starts it" });
+        ctx.addIssue({
+          code: "custom",
+          path: ["command"],
+          message:
+            agent.driver === "codex-app-server"
+              ? "driver: codex-app-server needs the Codex CLI to start (codex, or a path to it)"
+              : "an ACP agent needs the command that starts it",
+        });
       for (const key of ["profile", "workflow", "promptVar", "gitRef"] as const)
         if (agent[key] !== undefined)
           ctx.addIssue({ code: "custom", path: [key], message: `${key} applies only to type: orca-daemon` });
@@ -1289,6 +1320,13 @@ export const AgentSpecSchema = z
         code: "custom",
         path: ["codexExecGate"],
         message: "an orca-daemon agent runs the remote daemon's own agents; ORCA's Codex gate does not apply to it",
+      });
+    if (agent.driver === "codex-app-server")
+      ctx.addIssue({
+        code: "custom",
+        path: ["driver"],
+        message:
+          "an orca-daemon agent runs the remote daemon's own agents; the Codex app-server driver does not apply to it",
       });
     if (agent.mcpServers.length > 0 || agent.capabilities !== undefined)
       ctx.addIssue({

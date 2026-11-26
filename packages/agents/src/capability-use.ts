@@ -93,7 +93,12 @@ async function executable(path: string): Promise<boolean> {
   }
 }
 
-async function findLocal(command: string, cwd: string, path: string | undefined): Promise<string | undefined> {
+/** The executable `command` names on this machine: an absolute path as it is, a relative path from `cwd`, a bare name on `path`. */
+export async function findLocalExecutable(
+  command: string,
+  cwd: string,
+  path: string | undefined,
+): Promise<string | undefined> {
   // An absolute command is exactly that file: no extension is ever appended to it.
   if (isAbsolute(command)) return (await executable(command)) ? command : undefined;
   const extensions =
@@ -200,7 +205,7 @@ export async function resolveMcpServerCommand(
 ): Promise<{ path: string; trusted: boolean } | { reason: "missing" | "unreachable" }> {
   const path = configuredPath(server, context.agentEnv);
   if (host.spec.type === "local") {
-    const found = await findLocal(server.command, context.cwd, path ?? process.env.PATH);
+    const found = await findLocalExecutable(server.command, context.cwd, path ?? process.env.PATH);
     if (!found) return { reason: "missing" };
     return { path: found, trusted: found === server.command && (await trustedLocal(host, server.command)) };
   }
