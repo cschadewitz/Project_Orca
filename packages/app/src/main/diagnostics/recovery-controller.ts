@@ -32,6 +32,13 @@ export interface RecoveryControllerOptions {
   chooseDestination?: () => Promise<string | undefined>;
   operationTimeoutMs?: number;
   payload?: ControlledPayloadMemory;
+  /**
+   * False where the platform has no diagnostics storage at all (Linux today: no native backend
+   * and no path-based fallback, see `loadNativeDiagnosticsStorage`). No build can have written
+   * there, so there is nothing to clean up and no disk call is made (#1205). A missing or
+   * broken backend on a platform that has one is not this: earlier files may exist there.
+   */
+  platformStorage?: boolean;
 }
 interface PreparedReport {
   handle: string;
@@ -79,6 +86,7 @@ export class RecoveryController {
     { handle: string; token: string; promise: Promise<DiagnosticsResult<DiagnosticsStatus>> } | undefined;
   private readonly listeners = new Set<(status: DiagnosticsStatus) => void>();
   private readonly productionEnabled: boolean;
+  private readonly noStorage: boolean;
   private readonly timeoutMs: number;
   private readonly payload: ControlledPayloadMemory;
   private savingPayload: PayloadLease | undefined;
@@ -86,6 +94,7 @@ export class RecoveryController {
 
   constructor(private readonly options: RecoveryControllerOptions) {
     this.productionEnabled = options.productionEnabled ?? DIAGNOSTICS_PRODUCTION_ENABLED;
+    this.noStorage = options.platformStorage === false;
     this.timeoutMs = options.operationTimeoutMs ?? RECOVERY_LIMITS.operationMs;
     this.payload = options.payload ?? new ControlledPayloadMemory();
     this.ring = this.newRing();
@@ -113,6 +122,11 @@ export class RecoveryController {
     const epoch = this.epoch;
     const authorityEpoch = this.authorityEpoch;
     try {
+      if (this.noStorage) {
+        // Off by default with nothing owned to read, remove or wait on.
+        this.code = "unavailable";
+        return;
+      }
       const setting = await this.options.disk.readSetting();
       if (
         // A new window document revokes prepared reports, not the durable consent choice.
@@ -199,6 +213,13 @@ export class RecoveryController {
     // may let an older Enable adopt authority revoked by a newer Off.
     const epoch = this.epoch;
     // Immediate logical revocation precedes ALL awaits, including an outstanding native call.
+    if (!enabled && this.noStorage) {
+      this.setting = { ...this.setting, enabled: false };
+      this.revokeAuthority();
+      this.code = "unavailable";
+      this.emit();
+      return success(this.status());
+    }
     if (!enabled) {
       this.setting = { ...this.setting, enabled: false };
       this.revokeAuthority();
@@ -226,6 +247,7 @@ export class RecoveryController {
       });
     }
     await this.initialize();
+    if (this.noStorage) return failure("unavailable");
     if (epoch !== this.epoch) return failure("off");
     if (this.setting.enabled) return success(this.status());
     return this.mutate(async () => {
@@ -264,6 +286,7 @@ export class RecoveryController {
   async setMinutes(minutes: number): Promise<DiagnosticsResult<DiagnosticsStatus>> {
     if (!Number.isInteger(minutes) || minutes < 1 || minutes > 15) return failure("refused");
     await this.initialize();
+    if (this.noStorage) return failure("unavailable");
     return this.mutate(async () => {
       const next = { ...this.setting, minutes };
       await this.options.disk.writeSetting(next);
@@ -613,6 +636,7 @@ export class RecoveryController {
   }
   async retryCleanup(): Promise<DiagnosticsResult<DiagnosticsStatus>> {
     await this.initialize();
+    if (this.noStorage) return success(this.status());
     return this.mutate(async () => {
       if (this.exportState.current) {
         if (!this.setting.enabled && this.disableFailed) await this.persistDisabled();
@@ -646,6 +670,7 @@ export class RecoveryController {
     if (this.preparedReport?.source === "previous") this.dropExport();
     this.previousAvailable = false;
     this.emit();
+    if (this.noStorage) return success(this.status());
     return this.mutate(async () => {
       await this.options.disk.discardPrevious();
     });
@@ -666,6 +691,7 @@ export class RecoveryController {
   }
   async cleanExit(): Promise<void> {
     this.revokeAuthority();
+    if (this.noStorage) return;
     if (this.busy) {
       this.cleanupPending = true;
       return;
