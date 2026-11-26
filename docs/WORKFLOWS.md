@@ -522,9 +522,15 @@ signs in, never asks Codex to refresh a token and never reads Codex's credential
 Codex that needs a login and reports none is to be refused with "run `codex login`".
 
 **Every session that asks for it is refused today**, before anything starts: the session driver
-exists, but ORCA does not yet answer Codex's approval asks (#1159), it runs only on ORCA's
-own machine (#1166), and config rejects it on an
-`orca-daemon` agent and together with `nativeToolHook` or `codexExecGate`. Nothing falls back to
+exists and answers Codex's asks through ORCA's policy, but the route is not qualified yet
+(#1165), it runs only on ORCA's own machine (#1166), and config rejects it on an
+`orca-daemon` agent and together with `nativeToolHook` or `codexExecGate`. The factory's
+options for it are mapped and tested: a session gets ORCA's permission files and protected
+paths, its answerer, judge advice on commands, resume and the run's secrets (each
+app-server's secret values reach the run's redaction before ORCA sends it anything), with
+`on-request` and a `workspace-write` sandbox, and is refused, rather than run without, when
+it is given additional directories, MCP servers (#1163), a judge for edits or MCP calls, or
+an ACP- or hook-route option. Nothing falls back to
 the ACP adapter: to run Codex through it, remove `driver` (or set `driver: acp`, the default)
 and set `command` back to the adapter (for example `codex-acp`), since `codex` itself is not an
 ACP agent.

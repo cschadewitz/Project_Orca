@@ -58,7 +58,7 @@ export function codexAppServerRefused(
 ): OrcaError | undefined {
   if (!codexAppServerRequested(agent)) return undefined;
   const why = {
-    "session-factory": "ORCA does not answer Codex's approval asks (#1159) yet",
+    "session-factory": "the route is not qualified yet (#1165)",
     "non-local-host": `it runs on ${host?.type ?? "another"} host ${host?.id ?? "(unknown)"}, and the driver runs only on ORCA's own machine for now (#1166)`,
     launch: "ORCA's ACP launch would start the Codex CLI as an ACP agent, and this driver is not ACP",
     "remote-delegation": "it is an orca-daemon agent, and the driver applies to agents ORCA starts itself",
