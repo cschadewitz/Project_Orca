@@ -872,17 +872,29 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
     if (typeof t.cwd !== "string" || !samePath(t.cwd, opts.cwd)) throw refuse("working directory", t.cwd);
     const sandbox = isObject(t.sandbox) ? t.sandbox.type : undefined;
     const roots = codexWritableRoots(t.sandbox, opts.cwd, tmpdir);
-    if (roots === undefined || sandbox !== SANDBOX_TYPES[opts.thread.sandbox]) throw refuse("sandbox", sandbox);
+    if (roots === undefined || sandbox !== SANDBOX_TYPES[opts.thread.sandbox])
+      throw configRefusal(refuse("sandbox", sandbox));
     const overlap = codexWritableRootsProblem(roots, opts.protectedPaths ?? []);
     if (overlap)
-      throw new OrcaError("NOT_SUPPORTED", `agent ${agent.id}: ${overlap}. ORCA refuses the session.`, {
-        agentId: agent.id,
-      });
+      throw configRefusal(
+        new OrcaError("NOT_SUPPORTED", `agent ${agent.id}: ${overlap}. ORCA refuses the session.`, {
+          agentId: agent.id,
+        }),
+      );
     return {
       id: thread.id,
       model: typeof t.model === "string" ? t.model : undefined,
       effort: typeof t.reasoningEffort === "string" ? t.reasoningEffort : null,
     };
+  };
+  /**
+   * Refusals of what Codex would run with: its config, or the sandbox a thread came back with.
+   * On a restart these stop the session; a request that failed or was cut short is not one.
+   */
+  const configRefusals = new WeakSet<object>();
+  const configRefusal = (error: OrcaError) => {
+    configRefusals.add(error);
+    return error;
   };
   /**
    * What Codex will run with on `c`, read back and checked (`codexConfigCheck`): before a thread
@@ -893,7 +905,11 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
     const config = await c.client.request("config/read", { includeLayers: true, cwd: opts.cwd });
     const requirements = await c.client.request("configRequirements/read", undefined);
     const hooks = await c.client.request("hooks/list", thread ? { threadId: thread } : { cwds: [opts.cwd] });
-    return codexConfigCheck(agent.id, opts.thread, { config, requirements, hooks });
+    try {
+      return codexConfigCheck(agent.id, opts.thread, { config, requirements, hooks });
+    } catch (error) {
+      throw configRefusal(error as OrcaError);
+    }
   };
   const recordConfig = (verified: CodexVerifiedConfig) => {
     logger.info("Codex's effective config verified", { ...verified });
@@ -1063,13 +1079,17 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
     let c: Connection | undefined;
     try {
       c = await connect(true, stopped);
-      // A config that no longer holds is not a crash to retry: the session stops.
+      // A config or sandbox that no longer holds is not a crash to retry: the session stops.
+      // A cancel or close first keeps its own outcome, since it closes the replacement under
+      // whatever request is in flight; any other failure is a failed restart, as before.
       const refused = (error: unknown): never => {
-        breakSession(error instanceof OrcaError ? error : new OrcaError("AGENT_PROTOCOL", String(error)));
+        const why = stopped();
+        if (why) throw why;
+        if (error instanceof OrcaError && configRefusals.has(error)) breakSession(error);
         throw error;
       };
       await verifyConfig(c).catch(refused);
-      const resumed = await resumeOn(c, threadId);
+      const resumed = await resumeOn(c, threadId).catch(refused);
       const reverified = await verifyConfig(c, threadId).catch(refused);
       const late = stopped();
       if (late) throw late;

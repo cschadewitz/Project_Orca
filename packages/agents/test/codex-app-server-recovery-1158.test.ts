@@ -416,6 +416,75 @@ describe("an app-server that exits", () => {
     expect(s.spawnAgent).toHaveBeenCalledTimes(2);
   });
 
+  it("ends a prompt cancelled during the replacement's config reads as cancelled, and a later prompt restarts", async () => {
+    for (const stall of ["config/read", "configRequirements/read", "hooks/list"]) {
+      let reads = 0;
+      const s = scriptedHost((i) => ({
+        ...BASE,
+        // the replacement stalls in its first check (before the resume)
+        ...(i === 1
+          ? { [stall]: () => (reads++ === 0 ? NO_ANSWER : CONFIG_ANSWERS[stall as keyof typeof CONFIG_ANSWERS]()) }
+          : {}),
+      }));
+      const session = await open(s.host, { requestTimeoutMs: 60_000 });
+      s.procs[0]!.crash();
+      await settle();
+      const turn = session.prompt("go");
+      await vi.waitFor(() => expect(s.procs[1]?.received.some((m) => m.method === stall)).toBe(true));
+      await session.cancel();
+      await expect(turn).resolves.toMatchObject({ stopReason: "cancelled" });
+      expect(s.procs[1]!.kill).toHaveBeenCalled();
+      // not broken: the next prompt starts a third app-server and runs
+      await expect(session.prompt("again")).resolves.toMatchObject({ stopReason: "end_turn" });
+      expect(s.spawnAgent).toHaveBeenCalledTimes(3);
+      await session.close();
+    }
+  });
+
+  it("stops the session when the resumed thread comes back with another sandbox", async () => {
+    const s = scriptedHost((i) => ({
+      ...BASE,
+      ...(i === 1
+        ? {
+            "thread/resume": (msg) =>
+              thread(msg.params!["threadId"] as string, { sandbox: { type: "readOnly", networkAccess: false } }),
+          }
+        : {}),
+    }));
+    const session = await open(s.host);
+    s.procs[0]!.crash();
+    await settle();
+    const error = (await session.prompt("go").catch((e: unknown) => e)) as OrcaError;
+    expect(error.code).toBe("NOT_SUPPORTED");
+    expect(error.message).toMatch(/resumed the thread with sandbox "readOnly"/);
+    expect(s.procs[1]!.kill).toHaveBeenCalled();
+    await expect(session.prompt("again")).rejects.toBe(error);
+    expect(s.spawnAgent).toHaveBeenCalledTimes(2);
+  });
+
+  it("stops the session when the resumed thread could write a path ORCA protects", async () => {
+    const s = scriptedHost(() => BASE);
+    const session = await open(s.host, { protectedPaths: ["/tmp/orca-1160-sidecar"] }).catch((e: unknown) => e);
+    // the open itself is refused: /tmp is writable in the scripted sandbox
+    expect((session as OrcaError).message).toContain("which overlaps ORCA's protected /tmp/orca-1160-sidecar");
+    const t = scriptedHost((i) => ({
+      ...BASE,
+      ...(i === 0
+        ? {
+            "thread/start": () =>
+              thread("thr_1", { sandbox: { ...WRITE_SANDBOX, excludeSlashTmp: true, excludeTmpdirEnvVar: true } }),
+          }
+        : {}),
+    }));
+    const opened = await open(t.host, { protectedPaths: ["/tmp/orca-1160-sidecar"] });
+    t.procs[0]!.crash();
+    await settle();
+    const error = (await opened.prompt("go").catch((e: unknown) => e)) as OrcaError;
+    expect(error.message).toContain("which overlaps ORCA's protected /tmp/orca-1160-sidecar");
+    await expect(opened.prompt("again")).rejects.toBe(error);
+    expect(t.spawnAgent).toHaveBeenCalledTimes(2);
+  });
+
   it("stops the session after the crash budget, waiting the backoff before each restart", async () => {
     const sleep = vi.fn(async () => {});
     // every app-server after the first exits as soon as its thread is resumed
