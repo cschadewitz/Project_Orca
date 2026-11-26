@@ -55,6 +55,12 @@ export interface HostAgent {
   version: string;
   /** The origins its sign-in link may be on: any other link it prints is not shown. */
   loginOrigins: readonly string[];
+  /**
+   * How it is signed in: `device-code`, ORCA runs its own sign-in on the server and shows the
+   * link and code; `yourself`, the person runs its sign-in on the server and ORCA never takes
+   * part (Claude Code: the unmodified binary, the person's own account).
+   */
+  signIn: "device-code" | "yourself";
 }
 
 export const HOST_AGENTS: Readonly<Record<string, HostAgent>> = {
@@ -63,12 +69,21 @@ export const HOST_AGENTS: Readonly<Record<string, HostAgent>> = {
     name: "Codex",
     version: HOST_AGENT_LOCK.codex!.version,
     loginOrigins: ["https://auth.openai.com"],
+    signIn: "device-code",
   },
   copilot: {
     id: "copilot",
     name: "GitHub Copilot CLI",
     version: HOST_AGENT_LOCK.copilot!.version,
     loginOrigins: ["https://github.com"],
+    signIn: "device-code",
+  },
+  claude: {
+    id: "claude",
+    name: "Claude Code",
+    version: HOST_AGENT_LOCK.claude!.version,
+    loginOrigins: [],
+    signIn: "yourself",
   },
 };
 
@@ -272,7 +287,12 @@ export interface HostAgentStatus {
   signedIn: "yes" | "no" | "unknown";
   /** Why the pinned version there cannot be used (changed since install, say). */
   problem?: string;
+  /** For an agent the person signs in themselves: what to run on the server to do it. */
+  signInCommand?: string;
 }
+
+/** A sign-in command as the server reports it: `NAME=<path> <path> auth login`, nothing else. */
+const SIGN_IN_COMMAND = /^[A-Z_]{1,32}=\/[A-Za-z0-9._/-]{1,512} \/[A-Za-z0-9._/@-]{1,1024} auth login$/;
 
 /** Every known agent's state on the server, from one run of the program there. */
 export async function hostAgentStatus(transport: HostAgentTransport, program: string): Promise<HostAgentStatus[]> {
@@ -284,7 +304,7 @@ export async function hostAgentStatus(transport: HostAgentTransport, program: st
   if (ran.code !== 0 || !list) throw new HostAgentRefused("The server could not report its agents.");
   return list.flatMap((item): HostAgentStatus[] => {
     if (!item || typeof item !== "object") return [];
-    const { agent, versions, others, signedIn, problem } = item as Record<string, unknown>;
+    const { agent, versions, others, signedIn, problem, signInCommand } = item as Record<string, unknown>;
     if (typeof agent !== "string" || !Object.hasOwn(HOST_AGENTS, agent)) return [];
     const list = (value: unknown) =>
       Array.isArray(value) ? value.filter((v): v is string => typeof v === "string" && /^\d+\.\d+\.\d+$/.test(v)) : [];
@@ -295,6 +315,11 @@ export async function hostAgentStatus(transport: HostAgentTransport, program: st
         others: list(others),
         signedIn: signedIn === "yes" || signedIn === "no" ? signedIn : "unknown",
         ...(typeof problem === "string" ? { problem: problem.slice(0, 2000) } : {}),
+        ...(HOST_AGENTS[agent]!.signIn === "yourself" &&
+        typeof signInCommand === "string" &&
+        SIGN_IN_COMMAND.test(signInCommand)
+          ? { signInCommand }
+          : {}),
       },
     ];
   });
@@ -364,6 +389,10 @@ export async function signInHostAgent(
 ): Promise<void> {
   if (signal?.aborted) throw new HostAgentRefused("The sign-in was cancelled.");
   const agent = hostAgent(id);
+  if (agent.signIn === "yourself")
+    throw new HostAgentRefused(
+      `ORCA does not sign ${agent.name} in. Sign it in on the server yourself: its status shows the command to run there.`,
+    );
   const seen: HostAgentLoginPrompt = {};
   let shown = "";
   let refused: string | undefined;
@@ -408,12 +437,30 @@ export async function signInHostAgent(
   }
 }
 
+/** For an agent the person signs in themselves: what to run on the server, from where it was installed. */
+export function hostAgentSignInCommand(installed: HostAgentInstalled): string | undefined {
+  const agent = hostAgent(installed.agent);
+  if (agent.signIn !== "yourself") return undefined;
+  const command = `CLAUDE_CONFIG_DIR=${installed.home} ${installed.binary} auth login`;
+  return SIGN_IN_COMMAND.test(command) ? command : undefined;
+}
+
 /** The YAML for the server's own config that runs an installed agent, under `agents:`. */
 export function hostAgentSettings(installed: HostAgentInstalled): string {
   const agent = hostAgent(installed.agent);
   const suffix = `/agents/${agent.id}/${installed.version}`;
   if (!installed.dir.endsWith(suffix)) throw new HostAgentRefused("The install is not under the server root.");
   const root = installed.dir.slice(0, -suffix.length);
+  if (agent.id === "claude")
+    return [
+      "agents:",
+      "  - id: claude",
+      `    name: ${agent.name}`,
+      `    command: ${root}/current/runtime/bin/node`,
+      `    args: [${installed.dir}/files/node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js]`,
+      "    env:",
+      `      CLAUDE_CONFIG_DIR: ${installed.home}`,
+    ].join("\n");
   if (agent.id === "codex")
     return [
       "agents:",

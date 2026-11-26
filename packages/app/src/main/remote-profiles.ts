@@ -1006,6 +1006,8 @@ export class RemoteProfiles {
           installed: status?.versions.includes(agent.version) ?? false,
           signedIn: status?.signedIn ?? "unknown",
           ...(status?.problem ? { problem: status.problem } : {}),
+          signIn: agent.signIn,
+          ...(status?.signInCommand ? { signInCommand: status.signInCommand } : {}),
         };
       });
     });

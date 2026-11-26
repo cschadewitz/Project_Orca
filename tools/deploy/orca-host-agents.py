@@ -29,12 +29,15 @@ on the server to run it. It works only under the server root the setup made,
                           uses a device code: its link and code are printed for the client to
                           show the person, who approves it in their own browser. The credential
                           is written by the agent, on this server, in `agents/<agent>/home`.
+                          Claude Code is never signed in by ORCA: the person runs its own
+                          `auth login` on this server themselves, with the command `status`
+                          names, and ORCA never reads what it writes.
 
 Nothing installed is run (status, sign-in) unless its tree is exactly its record, every
 directory from the home down is this account's own and closed to other writers, and the
 profile is closed to everyone else (0700). npm never runs here, and no install script of any
-package runs. Each agent's profile (`CODEX_HOME`, `COPILOT_HOME`) is its own directory under the
-server root, never the account's everyday one. It prints `orca-agents: {json}` lines; anything
+package runs. Each agent's profile (`CODEX_HOME`, `COPILOT_HOME`, `CLAUDE_CONFIG_DIR`) is its
+own directory under the server root, never the account's everyday one. It prints `orca-agents: {json}` lines; anything
 else is the agent's own output. No third-party modules.
 """
 import argparse
@@ -73,7 +76,8 @@ except NameError:
     ENTRY_LIMIT = 100_000
 
 # What this program knows how to run, by agent id: the executable inside an install, the
-# environment variable that names the agent's profile, its sign-in and its status check.
+# environment variable that names the agent's profile, its sign-in and its status check. An agent
+# with no sign-in here (`login` None) is signed in by the person, on the server, themselves.
 AGENTS = {
     "codex": {
         "binary": "node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex",
@@ -85,6 +89,12 @@ AGENTS = {
         "binary": "node_modules/@github/copilot-linux-x64/copilot",
         "home": "COPILOT_HOME",
         "login": ["login", "--device-code"],
+        "status": None,
+    },
+    "claude": {
+        "binary": "node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude",
+        "home": "CLAUDE_CONFIG_DIR",
+        "login": None,
         "status": None,
     },
 }
@@ -448,6 +458,9 @@ def signed_in(root, agent, binary):
             return "no"
     except Refused:
         return "unknown"
+    if agent == "claude":
+        # Its sign-in is the person's own; what it wrote is never read here.
+        return "unknown"
     if agent == "copilot":
         config = profile / "config.json"
         if not os.path.lexists(config):
@@ -478,15 +491,25 @@ def status():
         found, others, problem = installed(root, lock, agent)
         item = {"agent": agent, "versions": [lock[agent]["version"]] if found else [], "others": others,
                 "signedIn": signed_in(root, agent, found[1]) if found else "no"}
+        if found and AGENTS[agent]["login"] is None:
+            item["signInCommand"] = sign_in_command(root, agent, found[1])
         if problem:
             item["problem"] = problem
         agents.append(item)
     emit({"status": agents})
 
 
+def sign_in_command(root, agent, binary):
+    """What the person runs on this server to sign the agent in themselves."""
+    return f"{AGENTS[agent]['home']}={root / 'agents' / agent / 'home'} {binary} auth login"
+
+
 def login(agent):
     if agent not in AGENTS:
         raise Refused(f"No agent called {agent!r} can be signed in here.")
+    if AGENTS[agent]["login"] is None:
+        raise Refused(f"ORCA does not sign {agent} in. Sign it in on this server yourself: `status` names the "
+                      "command to run.")
     lock = load_lock()
     root = server_root()
     found, _, problem = installed(root, lock, agent)

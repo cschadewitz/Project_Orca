@@ -567,7 +567,8 @@ export function ConnectionProfiles({
  * The agents ORCA can put on a managed server (#1236): each one's pinned version, whether that
  * exact install is there and whether it is signed in. Install carries the pinned packages from
  * this computer and shows the server config that runs the agent; Sign in runs the agent's own
- * device-code sign-in there, and shows the page's host and the code. Main opens the page.
+ * device-code sign-in there, and shows the page's host and the code. Main opens the page. An
+ * agent the person signs in themselves (Claude Code) gets the command to run there instead.
  */
 export function HostAgents({
   profiles,
@@ -636,11 +637,13 @@ export function HostAgents({
               ? `not usable (${agent.problem})`
               : !agent.installed
                 ? "not installed"
-                : agent.signedIn === "yes"
-                  ? "signed in"
-                  : agent.signedIn === "no"
-                    ? "not signed in"
-                    : "sign-in unknown"}
+                : agent.signIn === "yourself"
+                  ? "installed, you sign it in yourself"
+                  : agent.signedIn === "yes"
+                    ? "signed in"
+                    : agent.signedIn === "no"
+                      ? "not signed in"
+                      : "sign-in unknown"}
           </Text>
           {!agent.installed && !agent.problem && (
             <Button
@@ -657,7 +660,7 @@ export function HostAgents({
               {working === agent.agent ? "Installing…" : "Install"}
             </Button>
           )}
-          {agent.installed && agent.signedIn !== "yes" && (
+          {agent.installed && agent.signIn === "device-code" && agent.signedIn !== "yes" && (
             <Button
               size="sm"
               disabled={working !== undefined}
@@ -668,6 +671,21 @@ export function HostAgents({
           )}
         </div>
       ))}
+      {agents
+        ?.filter((agent) => agent.installed && agent.signIn === "yourself")
+        .map((agent) => (
+          <div key={`${agent.agent}-sign-in`} className="orca-connection-stack">
+            <Text style="caption" as="p">
+              ORCA does not sign {agent.name} in. Sign in with your own account on {name}: connect to it (for example
+              with tailscale ssh) and run{agent.signInCommand ? ":" : " its auth login."}
+            </Text>
+            {agent.signInCommand && (
+              <pre className={textClass("mono-id")} aria-label={`Sign-in command for ${agent.agent}`}>
+                {agent.signInCommand}
+              </pre>
+            )}
+          </div>
+        ))}
       {prompt && (
         <div className="orca-connection-stack" role="alert">
           <Text style="caption" as="p">
