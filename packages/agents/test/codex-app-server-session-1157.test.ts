@@ -99,7 +99,7 @@ function scriptedHost(answers: Record<string, Responder>) {
   const spawnAgent = vi.fn(async (_spec: unknown) => handle);
   const host = new LocalHost({ id: "local", type: "local" }) as AgentHost;
   host.spawnAgent = spawnAgent;
-  return { host, peer, spawnAgent, kill };
+  return { host, peer, spawnAgent, kill, exit, stdout };
 }
 
 const NO_ANSWER = Symbol("no answer");
@@ -780,14 +780,97 @@ describe("opening a session", () => {
     expect(s.peer.received.map((m) => m.method)).toEqual(["initialize"]);
   });
 
-  it("refuses without a policy, with full access or never, on another host, and for an ACP agent", async () => {
+  describe("a Codex that stops before the handshake finishes (#1269)", () => {
+    const SECRETISH = "provider said: token sk-live-abc123 for /home/someone/.codex/auth.json";
+    const stopped = async (
+      stderr: string,
+      exitFirst: boolean,
+      how: { streamError?: Error; ignoreKill?: boolean } = {},
+    ) => {
+      // A stream error is raised while ORCA waits on the handshake, once it is listening.
+      const s: ReturnType<typeof scriptedHost> = scriptedHost(
+        how.streamError ? { initialize: () => (s.stdout.destroy(how.streamError), NO_ANSWER) } : {},
+      );
+      const handle = await s.spawnAgent(undefined);
+      s.spawnAgent.mockClear();
+      Object.defineProperty(handle, "stderrTail", { value: () => stderr });
+      if (how.ignoreKill) s.kill.mockImplementation(() => undefined);
+      if (exitFirst) s.exit({ code: 1, signal: null });
+      if (!how.streamError) s.stdout.end();
+      const error = await open(s.host, { exitGraceMs: 20 }).then(
+        () => expect.unreachable("the session opened"),
+        (e: unknown) => e as OrcaError,
+      );
+      expect(error.code).toBe("AGENT_TRANSPORT");
+      // Nothing Codex printed, nor the stream's own error, reaches the public error or a cause.
+      expect(error.cause).toBeUndefined();
+      const shown = JSON.stringify(error) + error.message + String(error.stack);
+      for (const leak of ["sk-live", "/home/someone", "auth.json", "provider said"]) expect(shown).not.toContain(leak);
+      return { error, s };
+    };
+
+    it("names a recognized reason with a fixed diagnosis, and the exit it observed", async () => {
+      const { error } = await stopped(
+        `${SECRETISH}\nError: approval_policy = "untrusted" is no longer supported; remove this setting`,
+        true,
+      );
+      expect(error.message).toMatch(
+        /exited with code 1 before ORCA's handshake finished: a Codex config sets approval_policy = "untrusted"/,
+      );
+      expect(error.details).toEqual({
+        agentId: "codex",
+        reason: "untrusted-approval-policy",
+        exited: true,
+        exitCode: 1,
+        signal: null,
+      });
+    });
+
+    it("repeats nothing of output it does not recognize", async () => {
+      const { error } = await stopped(SECRETISH, true);
+      expect(error.message).toMatch(/exited with code 1 .* ORCA does not recognize its reason/);
+      expect(error.details).toEqual({
+        agentId: "codex",
+        reason: "unrecognized",
+        exited: true,
+        exitCode: 1,
+        signal: null,
+      });
+    });
+
+    it("does not claim an exit it did not see when only the connection closed", async () => {
+      const { error, s } = await stopped(SECRETISH, false);
+      expect(error.message).toMatch(/closed its connection before ORCA's handshake finished, and ORCA stopped it/);
+      expect(error.details).toEqual({ agentId: "codex", reason: "unrecognized", exited: false, stopped: true });
+      expect(s.kill).toHaveBeenCalled();
+    });
+
+    it("says ORCA only attempted the stop when it did not see the process exit", async () => {
+      const { error, s } = await stopped(SECRETISH, false, { ignoreKill: true });
+      expect(s.kill).toHaveBeenCalledWith("SIGKILL");
+      expect(error.message).toMatch(/ORCA attempted to stop it but did not see it exit/);
+      expect(error.message).not.toMatch(/ORCA stopped it/);
+      expect(error.details).toEqual({ agentId: "codex", reason: "unrecognized", exited: false, stopped: false });
+    });
+
+    it("keeps a sensitive stream error out of the error and its cause", async () => {
+      const { error } = await stopped("", true, { streamError: new Error(SECRETISH) });
+      expect(error.details).toMatchObject({ reason: "unrecognized", exited: true });
+    });
+  });
+
+  it("refuses without a policy, with full access, never or untrusted, on another host, and for an ACP agent", async () => {
     const s = scriptedHost(BASE);
     for (const thread of [
       undefined,
       { approvalPolicy: "never", sandbox: "workspace-write" },
+      // Codex 0.171.0 refuses untrusted at startup (#1269)
+      { approvalPolicy: "untrusted", sandbox: "workspace-write" },
       { approvalPolicy: "on-request", sandbox: "danger-full-access" },
     ])
-      await expect(open(s.host, { thread: thread as never })).rejects.toThrow(/needs an approval policy/);
+      await expect(open(s.host, { thread: thread as never })).rejects.toThrow(
+        /needs the approval policy on-request \(Codex no longer supports untrusted\)/,
+      );
     const ssh = scriptedHost(BASE).host;
     Object.defineProperty(ssh, "spec", { value: { id: "box", type: "ssh" } });
     await expect(open(ssh)).rejects.toThrow(/runs on ssh host box/);

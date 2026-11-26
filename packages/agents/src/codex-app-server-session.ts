@@ -46,7 +46,7 @@ import {
   type SecretsConfig,
   type SessionConfigOption,
 } from "@orca/core";
-import type { AgentHost, AgentProcessHandle } from "./host.js";
+import type { AgentHost, AgentProcessHandle, ProcessExit } from "./host.js";
 import {
   codexAppServerLaunch,
   codexAppServerRequested,
@@ -665,6 +665,66 @@ interface ActiveTurn {
   fail: (error: Error) => void;
 }
 
+/** How long ORCA watches for Codex's own exit once its connection closed during the handshake. */
+const STARTUP_EXIT_WAIT_MS = 1_000;
+
+/** The process's exit if it is observed within `ms`, otherwise undefined. */
+async function exitedWithin(exited: Promise<ProcessExit>, ms: number): Promise<ProcessExit | undefined> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      exited.catch(() => undefined),
+      new Promise<undefined>((r) => (timer = setTimeout(() => r(undefined), ms))),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Startup failures ORCA recognizes in Codex's stderr, each reported by a fixed reason and
+ * diagnosis. Nothing captured (text, paths, values) is ever repeated.
+ */
+const CODEX_STARTUP_DIAGNOSES: readonly { pattern: RegExp; reason: string; diagnosis: string }[] = [
+  {
+    pattern: /approval_policy = "untrusted" is no longer supported/,
+    reason: "untrusted-approval-policy",
+    diagnosis: 'a Codex config sets approval_policy = "untrusted", which this Codex no longer supports',
+  },
+  {
+    pattern: /CODEX_HOME points to .*, but that path (does not exist|is not a directory)/,
+    reason: "codex-home-missing",
+    diagnosis: "CODEX_HOME does not name an existing directory",
+  },
+];
+
+/**
+ * The failure for a Codex app-server that stopped answering before the handshake finished. It
+ * carries no cause: the transport's close error can embed an underlying stream error's text.
+ */
+function codexStartupFailure(
+  agentId: string,
+  exit: ProcessExit | undefined,
+  stopped: boolean,
+  stderr: string,
+): OrcaError {
+  const known = CODEX_STARTUP_DIAGNOSES.find((d) => d.pattern.test(stderr));
+  const how = !exit
+    ? `closed its connection before ORCA's handshake finished, and ORCA ${stopped ? "stopped it" : "attempted to stop it but did not see it exit"}`
+    : exit.code !== null
+      ? `exited with code ${exit.code} before ORCA's handshake finished`
+      : `was stopped by ${exit.signal ?? "a signal"} before ORCA's handshake finished`;
+  const why = known
+    ? `: ${known.diagnosis}`
+    : ". ORCA does not recognize its reason and does not repeat Codex's output; run `codex app-server` as the account ORCA runs Codex as to see it";
+  return new OrcaError("AGENT_TRANSPORT", `agent ${agentId}: the Codex app-server ${how}${why}`, {
+    agentId,
+    reason: known?.reason ?? "unrecognized",
+    exited: exit !== undefined,
+    ...(exit ? { exitCode: exit.code, signal: exit.signal } : { stopped }),
+  });
+}
+
 /**
  * Open a Codex app-server session. Refused unless the spec asks for the driver and the host is
  * ORCA's own; every failure after the process starts stops it, with its exit attached.
@@ -677,14 +737,16 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
     });
   if (opts.host.spec.type !== "local") throw codexAppServerRefused(agent, "non-local-host", opts.host.spec)!;
   const policy = opts.thread as Partial<CodexThreadPolicy> | undefined;
+  // Codex 0.171.0 refuses approval_policy="untrusted" at startup, so on-request is the only
+  // policy under which Codex asks before it acts outside its sandbox (#1269).
   if (
     !policy ||
-    !["untrusted", "on-request"].includes(policy.approvalPolicy as string) ||
+    policy.approvalPolicy !== "on-request" ||
     !["read-only", "workspace-write"].includes(policy.sandbox as string)
   )
     throw new OrcaError(
       "NOT_SUPPORTED",
-      `agent ${agent.id}: a Codex app-server session needs an approval policy (untrusted or on-request) and a sandbox (read-only or workspace-write)`,
+      `agent ${agent.id}: a Codex app-server session needs the approval policy on-request (Codex no longer supports untrusted) and a sandbox (read-only or workspace-write)`,
       { agentId: agent.id },
     );
   if (opts.requireContextRecovery && !opts.resumeThreadId?.trim()) throw codexRecoveryFailure("missing-thread-id");
@@ -1264,8 +1326,13 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
     const c = { proc, cleanup } as Connection;
     owned.add(c);
     if (replacement) starting = c;
-    const fail = async (error: unknown): Promise<never> => {
+    const fail = async (reason: unknown): Promise<never> => {
       await cleanup().catch(() => undefined);
+      // Built once the stop was attempted, from whether the process was then seen gone.
+      const error =
+        typeof reason === "function"
+          ? (reason as (stopped: boolean) => unknown)((await exitedWithin(proc.exited, 0)) !== undefined)
+          : reason;
       const failure = redactError(error instanceof Error ? error : new Error(String(error)), values);
       throw withStartupTermination(failure, proc.exited);
     };
@@ -1321,6 +1388,15 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
       c.account = account;
       return c;
     } catch (error) {
+      // Codex stopped answering before the handshake finished. Its stderr may hold the user's
+      // own profile, paths or provider diagnostics, which ORCA does not know to redact, so the
+      // failure names only a fixed diagnosis for output ORCA recognizes, and says whether the
+      // process was seen to exit on its own before ORCA stopped it.
+      if (client.closed !== undefined && error instanceof OrcaError && error.code === "AGENT_TRANSPORT") {
+        const exit = await exitedWithin(proc.exited, STARTUP_EXIT_WAIT_MS);
+        client.close("closed after a refused open");
+        return fail((stopped: boolean) => codexStartupFailure(agent.id, exit, stopped, proc.stderrTail()));
+      }
       client.close("closed after a refused open");
       return fail(error);
     }

@@ -33,7 +33,8 @@ import { OrcaError } from "@orca/core";
 
 /** The policy ORCA runs a Codex thread with. */
 export interface CodexThreadPolicy {
-  approvalPolicy: "untrusted" | "on-request";
+  /** The only policy Codex 0.171.0 still supports that asks before acting outside the sandbox. */
+  approvalPolicy: "on-request";
   sandbox: "read-only" | "workspace-write";
 }
 
