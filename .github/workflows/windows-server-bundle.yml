@@ -6,8 +6,10 @@
 # Expand-Archive, as a host's setup will, and runs it with tools/deploy/server-bundle-smoke.mjs:
 # the bundle's own node.exe runs the CLI's version, the scripted demo, `validate` of the shipped
 # workflows and a temporary daemon whose hello must carry the release's version, protocol and
-# capabilities. Nothing is signed or published here; the release workflow for this bundle signs
-# and attaches it.
+# capabilities. Then tools/deploy/orca-server-setup.ps1 sets the same bundle up as a host's
+# setup will (tools/deploy/tests/windows-setup/run.ps1): staged, receipted, run by its scheduled
+# task and checked by its hello, every failure put back, a re-run changing nothing. Nothing is
+# signed or published here; the release workflow for this bundle signs and attaches it.
 name: Windows server bundle
 
 on:
@@ -16,6 +18,9 @@ on:
     paths:
       - tools/deploy/server-bundle.py
       - tools/deploy/server-bundle-smoke.mjs
+      - tools/deploy/orca-server-setup.ps1
+      - tools/deploy/tests/windows-setup/**
+      - tools/test/windows-server-setup.test.js
       - tools/test/server-bundle-smoke.test.js
       - packages/app/scripts/build-daemon.js
       - release-compatibility.json
@@ -34,7 +39,7 @@ jobs:
   bundle:
     name: assemble and run the Windows server bundle
     runs-on: windows-2025
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -80,3 +85,13 @@ jobs:
           Expand-Archive -LiteralPath $zip -DestinationPath $unpacked
           node tools/deploy/server-bundle-smoke.mjs (Join-Path $unpacked $manifest.root)
           if ($LASTEXITCODE -ne 0) { throw "the bundle does not run" }
+
+      - name: Set it up as a host would, and put back every failure
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          $bundle = Join-Path $env:RUNNER_TEMP "bundle"
+          $manifest = Get-Content (Get-ChildItem $bundle -Filter *.manifest.json).FullName -Raw | ConvertFrom-Json
+          powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File tools/deploy/tests/windows-setup/run.ps1 `
+            -Bundle $bundle -Version $manifest.version
+          if ($LASTEXITCODE -ne 0) { throw "the Windows server setup check failed" }
