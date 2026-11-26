@@ -1,6 +1,6 @@
 {
   "name": "orca",
-  "version": "0.8.0-rc.2",
+  "version": "0.8.0-rc.3",
   "private": true,
   "description": "ORCA - Orchestration Runtime for Coding Agents. A workflow engine that sits above AI-SDLC agent steps, passing artifacts between agents over ACP.",
   "type": "module",
