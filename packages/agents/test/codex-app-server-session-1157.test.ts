@@ -782,20 +782,29 @@ describe("opening a session", () => {
 
   describe("a Codex that stops before the handshake finishes (#1269)", () => {
     const SECRETISH = "provider said: token sk-live-abc123 for /home/someone/.codex/auth.json";
-    const stopped = async (stderr: string, exitFirst: boolean) => {
-      const s = scriptedHost({});
+    const stopped = async (
+      stderr: string,
+      exitFirst: boolean,
+      how: { streamError?: Error; ignoreKill?: boolean } = {},
+    ) => {
+      // A stream error is raised while ORCA waits on the handshake, once it is listening.
+      const s: ReturnType<typeof scriptedHost> = scriptedHost(
+        how.streamError ? { initialize: () => (s.stdout.destroy(how.streamError), NO_ANSWER) } : {},
+      );
       const handle = await s.spawnAgent(undefined);
       s.spawnAgent.mockClear();
       Object.defineProperty(handle, "stderrTail", { value: () => stderr });
+      if (how.ignoreKill) s.kill.mockImplementation(() => undefined);
       if (exitFirst) s.exit({ code: 1, signal: null });
-      s.stdout.end();
-      const error = await open(s.host).then(
+      if (!how.streamError) s.stdout.end();
+      const error = await open(s.host, { exitGraceMs: 20 }).then(
         () => expect.unreachable("the session opened"),
         (e: unknown) => e as OrcaError,
       );
       expect(error.code).toBe("AGENT_TRANSPORT");
-      // Nothing Codex printed reaches the public error.
-      const shown = JSON.stringify(error) + error.message;
+      // Nothing Codex printed, nor the stream's own error, reaches the public error or a cause.
+      expect(error.cause).toBeUndefined();
+      const shown = JSON.stringify(error) + error.message + String(error.stack);
       for (const leak of ["sk-live", "/home/someone", "auth.json", "provider said"]) expect(shown).not.toContain(leak);
       return { error, s };
     };
@@ -832,8 +841,21 @@ describe("opening a session", () => {
     it("does not claim an exit it did not see when only the connection closed", async () => {
       const { error, s } = await stopped(SECRETISH, false);
       expect(error.message).toMatch(/closed its connection before ORCA's handshake finished, and ORCA stopped it/);
-      expect(error.details).toEqual({ agentId: "codex", reason: "unrecognized", exited: false });
+      expect(error.details).toEqual({ agentId: "codex", reason: "unrecognized", exited: false, stopped: true });
       expect(s.kill).toHaveBeenCalled();
+    });
+
+    it("says ORCA only attempted the stop when it did not see the process exit", async () => {
+      const { error, s } = await stopped(SECRETISH, false, { ignoreKill: true });
+      expect(s.kill).toHaveBeenCalledWith("SIGKILL");
+      expect(error.message).toMatch(/ORCA attempted to stop it but did not see it exit/);
+      expect(error.message).not.toMatch(/ORCA stopped it/);
+      expect(error.details).toEqual({ agentId: "codex", reason: "unrecognized", exited: false, stopped: false });
+    });
+
+    it("keeps a sensitive stream error out of the error and its cause", async () => {
+      const { error } = await stopped("", true, { streamError: new Error(SECRETISH) });
+      expect(error.details).toMatchObject({ reason: "unrecognized", exited: true });
     });
   });
 

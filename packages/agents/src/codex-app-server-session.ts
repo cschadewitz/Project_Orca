@@ -698,33 +698,31 @@ const CODEX_STARTUP_DIAGNOSES: readonly { pattern: RegExp; reason: string; diagn
   },
 ];
 
-/** The failure for a Codex app-server that stopped answering before the handshake finished. */
+/**
+ * The failure for a Codex app-server that stopped answering before the handshake finished. It
+ * carries no cause: the transport's close error can embed an underlying stream error's text.
+ */
 function codexStartupFailure(
   agentId: string,
   exit: ProcessExit | undefined,
+  stopped: boolean,
   stderr: string,
-  cause: unknown,
 ): OrcaError {
   const known = CODEX_STARTUP_DIAGNOSES.find((d) => d.pattern.test(stderr));
   const how = !exit
-    ? "closed its connection before ORCA's handshake finished, and ORCA stopped it"
+    ? `closed its connection before ORCA's handshake finished, and ORCA ${stopped ? "stopped it" : "attempted to stop it but did not see it exit"}`
     : exit.code !== null
       ? `exited with code ${exit.code} before ORCA's handshake finished`
       : `was stopped by ${exit.signal ?? "a signal"} before ORCA's handshake finished`;
   const why = known
     ? `: ${known.diagnosis}`
     : ". ORCA does not recognize its reason and does not repeat Codex's output; run `codex app-server` as the account ORCA runs Codex as to see it";
-  return new OrcaError(
-    "AGENT_TRANSPORT",
-    `agent ${agentId}: the Codex app-server ${how}${why}`,
-    {
-      agentId,
-      reason: known?.reason ?? "unrecognized",
-      exited: exit !== undefined,
-      ...(exit ? { exitCode: exit.code, signal: exit.signal } : {}),
-    },
-    { cause },
-  );
+  return new OrcaError("AGENT_TRANSPORT", `agent ${agentId}: the Codex app-server ${how}${why}`, {
+    agentId,
+    reason: known?.reason ?? "unrecognized",
+    exited: exit !== undefined,
+    ...(exit ? { exitCode: exit.code, signal: exit.signal } : { stopped }),
+  });
 }
 
 /**
@@ -1330,8 +1328,11 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
     if (replacement) starting = c;
     const fail = async (reason: unknown): Promise<never> => {
       await cleanup().catch(() => undefined);
-      // Read once the process is stopped, so a reason built from its stderr sees all of it.
-      const error = typeof reason === "function" ? (reason as () => unknown)() : reason;
+      // Built once the stop was attempted, from whether the process was then seen gone.
+      const error =
+        typeof reason === "function"
+          ? (reason as (stopped: boolean) => unknown)((await exitedWithin(proc.exited, 0)) !== undefined)
+          : reason;
       const failure = redactError(error instanceof Error ? error : new Error(String(error)), values);
       throw withStartupTermination(failure, proc.exited);
     };
@@ -1394,7 +1395,7 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
       if (client.closed !== undefined && error instanceof OrcaError && error.code === "AGENT_TRANSPORT") {
         const exit = await exitedWithin(proc.exited, STARTUP_EXIT_WAIT_MS);
         client.close("closed after a refused open");
-        return fail(() => codexStartupFailure(agent.id, exit, proc.stderrTail(), error));
+        return fail((stopped: boolean) => codexStartupFailure(agent.id, exit, stopped, proc.stderrTail()));
       }
       client.close("closed after a refused open");
       return fail(error);
