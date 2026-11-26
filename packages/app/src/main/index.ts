@@ -52,7 +52,7 @@ import { executableMatchesPackage, LinuxPackageRestart, readInstalledDebVersion 
 import { basename, dirname, join } from "node:path";
 import { readFileSync, statSync } from "node:fs";
 import { windowIcon } from "./window-icon.js";
-import { revealWhenReady } from "./window-reveal.js";
+import { revealWarning, revealWhenReady } from "./window-reveal.js";
 import { fileURLToPath } from "node:url";
 import {
   app,
@@ -1948,8 +1948,8 @@ function createWindow(): void {
   // `ready-to-show` alone can leave the window hidden for good under Wayland (#858).
   revealWhenReady(win, {
     onReveal: (reason) => {
-      if (reason !== "ready-to-show")
-        console.warn(`[orca] window shown by the ${reason} fallback; no first paint was reported`);
+      const warning = revealWarning(reason);
+      if (warning) console.warn(warning);
     },
   });
   if (rendererUrl) {

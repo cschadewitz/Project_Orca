@@ -227,6 +227,12 @@
    permanent kind the header describes: no token could sensibly name 1px-of-nothing. */
 .orca-visually-hidden {
   position: absolute;
+  /* Pinned to its containing block's corner rather than left at its place in the flow. Left
+     there, a hidden label inside a pane that scrolls sideways sat past the window's edge, and
+     an absolute box escapes a clip whose element is not its containing block, so the whole
+     window scrolled sideways under Plan, Workflows and the id chips (#1112). */
+  inset-block-start: 0;
+  inset-inline-start: 0;
   /* The note covers this line and the next, which is the whole of the exemption. */
   width: 1px; /* orca-allow-literal: the smallest rendered box, which is not a size — no token could sensibly name it, and a rung that did would name a family with one invisible member. Callers take the class, never these two numbers. */
   height: 1px;
@@ -2820,6 +2826,9 @@
   align-items: center;
   justify-content: center;
   gap: var(--space-3);
+  /* Shrinks with a flex row it sits in, as the Agents split, instead of holding the
+     skeleton's measure and pushing the window sideways at 800 px and 150% (#1112). */
+  min-width: 0;
   padding: var(--space-12) var(--space-8);
   text-align: center;
 }

@@ -86,6 +86,7 @@ import {
 } from "./agent-groups.js";
 import { useAgents, type AgentsFeed, type AgentsState } from "./use-agents.js";
 import "./agents.css";
+import { NoDaemonView } from "../first-run/no-daemon-view.js";
 
 export interface AgentsSurfaceProps {
   /** Whether the daemon is answering. A screen nobody is updating says so rather than lying. */
@@ -195,14 +196,7 @@ function Body({
         action={{ label: "Try again", onClick: onRetry }}
       />
     ) : (
-      <StateView
-        kind="disconnected"
-        title="No daemon to read agents from"
-        /* No backticks: `StateView`'s body is one type style, so markup for mono would
-           render as the characters themselves. */
-        body="Start one with orca serve, then try again."
-        action={{ label: "Try again", onClick: onRetry }}
-      />
+      <NoDaemonView title="No daemon to read agents from" onRetry={onRetry} />
     );
   }
 
