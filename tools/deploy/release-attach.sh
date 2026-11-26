@@ -835,7 +835,11 @@ case "${1:-}" in
       for name in $(SP=win-x64 server_names "$version"); do
         stale=$(jq -r --arg n "$name" '[.assets[] | select(.name == $n) | .id] | .[0] // ""' <<<"$json")
         [[ -n "$stale" ]] || continue
-        fresh=$(validate "$id" "$sha" "$version" "$records" "$arm_records" >/dev/null && gh api "repos/$REPO/releases/$id") || exit 1
+        # One snapshot, read right before the delete, carries every check: still this unpublished
+        # final draft, still no Windows record, still the same asset under the same name.
+        fresh=$(gh api "repos/$REPO/releases/$id") || fail "release $id is gone; nothing removed"
+        [[ "$(jq -r '[.draft, .prerelease, .target_commitish, .name] | map(tostring) | join(" ")' <<<"$fresh")" == "true false $sha v$version" ]] ||
+          fail "release $id is no longer the final draft v$version at $sha; nothing removed"
         [[ "$(SP=win-x64 server_state "$(jq -r '.body // ""' <<<"$fresh")")" == none ]] ||
           fail "release $id gained a Windows server bundle record; nothing removed"
         # The same asset, still under that name, and the only one with it: anything else changed

@@ -93,6 +93,11 @@ if (method === "DELETE" && (m = path.match(/^releases\/assets\/(\d+)$/))) {
     const rename = (process.env.FAKE_RENAME_AT_READ || "").split(":");
     if (rename.length === 3 && String(state.reads) === rename[0])
       for (const a of r.assets) if (String(a.id) === rename[1]) a.name = rename[2];
+    // FAKE_PUBLISH_DRAFT_AT_READ=k: a maintainer publishes the draft on the k-th read.
+    if (String(state.reads) === process.env.FAKE_PUBLISH_DRAFT_AT_READ) {
+      r.draft = false;
+      r.published_at = "2026-11-21T22:00:00Z";
+    }
     if (String(state.reads) === process.env.FAKE_PUBLISH_AT_READ) {
       r.draft = false;
       r.published_at = "2026-11-21T22:00:00Z";
@@ -1459,6 +1464,41 @@ describe.skipIf(process.platform === "win32")("release-attach.sh", () => {
         expect(result.stderr).toContain("changed since it was read; nothing removed");
         expect(f.writes().filter((w) => w[0] === "delete")).toEqual([]);
         expect(f.state().releases[0].draft).toBe(true);
+      });
+
+      it("removes nothing when the last read before a delete shows the release published", () => {
+        const unrecorded = () => {
+          const f = setup();
+          ready(f);
+          f.edit((st) => {
+            withWindows(st);
+            st.releases[0].body = st.releases[0].body.replace(`\n\n${winRecord()}`, "");
+          });
+          return f;
+        };
+        const probe = unrecorded();
+        const before = probe.writes().length;
+        expect(
+          probe.run(WIN_ATTACH, ["publish", "7", "0.8.0", SHA, DEB.digest, probe.digest], { FAKE_LOG_READS: "1" })
+            .status,
+        ).toBe(0);
+        const log = probe.writes().slice(before);
+        const last = log
+          .slice(
+            0,
+            log.findIndex((w) => w[0] === "delete"),
+          )
+          .findLast((w) => w[0] === "read")[2];
+        const f = unrecorded();
+        const result = f.run(WIN_ATTACH, ["publish", "7", "0.8.0", SHA, DEB.digest, f.digest], {
+          FAKE_PUBLISH_DRAFT_AT_READ: String(last),
+        });
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("is no longer the final draft v0.8.0");
+        expect(f.writes().filter((w) => w[0] === "delete")).toEqual([]);
+        expect(f.state().releases[0].assets.filter((a) => a.name.startsWith("orca-server-0.8.0-win-x64"))).toHaveLength(
+          3,
+        );
       });
 
       it("never removes a recorded Windows bundle, even an incomplete one", () => {
