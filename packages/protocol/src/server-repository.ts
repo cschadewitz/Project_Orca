@@ -221,6 +221,12 @@ async function updateCheckout(
     const cloned = await run(transport, ["git", "clone", "-q", "--no-hardlinks", "--", hub, checkout]);
     return cloned.code === 0 ? { kind: "created" } : kept("it could not be cloned", false);
   }
+  // `git -C` finds a repository above the path it is given: Git must be working on exactly this
+  // directory, which is where it was made (no link out of the server root), as its worktree root.
+  const resolved = await run(transport, ["realpath", "-e", "--", checkout]);
+  const top = await run(transport, ["git", "-C", checkout, "rev-parse", "--show-toplevel"]);
+  if (resolved.code !== 0 || resolved.stdout.trim() !== checkout || top.code !== 0 || top.stdout.trim() !== checkout)
+    return kept(`it is not a checkout of its own at ${checkout}, so it was not touched`, false);
   const origin = await run(transport, ["git", "-C", checkout, "remote", "get-url", "origin"]);
   if (origin.code !== 0 || origin.stdout.trim() !== hub)
     return kept(`it is not a checkout of ${hub}, so it was not touched`, false);

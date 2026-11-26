@@ -144,6 +144,28 @@ describe("pushRepository", () => {
     );
   });
 
+  it("never works on an enclosing checkout that Git finds above a plain directory", async () => {
+    const local = repo();
+    const host = server();
+    const first = await push(local, host.transport, "seed");
+    // checkouts/ itself is a checkout of a hub, and checkouts/app is a plain directory inside it.
+    git(host.root, "clone", "-q", first.hub, join(host.root, "checkouts-enclosing"));
+    rmSync(join(host.root, "checkouts"), { recursive: true, force: true });
+    execFileSync("mv", [join(host.root, "checkouts-enclosing"), join(host.root, "checkouts")]);
+    git(join(host.root, "checkouts"), "remote", "set-url", "origin", `${host.root}/repos/app.git`);
+    mkdirSync(join(host.root, "checkouts/app"));
+    const before = git(join(host.root, "checkouts"), "rev-parse", "HEAD");
+    commit(local, "two\n");
+    host.commands.length = 0;
+    const pushed = await push(local, host.transport);
+    expect(pushed.checkoutState).toMatchObject({ kind: "kept", usable: false });
+    expect(workspaceSnippet(pushed)).toBeUndefined();
+    expect(git(join(host.root, "checkouts"), "rev-parse", "HEAD")).toBe(before);
+    expect(host.commands.some((c) => c.includes("merge") || (c.includes("fetch") && c.includes(pushed.checkout)))).toBe(
+      false,
+    );
+  });
+
   it("does not merge when the checkout's fetch fails, and offers no settings when the first clone fails", async () => {
     const local = repo();
     const failing = { fetch: false, clone: false };
