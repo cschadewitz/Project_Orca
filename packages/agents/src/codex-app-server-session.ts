@@ -1479,6 +1479,8 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
     if (why) return fail(why);
     if (!proc.stdio)
       return fail(new OrcaError("NOT_SUPPORTED", `host ${opts.host.id} cannot give an agent's raw stdio`));
+    /** This connection's life: aborted when its client closes (a close, a cancel, an exit). */
+    const lifetime = new AbortController();
     const client: CodexAppServerClient = new CodexAppServerClient(stdioLineTransport(proc.stdio()), {
       requestTimeoutMs: opts.requestTimeoutMs ?? 30_000,
       onNotification: (method, params) => {
@@ -1514,7 +1516,11 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
         }
         throw new CodexRpcError(-32601, `ORCA does not answer ${method} yet`);
       },
-      onClose: (error) => connectionClosed(c, error),
+      onClose: (error) => {
+        // Whatever still runs for this connection (the hook's admission, #1161) stops with it.
+        lifetime.abort(error);
+        connectionClosed(c, error);
+      },
     });
     c.client = client;
     try {
@@ -1545,10 +1551,19 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
       c.account = account;
       // ORCA's hook, when installed, is admitted against this very process before any thread
       // starts or resumes on it; a restart that cannot be admitted ends the session (#1161).
+      // The admission is bound to this connection: a close, a cancel or the process ending
+      // stops the probe, and the caller's own outcome (closed, cancelled) is reported as such,
+      // not as a refusal of the hook.
       if (opts.nativeToolHook) {
+        const before = stopped();
+        if (before) throw before;
+        if (lifetime.signal.aborted) throw client.closed ?? new OrcaError("AGENT_TRANSPORT", "the app-server closed");
         try {
-          await opts.nativeToolHook.admit(proc.pid);
+          await opts.nativeToolHook.admit(proc.pid, lifetime.signal);
         } catch (error) {
+          const why = stopped();
+          if (why) throw why;
+          if (lifetime.signal.aborted) throw client.closed ?? error;
           if (replacement && error instanceof OrcaError && error.code === "NOT_SUPPORTED") breakSession(error);
           throw error;
         }

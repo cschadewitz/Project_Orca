@@ -1002,7 +1002,7 @@ describe("ORCA's hook on this route (#1161)", () => {
     expect(spec.args.indexOf("hooks.PreToolUse=[]")).toBeGreaterThan(
       spec.args.indexOf('sandbox_mode="workspace-write"'),
     );
-    expect(admit).toHaveBeenCalledWith(4242);
+    expect(admit).toHaveBeenCalledWith(4242, expect.any(AbortSignal));
     expect(order[0]).toBe("admit 4242");
     expect(order).not.toContain("thread/start");
     expect(t.peer.received.map((m) => m.method)).toContain("thread/start");
