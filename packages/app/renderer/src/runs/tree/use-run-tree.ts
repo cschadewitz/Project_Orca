@@ -75,11 +75,15 @@ export function useRunTree(roots: readonly RunSummaryView[]): RunTree {
   /* Runs that settled while their first read was still out: that read may predate the step's
      variables, and the status patch queued behind it carries none, so it is read once more. */
   const rereadAfterFetch = useRef(new Set<string>());
+  /* The newest notification cursor seen per run. A re-read older than that would undo a
+     status already folded in, so it is dropped. */
+  const notified = useRef(new Map<string, number>());
   useEffect(() => {
     epoch.current += 1;
     fetching.current.clear();
     rereading.current.clear();
     rereadAfterFetch.current.clear();
+    notified.current.clear();
     setDetails(new Map());
     return () => {
       epoch.current += 1;
@@ -115,7 +119,7 @@ export function useRunTree(roots: readonly RunSummaryView[]): RunTree {
       // A reconnect cleared the map; a newer request may own the slot now, so only remove ours.
       if (rereading.current.get(runId) === entry) rereading.current.delete(runId);
       if (requestEpoch !== epoch.current) return;
-      if (result?.ok)
+      if (result?.ok && result.result.lastSeq >= (notified.current.get(runId) ?? 0))
         setDetails((prev) => {
           const current = prev.get(runId);
           if (!current || current.lastSeq > result.result.lastSeq) return prev;
@@ -153,8 +157,10 @@ export function useRunTree(roots: readonly RunSummaryView[]): RunTree {
       const settle = (result: Awaited<ReturnType<typeof window.orca.runs.get>> | undefined): void => {
         if (requestEpoch !== epoch.current) return;
         if (fetching.current.get(runId) === pending) fetching.current.delete(runId);
-        const again = rereadAfterFetch.current.delete(runId);
+        const settled = rereadAfterFetch.current.delete(runId);
         if (!result?.ok) return;
+        // Only when the read predates something that settled while it was out.
+        const again = settled && pending.some((change) => change.runId === runId && change.seq > result.result.lastSeq);
         const detail = pending.reduce((held, change) => {
           // The read may already include this transition. Child-run cursors are independent
           // of the parent's, so only compare a notification against its own run's cursor.
@@ -171,6 +177,7 @@ export function useRunTree(roots: readonly RunSummaryView[]): RunTree {
   useEffect(() => {
     /** Fold one notification into whichever projections hold the object it is about. */
     const patch = (apply: (detail: RunsGetResult) => RunsGetResult, runId: string, seq: number): void => {
+      notified.current.set(runId, Math.max(seq, notified.current.get(runId) ?? 0));
       for (const pending of fetching.current.values()) pending.push({ apply, runId, seq });
       setDetails((prev) => {
         let touched = false;
