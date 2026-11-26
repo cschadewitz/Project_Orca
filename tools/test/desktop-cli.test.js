@@ -23,7 +23,8 @@ const workflow = load(read(".github/workflows/desktop.yml"));
 describe("packaging", () => {
   it("ships the Linux launcher in resources/bin and the .deb's /usr/bin/orca-cli as a package file", () => {
     expect(config.linux.extraResources).toContainEqual({ from: "build/cli/orca-cli", to: "bin/orca-cli" });
-    expect(config.deb.fpm).toEqual(["build/linux/orca-cli=/usr/bin/orca-cli"]);
+    // The rest of fpm's arguments are the rename's package relationships (linux-deb.test.js).
+    expect(config.deb.fpm.filter((arg) => !arg.startsWith("--"))).toEqual(["build/linux/orca-cli=/usr/bin/orca-cli"]);
     // Not through the maintainer scripts: the postinst and postrm never name it.
     expect(read("packages/app/build/linux/after-install.tpl")).not.toContain("orca-cli");
     expect(config.deb.afterRemove).toBeUndefined();
