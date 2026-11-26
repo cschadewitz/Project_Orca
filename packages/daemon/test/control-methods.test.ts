@@ -7,7 +7,7 @@
  * lease and reach the same terminal state a CLI would, so the fixture is an orchestrator
  * with `PausingHumanInput` and a workflow, driven until it parks.
  */
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -552,6 +552,24 @@ describe("agents.list and agents.ping", () => {
     expect(missing("far")).toBeUndefined();
     // Health is still what it was: nothing has been asked.
     expect(list.agents.find((a) => a.id === "gone")!.state).toBe("unknown");
+  });
+
+  it("leaves a command it could not look at unknown rather than missing (#1200)", async () => {
+    // A symlink loop: stat fails with ELOOP, not ENOENT, so nothing is certain about it.
+    const dir = await mkdtemp(join(tmpdir(), "orca-1200-"));
+    try {
+      await symlink(join(dir, "b"), join(dir, "a"));
+      await symlink(join(dir, "a"), join(dir, "b"));
+      const h = harness();
+      h.agents
+        .addAgent(AgentSpecSchema.parse({ id: "looped", command: join(dir, "a"), hostId: "local" }))
+        .addAgent(AgentSpecSchema.parse({ id: "looped-on-path", command: "a", env: { PATH: dir }, hostId: "local" }));
+      const list = AgentsListResultSchema.parse((await call(h.ctx, "agents.list")).result);
+      expect(list.agents.find((a) => a.id === "looped")!.commandMissing).toBeUndefined();
+      expect(list.agents.find((a) => a.id === "looped-on-path")!.commandMissing).toBeUndefined();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it("says which transport each agent's host uses, and says nothing when the host has gone", async () => {

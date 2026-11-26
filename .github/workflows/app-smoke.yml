@@ -127,6 +127,123 @@ jobs:
             echo "type_proof=false" >> "$GITHUB_OUTPUT"
           fi
 
+  # The 0.8.1 layout fixes (#1112 #1193 #1194 #1200 #1109), measured on a daemon the demo
+  # seed filled, with a screenshot of each state. Always GitHub-hosted: the spec needs dbus and
+  # gnome-keyring, which this job installs, and a persistent self-hosted runner is never
+  # changed by a workflow. The spec starts its own Xvfb, private session bus and unlocked
+  # keyring under a throwaway HOME, and Chromium's sandbox stays on.
+  layout:
+    name: layout check
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
+
+      # Must precede setup-node: `cache: pnpm` needs the pnpm binary on PATH to
+      # resolve the store path. Version comes from package.json packageManager.
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          # One version: this is about the app running at all, not about Node support.
+          # `mise.toml` pins 24, so that is what a developer reproduces locally.
+          node-version: 24
+          # No automatic npm cache detected from the checked-out package.json (it may be a rehearsed ref's).
+          package-manager-cache: false
+          cache: ${{ inputs.caches != false && 'pnpm' || '' }}
+
+      # Deliberately without ELECTRON_SKIP_BINARY_DOWNLOAD: the binary is the point.
+      # Playwright needs no browser download — the only driver used is Electron's.
+      - run: pnpm install --frozen-lockfile
+
+      # Electron's binary, on disk before any test's clock is running.
+      #
+      # `pnpm-workspace.yaml` allows electron's postinstall, but the pnpm store this job
+      # restores is keyed on the lockfile and shared with `ci.yml`, which installs under
+      # ELECTRON_SKIP_BINARY_DOWNLOAD=1. So the store can hold an electron that is *built*
+      # and has no binary, and `pnpm install` above has nothing left to run — its log shows
+      # esbuild's postinstall and not electron's. `node_modules/electron/index.js` then
+      # fetches the binary on first `require`, through a blocking `spawnSync`, inside
+      # whichever test hook reached it first.
+      #
+      # Hygiene rather than a fix: it is five seconds on a Windows runner, so it was never
+      # the three-minute hang it was briefly blamed for (`playwright.config.ts` records that
+      # dead end). What it buys is that the download is not inside a hook's timeout and has
+      # its own line in the step list, which is where a download belongs.
+      #
+      # From `packages/app`, the package that depends on electron: pnpm's node_modules is
+      # strict, so the root has no `electron` to resolve and the first attempt at this step
+      # failed with MODULE_NOT_FOUND.
+      - name: Put the Electron binary on disk, rather than inside a test's timeout
+        shell: bash
+        working-directory: packages/app
+        id: electron
+        # No `tee /dev/stderr`: Git Bash on windows-latest (Git 2.56, Nov 2026) has no /dev/stderr.
+        # The require can print "Downloading Electron binary..." first, so keep the last line.
+        run: |
+          electron_path=$(node -e "console.log(require('electron'))" | tail -n 1)
+          echo "$electron_path" >&2
+          printf 'path=%s\n' "$electron_path" >> "$GITHUB_OUTPUT"
+
+      # The same scoped sandbox exception as the smoke job's GitHub-hosted fallback. Ubuntu
+      # 24.04 keeps unprivileged user namespaces, which Chromium's sandbox needs, behind
+      # AppArmor. Rather
+      # than lift that for the whole VM, load a profile that grants `userns` to the one
+      # Electron executable this job launches, resolved through symlinks, and check that
+      # the restriction stays on for everything else. Here that executable is
+      # the development Electron that Playwright starts. The profile is otherwise
+      # unconfined: it is a scoped exception, not a sandbox for the app. Its path is in the
+      # runner-writable workspace, and the job user has passwordless sudo on these VMs, so
+      # it is no boundary against job code; it keeps the default for other programs.
+      - name: Prepare a GitHub-hosted Linux runner
+        env:
+          ELECTRON_EXE: ${{ steps.electron.outputs.path }}
+        run: |
+          set -euo pipefail
+          command -v xvfb-run || { sudo apt-get update -q && sudo apt-get install -y -q xvfb; }
+          exe=$(readlink -f "$ELECTRON_EXE")
+          test -x "$exe"
+          sudo sysctl -q -w kernel.apparmor_restrict_unprivileged_userns=1
+          printf '%s\n' 'abi <abi/4.0>,' 'include <tunables/global>' \
+            "profile orca-electron-userns \"$exe\" flags=(unconfined) {" '  userns,' '}' \
+            | sudo tee /etc/apparmor.d/orca-electron-userns > /dev/null
+          sudo apparmor_parser -r /etc/apparmor.d/orca-electron-userns
+          sudo grep -q '^orca-electron-userns ' /sys/kernel/security/apparmor/profiles
+          test "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)" = 1
+          if unshare --user --map-root-user true 2> /dev/null; then
+            echo "::error::an unrelated executable can still create user namespaces"; exit 1
+          fi
+          echo "user namespaces: allowed only for $exe (profile orca-electron-userns)"
+
+      - name: Build
+        run: pnpm run build
+
+      - name: Layout check
+        env:
+          LAYOUT_OUT: ${{ github.workspace }}/test-results/layout-shots
+        run: |
+          set -euo pipefail
+          if ! node -e 'process.exit(require("./package.json").scripts?.["app:layout"] ? 0 : 1)'; then
+            echo "::notice title=Layout check::not applicable: this ref predates the check"
+            exit 0
+          fi
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends xvfb dbus dbus-bin gnome-keyring
+          pnpm run app:layout
+
+      - name: Upload the layout check's output
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: app-layout
+          path: |
+            test-results/
+            playwright-report/
+          retention-days: ${{ inputs.ref && 14 || 7 }}
+          if-no-files-found: ignore
+
   smoke:
     name: electron smoke test
     needs: runner
@@ -251,25 +368,6 @@ jobs:
             exit 0
           fi
           xvfb-run -a pnpm run app:upgrade-launch
-
-      # The 0.8.1 layout fixes (#1112 #1193 #1194 #1200), measured on a daemon the demo seed
-      # filled, with a screenshot of each state under test-results/layout-shots. The spec
-      # starts its own Xvfb, session bus and unlocked keyring, so it needs those three tools
-      # rather than xvfb-run.
-      - name: Layout check
-        env:
-          LAYOUT_OUT: ${{ github.workspace }}/test-results/layout-shots
-        run: |
-          set -euo pipefail
-          if ! node -e 'process.exit(require("./package.json").scripts?.["app:layout"] ? 0 : 1)'; then
-            echo "::notice title=Layout check::not applicable: this ref predates the check"
-            exit 0
-          fi
-          if ! command -v dbus-daemon > /dev/null || ! command -v gnome-keyring-daemon > /dev/null; then
-            sudo apt-get update -q
-            sudo apt-get install -y -q --no-install-recommends dbus dbus-bin gnome-keyring
-          fi
-          pnpm run app:layout
 
       # Screenshots of both themes, the greyscale pictures, the axe results per surface and
       # a trace for anything that failed. None of these is a baseline — see the spec header.

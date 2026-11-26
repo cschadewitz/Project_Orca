@@ -187,12 +187,18 @@ function agentView(health: AgentHealth, registry: AgentRegistry): AgentView {
   };
 }
 
-/** A regular file at `path`, or a reason to say it is not there. */
-function isFile(path: string): boolean {
+/**
+ * What is at `path`: a regular file, certainly nothing usable (no entry, a non-directory in
+ * the way, or an entry that is not a file), or `unknown` when the path could not be looked
+ * at (permissions, a symlink loop, anything else). Only `absent` lets an agent be called
+ * missing.
+ */
+function probe(path: string): "file" | "absent" | "unknown" {
   try {
-    return statSync(path).isFile();
-  } catch {
-    return false;
+    return statSync(path).isFile() ? "file" : "absent";
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code === "ENOENT" || code === "ENOTDIR" ? "absent" : "unknown";
   }
 }
 
@@ -201,19 +207,20 @@ function isFile(path: string): boolean {
  * file there, or a bare name found on no directory of the agent's `PATH` (its own `env.PATH`
  * when the config sets one as a literal, else this daemon's). A relative path resolves against
  * a run's workspace, which an agent read does not have, so it is never reported, and neither
- * is an empty command: both are left to the handshake. Only "certainly missing" is said; a
- * command that is there may still fail to start, which the handshake reports as `down`.
+ * is an empty command: both are left to the handshake. Only "certainly missing" is said: a
+ * candidate that could not be looked at keeps the agent `unknown`, and a command that is there
+ * may still fail to start, which the handshake reports as `down`.
  */
 function commandMissing(command: string, env: Record<string, unknown>): boolean {
   if (command === "") return false;
-  if (isAbsolute(command)) return !isFile(command);
+  if (isAbsolute(command)) return probe(command) === "absent";
   if (/[\\/]/.test(command)) return false;
   const path = typeof env.PATH === "string" ? env.PATH : (process.env.PATH ?? "");
   const extensions =
     process.platform === "win32" ? ["", ...(process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";")] : [""];
   for (const dir of path.split(delimiter)) {
     if (dir === "") continue;
-    for (const extension of extensions) if (isFile(join(dir, command + extension))) return false;
+    for (const extension of extensions) if (probe(join(dir, command + extension)) !== "absent") return false;
   }
   return true;
 }
