@@ -148,6 +148,9 @@ test("#1193 Runs keeps twenty characters of title and its toolbar at 800×600 an
   for (const [width, height, zoom, name] of [
     [800, 600, 1, "1193-runs-800x600"],
     [...LARGE, 1.5, `1193-runs-${LARGE[0]}x${LARGE[1]}-150`],
+    // Just wider than the old fold point (44em): the step detail at its floor left the tree
+    // too narrow for twenty characters, on every platform (found on Windows, #1284).
+    [1000, 680, 1.5, "1193-runs-1000x680-150"],
     // Both at once: about 530 CSS pixels, where the step detail folds under the tree.
     [800, 600, 1.5, "1193-runs-800x600-150"],
   ] as const) {
