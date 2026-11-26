@@ -9,6 +9,7 @@
  * would remember those, and later calls would skip ORCA's policy (a rule removed, expired or
  * narrowed would never be consulted again). ORCA's own "always" answers go to its sidecar.
  */
+import { isDeepStrictEqual } from "node:util";
 import type * as acp from "@agentclientprotocol/sdk";
 import type { CommandAction } from "./codex-protocol/0.171.0/v2/CommandAction.js";
 import type { FileUpdateChange } from "./codex-protocol/0.171.0/v2/FileUpdateChange.js";
@@ -22,6 +23,8 @@ export const CODEX_POLICY_ASKS = [
   "item/commandExecution/requestApproval",
   "item/fileChange/requestApproval",
   "item/permissions/requestApproval",
+  // An MCP tool call Codex asks about (#1163); any other elicitation is declined.
+  "mcpServer/elicitation/request",
 ] as const;
 export type CodexPolicyAsk = (typeof CODEX_POLICY_ASKS)[number];
 export const isCodexPolicyAsk = (method: string): method is CodexPolicyAsk =>
@@ -53,10 +56,25 @@ export type CodexAskMapping =
   | { target: CodexAskTarget; effects: acp.RequestPermissionRequest[]; review: acp.RequestPermissionRequest }
   | { target: CodexAskTarget | undefined; refused: string };
 
+/** An MCP tool call item Codex started and has not finished, as ORCA read it from `item/started`. */
+export interface CodexMcpCall {
+  itemId: string;
+  turnId: string;
+  server: string;
+  tool: string;
+  arguments: unknown;
+  /** Set once an ask was bound to this call: one call gets one decision. */
+  asked?: boolean;
+}
+
 /** What a mapping needs beyond the ask itself. */
 export interface CodexAskContext {
   /** The changes of the file change item Codex started for the ask, in the same turn. */
   changes?: readonly FileUpdateChange[] | undefined;
+  /** The MCP tool calls Codex started in the live turn and has not finished: what an MCP ask is about. */
+  mcpCalls?: Iterable<CodexMcpCall> | undefined;
+  /** The MCP servers ORCA configured for the session: an ask from any other is declined. */
+  mcpServers?: ReadonlySet<string> | undefined;
 }
 
 const text = (lines: (string | undefined)[]): acp.ToolCallContent[] => {
@@ -310,6 +328,7 @@ export function codexAskRequest(
   ctx: CodexAskContext = {},
 ): CodexAskMapping {
   if (!isObject(params)) return { target: undefined, refused: "an ask whose params are not an object" };
+  if (method === "mcpServer/elicitation/request") return mcpAsk(sessionId, params, ctx);
   const target = targetOf(params);
   if (!target) return { target: undefined, refused: "an ask without its thread, turn and item" };
   switch (method) {
@@ -322,11 +341,60 @@ export function codexAskRequest(
   }
 }
 
+/** Codex's mark on an elicitation that asks to run an MCP tool call, not for a server's own form. */
+export const CODEX_MCP_TOOL_CALL_ASK = "mcp_tool_call";
+
+/**
+ * An MCP tool call Codex asks about (#1163), decided as the ACP route decides one: ORCA's
+ * policy for `<server>: <tool>`, of kind `other`. The elicitation names no item, so it is
+ * matched to the call Codex started in the same turn for the same server, tool and arguments,
+ * and those are what is decided: a server ORCA did not configure, an ask for no started call,
+ * and anything else elicited (a server's own form or URL, a non-goal) are declined, as is an ask
+ * that matches several running calls (identical ones in flight) or a call already asked about.
+ * The session binds the decision to the matched call and accepts only while it still runs.
+ */
+function mcpAsk(sessionId: string, p: Record<string, unknown>, ctx: CodexAskContext): CodexAskMapping {
+  if (typeof p.threadId !== "string" || typeof p.turnId !== "string" || typeof p.serverName !== "string")
+    return { target: undefined, refused: "an MCP ask without its thread, turn and server" };
+  const meta = p._meta;
+  if (p.mode !== "form" || !isObject(meta) || meta.codex_approval_kind !== CODEX_MCP_TOOL_CALL_ASK)
+    return { target: undefined, refused: "an MCP elicitation that is not a tool call ask" };
+  if (!ctx.mcpServers?.has(p.serverName))
+    return { target: undefined, refused: "an MCP ask from a server ORCA did not configure" };
+  if (typeof meta.tool_name !== "string" || !meta.tool_name)
+    return { target: undefined, refused: "an MCP ask without its tool" };
+  const args = meta.tool_params ?? null;
+  const matches = [...(ctx.mcpCalls ?? [])].filter(
+    (c) =>
+      c.turnId === p.turnId &&
+      c.server === p.serverName &&
+      c.tool === meta.tool_name &&
+      isDeepStrictEqual(c.arguments ?? null, args),
+  );
+  if (matches.length === 0) return { target: undefined, refused: "an MCP ask for no call Codex started in this turn" };
+  // Identical calls in flight: the ask names no item, so which one it is about is unknown.
+  if (matches.length > 1) return { target: undefined, refused: "an MCP ask that matches more than one running call" };
+  const call = matches[0]!;
+  // One decision per call: a second ask for a call already asked about is not attributed to it.
+  if (call.asked) return { target: undefined, refused: "a second MCP ask for one call" };
+  const target = { threadId: p.threadId, turnId: call.turnId, itemId: call.itemId };
+  const effect = request(sessionId, {
+    toolCallId: call.itemId,
+    title: `${call.server}: ${call.tool}`,
+    kind: "other",
+    locations: [],
+    rawInput: call.arguments,
+  });
+  return mapped(sessionId, target, [effect], effect.toolCall.title ?? "", [str(meta.tool_description)]);
+}
+
 /**
  * The response to `method` for `outcome`: only ever a one-time decision. A permissions ask is
  * never granted (see `permissionsAsk`): it gets nothing, for this turn.
  */
 export function codexAskResponse(method: CodexPolicyAsk, outcome: CodexAskOutcome): unknown {
   if (method === "item/permissions/requestApproval") return { permissions: {}, scope: "turn" };
+  // No content and no `_meta`: nothing Codex would remember for the next call.
+  if (method === "mcpServer/elicitation/request") return { action: outcome, content: null, _meta: null };
   return { decision: outcome };
 }

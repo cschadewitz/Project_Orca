@@ -177,6 +177,26 @@ describe("checking Codex's effective config", () => {
     );
   });
 
+  it("refuses a config entry, even disabled, named like a server ORCA hands the thread (#1163)", () => {
+    const answers = {
+      config: configRead(
+        {},
+        { config: { mcp_servers: { m: { enabled: false, tools: { touch: { approval_mode: "approve" } } } } } },
+      ),
+      requirements: NO_REQUIREMENTS,
+      hooks: NO_HOOKS,
+    };
+    // without ORCA's server of that name it is a disabled entry, and passes
+    expect(codexConfigCheck("codex", POLICY, answers).sandbox).toBe("workspace-write");
+    let error: OrcaError | undefined;
+    try {
+      codexConfigCheck("codex", POLICY, answers, undefined, ["m"]);
+    } catch (e) {
+      error = e as OrcaError;
+    }
+    expect(error?.details).toMatchObject({ setting: "mcp_servers", servers: ["m"] });
+  });
+
   it("refuses managed requirements that leave out ORCA's policy or sandbox, and records ones that allow them", () => {
     const req = (r: Record<string, unknown>) => ({ supportsIndependentSpeedModes: true, requirements: r });
     expect(refusal({ requirements: req({ allowedApprovalPolicies: ["never"] }) }).message).toContain(

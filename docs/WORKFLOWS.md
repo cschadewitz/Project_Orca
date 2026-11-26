@@ -529,8 +529,13 @@ options for it are mapped and tested: a session gets ORCA's permission files and
 paths, its answerer, judge advice on commands, resume and the run's secrets (each
 app-server's secret values reach the run's redaction before ORCA sends it anything), with
 `on-request` and a `workspace-write` sandbox, and is refused, rather than run without, when
-it is given additional directories, MCP servers (#1163), a judge for edits or MCP calls, or
-an ACP- or hook-route option. Nothing falls back to
+it is given additional directories, a judge for edits or MCP calls, or an ACP- or hook-route
+option. The agent's own `mcpServers` are carried (#1163): Codex runs them for the thread, given
+in `thread/start` (never on the command line, since their environment can carry secrets), and
+every call, one its server marks read-only included, is asked about and decided by ORCA's
+policy as `<server>: <tool>`, one time each. An MCP server in Codex's own config, or one the
+thread runs that ORCA did not configure (a plugin's), refuses the session; a server that fails
+to start is logged with Codex's reason and the session goes on, that server's calls failing. Nothing falls back to
 the ACP adapter: to run Codex through it, remove `driver` (or set `driver: acp`, the default)
 and set `command` back to the adapter (for example `codex-acp`), since `codex` itself is not an
 ACP agent.

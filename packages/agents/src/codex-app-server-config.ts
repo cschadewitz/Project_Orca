@@ -12,8 +12,9 @@
  *   session flags (a managed `config.toml`) that overrides one is refused, and so is any other
  *   layer in force (user, project, system) that sets one of them to anything else: ORCA names
  *   the setting and the file rather than run over the user's choice silently.
- *   Any MCP server in force is refused too: ORCA hands this driver none, and one from a config
- *   file would run outside ORCA's view.
+ *   Any MCP server in force is refused too: ORCA hands the thread its own (#1163,
+ *   `codex-app-server-mcp.ts`), and one from a config file would run outside ORCA's view. So
+ *   is an entry, even disabled, named like one of ORCA's: its settings would merge into ORCA's.
  * - `configRequirements/read`: managed requirements that do not allow ORCA's approval policy or
  *   sandbox are refused.
  * - `hooks/list`: any enabled hook (user, project, plugin or managed) is refused: it would run
@@ -188,6 +189,8 @@ export function codexConfigCheck(
   answers: { config: unknown; requirements: unknown; hooks: unknown },
   /** ORCA's own hook's command, when the session installs it (#1161). */
   ownHook?: string,
+  /** The MCP servers ORCA hands the thread (#1163). */
+  ownMcpServers: readonly string[] = [],
 ): CodexVerifiedConfig {
   const malformed = (method: string) =>
     new OrcaError(
@@ -271,7 +274,7 @@ export function codexConfigCheck(
   if (mcp !== undefined && mcp !== null) {
     if (!isObject(mcp)) throw malformed("config/read");
     const running = Object.entries(mcp)
-      .filter(([, server]) => !(isObject(server) && server.enabled === false))
+      .filter(([name, server]) => ownMcpServers.includes(name) || !(isObject(server) && server.enabled === false))
       .map(([name]) => (SERVER_NAME.test(name) ? name : "(a server whose name ORCA does not repeat)"));
     if (running.length > 0)
       throw refuse(`Codex's config adds the MCP server${running.length > 1 ? "s" : ""} ${running.join(", ")}`, {

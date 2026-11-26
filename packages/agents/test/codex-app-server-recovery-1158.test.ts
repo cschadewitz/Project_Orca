@@ -146,7 +146,8 @@ function scriptedHost(
   return { host, procs, spawnAgent };
 }
 
-const agent = () => AgentSpecSchema.parse({ id: "codex", command: process.execPath, driver: "codex-app-server" });
+const agent = (more: Record<string, unknown> = {}) =>
+  AgentSpecSchema.parse({ id: "codex", command: process.execPath, driver: "codex-app-server", ...more });
 
 const open = (host: AgentHost, more: Partial<Parameters<typeof openCodexAppServerSession>[0]> = {}) =>
   openCodexAppServerSession({
@@ -169,6 +170,31 @@ const CHECKS = ["config/read", "configRequirements/read", "hooks/list"];
 const methods = (p: Proc) => p.received.map((m) => m.method).filter(Boolean);
 
 describe("an app-server that exits", () => {
+  it("gives the restarted thread ORCA's MCP servers again, and checks what it runs (#1163)", async () => {
+    const s = scriptedHost((i) => ({
+      ...BASE,
+      ...(i === 0
+        ? {
+            "turn/start": (_m, proc) => (
+              setImmediate(() => proc.crash()),
+              { turn: { id: "t0", status: "inProgress" } }
+            ),
+          }
+        : { "mcpServerStatus/list": () => ({ data: [{ name: "m" }, { name: "extra" }], nextCursor: null }) }),
+    }));
+    const session = await open(s.host, { agent: agent({ mcpServers: [{ name: "m", command: "/usr/bin/m" }] }) });
+    await expect(session.prompt("one")).rejects.toMatchObject({ code: "AGENT_TRANSPORT" });
+    await settle();
+    // the replacement's thread runs a server ORCA did not configure: refused, never published
+    await expect(session.prompt("two")).rejects.toMatchObject({ code: "AGENT_TRANSPORT" });
+    const resume = s.procs[1]!.received.find((m) => m.method === "thread/resume")!;
+    expect((resume.params as { config: unknown }).config).toEqual({
+      mcp_servers: { m: { command: "/usr/bin/m", args: [], enabled: true, default_tools_approval_mode: "prompt" } },
+    });
+    expect(methods(s.procs[1]!)).not.toContain("turn/start");
+    await session.close();
+  });
+
   it("fails the running turn, and the next prompt restarts it on the same thread with ORCA's policy", async () => {
     const s = scriptedHost((i) => ({
       ...BASE,
@@ -193,6 +219,7 @@ describe("an app-server that exits", () => {
       ...CHECKS,
       "thread/resume",
       ...CHECKS,
+      "mcpServerStatus/list",
       "turn/start",
     ]);
     expect(s.procs[1]!.received.find((m) => m.method === "thread/resume")?.params).toEqual({
@@ -1003,6 +1030,7 @@ describe("resuming a thread", () => {
       "thread/turns/list",
       "thread/turns/list",
       ...CHECKS,
+      "mcpServerStatus/list",
       "model/list",
     ]);
     expect(s.procs[0]!.received.find((m) => m.method === "thread/resume")?.params).toMatchObject({

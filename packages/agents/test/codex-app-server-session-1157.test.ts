@@ -702,7 +702,7 @@ describe("opening a session", () => {
     const session = await open(s.host);
     expect(session.acpSessionId).toBe("thr_1");
     const methods = s.peer.received.map((m) => m.method);
-    expect(methods.slice(0, 11)).toEqual([
+    expect(methods.slice(0, 12)).toEqual([
       "initialize",
       "initialized",
       "account/read",
@@ -714,6 +714,8 @@ describe("opening a session", () => {
       "config/read",
       "configRequirements/read",
       "hooks/list",
+      // the thread's MCP servers, ORCA's only (#1163)
+      "mcpServerStatus/list",
       "model/list",
     ]);
     const lists = s.peer.received.filter((m) => m.method === "hooks/list").map((m) => m.params);
@@ -2196,5 +2198,348 @@ describe("the host handle's stdio", () => {
     } finally {
       handle.kill("SIGKILL");
     }
+  });
+});
+
+describe("MCP servers ORCA configures (#1163)", () => {
+  const SERVERS = [{ name: "m", command: "/usr/bin/mcp-m", args: ["--serve"], env: { M_TOKEN: "lit-value" } }];
+  const withServers = (permissions?: Record<string, unknown>) =>
+    agent({ mcpServers: SERVERS, ...(permissions ? { permissions } : {}) });
+  const CALL = (over: Record<string, unknown> = {}) => ({
+    type: "mcpToolCall",
+    id: "call_1",
+    server: "m",
+    tool: "touch",
+    status: "inProgress",
+    arguments: { file: "x.txt" },
+    readOnlyHint: true,
+    ...over,
+  });
+  const ASK = (over: Record<string, unknown> = {}, meta: Record<string, unknown> = {}) => ({
+    threadId: "thr_1",
+    turnId: "turn_1",
+    serverName: "m",
+    environmentId: null,
+    mode: "form",
+    message: 'Allow the m MCP server to run tool "touch"?',
+    requestedSchema: { type: "object", properties: {} },
+    _meta: {
+      codex_approval_kind: "mcp_tool_call",
+      tool_name: "touch",
+      tool_annotations: { readOnlyHint: true },
+      tool_description: "write a file",
+      tool_params: { file: "x.txt" },
+      ...meta,
+    },
+    ...over,
+  });
+  /** A Codex whose turn starts `item` (unless null), sends each ask in turn, then completes. */
+  const calling = (asks: Record<string, unknown>[], item: Record<string, unknown> | null = CALL(), more = {}) => {
+    const answers: unknown[] = [];
+    const table: Record<string, Responder> = {
+      ...BASE,
+      ...more,
+      "turn/start": (_msg, peer) => {
+        void (async () => {
+          if (item) peer.notify("item/started", { threadId: "thr_1", turnId: "turn_1", item });
+          for (const [i, params] of asks.entries()) {
+            const id = `mcp_${i}`;
+            peer.say({ id, method: "mcpServer/elicitation/request", params });
+            await vi.waitFor(() => expect(peer.received.find((m) => m.id === id && !m.method)).toBeDefined());
+            answers.push((peer.received.find((m) => m.id === id && !m.method) as { result: unknown }).result);
+          }
+          if (item)
+            peer.notify("item/completed", {
+              threadId: "thr_1",
+              turnId: "turn_1",
+              item: { ...item, status: "completed" },
+            });
+          peer.notify("turn/completed", {
+            threadId: "thr_1",
+            turn: { id: "turn_1", status: "completed", error: null },
+          });
+        })();
+        return { turn: { id: "turn_1", status: "inProgress" } };
+      },
+    };
+    return { table, answers };
+  };
+  /** A Codex whose turn runs `script` with the peer, then completes; answers to asks are collected. */
+  const scripted = (
+    script: (peer: Peer, ask: (params: Record<string, unknown>) => Promise<unknown>) => Promise<void>,
+  ) => {
+    const answers: unknown[] = [];
+    let n = 0;
+    const table: Record<string, Responder> = {
+      ...BASE,
+      "turn/start": (_msg, peer) => {
+        const ask = async (params: Record<string, unknown>) => {
+          const id = `mcp_${n++}`;
+          peer.say({ id, method: "mcpServer/elicitation/request", params });
+          await vi.waitFor(() => expect(peer.received.find((m) => m.id === id && !m.method)).toBeDefined());
+          const result = (peer.received.find((m) => m.id === id && !m.method) as { result: unknown }).result;
+          answers.push(result);
+          return result;
+        };
+        void script(peer, ask).then(() =>
+          peer.notify("turn/completed", {
+            threadId: "thr_1",
+            turn: { id: "turn_1", status: "completed", error: null },
+          }),
+        );
+        return { turn: { id: "turn_1", status: "inProgress" } };
+      },
+    };
+    return { table, answers };
+  };
+  const started = (peer: Peer, item: Record<string, unknown>) =>
+    peer.notify("item/started", { threadId: "thr_1", turnId: "turn_1", item });
+  const finished = (peer: Peer, item: Record<string, unknown>) =>
+    peer.notify("item/completed", { threadId: "thr_1", turnId: "turn_1", item: { ...item, status: "completed" } });
+
+  const ACCEPT = { action: "accept", content: null, _meta: null };
+  const DECLINE = { action: "decline", content: null, _meta: null };
+
+  it("gives the thread the agent's servers in thread/start, every call asked, never on the command line", async () => {
+    const s = scriptedHost(BASE);
+    const session = await open(s.host, { agent: withServers() });
+    const start = s.peer.received.find((m) => m.method === "thread/start")!;
+    expect(start.params!.config).toEqual({
+      mcp_servers: {
+        m: {
+          command: "/usr/bin/mcp-m",
+          args: ["--serve"],
+          env: { M_TOKEN: "lit-value" },
+          enabled: true,
+          default_tools_approval_mode: "prompt",
+        },
+      },
+    });
+    const spec = s.spawnAgent.mock.calls[0]![0] as { args: string[] };
+    expect(JSON.stringify(spec.args)).not.toMatch(/mcp-m|lit-value|mcp_servers/);
+    // the thread's servers are read back
+    expect(s.peer.received.find((m) => m.method === "mcpServerStatus/list")!.params).toEqual({ threadId: "thr_1" });
+    await session.close();
+  });
+
+  it("starts no server and sends no config for an agent with none", async () => {
+    const s = scriptedHost(BASE);
+    const session = await open(s.host);
+    expect(s.peer.received.find((m) => m.method === "thread/start")!.params!.config).toBeUndefined();
+    await session.close();
+  });
+
+  it("puts a call its server marks read-only to ORCA's policy as <server>: <tool>, one time each", async () => {
+    const asked: acp.RequestPermissionRequest[] = [];
+    const askPermission = vi.fn(async (req: acp.RequestPermissionRequest) => (asked.push(req), "accept"));
+    // two identical calls, one after the other: each is its own item, and each is asked about
+    const c = scripted(async (peer, ask) => {
+      for (const id of ["call_1", "call_2"]) {
+        started(peer, CALL({ id }));
+        await ask(ASK());
+        finished(peer, CALL({ id }));
+      }
+    });
+    const s = scriptedHost(c.table);
+    const session = await open(s.host, { agent: withServers({ default: "ask" }), askPermission });
+    await expect(session.prompt("go")).resolves.toMatchObject({ stopReason: "end_turn" });
+    expect(c.answers).toEqual([ACCEPT, ACCEPT]);
+    expect(askPermission).toHaveBeenCalledTimes(2);
+    expect(asked[0]!.toolCall).toMatchObject({
+      toolCallId: "call_1",
+      title: "m: touch",
+      kind: "other",
+      rawInput: { file: "x.txt" },
+    });
+    await session.close();
+  });
+
+  it("declines a call ORCA's policy denies, and allows one it allows, without asking anybody", async () => {
+    const askPermission = vi.fn(async () => "accept");
+    const denied = calling([ASK()]);
+    const d = scriptedHost(denied.table);
+    const deny = await open(d.host, {
+      agent: withServers({
+        default: "allow",
+        rules: [{ match: { kind: "other", titlePattern: "^m: touch$" }, decision: "deny" }],
+      }),
+      askPermission,
+    });
+    await deny.prompt("go");
+    expect(denied.answers).toEqual([DECLINE]);
+    await deny.close();
+    const allowed = calling([ASK()]);
+    const a = scriptedHost(allowed.table);
+    const allow = await open(a.host, { agent: withServers({ default: "allow" }), askPermission });
+    await allow.prompt("go");
+    expect(allowed.answers).toEqual([ACCEPT]);
+    expect(askPermission).not.toHaveBeenCalled();
+    await allow.close();
+  });
+
+  it("declines, unasked, an ask for no call Codex started, from another server, or for anything but a tool call", async () => {
+    const askPermission = vi.fn(async () => "accept");
+    const cases: [Record<string, unknown>[], Record<string, unknown> | null][] = [
+      [[ASK()], null],
+      [[ASK({}, { tool_params: { file: "other.txt" } })], CALL()],
+      [[ASK({}, { tool_name: "rm" })], CALL()],
+      [[ASK({ serverName: "other" })], CALL({ server: "other" })],
+      [[ASK({}, { codex_approval_kind: "something_else" })], CALL()],
+      [[ASK({ mode: "url", url: "https://example.com", elicitationId: "e" })], CALL()],
+      [[ASK({ turnId: null })], CALL()],
+    ];
+    for (const [asks, item] of cases) {
+      const c = calling(asks, item);
+      const s = scriptedHost(c.table);
+      const session = await open(s.host, { agent: withServers({ default: "allow" }), askPermission });
+      await session.prompt("go");
+      expect(c.answers, JSON.stringify(asks)).toEqual([DECLINE]);
+      await session.close();
+    }
+    expect(askPermission).not.toHaveBeenCalled();
+  });
+
+  it("declines, unasked, an ask that matches identical calls in flight: which one it is about is unknown", async () => {
+    const askPermission = vi.fn(async () => "accept");
+    const c = scripted(async (peer, ask) => {
+      started(peer, CALL({ id: "call_1" }));
+      started(peer, CALL({ id: "call_2" }));
+      await ask(ASK());
+      finished(peer, CALL({ id: "call_1" }));
+      finished(peer, CALL({ id: "call_2" }));
+    });
+    const s = scriptedHost(c.table);
+    const session = await open(s.host, { agent: withServers({ default: "ask" }), askPermission });
+    await session.prompt("go");
+    expect(c.answers).toEqual([DECLINE]);
+    expect(askPermission).not.toHaveBeenCalled();
+    await session.close();
+  });
+
+  it("gives one call one decision: a second ask for the same call is declined unasked", async () => {
+    const askPermission = vi.fn(async () => "accept");
+    const c = scripted(async (peer, ask) => {
+      started(peer, CALL());
+      await ask(ASK());
+      await ask(ASK());
+      finished(peer, CALL());
+    });
+    const s = scriptedHost(c.table);
+    const session = await open(s.host, { agent: withServers({ default: "ask" }), askPermission });
+    await session.prompt("go");
+    expect(c.answers).toEqual([ACCEPT, DECLINE]);
+    expect(askPermission).toHaveBeenCalledTimes(1);
+    await session.close();
+  });
+
+  it("declines when the call finished while a person was deciding", async () => {
+    let release!: () => void;
+    const asked = new Promise<void>((r) => (release = r));
+    let answer!: (option: string) => void;
+    const askPermission = vi.fn(() => new Promise<string>((r) => ((answer = r), release())));
+    const c = scripted(async (peer, ask) => {
+      started(peer, CALL());
+      const pending = ask(ASK());
+      await asked;
+      finished(peer, CALL());
+      await settle();
+      answer("accept");
+      await pending;
+    });
+    const s = scriptedHost(c.table);
+    const session = await open(s.host, { agent: withServers({ default: "ask" }), askPermission });
+    await session.prompt("go");
+    expect(askPermission).toHaveBeenCalledTimes(1);
+    expect(c.answers).toEqual([DECLINE]);
+    await session.close();
+  });
+
+  it("keeps a server named like an object property in the config it sends", async () => {
+    const s = scriptedHost(BASE);
+    const session = await open(s.host, {
+      agent: agent({
+        mcpServers: [
+          { name: "__proto__", command: "/usr/bin/p" },
+          { name: "constructor", command: "/usr/bin/c" },
+        ],
+      }),
+    });
+    const start = s.peer.received.find((m) => m.method === "thread/start")!;
+    const servers = (start.params!.config as { mcp_servers: Record<string, unknown> }).mcp_servers;
+    expect(Object.keys(servers).sort()).toEqual(["__proto__", "constructor"]);
+    expect(Object.getOwnPropertyDescriptor(servers, "__proto__")?.value).toMatchObject({ command: "/usr/bin/p" });
+    await session.close();
+  });
+
+  it("refuses the session when the thread runs an MCP server ORCA did not configure", async () => {
+    const s = scriptedHost({
+      ...BASE,
+      "mcpServerStatus/list": () => ({ data: [{ name: "m" }, { name: "plugin_srv" }], nextCursor: null }),
+    });
+    await expect(open(s.host, { agent: withServers() })).rejects.toMatchObject({
+      code: "NOT_SUPPORTED",
+      details: { reason: "codex-mcp-unconfigured", servers: ["plugin_srv"] },
+    });
+  });
+
+  it("reads every page of the thread's servers", async () => {
+    const s = scriptedHost({
+      ...BASE,
+      "mcpServerStatus/list": (msg) =>
+        msg.params?.cursor === "p2"
+          ? { data: [{ name: "late" }], nextCursor: null }
+          : { data: [{ name: "m" }], nextCursor: "p2" },
+    });
+    await expect(open(s.host, { agent: withServers() })).rejects.toMatchObject({
+      details: { reason: "codex-mcp-unconfigured", servers: ["late"] },
+    });
+  });
+
+  it("breaks the session when Codex reports starting a server ORCA did not configure", async () => {
+    const s = scriptedHost(BASE);
+    const session = await open(s.host, { agent: withServers() });
+    s.peer.notify("mcpServer/startupStatus/updated", {
+      threadId: "thr_1",
+      name: "sneaky",
+      environmentId: null,
+      status: "starting",
+      error: null,
+      failureReason: null,
+    });
+    await settle();
+    await expect(session.prompt("go")).rejects.toMatchObject({ details: { reason: "codex-mcp-unconfigured" } });
+    await session.close();
+  });
+
+  it("reports a server that failed to start, redacted, and goes on", async () => {
+    const statuses: unknown[] = [];
+    const warn = vi.fn();
+    const logger = { ...silentLogger, warn, child: () => logger } as typeof silentLogger;
+    const s = scriptedHost(BASE);
+    const session = await open(s.host, { agent: withServers(), onMcpServerStatus: (st) => statuses.push(st), logger });
+    for (const status of ["starting", "failed"])
+      s.peer.notify("mcpServer/startupStatus/updated", {
+        threadId: "thr_1",
+        name: "m",
+        environmentId: null,
+        status,
+        error: status === "failed" ? "MCP startup failed: No such file or directory (os error 2)" : null,
+        failureReason: null,
+      });
+    await vi.waitFor(() => expect(statuses).toHaveLength(2));
+    expect(statuses).toEqual([
+      { server: "m", status: "starting" },
+      { server: "m", status: "failed", error: "MCP startup failed: No such file or directory (os error 2)" },
+    ]);
+    expect(warn).toHaveBeenCalledWith("an MCP server failed to start", expect.objectContaining({ server: "m" }));
+    await session.close();
+  });
+
+  it("refuses an agent whose server name Codex would not accept, before anything starts", async () => {
+    const s = scriptedHost(BASE);
+    await expect(
+      open(s.host, { agent: agent({ mcpServers: [{ name: "has space", command: "x" }] }) }),
+    ).rejects.toMatchObject({ code: "CONFIG_INVALID" });
+    expect(s.spawnAgent).not.toHaveBeenCalled();
   });
 });

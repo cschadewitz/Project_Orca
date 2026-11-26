@@ -83,8 +83,16 @@ import {
   codexEnvironmentForeign,
   codexEnvironmentProblem,
   type CodexAskOutcome,
+  type CodexMcpCall,
   type CodexPolicyAsk,
 } from "./codex-app-server-asks.js";
+import {
+  codexForeignMcpServer,
+  codexForeignMcpServers,
+  codexMcpServersConfig,
+  codexMcpStartupProblem,
+  type CodexMcpServerStatus,
+} from "./codex-app-server-mcp.js";
 import type { PermissionInvocation } from "./acp-session.js";
 import { judgedLane } from "./judged-lane.js";
 import {
@@ -118,6 +126,7 @@ import {
 import {
   checkSecretUse,
   ENV_SECRET_DELIVERY,
+  fillMcpSecrets,
   planSessionSecrets,
   redactError,
   redactingLogger,
@@ -166,6 +175,11 @@ export interface OpenCodexAppServerSessionOptions {
   onPermission?: (info: { toolCallId?: string; title: string; decision: string; rule?: PermissionRuleRecord }) => void;
   /** Called with what ORCA verified of Codex's config, on open and after each restart. */
   onVerifiedConfig?: (config: CodexVerifiedConfig) => void;
+  /**
+   * Called with each startup report Codex sends for one of the agent's MCP servers (#1163), a
+   * failed start included. Codex's reason is redacted of the session's secrets.
+   */
+  onMcpServerStatus?: (status: CodexMcpServerStatus) => void;
   /** Called with the account Codex runs on, at open and whenever Codex reports it changed (#1164). */
   onAccount?: (account: CodexAccountStatus) => void;
   /**
@@ -263,6 +277,10 @@ interface Connection {
   foreignEnvironment?: boolean;
   /** The verified Codex version whose image ORCA attested for this process (#1162). */
   imageVersion?: string;
+  /** The agent's MCP servers as this process's threads are given them, secrets filled (#1163). */
+  mcpServers?: Record<string, Record<string, unknown>>;
+  /** MCP servers ORCA did not configure that Codex reported starting on this connection (#1163). */
+  foreignMcp?: string[];
 }
 
 /** Provider errors can carry private context: report only the failed recovery boundary, as the ACP route does. */
@@ -355,6 +373,7 @@ export const CODEX_SESSION_METHODS = [
   "configRequirements/read",
   "hooks/list",
   "account/rateLimits/read",
+  "mcpServerStatus/list",
 ] as const;
 
 /** The notifications the session reads; anything else Codex sends is ignored. */
@@ -370,6 +389,7 @@ const HANDLED_NOTIFICATIONS = new Set([
   "account/updated",
   "account/rateLimits/updated",
   "thread/environment/connected",
+  "mcpServer/startupStatus/updated",
 ]);
 
 /** Codex's legacy (v1) approvals, which a v2 thread does not send: declined. */
@@ -691,6 +711,8 @@ interface ActiveTurn {
   knowTurnId: () => void;
   /** The file change items Codex started in this turn, by turn and item id: what its file change asks are about. */
   fileChanges: Map<string, FileUpdateChange[]>;
+  /** The MCP tool calls Codex started in this turn and has not finished, by turn and item id (#1163). */
+  mcpCalls: Map<string, CodexMcpCall>;
   /** Waiting on an account re-read, before any turn/start: a cancel ends the wait, nothing else. */
   waking?: () => void;
   grace?: ReturnType<typeof setTimeout>;
@@ -811,6 +833,10 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
 
   const secretPlan = planSessionSecrets(opts.host, agent, opts.secrets);
   await checkSecretUse(secretPlan, opts.host, agent.id, opts.authorizeSecretUse);
+  // The agent's MCP servers (#1163), checked before anything starts; each process's threads
+  // get them with the secrets that process's host read.
+  codexMcpServersConfig(agent.id, secretPlan.agent.mcpServers);
+  const mcpNames: ReadonlySet<string> = new Set(agent.mcpServers.map((s) => s.name));
   const values: string[] = [];
   const redacted = <T>(work: () => Promise<T>) =>
     work().catch((error: unknown) => {
@@ -1147,6 +1173,8 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
     const itemId = isObject(params) && typeof params.itemId === "string" ? params.itemId : undefined;
     const mapping = codexAskRequest(threadId, method, params, {
       changes: itemId ? turn.fileChanges.get(`${turn.turnId}\0${itemId}`) : undefined,
+      mcpCalls: turn.mcpCalls.values(),
+      mcpServers: mcpNames,
     });
     if (mapping.target && (mapping.target.threadId !== threadId || mapping.target.turnId !== turn.turnId))
       return respond("decline", "not-the-live-turn");
@@ -1154,6 +1182,15 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
       logger.warn("Codex asked something ORCA declines without asking", { method, why: mapping.refused });
       return respond("decline", "refused");
     }
+    // An MCP ask is bound to the one call it matched (#1163): no other ask is attributed to that
+    // call, and the decision is given only while that very call still runs.
+    const mcpKey = method === "mcpServer/elicitation/request" ? `${turn.turnId}\0${mapping.target.itemId}` : undefined;
+    const mcpCall = mcpKey ? turn.mcpCalls.get(mcpKey) : undefined;
+    if (mcpKey) {
+      if (!mcpCall || mcpCall.asked) return respond("decline", "refused");
+      mcpCall.asked = true;
+    }
+    const callLive = () => !mcpKey || turn.mcpCalls.get(mcpKey) === mcpCall;
     const { effects, review } = mapping;
     const title = review.toolCall.title ?? "";
     const invocation: PermissionInvocation = {
@@ -1250,6 +1287,7 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
     // A person stopped the turn while it was asked: cancel. Otherwise only a live turn is allowed.
     if (turn.cancelReason) return respond("cancel", "turn-cancelled", title);
     if (!live()) return respond("decline", "turn-ended", title);
+    if (!callLive()) return respond("decline", "call-ended", title);
     return codexAskResponse(method, accepted ? "accept" : "decline");
   };
 
@@ -1284,6 +1322,19 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
         // Keyed by its turn too: it can come before turn/start has answered with the turn's id.
         if (item.type === "fileChange" && active && typeof params.turnId === "string")
           active.fileChanges.set(`${params.turnId}\0${item.id}`, item.changes);
+        // What an MCP ask is about (#1163): the call Codex started, until it finishes.
+        if (item.type === "mcpToolCall" && active && typeof params.turnId === "string") {
+          const key = `${params.turnId}\0${item.id}`;
+          if (method === "item/started" && item.status === "inProgress")
+            active.mcpCalls.set(key, {
+              itemId: item.id,
+              turnId: params.turnId,
+              server: item.server,
+              tool: item.tool,
+              arguments: item.arguments,
+            });
+          else active.mcpCalls.delete(key);
+        }
         if (method === "item/completed" && item.type === "agentMessage" && !active?.streamed.has(item.id) && item.text)
           emit({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: item.text } });
         const update = codexItemUpdate(item, method === "item/started" ? "started" : "completed");
@@ -1420,6 +1471,11 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
     values.push(...(proc.secretValues?.values() ?? []));
     const cleanup = processCleanup(proc, opts.exitGraceMs);
     const c = { proc, cleanup } as Connection;
+    const mcpConfig = codexMcpServersConfig(
+      agent.id,
+      fillMcpSecrets(secretPlan, proc.secretValues ?? new Map<string, string>()),
+    );
+    if (mcpConfig) c.mcpServers = mcpConfig;
     owned.add(c);
     if (replacement) starting = c;
     const fail = async (reason: unknown): Promise<never> => {
@@ -1496,6 +1552,28 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
             active?.fail(error);
             breakSession(error);
           }
+        }
+        // An MCP server ORCA did not configure fences the connection the same way (#1163); a
+        // report for one of ORCA's is the session's diagnostics.
+        if (method === "mcpServer/startupStatus/updated" && isObject(params) && !codexMcpStartupProblem(params)) {
+          const name = params.name as string;
+          if (!mcpNames.has(name)) {
+            c.foreignMcp = [...new Set([...(c.foreignMcp ?? []), name])];
+            if (conn === c && open) {
+              const error = codexForeignMcpServer(agent.id, c.foreignMcp);
+              active?.fail(error);
+              breakSession(error);
+            }
+            return;
+          }
+          const status: CodexMcpServerStatus = {
+            server: name,
+            status: params.status as CodexMcpServerStatus["status"],
+            ...(typeof params.error === "string" ? { error: redactSecretValues(params.error, values) } : {}),
+          };
+          if (status.status === "failed") logger.warn("an MCP server failed to start", { ...status });
+          else logger.debug("MCP server status", { ...status });
+          opts.onMcpServerStatus?.(status);
         }
         if (conn !== c) return;
         try {
@@ -1650,11 +1728,41 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
     const config = await c.client.request("config/read", { includeLayers: true, cwd: opts.cwd });
     const requirements = await c.client.request("configRequirements/read", undefined);
     const hooks = await c.client.request("hooks/list", thread ? { threadId: thread } : { cwds: [opts.cwd] });
+    let verified: CodexVerifiedConfig;
     try {
-      return codexConfigCheck(agent.id, opts.thread, { config, requirements, hooks }, opts.nativeToolHook?.command);
+      verified = codexConfigCheck(
+        agent.id,
+        opts.thread,
+        { config, requirements, hooks },
+        opts.nativeToolHook?.command,
+        [...mcpNames],
+      );
     } catch (error) {
       throw configRefusal(error as OrcaError);
     }
+    // On the thread: the MCP servers Codex runs for it are ORCA's only (#1163). One still
+    // starting is not listed yet; its startup report is checked as it comes.
+    if (thread) {
+      const foreign: string[] = [];
+      let cursor: string | null = null;
+      for (let page = 0; ; page++) {
+        const answer: unknown = await c.client.request("mcpServerStatus/list", {
+          threadId: thread,
+          ...(cursor ? { cursor } : {}),
+        });
+        foreign.push(...codexForeignMcpServers(agent.id, answer, mcpNames));
+        const next = (answer as { nextCursor?: unknown }).nextCursor;
+        if (next === null || next === undefined) break;
+        if (typeof next !== "string" || page >= 20)
+          throw new OrcaError("AGENT_PROTOCOL", `agent ${agent.id}: mcpServerStatus/list did not end`, {
+            agentId: agent.id,
+          });
+        cursor = next;
+      }
+      if (foreign.length) throw codexForeignMcpServer(agent.id, [...new Set(foreign)]);
+    }
+    if (c.foreignMcp) throw codexForeignMcpServer(agent.id, c.foreignMcp);
+    return verified;
   };
   const recordConfig = (verified: CodexVerifiedConfig) => {
     logger.info("Codex's effective config verified", { ...verified });
@@ -1667,6 +1775,8 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
       await c.client.request("thread/resume", {
         threadId: want,
         ...policyParams(),
+        // Servers run per thread: a resumed thread is given ORCA's again (#1163).
+        ...(c.mcpServers ? { config: { mcp_servers: c.mcpServers } } : {}),
         ...(model ? { model } : {}),
         excludeTurns: true,
       }),
@@ -1730,6 +1840,11 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
       const params: ThreadStartParams = {
         ...startPolicy,
         ...(agent.defaultModel ? { model: agent.defaultModel } : {}),
+        // ORCA's MCP servers, in the request and never on the command line: their environment
+        // can carry secrets (#1163).
+        ...(conn.mcpServers
+          ? { config: { mcp_servers: conn.mcpServers } as NonNullable<ThreadStartParams["config"]> }
+          : {}),
       };
       if (conn.foreignEnvironment) throw foreignEnvironmentRefusal();
       opened = acceptThread("thread/start", await conn.client.request("thread/start", params));
@@ -1759,6 +1874,7 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
   // From here to the session's publication nothing is awaited: this is the last fence for an
   // environment connection Codex reported during the open, the account re-reads included.
   if (conn.foreignEnvironment) return refuseOpen(foreignEnvironmentRefusal());
+  if (conn.foreignMcp) return refuseOpen(codexForeignMcpServer(agent.id, conn.foreignMcp));
   opts.onSessionContinuity?.(continuity);
   recordConfig(verified);
   sessionAccount.identity = conn.account;
@@ -1890,6 +2006,7 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
       await checkAccount(c);
       while (c.accountUpdated) await checkAccount(c);
       if (c.foreignEnvironment) refused(configRefusal(foreignEnvironmentRefusal()));
+      if (c.foreignMcp) refused(codexForeignMcpServer(agent.id, c.foreignMcp));
       const late = stopped();
       if (late) throw late;
       conn = c;
@@ -2009,6 +2126,7 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
             turnIdKnown,
             knowTurnId,
             fileChanges: new Map(),
+            mcpCalls: new Map(),
           };
         });
         /** turn/start's outcome is unknown: Codex may be running the turn, so the session stops. */
