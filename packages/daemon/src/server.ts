@@ -66,6 +66,7 @@ import { directAdmissionAuthority } from "./admission-retry.js";
 import { holds, type Principal } from "./auth/principal.js";
 import type { JudgeBudgetInspection } from "./judge-budget.js";
 import { judgeKeyStatus, judgeStatus } from "./judge-status.js";
+import { remotesModel, type RemotesSource } from "./delegation/remotes-model.js";
 import type { JudgeKeyState } from "@orca/protocol";
 import {
   HostResourceReadModel,
@@ -96,6 +97,11 @@ export interface DaemonOptions extends MethodContext {
     /** The key check (`judgeKeyStatus` by default); tests inject one to count probes. */
     key?: (config: Pick<OrcaConfig, "review" | "secrets" | "hosts"> | undefined) => Promise<JudgeKeyState>;
   };
+  /**
+   * `remotes.list` and `remotes.enroll` (#1206): enrollment of delegation remotes by this daemon.
+   * Given only by a daemon that may write its workspace (never `--read-only`).
+   */
+  remotesSource?: RemotesSource;
   /** Installed protected evidence reader; never a callback that attaches execution. */
   admissionExecutionSource?: ((runId: string) => Promise<AdmissionExecutionView | undefined>) | undefined;
   /** Actual protected runtime and registered retry services; never a placeholder capability. */
@@ -753,6 +759,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
       });
     };
   }
+  if (opts.remotesSource) ctx.remotes = remotesModel(opts.remotesSource);
   if (opts.hostResourceSource && identity && auth.mode === "token") {
     const resources = new HostResourceReadModel(identity, opts.hostResourceSource);
     ctx.hostResourceRead = (params, invocation) => {

@@ -1219,6 +1219,20 @@ async function serveDaemon(ctx: CommandContext, installedPluginRelease?: Install
       config: () => app.generations.effectiveConfig(),
       budget: () => inspectJudgeBudget({ storeDir, workspaceId }),
     },
+    // Delegation remotes enrolled by this daemon (#1206): the route a workspace the desktop app
+    // set up in first-run admits, since its fence refuses `orca remote enroll`. Only a daemon
+    // that may write its workspace offers it, and only while it holds that workspace's fence.
+    ...(readOnly
+      ? {}
+      : {
+          remotesSource: {
+            configDir: app.configDir,
+            config: () => app.generations.current.snapshot.config,
+            receiptsDir: resolvePath(storeDir, "delegations"),
+            principal: async () => `delegate-${workspaceId}`,
+            admitted: () => app.firstRunWriter?.check() ?? true,
+          },
+        }),
     admissionExecutionSource: async (runId) => {
       const status = await readAdmissionExecutionStatus(app.orchestrator.stores, runId);
       switch (status.state) {

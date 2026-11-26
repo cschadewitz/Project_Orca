@@ -52,6 +52,7 @@ import { DraftBar } from "./draft-bar.js";
 import { PermissionsView } from "./permissions-view.js";
 import { JudgeSetup } from "./judge-setup.js";
 import { PreferencesSection } from "./preferences-section.js";
+import { RemotesSection } from "./remotes-section.js";
 import { StorageSection } from "./storage-section.js";
 import { RawView } from "./raw-view.js";
 import { agentPolicies, buildSections, fieldPaths, patchFrom, placeErrors } from "./config-model.js";
@@ -273,6 +274,7 @@ function LegacyConfigSurface({ connection, open }: ConfigSurfaceProps): JSX.Elem
             autoFocus={open === "permissions"}
           />
 
+          <RemotesSection />
           <StorageSection />
           <PreferencesSection surfaces={SURFACES.map((surface) => ({ id: surface.id, label: surface.label }))} />
 
