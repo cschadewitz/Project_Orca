@@ -29,6 +29,21 @@ Pending entries live in [`changelog.d/`](changelog.d/), one file per entry; prep
 release renders them into a dated section below. Run `node tools/release.js notes --unreleased`
 to read them as they stand.
 
+## 0.8.0 - 2026-11-26
+
+### Store format
+
+No change.
+
+### Changed
+
+#### release
+
+- 0.8.0 is the final of the 0.8.0 release candidates and changes no code
+  since 0.8.0-rc.3; the 0.8.0-rc.1, rc.2 and rc.3 sections below list what 0.8 brings.
+  Until #1206 is fixed, delegating work to another machine needs a parent workspace set up
+  with the `orca` command line (`docs/MULTI-MACHINE.md`).
+
 ## 0.8.0-rc.3 - 2026-11-26
 
 ### Store format
