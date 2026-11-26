@@ -23,6 +23,7 @@ import { DependencyGraph } from "./dependency-graph.js";
 import { DEPENDENCY_KINDS, type DepEdge, type DepNode, type DependencyKind, type GraphFilters } from "./graph-model.js";
 import { classificationMark, workItemStatusMark } from "./plan-model.js";
 import type { DependenciesState } from "./use-dependencies.js";
+import { NoDaemonView } from "../first-run/no-daemon-view.js";
 
 export interface DepsModeProps {
   state: DependenciesState;
@@ -56,12 +57,7 @@ export function DepsMode(props: DepsModeProps): JSX.Element {
           action={{ label: "Try again", onClick: onRetry }}
         />
       ) : (
-        <StateView
-          kind="disconnected"
-          title="No daemon to read the dependencies from"
-          body="Start one with orca serve, then try again."
-          action={{ label: "Try again", onClick: onRetry }}
-        />
+        <NoDaemonView title="No daemon to read the dependencies from" onRetry={onRetry} />
       );
     }
     if (props.nodes.length === 0) {

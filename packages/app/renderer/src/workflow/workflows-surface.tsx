@@ -21,6 +21,7 @@ import { useNotifications } from "../notifications-context.js";
 import { workflowEditUrl, workflowUrl } from "../route-table.js";
 import { Button, StateView, Text, counted, textClass, type Crumb } from "../ui/index.js";
 import "./workflow.css";
+import { NoDaemonView } from "../first-run/no-daemon-view.js";
 
 export interface WorkflowsSurfaceProps {
   connection: ConnectionState;
@@ -113,12 +114,7 @@ export function WorkflowsSurface({ connection, onOpen, onHeader }: WorkflowsSurf
         action={{ label: "Try again", onClick: reload }}
       />
     ) : (
-      <StateView
-        kind="disconnected"
-        title="No daemon to list workflows from"
-        body="Start one with orca serve, then try again."
-        action={{ label: "Try again", onClick: reload }}
-      />
+      <NoDaemonView title="No daemon to list workflows from" onRetry={reload} />
     );
   if (state.workflows.length === 0)
     return (

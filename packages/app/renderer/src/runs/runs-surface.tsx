@@ -65,6 +65,7 @@ import { useBoardRecovery } from "./board/use-board-recovery.js";
 import { useRunBoard } from "./board/use-run-board.js";
 import { boardRuns } from "./board/board-model.js";
 import "./runs.css";
+import { NoDaemonView } from "../first-run/no-daemon-view.js";
 
 export interface RunsSurfaceProps {
   /** Whether the daemon is answering. A list nobody is updating says so rather than lying. */
@@ -627,14 +628,7 @@ function TreeBody(props: TreeBodyProps): JSX.Element {
         action={{ label: "Try again", onClick: onRetry }}
       />
     ) : (
-      <StateView
-        kind="disconnected"
-        title="No daemon to read runs from"
-        /* No backticks: `StateView`'s body is one type style, so markup for mono would
-           render as the characters themselves. */
-        body="Start one with orca serve, then try again."
-        action={{ label: "Try again", onClick: onRetry }}
-      />
+      <NoDaemonView title="No daemon to read runs from" onRetry={onRetry} />
     );
   }
 
