@@ -406,12 +406,16 @@ class PushedCosignTests(unittest.TestCase):
             self.source.cosign()
         self.assertEqual(list((self.tmp / "root" / "tools").glob("cosign-*")), [])
 
-    def test_refuses_a_symlinked_pushed_cosign_by_downloading_instead(self):
+    def test_refuses_a_missing_or_symlinked_pushed_cosign_without_trying_the_network(self):
+        # Offline means offline: no download is attempted (`download` here would fail the test).
+        self.source.pushed = self.pushed
+        with self.assertRaisesRegex(RuntimeError, "Pushed cosign is missing"):
+            self.source.cosign()
         (self.tmp / "elsewhere").write_bytes(self.binary)
         (self.pushed / "cosign-linux-amd64").symlink_to(self.tmp / "elsewhere")
-        self.source.pushed = self.pushed
-        with self.assertRaisesRegex(AssertionError, "downloaded although"):
+        with self.assertRaisesRegex(RuntimeError, "Pushed cosign is missing"):
             self.source.cosign()
+        self.assertEqual(list((self.tmp / "root" / "tools").glob("cosign-*")), [])
 
 
 if __name__ == "__main__":

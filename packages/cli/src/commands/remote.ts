@@ -21,11 +21,12 @@
  * dials that node's current address, a Tailscale SSH check-mode login prints its approval link,
  * and the host keys the tailnet advertises are what ssh checks the server against (#1227).
  * `--push-bundle` carries the signed bundle from this computer for a host with no internet
- * access (#1234).
+ * access (#1234). `orca remote push-repo` puts a repository on such a server from this computer,
+ * through the host key `remote add` pinned (#1235).
  */
-import { existsSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { OrcaError } from "@orca/core";
 import { ConnectionProfileSchema, profileIdFor, SshTunnel } from "@orca/protocol/remote-access";
@@ -57,6 +58,16 @@ import {
   type TailnetPeer,
 } from "@orca/protocol/tailnet";
 import { dropCourier, prepareCourier, pushCourier, type CourierFetch } from "@orca/protocol/server-courier";
+import {
+  bundleRepository,
+  localGit,
+  pushRepository,
+  refsToPush,
+  repositoryName,
+  RepositoryRefused,
+  workspaceSnippet,
+  type LocalGit,
+} from "@orca/protocol/server-repository";
 import { readOrcaVersion } from "../version.js";
 import type { CommandContext } from "./index.js";
 import { remoteEnrollCommand } from "./remote-enroll.js";
@@ -102,15 +113,18 @@ export async function remoteCommand(
     tailnet?: ReadTailnetOptions;
     courierFetch?: CourierFetch;
     cacheDir?: string;
+    /** Test seam for `push-repo`: git on this computer. */
+    git?: LocalGit;
   } = {},
 ): Promise<number> {
   // `orca remote enroll <id>` (#883): delegation's one-time trust step for a configured remote.
   if (ctx.positionals[0] === "enroll") return remoteEnrollCommand(ctx);
   const [sub, destination, ...extra] = ctx.positionals;
+  if (sub === "push-repo" && destination && !extra.length) return pushRepoCommand(ctx, destination, deps);
   if (sub !== "add" || !destination || extra.length)
     throw new OrcaError(
       "CONFIG_INVALID",
-      "usage: orca remote add [user@]host [--tailnet] [--ssh-port N] [--identity FILE] [--port N] [--push-bundle] [--confirm CODE], or orca remote enroll <id> [--host-key SHA256:... | --tailnet]",
+      "usage: orca remote add [user@]host [--tailnet] [--ssh-port N] [--identity FILE] [--port N] [--push-bundle] [--confirm CODE], orca remote push-repo [user@]host [--tailnet] [--repo DIR] [--name NAME] [--ref REF]..., or orca remote enroll <id> [--host-key SHA256:... | --tailnet]",
     );
   const scripts = deps.scripts ?? setupScripts();
   if (!scripts)
@@ -118,44 +132,13 @@ export async function remoteCommand(
       "CONFIG_INVALID",
       "orca remote add runs from a source checkout; in the desktop app, use Add a machine in the connection dialog.",
     );
-  const sshPort = port(ctx.flags["ssh-port"], "--ssh-port");
-  const daemonPort = port(ctx.flags.port, "--port") ?? 6722;
-  const identity = ctx.flags.identity;
-  if (identity !== undefined && typeof identity !== "string")
-    throw new OrcaError("CONFIG_INVALID", "--identity takes a key file");
-  if ((ctx.flags.tailnet || ctx.flags["push-bundle"]) && !tailnetEnabled(deps.tailnet?.features))
+  if (ctx.flags["push-bundle"] && !tailnetEnabled(deps.tailnet?.features))
     throw new OrcaError("CONFIG_INVALID", "--tailnet and --push-bundle are not available in this build.");
-  const peer = ctx.flags.tailnet ? await tailnetPeer(ctx, destination, deps.tailnet) : undefined;
-  const at = destination.lastIndexOf("@");
-  const user = at < 0 ? "" : destination.slice(0, at + 1);
-  const parsed = ConnectionProfileSchema.safeParse({
-    id: profileIdFor(peer ? peer.dnsName.split(".")[0]! : destination, new Set()),
-    name: peer ? peer.dnsName : destination,
-    destination: peer ? `${user}${peer.dnsName}` : destination,
-    ...(peer ? { tailnet: bindingFor(peer) } : {}),
-    remotePort: daemonPort,
-    ...(sshPort ? { sshPort } : {}),
-    ...(identity ? { identityFile: identity } : {}),
-  });
-  if (!parsed.success) throw new OrcaError("CONFIG_INVALID", parsed.error.issues[0]?.message ?? "Invalid destination");
-  const profile = parsed.data;
+  const { profile, peer, base } = await profileFor(ctx, destination, deps);
   const version = deps.version ?? ORCA_VERSION;
   const confirm = ctx.flags.confirm;
   if (confirm !== undefined && typeof confirm !== "string")
     throw new OrcaError("CONFIG_INVALID", "--confirm takes the code the first run printed");
-  const base = {
-    profile,
-    knownHostsFile: join(pinsDir(), profile.id),
-    ...(profile.tailnet ? { resolveHost: tailnetHostResolver(profile.tailnet, deps.tailnet) } : {}),
-    // Only for a machine on the tailnet, and only a page on its control plane (#1228).
-    ...(profile.tailnet
-      ? {
-          onLoginApproval: (url: string) =>
-            ctx.err(`Tailscale asks you to approve this login. Open this page, then wait here: ${url}`),
-          approvalOrigins: tailnetLoginOrigins(),
-        }
-      : {}),
-  };
   const make = deps.tunnel ?? ((options: ConstructorParameters<typeof SshTunnel>[0]) => new SshTunnel(options));
   const program = setupProgram(scripts);
 
@@ -260,6 +243,121 @@ export async function remoteCommand(
     await tunnel.close();
   }
   return finish(ctx, destination, outcome);
+}
+
+type RemoteDeps = NonNullable<Parameters<typeof remoteCommand>[1]>;
+
+/**
+ * The profile a destination names, as `remote add` and `push-repo` both build it: the same id,
+ * so the same pin file. With `--tailnet`, bound to the node and dialled at its current address.
+ */
+async function profileFor(ctx: CommandContext, destination: string, deps: RemoteDeps) {
+  const sshPort = port(ctx.flags["ssh-port"], "--ssh-port");
+  const daemonPort = port(ctx.flags.port, "--port") ?? 6722;
+  const identity = ctx.flags.identity;
+  if (identity !== undefined && typeof identity !== "string")
+    throw new OrcaError("CONFIG_INVALID", "--identity takes a key file");
+  if (ctx.flags.tailnet && !tailnetEnabled(deps.tailnet?.features))
+    throw new OrcaError("CONFIG_INVALID", "--tailnet and --push-bundle are not available in this build.");
+  const peer = ctx.flags.tailnet ? await tailnetPeer(ctx, destination, deps.tailnet) : undefined;
+  const at = destination.lastIndexOf("@");
+  const user = at < 0 ? "" : destination.slice(0, at + 1);
+  const parsed = ConnectionProfileSchema.safeParse({
+    id: profileIdFor(peer ? peer.dnsName.split(".")[0]! : destination, new Set()),
+    name: peer ? peer.dnsName : destination,
+    destination: peer ? `${user}${peer.dnsName}` : destination,
+    ...(peer ? { tailnet: bindingFor(peer) } : {}),
+    remotePort: daemonPort,
+    ...(sshPort ? { sshPort } : {}),
+    ...(identity ? { identityFile: identity } : {}),
+  });
+  if (!parsed.success) throw new OrcaError("CONFIG_INVALID", parsed.error.issues[0]?.message ?? "Invalid destination");
+  const profile = parsed.data;
+  const base = {
+    profile,
+    knownHostsFile: join(pinsDir(), profile.id),
+    ...(profile.tailnet ? { resolveHost: tailnetHostResolver(profile.tailnet, deps.tailnet) } : {}),
+    // Only for a machine on the tailnet, and only a page on its control plane (#1228).
+    ...(profile.tailnet
+      ? {
+          onLoginApproval: (url: string) =>
+            ctx.err(`Tailscale asks you to approve this login. Open this page, then wait here: ${url}`),
+          approvalOrigins: tailnetLoginOrigins(),
+        }
+      : {}),
+  };
+  return { profile, peer, base };
+}
+
+/**
+ * `orca remote push-repo [user@]host` (#1235): put this repository's current branch (or each
+ * `--ref`) on a server `remote add` set up, over its pinned ssh only. The host needs no git
+ * credentials; it fetches from a bundle this computer carries. Prints the workspace settings
+ * that point the server's daemon at the checkout.
+ */
+async function pushRepoCommand(ctx: CommandContext, destination: string, deps: RemoteDeps): Promise<number> {
+  if (!tailnetEnabled(deps.tailnet?.features))
+    throw new OrcaError("CONFIG_INVALID", "orca remote push-repo is not available in this build.");
+  const repoFlag = ctx.flags.repo;
+  if (repoFlag !== undefined && typeof repoFlag !== "string")
+    throw new OrcaError("CONFIG_INVALID", "--repo takes a directory");
+  const nameFlag = ctx.flags.name;
+  if (nameFlag !== undefined && typeof nameFlag !== "string")
+    throw new OrcaError("CONFIG_INVALID", "--name takes a name");
+  const refFlag = ctx.flags.ref;
+  const requested = refFlag === undefined ? [] : Array.isArray(refFlag) ? refFlag.map(String) : [String(refFlag)];
+  const git = deps.git ?? localGit;
+  const repo = resolve(ctx.cwd, repoFlag ?? ".");
+  const top = await git(["rev-parse", "--show-toplevel"], repo);
+  if (top.code !== 0) throw new OrcaError("CONFIG_INVALID", `${repo} is not in a git repository.`);
+  const worktree = top.stdout.trim();
+  try {
+    const name = repositoryName(nameFlag ?? basename(worktree));
+    const refs = await refsToPush(git, worktree, requested);
+    const { base } = await profileFor(ctx, destination, deps);
+    // Only through a host key `remote add` already pinned: a push never trusts a key on first use.
+    const make = deps.tunnel ?? ((options: ConstructorParameters<typeof SshTunnel>[0]) => new SshTunnel(options));
+    const tunnel = make({ ...base, pinnedOnly: true });
+    ctx.err(`Bundling ${refs.join(", ")}.`);
+    const bundle = await bundleRepository(git, worktree, refs);
+    try {
+      await tunnel.open();
+      ctx.err(`Copying it to ${destination}.`);
+      const pushed = await pushRepository(
+        {
+          exec: (command, timeoutMs) => tunnel.exec(command, timeoutMs),
+          upload: (path, remotePath, timeoutMs) => {
+            if (!tunnel.upload)
+              throw new OrcaError("CONFIG_INVALID", "This connection cannot copy files to the server.");
+            return tunnel.upload(path, remotePath, timeoutMs);
+          },
+        },
+        bundle,
+        { name, refs },
+      );
+      if (ctx.flags.json) ctx.out(JSON.stringify(pushed));
+      else {
+        ctx.out(`Pushed ${refs.join(", ")} to ${pushed.hub}.`);
+        ctx.out(
+          pushed.checkoutState.kind === "kept"
+            ? `The checkout ${pushed.checkout} was left as it was: ${pushed.checkoutState.reason}.`
+            : `Checkout: ${pushed.checkout} (${pushed.checkoutState.kind}).`,
+        );
+        const snippet = workspaceSnippet(pushed);
+        if (snippet) {
+          ctx.out("To work there, set this in the server's orca.config.yaml, then apply it:");
+          ctx.out(snippet);
+        } else ctx.err(`There is no checkout of ${pushed.hub} to work in yet. Fix the above, then push again.`);
+      }
+      return workspaceSnippet(pushed) ? 0 : 1;
+    } finally {
+      rmSync(bundle.dir, { recursive: true, force: true });
+      await tunnel.close();
+    }
+  } catch (error) {
+    if (error instanceof RepositoryRefused) throw new OrcaError("CONFIG_INVALID", error.message);
+    throw error;
+  }
 }
 
 /** Where the CLI caches what it carries to servers (#1234). */

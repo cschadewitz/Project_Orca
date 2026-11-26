@@ -583,9 +583,10 @@ class BundleSource:
             pushed_dir = getattr(self, "pushed", None)
             pushed = pushed_dir / name if pushed_dir is not None else None
             try:
-                if pushed is not None and not pushed.is_symlink() and pushed.is_file():
-                    if pushed.stat().st_size > 256 << 20:
-                        raise RuntimeError("Pushed cosign exceeds its size limit")
+                if pushed is not None:
+                    # Offline: the carried cosign or nothing. The network is never tried.
+                    if pushed.is_symlink() or not pushed.is_file() or pushed.stat().st_size > 256 << 20:
+                        raise RuntimeError("Pushed cosign is missing, or not a regular file within its size limit")
                     shutil.copyfile(pushed, partial)
                     if file_sha256(partial) != digest:
                         raise RuntimeError("Pushed cosign does not match its pinned digest")

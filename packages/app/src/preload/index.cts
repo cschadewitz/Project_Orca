@@ -264,8 +264,10 @@ const bridge: OrcaBridge = {
         ipcRenderer.invoke("orca:profiles.useAutomaticSignIn", id) as Promise<ProfileResult<RemoteProfileView>>,
       inspectServer: (id) =>
         ipcRenderer.invoke("orca:profiles.inspectServer", id) as Promise<ProfileResult<ServerInspectionResultView>>,
-      setUpServer: (id, confirmation) =>
-        ipcRenderer.invoke("orca:profiles.setUpServer", id, confirmation) as Promise<ProfileResult<ServerSetupView>>,
+      setUpServer: (id, confirmation, options) =>
+        ipcRenderer.invoke("orca:profiles.setUpServer", id, confirmation, options) as Promise<
+          ProfileResult<ServerSetupView>
+        >,
       tailnetMachines: () =>
         ipcRenderer.invoke("orca:profiles.tailnetMachines") as Promise<ProfileResult<TailnetMachinesView>>,
       onLoginApproval: (listener) => {

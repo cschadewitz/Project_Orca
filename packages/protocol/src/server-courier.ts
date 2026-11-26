@@ -240,7 +240,7 @@ async function trustedRootFile(cacheDir: string, get: CourierFetch): Promise<Cou
   // The host would refuse any other: say so here, before anything is carried.
   if (!TRUSTED_ROOT_PINS.includes(digest))
     throw new CourierRefused(
-      "Sigstore lists a trusted root this version of ORCA does not pin yet. Update ORCA, or set the machine up with internet access.",
+      "Sigstore lists a trusted root this version of ORCA does not pin yet, so the bundle cannot be carried. Update ORCA, or set the machine up so that it downloads the bundle itself (it needs internet access).",
     );
   const file = await cached(join(cacheDir, "sigstore"), TRUSTED_ROOT_FILE, digest, async () => {
     const data = await get(`${SIGSTORE_TUF}/targets/${digest}.${TRUSTED_ROOT_FILE}`, LIMITS.trustedRoot);

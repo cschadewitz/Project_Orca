@@ -192,7 +192,7 @@ export function ConnectionProfiles({
   const [steps, setSteps] = useState<ServerSetupStepView[]>([]);
   /** What the server was found to be, waiting for the person to confirm the setup. */
   const [confirming, setConfirming] = useState<{
-    profile: Pick<RemoteProfileView, "id" | "name" | "destination">;
+    profile: Pick<RemoteProfileView, "id" | "name" | "destination" | "tailnet">;
     inspection: ServerInspectionView;
   }>();
   /** The editor was opened by "Add a machine": saving it also sets the server up. */
@@ -244,7 +244,7 @@ export function ConnectionProfiles({
     else setNotice(summary.text);
   };
   /** First, read only: what the person confirms. Nothing is enrolled or installed yet. */
-  const setUp = (profile: Pick<RemoteProfileView, "id" | "name" | "destination">) => {
+  const setUp = (profile: Pick<RemoteProfileView, "id" | "name" | "destination" | "tailnet">) => {
     if (!inspectServer || !setUpServer) return;
     setConfirming(undefined);
     setSteps([]);
@@ -256,14 +256,17 @@ export function ConnectionProfiles({
       },
     );
   };
-  const confirmSetUp = () => {
+  const confirmSetUp = (carryBundle: boolean) => {
     if (!setUpServer || !confirming) return;
     const { profile, inspection } = confirming;
     setConfirming(undefined);
     setSettingUp(profile.id);
     setSteps([]);
     void run(
-      () => setUpServer(profile.id, inspection.confirmation),
+      () =>
+        profile.tailnet
+          ? setUpServer(profile.id, inspection.confirmation, { carryBundle })
+          : setUpServer(profile.id, inspection.confirmation),
       (view) => report(profile, view),
     ).finally(() => live.current && setSettingUp(undefined));
   };
@@ -484,6 +487,7 @@ export function ConnectionProfiles({
         <ServerConfirmation
           inspection={confirming.inspection}
           name={confirming.profile.name}
+          carries={confirming.profile.tailnet !== undefined}
           disabled={disabled}
           confirm={confirmSetUp}
           cancel={() => setConfirming(undefined)}
@@ -545,17 +549,21 @@ export function ConnectionProfiles({
 function ServerConfirmation({
   inspection,
   name,
+  carries,
   disabled,
   confirm,
   cancel,
 }: {
   inspection: ServerInspectionView;
   name: string;
+  /** A machine on the tailnet: this computer can carry the bundle to it (#1234). */
+  carries: boolean;
   disabled: boolean;
-  confirm(this: void): void;
+  confirm(this: void, carryBundle: boolean): void;
   cancel(this: void): void;
 }): JSX.Element {
   const { fingerprints } = inspection;
+  const [carry, setCarry] = useState(true);
   return (
     <div className="orca-connection-stack" role="group" aria-label="Confirm server setup">
       <Text style="label-strong" as="p">
@@ -592,11 +600,31 @@ function ServerConfirmation({
         , enable and start its systemd user service (with lingering, so it runs without a login), then sign this
         computer in.
       </Text>
+      {carries && (
+        <ConfigField
+          label="Bundle"
+          path="setup.carryBundle"
+          help="For a machine with no internet access. Turn this off to have the machine download and verify the bundle itself, for example when this computer says it does not trust Sigstore's current root yet."
+        >
+          {(control) => (
+            <label className={textClass("caption")}>
+              <input
+                {...control}
+                type="checkbox"
+                checked={carry}
+                disabled={disabled}
+                onChange={(event) => setCarry(event.target.checked)}
+              />
+              Copy the signed bundle from this computer
+            </label>
+          )}
+        </ConfigField>
+      )}
       <div className="orca-dialog__actions">
         <Button size="sm" onClick={cancel}>
           Cancel
         </Button>
-        <Button size="sm" tone="primary" disabled={disabled} onClick={confirm}>
+        <Button size="sm" tone="primary" disabled={disabled} onClick={() => confirm(carries && carry)}>
           Set up
         </Button>
       </div>

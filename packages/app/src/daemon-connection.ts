@@ -174,7 +174,16 @@ export interface RemoteProfilesBridge {
    * Make the profile's machine a managed ORCA server, or verify and repair it (#881), then sign
    * in, exactly as confirmed (`inspectServer`'s confirmation, used once). Runs for minutes.
    */
-  setUpServer?(this: void, id: string, confirmation: string): Promise<ProfileResult<ServerSetupView>>;
+  setUpServer?(
+    this: void,
+    id: string,
+    confirmation: string,
+    /**
+     * `carryBundle: false`: a machine on the tailnet fetches and verifies the bundle itself instead
+     * of this computer carrying it (#1234). Ignored for any other profile.
+     */
+    options?: { carryBundle?: boolean },
+  ): Promise<ProfileResult<ServerSetupView>>;
   /** The machines on this computer's tailnet (#1226). `off` unless the `tailnet-hosts` flag is on. */
   tailnetMachines?(this: void): Promise<ProfileResult<TailnetMachinesView>>;
   /** Tailscale SSH waits for the person to approve a connection (#1228). */
