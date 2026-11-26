@@ -55,14 +55,13 @@ async function fakeDaemon(handlers, respond) {
       const message = JSON.parse(body);
       calls.push({ method: message.method, params: message.params, auth: req.headers.authorization });
       const handler = table.get(message.method);
+      const result = typeof handler === "function" ? handler(message.params, calls) : (handler ?? {});
       res.setHeader("content-type", "application/json");
-      try {
-        const result = typeof handler === "function" ? handler(message.params, calls) : (handler ?? {});
-        res.end(JSON.stringify({ kind: "response", id: message.id, ok: true, result }));
-      } catch (error) {
-        // A handler that throws `{ code, message }` answers as the daemon refuses a request.
-        res.end(JSON.stringify({ kind: "response", id: message.id, ok: false, error }));
-      }
+      // A handler that returns `{ refuse: { code, message } }` answers as the daemon refuses a request.
+      const answer = result?.refuse
+        ? { kind: "response", id: message.id, ok: false, error: result.refuse }
+        : { kind: "response", id: message.id, ok: true, result };
+      res.end(JSON.stringify(answer));
     });
   });
   await new Promise((done) => server.listen(0, "127.0.0.1", done));
@@ -208,7 +207,8 @@ it("sends a submission the store refused under contention again, with the same k
   const handlers = {
     "config.get": { config: { path: join(selected, "orca.config.yaml") } },
     "requests.submit": () => {
-      if (refusals-- > 0) throw { code: "STORE_LOCK_TIMEOUT", message: "lock catalog.lock still held after 100ms" };
+      if (refusals-- > 0)
+        return { refuse: { code: "STORE_LOCK_TIMEOUT", message: "lock catalog.lock still held after 100ms" } };
       n++;
       return { state: "accepted", admissionId: `adm-${n}`, requestId: `req-${n}`, runId: `run-${n}` };
     },
@@ -233,9 +233,7 @@ it("sends a submission the store refused under contention again, with the same k
   const refusing = await fakeDaemon({
     ...handlers,
     "config.get": { config: { path: join(other, "orca.config.yaml") } },
-    "requests.submit": () => {
-      throw { code: "RUN_STATE", message: "no" };
-    },
+    "requests.submit": () => ({ refuse: { code: "RUN_STATE", message: "no" } }),
   });
   const failed = await seed(["--workspace", other, "--url", refusing.url, "--phase", "populate", "--settle", "11"]);
   expect(failed.code).not.toBe(0);
