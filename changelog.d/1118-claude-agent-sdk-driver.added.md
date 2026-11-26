@@ -1,0 +1,1 @@
+- **agents:** `driver: claude-agent-sdk` for a Claude agent (#1118, in progress): ORCA checks the person's own installed `claude` and their own `claude auth login` before a session, takes no Claude or Anthropic credential from the daemon's environment, and refuses the session until the SDK session driver lands (#1120).

@@ -507,6 +507,23 @@ the agent is told `cancelled` and the *tool call* fails while the run carries on
 `agent.permission` event records which it was (`ask:allow`, `ask:deny`, `ask:cancelled`,
 `ask:no-answerer`).
 
+#### Claude through the Claude Agent SDK (`driver: claude-agent-sdk`, in progress, refused for now)
+
+A second way to run Claude (#1118, tracking #1153), on the `feature/claude-agent-sdk` branch
+only: ORCA drives the Claude Agent SDK itself against your own installed, unmodified `claude`,
+signed in with your own `claude auth login`. ORCA offers no login and never reads Claude's
+credentials. Setup and limits: [docs/agents/claude-agent-sdk.md](agents/claude-agent-sdk.md).
+
+```yaml
+  - id: claude
+    driver: claude-agent-sdk
+    # command: /path/to/claude   # optional; `claude` on PATH when left out
+```
+
+ORCA checks the executable and the login before anything starts, then **refuses the session**:
+the session driver itself is the next slice (#1120). Leave `driver` out to run Claude over ACP
+as before.
+
 ## Completion policies (agent steps)
 
 - `mode: turn-end` (default): wait for the agent's prompt turn to finish, then collect.
