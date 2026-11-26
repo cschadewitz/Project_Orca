@@ -30,3 +30,4 @@ export * from "./agent-profiles/index.js";
 export * from "./judged-lane.js";
 export * from "./owned-fs-io.js";
 export * from "./claude-sdk/session.js";
+export * from "./claude-sdk/config-options.js";

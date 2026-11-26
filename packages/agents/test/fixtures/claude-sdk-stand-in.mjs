@@ -25,6 +25,27 @@ if (process.env.STAND_IN_STUBBORN) {
   process.on("SIGTERM", () => undefined);
 }
 
+/** What `set_model` and `apply_flag_settings` changed, reported by the `config` turn. */
+const state = { model: null, effort: null };
+const MODELS = [
+  {
+    value: "default",
+    displayName: "Default (recommended)",
+    description: "the stand-in's default",
+    supportsEffort: true,
+    supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
+  },
+  {
+    value: "sonnet",
+    displayName: "Sonnet\u0007 stand-in",
+    supportsEffort: true,
+    supportedEffortLevels: ["low", "high"],
+  },
+  { value: "old-model", displayName: "Old", description: "x".repeat(500) },
+  { value: "bad id with spaces", displayName: "refused row" },
+  { value: "sonnet", displayName: "duplicate" },
+];
+
 let hookId;
 let nextRequest = 0;
 const pending = new Map();
@@ -127,6 +148,9 @@ async function turn(text) {
     permissionMode: "default",
   });
   switch (word) {
+    case "config":
+      assistant([{ type: "text", text: JSON.stringify(state) }]);
+      return result();
     case "hello":
       assistant([{ type: "thinking", thinking: "thinking about it", signature: "" }]);
       assistant([{ type: "text", text: `you said: ${text}` }]);
@@ -217,7 +241,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
             agents: [],
             output_style: "default",
             available_output_styles: [],
-            models: [],
+            models: MODELS,
             account: {},
             hooks_applied: true,
             hook_on_failure_supported: startup !== "old",
@@ -227,6 +251,19 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       });
     }
     if (req.subtype === "interrupt") interrupted?.();
+    if (req.subtype === "set_model" || req.subtype === "apply_flag_settings") {
+      if (process.env.STAND_IN_REFUSE_CONFIG)
+        return out({
+          type: "control_response",
+          response: {
+            subtype: "error",
+            request_id: m.request_id,
+            error: `${process.env.STAND_IN_REFUSE_CONFIG} refused`,
+          },
+        });
+      if (req.subtype === "set_model") state.model = req.model;
+      else if ("effortLevel" in req.settings) state.effort = req.settings.effortLevel;
+    }
     return out({ type: "control_response", response: { subtype: "success", request_id: m.request_id, response: {} } });
   }
   if (m.type === "user") {

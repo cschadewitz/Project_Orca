@@ -94,7 +94,15 @@ or a turn timeout, interrupts Claude; a turn that has not ended within the agent
 and results, and its to-do list (as a plan) show in the run like any other agent's. Errors name
 what happened, never text Claude printed.
 
-Model and effort choices, and resuming a session, are not there yet (#1120 follow-ups).
+### Model and effort
+
+The session offers the models your Claude Code lists itself (its own aliases such as
+`default`, `sonnet` and `opus`, and full ids) as its `model` option, so a run's model choice
+and the agent's `defaultModel` work as they do for any agent; a model Claude Code does not
+list is refused with the list. A model that takes effort levels also has an `effort` option
+(`default`, `low` … `max`); `default` leaves Claude Code's own choice, and switching to a model
+that does not take the chosen level goes back to `default`. A session starts on Claude Code's
+`default` model. Resuming a session is not there yet.
 
 ## What a session may do, for now
 

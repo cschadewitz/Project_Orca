@@ -12,9 +12,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { OrcaError } from "@orca/core";
+import { OrcaError, configOptionValues } from "@orca/core";
 import {
   claudeContent,
+  claudeModelChoices,
+  claudeSdkConfigOptions,
   openClaudeSdkSession,
   sessionUpdates,
   startupTermination,
@@ -92,7 +94,7 @@ describe.runIf(process.platform !== "win32")("Claude Agent SDK session (#1120)",
     expect(second.stopReason).toBe("end_turn");
     expect(texts(events)).toEqual(["you said: hello there", "you said: hello again"]);
     expect(events.map((e) => e.summary.kind)).toContain("agent_thought_chunk");
-    expect(session.configOptions).toEqual([]);
+    expect(session.configOptions.map((o) => o.id)).toEqual(["model", "effort"]);
     expect(session.promptCapabilities).toEqual({ embeddedContext: false });
 
     const lines = (await readFile(logFile, "utf8"))
@@ -117,6 +119,60 @@ describe.runIf(process.platform !== "win32")("Claude Agent SDK session (#1120)",
     expect((init!.in as { request: Record<string, unknown> }).request).toMatchObject({
       hooks: { PreToolUse: [{ onFailure: "block" }] },
     });
+  });
+
+  it("offers Claude Code's models and effort levels and applies a choice through the SDK", async () => {
+    const session = await open();
+    const events = collect(session);
+    const [model, effort] = session.configOptions;
+    expect(model).toMatchObject({ id: "model", category: "model", type: "select", currentValue: "default" });
+    expect(configOptionValues(model!).map((o) => o.value)).toEqual(["default", "sonnet", "old-model"]);
+    const names = configOptionValues(model!).map((o) => o.name);
+    expect(names[1]).toBe("Sonnet  stand-in"); // control character taken out
+    expect(configOptionValues(model!)[2]!.description!.length).toBeLessThanOrEqual(200);
+    expect(effort).toMatchObject({ id: "effort", category: "thought_level", currentValue: "default" });
+    expect(configOptionValues(effort!).map((o) => o.value)).toEqual([
+      "default",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+    ]);
+
+    // The engine's model selection (#187) goes through the `category: "model"` option.
+    await session.setConfigOption("effort", "max");
+    let options = await session.setConfigOption("model", "sonnet");
+    expect(options[0]!.currentValue).toBe("sonnet");
+    // max is not a sonnet effort here, so it went back to the default.
+    expect(options[1]).toMatchObject({ currentValue: "default" });
+    expect(configOptionValues(options[1]!).map((o) => o.value)).toEqual(["default", "low", "high"]);
+    options = await session.setConfigOption("effort", "high");
+    expect(options[1]!.currentValue).toBe("high");
+    await session.prompt("config");
+    expect(JSON.parse(texts(events).at(-1)!)).toEqual({ model: "sonnet", effort: "high" });
+
+    // A model without effort levels has no effort option; back to default effort.
+    options = await session.setConfigOption("model", "old-model");
+    expect(options.map((o) => o.id)).toEqual(["model"]);
+    await session.prompt("config");
+    expect(JSON.parse(texts(events).at(-1)!)).toEqual({ model: "old-model", effort: null });
+
+    await expect(session.setConfigOption("model", "opus")).rejects.toMatchObject({
+      code: "AGENT_PROTOCOL",
+      details: { available: ["default", "sonnet", "old-model"] },
+    });
+    await expect(session.setConfigOption("effort", "high")).rejects.toThrow(/no such option/);
+    await expect(session.setConfigOption("model", true)).rejects.toThrow(/takes a value from its list/);
+    expect(session.configOptions[0]!.currentValue).toBe("old-model");
+  });
+
+  it("keeps the options as they were when Claude Code refuses a change, with none of its text", async () => {
+    const session = await open({ STAND_IN_REFUSE_CONFIG: SENTINEL });
+    const failure = (await session.setConfigOption("model", "sonnet").catch((x: unknown) => x)) as OrcaError;
+    expect(failure.code).toBe("AGENT_PROTOCOL");
+    expect(failure.message + JSON.stringify(failure.details)).not.toContain(SENTINEL);
+    expect(session.configOptions[0]!.currentValue).toBe("default");
   });
 
   it("gives claude only the environment it was handed, not the daemon's", async () => {
@@ -344,5 +400,25 @@ describe("prompt content and update mapping (#1120)", () => {
       tools,
     );
     expect(stray).toEqual([]);
+  });
+});
+
+describe("model choices (#1120)", () => {
+  it("leaves out rows it cannot offer and caps what it shows", () => {
+    const choices = claudeModelChoices([
+      { value: "a", displayName: "A", supportsEffort: true, supportedEffortLevels: ["high", "turbo"] },
+      { value: "", displayName: "empty" },
+      { value: "x".repeat(200) },
+      { value: "../../etc", displayName: "path" },
+      null,
+      "sonnet",
+      { value: "b", displayName: "‮evil", description: 7 },
+    ]);
+    expect(choices).toEqual([
+      { value: "a", name: "A", efforts: ["high"] },
+      { value: "b", name: "evil", efforts: [] },
+    ]);
+    expect(claudeModelChoices(undefined)).toEqual([]);
+    expect(claudeSdkConfigOptions([], undefined, "default")).toEqual([]);
   });
 });
