@@ -1,7 +1,7 @@
 /** Cross-process mutex directories. Only the remover of an exact owner token may rmdir. */
 import { readFileSync, readlinkSync } from "node:fs";
 import { link, mkdir, open, readdir, readFile, rename, rmdir, stat, unlink, writeFile } from "node:fs/promises";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { hostname } from "node:os";
 import { join } from "node:path";
 import { OrcaError } from "@orca/core";
@@ -60,23 +60,53 @@ function bootTag(): string | null {
   return bootOf(livenessDomain())?.replace(/-/g, "") ?? null;
 }
 
+let machineCache: string | null | undefined;
 /**
- * Whether a lock left on this host was taken in an earlier boot of this machine (#1197). Every
- * process of an earlier boot is gone, so such a holder is dead whatever its pid now names: after
- * a power loss the pid is often reused, by an unrelated process or by the restarted daemon itself.
- *
- * Only positive boot identity counts: the kernel boot ids, recorded in the token (its liveness
- * domain) or in its name, compared with this boot's. A wall-clock comparison would not do — a
- * clock corrected forward moves the computed boot time past a current holder's timestamps — so
- * without boot ids on both sides (any platform but Linux, or a token from before #1197) the
- * answer is always no, and the lock fails closed as before.
+ * This machine, for a token's name: 16 hex digits of a digest of `/etc/machine-id` (the systemd
+ * machine id, stable across boots) and the host name, or null where there is no machine id. A
+ * torn token keeps only its name, and the name is all that can say the holder was this machine.
  */
-function fromEarlierBoot(recorded: { domain?: unknown; token?: string }): boolean {
+export function machineTag(): string | null {
+  if (machineCache !== undefined) return machineCache;
+  if (process.platform !== "linux") return (machineCache = null);
+  try {
+    const id = readFileSync("/etc/machine-id", "utf8").trim();
+    if (!/^[0-9a-f]{32}$/i.test(id)) return (machineCache = null);
+    return (machineCache = createHash("sha256")
+      .update(`${id.toLowerCase()}\n${hostname()}`)
+      .digest("hex")
+      .slice(0, 16));
+  } catch {
+    return (machineCache = null);
+  }
+}
+
+const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+/** `owner.<pid>.<boot>-<machine>-<uuid>.json`: what a token's name alone says about its holder. */
+const NAMED = new RegExp(`^owner\\.\\d+\\.([0-9a-f]{32})-([0-9a-f]{16})-${UUID}\\.json$`);
+
+/**
+ * Whether a holder was this machine in an earlier boot (#1197). Every process of an earlier
+ * boot is gone, so such a holder is dead whatever its pid now names: after a power loss the pid
+ * is often reused, by an unrelated process or by the restarted daemon itself.
+ *
+ * Only positive identity counts. A wall clock proves nothing (corrected forward, it moves the
+ * computed boot time past a live holder's timestamps), and a different boot id alone says only
+ * "not this boot", not "this machine". So: a readable token, whose host the caller has already
+ * matched, by the boot id in its liveness domain; a torn one only by its name, which must carry
+ * both this machine's tag and another boot id. Anything less (another or unknown machine, a
+ * platform without boot ids, a token from before #1197) is no, and the lock fails closed.
+ */
+function fromEarlierBoot(recorded: { domain: unknown } | { token: string }): boolean {
   const ours = bootTag();
   if (!ours) return false;
-  const named = recorded.token ? /^owner\.\d+\.([0-9a-f]{32})-[a-f0-9-]+\.json$/.exec(recorded.token)?.[1] : undefined;
-  const theirs = bootOf(recorded.domain)?.replace(/-/g, "") ?? named;
-  return theirs !== undefined && theirs !== ours;
+  if ("domain" in recorded) {
+    const theirs = bootOf(recorded.domain)?.replace(/-/g, "");
+    return theirs !== undefined && theirs !== ours;
+  }
+  const named = NAMED.exec(recorded.token);
+  const machine = machineTag();
+  return !!named && !!machine && named[2] === machine && named[1] !== ours;
 }
 
 export interface LockHolder {
@@ -102,10 +132,12 @@ export async function withFileLock<T>(
   fn: (stillHeld: () => Promise<void>) => Promise<T>,
   options: FileLockOptions = {},
 ): Promise<T> {
-  // The boot id is in the name as well as the contents: a name survives a power loss that
-  // leaves the contents empty, so a torn token from an earlier boot can still be judged (#1197).
+  // The boot id and this machine's tag are in the name as well as the contents: a name survives
+  // a power loss that leaves the contents empty, so a torn token from an earlier boot of this
+  // machine can still be judged (#1197). Without both, the name is the old one.
   const boot = bootTag();
-  const token = `owner.${process.pid}.${boot ? `${boot}-` : ""}${randomUUID()}.json`;
+  const machine = machineTag();
+  const token = `owner.${process.pid}.${boot && machine ? `${boot}-${machine}-` : ""}${randomUUID()}.json`;
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const deadline = Date.now() + timeoutMs;
   let backoff = 1;
@@ -187,7 +219,7 @@ async function removeDeadOwner(path: string, options: FileLockOptions): Promise<
       raw.pid! <= 0 ||
       !Number.isFinite(raw.at) ||
       // A pid from an earlier boot names nobody we can probe: it is dead, whatever runs under it now.
-      ((options.recovery === "provable" || !fromEarlierBoot(raw)) && processAlive(raw.pid!))
+      ((options.recovery === "provable" || !fromEarlierBoot({ domain: raw.domain })) && processAlive(raw.pid!))
     )
       return false;
     const removed = await removeToken(path, token);

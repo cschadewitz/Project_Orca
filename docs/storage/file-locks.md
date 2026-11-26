@@ -40,12 +40,15 @@ A holder from **an earlier boot of this machine** is dead whatever its pid now n
 after a power loss (#1197) a contender also takes the lock when the token names this host and
 records a different kernel boot than this one, even if its pid has been reused by another
 process or by the restarted daemon itself. The boot is the Linux boot id, recorded in the
-token's liveness domain and, since #1197, in the token's name
-(`owner.<pid>.<boot id>-<uuid>.json`). The name survives a power loss that leaves the token's
-contents empty, so a torn token from an earlier boot is cleared too. Only positive boot identity
+token's liveness domain. Since #1197 the token's name also records it, with a tag for this
+machine (a digest of `/etc/machine-id` and the hostname):
+`owner.<pid>.<boot id>-<machine tag>-<uuid>.json`. The name survives a power loss that leaves
+the token's contents empty, so a torn token is cleared when its name records **this machine**
+in another boot. One whose name names another machine, or no machine, is not: a different boot
+id alone says only that the holder was not this boot. Only positive boot identity
 counts: wall-clock timestamps are never compared with the boot time, because a clock corrected
 forward would make a live holder look older than the boot. So an empty lock directory, a torn
-token whose name records no boot, and any lock on a platform without boot ids still fail
+token whose name does not record this machine and another boot, and any lock on a platform without boot ids still fail
 closed. Locks taken with `recovery: "provable"` (the config file's lock) keep the stricter rule
 and are never cleared this way.
 

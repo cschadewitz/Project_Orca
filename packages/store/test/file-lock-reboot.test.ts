@@ -9,14 +9,16 @@ import { mkdir, mkdtemp, readdir, readFile, rm, utimes, writeFile } from "node:f
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { livenessDomain, withFileLock } from "../src/file-lock.js";
+import { livenessDomain, machineTag, withFileLock } from "../src/file-lock.js";
 
 const OTHER_BOOT_ID = "00000000-0000-4000-8000-000000001197";
 const OTHER_BOOT = `linux:${OTHER_BOOT_ID}:pid:[4026531836]`;
 const THIS_BOOT_ID = /^linux:([0-9a-f-]{36}):/i.exec(livenessDomain() ?? "")?.[1]?.toLowerCase();
 const hex = (id: string) => id.replace(/-/g, "");
 const LONG_AGO = new Date("2020-01-01T00:00:00Z");
-const linux = livenessDomain() !== null;
+const THIS_MACHINE = machineTag() ?? undefined;
+const OTHER_MACHINE = "0123456789abcdef";
+const linux = livenessDomain() !== null && machineTag() !== null;
 const dirs: string[] = [];
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -31,12 +33,15 @@ async function lockDir() {
   return lock;
 }
 /** A token naming this test process: a pid that is alive here, as a reused pid is after a reboot. */
-async function leftBy(holder: Record<string, unknown>, bytes = JSON.stringify(holder), boot?: string) {
+async function leftBy(
+  holder: Record<string, unknown>,
+  bytes = JSON.stringify(holder),
+  boot?: string,
+  machine: string | null | undefined = THIS_MACHINE,
+) {
   const lock = await lockDir();
-  const token = join(
-    lock,
-    `owner.${process.pid}.${boot ? `${hex(boot)}-` : ""}0b5e55ed-0000-4000-8000-000000001197.json`,
-  );
+  const named = boot ? `${hex(boot)}-${machine ? `${machine}-` : ""}` : "";
+  const token = join(lock, `owner.${process.pid}.${named}0b5e55ed-0000-4000-8000-000000001197.json`);
   await writeFile(token, bytes);
   return { lock, token };
 }
@@ -79,9 +84,16 @@ describe("a lock left by a power loss", () => {
     await expect(takes(lock)).rejects.toMatchObject(refused);
   });
 
-  it.runIf(linux)("clears a torn token whose name records another boot", async () => {
+  it.runIf(linux)("clears a torn token whose name records this machine in another boot", async () => {
     const { lock } = await leftBy({}, "", OTHER_BOOT_ID);
     await expect(takes(lock)).resolves.toBe("written");
+  });
+
+  it("keeps a torn token from another boot of another or an unnamed machine (Cal's review)", async () => {
+    for (const machine of [OTHER_MACHINE, null]) {
+      const torn = await leftBy({}, "", OTHER_BOOT_ID, machine);
+      await expect(takes(torn.lock)).rejects.toMatchObject(refused);
+    }
   });
 
   it("keeps a torn token whose name records this boot or no boot, however old its mtime", async () => {
@@ -98,12 +110,12 @@ describe("a lock left by a power loss", () => {
     await expect(takes(empty)).rejects.toMatchObject(refused);
   });
 
-  it.runIf(linux)("names this boot in every new token", async () => {
+  it.runIf(linux)("names this boot and this machine in every new token", async () => {
     const lock = join(await mkdtemp(join(tmpdir(), "orca-lock-reboot-")), "x.lock");
     dirs.push(join(lock, ".."));
     await withFileLock(lock, async () => {
       expect(await readdir(lock)).toEqual([
-        expect.stringMatching(new RegExp(`^owner\\.${process.pid}\\.${hex(THIS_BOOT_ID!)}-`)),
+        expect.stringMatching(new RegExp(`^owner\\.${process.pid}\\.${hex(THIS_BOOT_ID!)}-${THIS_MACHINE}-`)),
       ]);
     });
   });

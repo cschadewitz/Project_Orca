@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { AgentRegistry } from "@orca/agents";
 import { OrcaError, parseOrcaConfig, parseWorkflow, TemplateRegistry, WorkflowRegistry } from "@orca/core";
 import { executionEvents, fileStores } from "@orca/store";
-import { livenessDomain } from "../../store/src/file-lock.js";
+import { livenessDomain, machineTag } from "../../store/src/file-lock.js";
 import { builtinExecutors, completed, LocalWorkspaceProvider, Orchestrator, PausingHumanInput } from "@orca/engine";
 import { ControlModel, ReadModel, startDaemon } from "@orca/daemon";
 import {
@@ -593,7 +593,7 @@ it.runIf(livenessDomain() !== null)(
     const lock = join(f.dir, "admission-retries", "catalog.lock");
     const token = join(
       lock,
-      `owner.${process.pid}.00000000000040008000000000001197-0b5e55ed-0000-4000-8000-000000001197.json`,
+      `owner.${process.pid}.00000000000040008000000000001197-${machineTag()}-0b5e55ed-0000-4000-8000-000000001197.json`,
     );
     await mkdir(lock);
     await writeFile(token, "");
