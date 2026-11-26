@@ -10,6 +10,8 @@
 //   node tools/release.js notes 0.2.0                               -> prints that release's CHANGELOG body
 //   node tools/release.js notes --unreleased                        -> prints what changelog.d/ holds
 //   node tools/release.js line 0.7.1                                -> prints the branch it is cut from
+//   node tools/release.js promote <flag>                            -> moves changelog.d/incubating/<flag>/
+//                                                                      up into changelog.d/ (a promotion PR)
 //   node tools/release.js sync 0.7.1 <other CHANGELOG.md>           -> copies that section into CHANGELOG.md
 //                                                                      (and, for a new minor's X.Y.0
 //                                                                      or candidate, raises package.json
@@ -22,7 +24,7 @@
 //
 // The versioning policy it implements is documented in docs/RELEASING.md.
 import { readFileSync, writeFileSync } from "node:fs";
-import { FRAGMENT_DIR, deleteFragments, readFragments, renderEntries } from "./changelog.js";
+import { FRAGMENT_DIR, deleteFragments, promoteFragments, readFragments, renderEntries } from "./changelog.js";
 import { laneOf } from "./release-lane.js";
 import { compare, nextVersion as nextFor } from "./release-plan.js";
 
@@ -264,6 +266,14 @@ switch (command) {
     if (rest.length !== 2) die("usage: node tools/release.js sync <version> <source CHANGELOG.md>");
     sync(rest[0], rest[1]);
     break;
+  case "promote":
+    try {
+      const moved = promoteFragments(rest[0] ?? die("usage: node tools/release.js promote <flag>"));
+      console.error(`promoted ${moved.length} fragment(s) of ${rest[0]}: ${moved.join(", ")}`);
+    } catch (err) {
+      die(err.message);
+    }
+    break;
   default:
-    die("usage: node tools/release.js <version|prepare|notes|line|sync> [...]  (see the header comment)");
+    die("usage: node tools/release.js <version|prepare|notes|line|sync|promote> [...]  (see the header comment)");
 }
