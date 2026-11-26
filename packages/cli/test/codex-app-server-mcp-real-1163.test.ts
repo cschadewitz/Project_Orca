@@ -143,7 +143,15 @@ describe.skipIf(!CODEX)("the agent's MCP servers against the real pinned Codex",
     expect(await exists(declined)).toBe(false);
     expect(s.statuses).toContainEqual({ server: "t", status: "ready" });
     // Codex kept the server's environment in memory only
-    for (const file of await files(codexHome)) expect(await readFile(file, "utf8"), file).not.toContain(SENTINEL);
+    // (Codex's own background work, such as a plugin clone, can remove a temporary file while it
+    // is listed: one gone by the time it is read held nothing to check.)
+    for (const file of await files(codexHome)) {
+      const text = await readFile(file, "utf8").catch((e: NodeJS.ErrnoException) => {
+        if (e.code === "ENOENT") return "";
+        throw e;
+      });
+      expect(text, file).not.toContain(SENTINEL);
+    }
   });
 
   it("refuses the session when Codex's own config adds an MCP server", async () => {

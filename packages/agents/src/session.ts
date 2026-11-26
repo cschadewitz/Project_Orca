@@ -12,6 +12,16 @@ import { describeConfigOptions } from "./config-options.js";
 export interface TurnResult {
   stopReason: acp.StopReason;
   durationMs: number;
+  /**
+   * For a cancelled turn on a driver that can tell (the Codex app-server driver, #1299), whether
+   * the commands the turn was running are known to have ended. An agent's acknowledgement of
+   * the cancel says the turn stopped, not that its child work did:
+   * - `confirmed`: no command was in flight, or each one the agent reported ended without
+   *   completing (`failed` or `declined`);
+   * - `unconfirmed`: a command's end was not reported within the cancel grace; it may still run;
+   * - `not-carried-out`: the agent reported a command in flight at the cancel as completed.
+   */
+  cancel?: "confirmed" | "unconfirmed" | "not-carried-out";
 }
 
 export interface SessionUpdateEvent {

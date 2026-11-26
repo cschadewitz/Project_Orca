@@ -21,6 +21,12 @@
  *   message). Cancel, abort and timeout send `turn/interrupt`; a turn Codex does not end within
  *   the cancel grace kills the process, as on the ACP route, and the caller settles then even
  *   while `turn/start` is unanswered.
+ * - **Cancel outcome (#1299):** `interrupted` says the turn stopped, not that a command it started
+ *   did. A cancelled turn waits up to the cancel grace for Codex to report each command in flight
+ *   ended (a command it reports starting meanwhile included), and its result's `cancel` says
+ *   `confirmed`, `unconfirmed` or `not-carried-out`. While a command from a cancelled turn lacks
+ *   a report that it ended, and for good once one was reported completed, the session takes no
+ *   further prompt (so no restart resumes the thread); closing it is not taken as stopping it.
  * - **Failures:** a `turn/start` whose outcome is unknown (no answer in time, the connection
  *   lost, an answer without a turn id) ends the session, since Codex may be running the turn; a
  *   refusal Codex answers with an error does not. Every notification ORCA reads is checked
@@ -713,6 +719,13 @@ interface ActiveTurn {
   fileChanges: Map<string, FileUpdateChange[]>;
   /** The MCP tool calls Codex started in this turn and has not finished, by turn and item id (#1163). */
   mcpCalls: Map<string, CodexMcpCall>;
+  /**
+   * The command items in flight when this turn's cancel was asked for, or started after it, by
+   * turn and item id (#1299): the work the cancel has to be shown to have ended.
+   */
+  cancelOwned: Set<string>;
+  /** How Codex reported each owned command ended (its item's final status). */
+  cancelEnded: Map<string, string>;
   /** Waiting on an account re-read, before any turn/start: a cancel ends the wait, nothing else. */
   waking?: () => void;
   grace?: ReturnType<typeof setTimeout>;
@@ -721,6 +734,9 @@ interface ActiveTurn {
   done: (turn: unknown) => void;
   fail: (error: Error) => void;
 }
+
+/** The command statuses that report a command ended (#1299); `completed` means it ran to its end. */
+const TERMINAL_COMMAND_STATUSES: ReadonlySet<string> = new Set(["completed", "failed", "declined"]);
 
 /** How long ORCA watches for Codex's own exit once its connection closed during the handshake. */
 const STARTUP_EXIT_WAIT_MS = 1_000;
@@ -878,6 +894,23 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
   const id = newId("sess", clock.now());
   let threadId = "";
   let active: ActiveTurn | undefined;
+  /** Command items Codex started and has not reported finished, by turn and item id (#1299). */
+  const openCommands = new Set<string>();
+  /**
+   * Commands from a cancelled turn whose end Codex has not reported (#1299). While any remains,
+   * old work may still run, so no new prompt (and so no restart and resume) is taken.
+   */
+  const unsettled = new Set<string>();
+  /** Woken whenever Codex reports a command started or finished. */
+  const commandWaiters = new Set<() => void>();
+  /** Turns ORCA cancelled: a command Codex reports starting in one of them is never left untracked. */
+  const cancelledTurns = new Set<string>();
+  /**
+   * Set once Codex reported a command it was asked to stop as completed (#1299): the person
+   * expected it to stop and may need to reconcile what it changed, so the session takes no
+   * further prompt, whether or not the command has since ended.
+   */
+  let cancelNotCarriedOut = false;
   /** Set once the session cannot take another prompt: Codex may still be running a turn. */
   let broken: OrcaError | undefined;
   /** The account the session started on, which every later answer is compared to. */
@@ -1334,6 +1367,43 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
               arguments: item.arguments,
             });
           else active.mcpCalls.delete(key);
+        }
+        // Commands in flight, for telling whether a cancel ended them (#1299).
+        if (item.type === "commandExecution") {
+          const key = `${typeof params.turnId === "string" ? params.turnId : ""}\0${item.id}`;
+          const turnId = typeof params.turnId === "string" ? params.turnId : undefined;
+          if (method === "item/started") {
+            if (item.status === "inProgress") {
+              openCommands.add(key);
+              // A command started once its turn's cancel was asked for, or after that turn
+              // returned, is the cancel's to account for too.
+              // Owned by the turn the event names: a later cancel never shadows an earlier one's fence.
+              if (turnId !== undefined && cancelledTurns.has(turnId) && active?.turnId !== turnId) {
+                unsettled.add(key);
+                logger.warn("Codex started a command in a turn ORCA cancelled", { agentId: agent.id, item: item.id });
+              } else if (active?.cancelReason && (active.turnId === undefined || active.turnId === turnId))
+                active.cancelOwned.add(key);
+            }
+          } else if (!TERMINAL_COMMAND_STATUSES.has(item.status)) {
+            // Only a recognized terminal report settles a command: any other keeps it tracked.
+            logger.warn("Codex reported a command finished with a status that does not end it", {
+              agentId: agent.id,
+              item: item.id,
+              status: item.status,
+            });
+          } else {
+            openCommands.delete(key);
+            if (active?.cancelOwned.has(key)) active.cancelEnded.set(key, item.status);
+            if (unsettled.delete(key)) {
+              if (item.status === "completed") cancelNotCarriedOut = true;
+              logger.warn("Codex reported a command from a cancelled turn finished", {
+                agentId: agent.id,
+                item: item.id,
+                status: item.status,
+              });
+            }
+          }
+          for (const wake of commandWaiters) wake();
         }
         if (method === "item/completed" && item.type === "agentMessage" && !active?.streamed.has(item.id) && item.text)
           emit({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: item.text } });
@@ -1892,6 +1962,12 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
   const terminate = () =>
     (terminating ??= (async () => {
       closing = true;
+      // Stopping the app-server is no evidence that a command it started has ended (#1299).
+      if (unsettled.size)
+        logger.warn("the session closes with commands from a cancelled turn that Codex never reported ended", {
+          agentId: agent.id,
+          commands: [...unsettled].map((k) => k.split("\0")[1]),
+        });
       wakeRestart?.();
       starting?.client?.close("closed by ORCA: the session closed during a restart");
       const c = conn;
@@ -2045,10 +2121,61 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
     }
   };
 
+  /**
+   * Whether a cancelled turn's commands are known to have ended (#1299). Codex's `interrupted`
+   * says the turn stopped, not that a command it started did: ORCA waits up to the cancel grace
+   * for Codex to report each command in flight at the cancel ended. One still open then may run
+   * on, so the session takes no further prompt until Codex reports it ended.
+   */
+  const cancelOutcome = async (turn: ActiveTurn): Promise<NonNullable<TurnResult["cancel"]>> => {
+    if (turn.turnId !== undefined) cancelledTurns.add(turn.turnId);
+    // Only this turn's: a command from an app-server that since exited is never reported ended.
+    // Read live: a command Codex reports starting during the wait is the cancel's as well.
+    const owned = () => [...turn.cancelOwned].filter((k) => k.startsWith(`${turn.turnId ?? ""}\0`));
+    const open = () => owned().filter((k) => openCommands.has(k));
+    if (open().length) {
+      let wake!: () => void;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timedOut = new Promise<void>((r) => (timer = setTimeout(r, cancelGraceMs)));
+      try {
+        while (open().length) {
+          const woken = new Promise<void>((r) => (wake = r));
+          commandWaiters.add(wake);
+          const out = await Promise.race([woken.then(() => false), timedOut.then(() => true)]);
+          commandWaiters.delete(wake);
+          if (out) break;
+        }
+      } finally {
+        commandWaiters.delete(wake);
+        clearTimeout(timer);
+      }
+    }
+    // Read with no await before the prompt settles, so no report falls between this and the fence.
+    const stillOpen = open();
+    const completed = owned().filter((k) => turn.cancelEnded.get(k) === "completed");
+    for (const key of stillOpen) unsettled.add(key);
+    const outcome = completed.length ? "not-carried-out" : stillOpen.length ? "unconfirmed" : "confirmed";
+    if (completed.length) cancelNotCarriedOut = true;
+    if (outcome !== "confirmed")
+      logger.warn(
+        outcome === "not-carried-out"
+          ? "Codex ended the turn as interrupted, but reported a command in flight at the cancel as completed"
+          : "Codex ended the turn as interrupted without reporting that its commands ended; they may still run",
+        {
+          agentId: agent.id,
+          completed: completed.map((k) => k.split("\0")[1]),
+          stillOpen: stillOpen.map((k) => k.split("\0")[1]),
+        },
+      );
+    return outcome;
+  };
+
   const requestCancel = (reason: string) => {
     const turn = active;
     if (!turn || turn.cancelReason) return;
     turn.cancelReason = reason;
+    // The commands this cancel has to be shown to have ended (#1299).
+    for (const key of openCommands) turn.cancelOwned.add(key);
     // An ask a person is answering is answered `cancel` now (#1159).
     turn.asks.abort();
     // Still waiting on an account re-read: no turn was started, and none will be.
@@ -2098,6 +2225,20 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
         if (broken) throw broken;
         if (closing) throw new OrcaError("RUN_STATE", "the session is closed");
         if (active) throw new OrcaError("RUN_STATE", "a prompt turn is already active on this session");
+        if (cancelNotCarriedOut)
+          throw new OrcaError(
+            "RUN_STATE",
+            `agent ${agent.id}: Codex ran a command to completion after ORCA cancelled its turn; ` +
+              `ORCA takes no further prompt on this session. Close it, and check what the command changed before going on`,
+            { agentId: agent.id, reason: "codex-cancel-not-carried-out" },
+          );
+        if (unsettled.size)
+          throw new OrcaError(
+            "RUN_STATE",
+            `agent ${agent.id}: a command from a cancelled turn may still be running (Codex has not reported it ended); ` +
+              `ORCA takes no further prompt on this session. Close it, and check the workspace before going on`,
+            { agentId: agent.id, reason: "codex-cancel-unconfirmed", commands: unsettled.size },
+          );
         if (options.signal?.aborted) throw new OrcaError("CANCELLED", String(options.signal.reason ?? "cancelled"));
         const blocks: acp.ContentBlock[] = typeof input === "string" ? [{ type: "text", text: input }] : input;
         const other = blocks.find((b) => b.type !== "text");
@@ -2127,6 +2268,8 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
             knowTurnId,
             fileChanges: new Map(),
             mcpCalls: new Map(),
+            cancelOwned: new Set(),
+            cancelEnded: new Map(),
           };
         });
         /** turn/start's outcome is unknown: Codex may be running the turn, so the session stops. */
@@ -2219,10 +2362,11 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
             void c.client.request("turn/interrupt", { threadId, turnId }).catch(() => undefined);
           }
           const finished = await ended;
-          return {
-            stopReason: codexStopReason(agent.id, finished, limitsSince(limitsAtStart)),
-            durationMs: clock.now() - started,
-          };
+          const stopReason = codexStopReason(agent.id, finished, limitsSince(limitsAtStart));
+          if (stopReason !== "cancelled") return { stopReason, durationMs: clock.now() - started };
+          // The turn ended: its cancel grace is over, and what remains is whether its commands did.
+          if (turn.grace) clearTimeout(turn.grace);
+          return { stopReason, durationMs: clock.now() - started, cancel: await cancelOutcome(turn) };
         } finally {
           if (timer) clearTimeout(timer);
           if (turn.grace) clearTimeout(turn.grace);
