@@ -1008,6 +1008,7 @@ export class RemoteProfiles {
           ...(status?.problem ? { problem: status.problem } : {}),
           signIn: agent.signIn,
           ...(status?.signInCommand ? { signInCommand: status.signInCommand } : {}),
+          ...(status?.entry ? { entry: status.entry } : {}),
         };
       });
     });

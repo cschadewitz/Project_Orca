@@ -19,6 +19,7 @@ import { CapabilityPreview } from "./capability-preview-view.js";
 import { PermissionsView } from "./permissions-view.js";
 import { PreferencesSection } from "./preferences-section.js";
 import { RemotesSection } from "./remotes-section.js";
+import { HostAgentsSection } from "./host-agents-section.js";
 import { StorageSection } from "./storage-section.js";
 import { JudgeSetup } from "./judge-setup.js";
 import { agentPolicies } from "./config-model.js";
@@ -395,6 +396,8 @@ export function ConfigurationStudioSurface({
         <JudgeSetup />
         {/* Delegation remotes this daemon enrolls (#1206); offered only by a daemon that lists them. */}
         <RemotesSection />
+        {/* Agents installed on this managed server (#1235); only while connected to its profile. */}
+        <HostAgentsSection />
         <StorageSection />
         <PreferencesSection surfaces={SURFACES.map((surface) => ({ id: surface.id, label: surface.label }))} />
       </div>

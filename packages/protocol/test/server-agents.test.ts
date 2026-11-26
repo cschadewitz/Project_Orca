@@ -28,6 +28,7 @@ import type { RemoteCommand, RemoteCommandExit } from "../src/remote-access.js";
 import {
   HOST_AGENTS,
   HOST_AGENTS_LOCK_FILE,
+  hostAgentEntry,
   hostAgentSettings,
   hostAgentSignInCommand,
   hostAgentsProgram,
@@ -212,6 +213,7 @@ describe("Claude Code on the server: the person signs it in", () => {
     const command = `CLAUDE_CONFIG_DIR=${installed.home} ${installed.binary} auth login`;
     expect(hostAgentSignInCommand(installed)).toBe(command);
     const settings = hostAgentSettings(installed);
+    expect(hostAgentEntry("claude", host.root)).toMatchObject({ env: { CLAUDE_CONFIG_DIR: installed.home } });
     expect(settings).toContain("id: claude");
     expect(settings).toContain("@agentclientprotocol/claude-agent-acp/dist/index.js");
     expect(settings).toContain(`CLAUDE_CONFIG_DIR: ${installed.home}`);
@@ -220,7 +222,14 @@ describe("Claude Code on the server: the person signs it in", () => {
     writeFileSync(join(installed.home, ".credentials.json"), '{"claudeAiOauth":{"accessToken":"x"}}');
     // The temporary home is not a managed root's shape only by its characters: built from it.
     expect(await hostAgentStatus(host.transport, made.program)).toEqual([
-      { agent: "claude", versions: ["0.109.1"], others: [], signedIn: "unknown", signInCommand: command },
+      {
+        agent: "claude",
+        versions: ["0.109.1"],
+        others: [],
+        signedIn: "unknown",
+        signInCommand: command,
+        entry: hostAgentEntry("claude", host.root),
+      },
     ]);
 
     // ORCA offers no sign-in for it: refused here before anything runs on the server, and refused there too.
@@ -257,6 +266,7 @@ describe("Claude Code on the server: the person signs it in", () => {
       `CLAUDE_CONFIG_DIR=${root}/agents/claude/home ${root}/agents/claude/0.109.1/files/node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude auth login`,
     );
     expect(codex).not.toHaveProperty("signInCommand");
+    expect(codex!.entry).toEqual(hostAgentEntry("codex", root));
     for (const bad of [
       "/home/casey/elsewhere",
       "/home/casey/../root/.local/share/orca-server",
@@ -266,10 +276,13 @@ describe("Claude Code on the server: the person signs it in", () => {
       42,
       undefined,
     ])
-      expect((await hostAgentStatus(report(bad), "program"))[0]).not.toHaveProperty("signInCommand");
+      for (const item of await hostAgentStatus(report(bad), "program")) {
+        expect(item).not.toHaveProperty("signInCommand");
+        expect(item).not.toHaveProperty("entry");
+      }
   });
 
-  it("gives no command for an install not laid out as a managed one", () => {
+  it("gives no command or configuration for an install not laid out as a managed one", () => {
     const root = "/home/casey/.local/share/orca-server";
     const dir = `${root}/agents/claude/0.109.1`;
     const good = {
@@ -286,9 +299,24 @@ describe("Claude Code on the server: the person signs it in", () => {
       { binary: "/usr/bin/evil" },
       { version: "0.109.2", dir: `${root}/agents/claude/0.109.2` },
       { dir: "/opt/agents/claude/0.109.1", home: "/opt/agents/claude/home" },
-    ])
+    ]) {
       expect(hostAgentSignInCommand({ ...good, ...changed })).toBeUndefined();
+      expect(() => hostAgentSettings({ ...good, ...changed })).toThrow(/not laid out as a managed install/);
+    }
+    expect(hostAgentSettings(good)).toContain(`CLAUDE_CONFIG_DIR: ${good.home}`);
     expect(hostAgentSignInCommand({ ...good, agent: "codex" })).toBeUndefined();
+    // Not under a managed root, or a root with a traversal in it: no settings, no entry.
+    const outside = "/home/casey/../../tmp/.local/share/orca-server";
+    expect(() =>
+      hostAgentSettings({
+        ...good,
+        dir: `${outside}/agents/claude/0.109.1`,
+        home: `${outside}/agents/claude/home`,
+        binary: `${outside}/agents/claude/0.109.1/files/node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude`,
+      }),
+    ).toThrow(/not laid out as a managed install/);
+    expect(() => hostAgentEntry("codex", outside)).toThrow(/not a managed server root/);
+    expect(() => hostAgentEntry("codex", "/opt/orca")).toThrow(/not a managed server root/);
   });
 });
 
@@ -318,6 +346,11 @@ describe("installing an agent on the server", () => {
     expect(made.fetched).toHaveLength(1);
 
     const settings = hostAgentSettings(first);
+    // The entry the app adds to the server's config is what the printed settings say.
+    expect(hostAgentEntry("copilot", host.root)).toMatchObject({
+      command: first.binary,
+      env: { COPILOT_HOME: first.home },
+    });
     expect(settings).toContain(`command: ${first.binary}`);
     expect(settings).toContain(`COPILOT_HOME: ${first.home}`);
   });
@@ -494,6 +527,7 @@ describe("signing an agent in on the server", () => {
       versions: ["1.0.114"],
       others: [],
       signedIn: "no",
+      entry: hostAgentEntry("copilot", host.root),
     });
     const prompts: unknown[] = [];
     await signInHostAgent(host.stream, "copilot", made.program, (prompt) => prompts.push(prompt));
