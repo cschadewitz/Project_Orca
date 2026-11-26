@@ -46,7 +46,7 @@ import {
   type SecretsConfig,
   type SessionConfigOption,
 } from "@orca/core";
-import type { AgentHost, AgentProcessHandle } from "./host.js";
+import type { AgentHost, AgentProcessHandle, ProcessExit } from "./host.js";
 import {
   codexAppServerLaunch,
   codexAppServerRequested,
@@ -663,6 +663,68 @@ interface ActiveTurn {
   failed?: boolean;
   done: (turn: unknown) => void;
   fail: (error: Error) => void;
+}
+
+/** How long ORCA watches for Codex's own exit once its connection closed during the handshake. */
+const STARTUP_EXIT_WAIT_MS = 1_000;
+
+/** The process's exit if it is observed within `ms`, otherwise undefined. */
+async function exitedWithin(exited: Promise<ProcessExit>, ms: number): Promise<ProcessExit | undefined> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      exited.catch(() => undefined),
+      new Promise<undefined>((r) => (timer = setTimeout(() => r(undefined), ms))),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Startup failures ORCA recognizes in Codex's stderr, each reported by a fixed reason and
+ * diagnosis. Nothing captured (text, paths, values) is ever repeated.
+ */
+const CODEX_STARTUP_DIAGNOSES: readonly { pattern: RegExp; reason: string; diagnosis: string }[] = [
+  {
+    pattern: /approval_policy = "untrusted" is no longer supported/,
+    reason: "untrusted-approval-policy",
+    diagnosis: 'a Codex config sets approval_policy = "untrusted", which this Codex no longer supports',
+  },
+  {
+    pattern: /CODEX_HOME points to .*, but that path (does not exist|is not a directory)/,
+    reason: "codex-home-missing",
+    diagnosis: "CODEX_HOME does not name an existing directory",
+  },
+];
+
+/** The failure for a Codex app-server that stopped answering before the handshake finished. */
+function codexStartupFailure(
+  agentId: string,
+  exit: ProcessExit | undefined,
+  stderr: string,
+  cause: unknown,
+): OrcaError {
+  const known = CODEX_STARTUP_DIAGNOSES.find((d) => d.pattern.test(stderr));
+  const how = !exit
+    ? "closed its connection before ORCA's handshake finished, and ORCA stopped it"
+    : exit.code !== null
+      ? `exited with code ${exit.code} before ORCA's handshake finished`
+      : `was stopped by ${exit.signal ?? "a signal"} before ORCA's handshake finished`;
+  const why = known
+    ? `: ${known.diagnosis}`
+    : ". ORCA does not recognize its reason and does not repeat Codex's output; run `codex app-server` as the account ORCA runs Codex as to see it";
+  return new OrcaError(
+    "AGENT_TRANSPORT",
+    `agent ${agentId}: the Codex app-server ${how}${why}`,
+    {
+      agentId,
+      reason: known?.reason ?? "unrecognized",
+      exited: exit !== undefined,
+      ...(exit ? { exitCode: exit.code, signal: exit.signal } : {}),
+    },
+    { cause },
+  );
 }
 
 /**
@@ -1325,20 +1387,16 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
       c.account = account;
       return c;
     } catch (error) {
-      // Codex exited before it answered: say so, with the end of its stderr (redacted with the
-      // rest of the failure), which holds its reason, such as a refused setting.
-      const exited = client.closed !== undefined && error instanceof OrcaError && error.code === "AGENT_TRANSPORT";
+      // Codex stopped answering before the handshake finished. Its stderr may hold the user's
+      // own profile, paths or provider diagnostics, which ORCA does not know to redact, so the
+      // failure names only a fixed diagnosis for output ORCA recognizes, and says whether the
+      // process was seen to exit on its own before ORCA stopped it.
+      if (client.closed !== undefined && error instanceof OrcaError && error.code === "AGENT_TRANSPORT") {
+        const exit = await exitedWithin(proc.exited, STARTUP_EXIT_WAIT_MS);
+        client.close("closed after a refused open");
+        return fail(() => codexStartupFailure(agent.id, exit, proc.stderrTail(), error));
+      }
       client.close("closed after a refused open");
-      if (exited)
-        return fail(
-          () =>
-            new OrcaError(
-              "AGENT_TRANSPORT",
-              `agent ${agent.id}: the Codex app-server exited before ORCA's handshake finished; the end of its stderr is in the details`,
-              { agentId: agent.id, stderr: proc.stderrTail() },
-              { cause: error },
-            ),
-        );
       return fail(error);
     }
   };

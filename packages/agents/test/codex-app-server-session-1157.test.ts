@@ -99,7 +99,7 @@ function scriptedHost(answers: Record<string, Responder>) {
   const spawnAgent = vi.fn(async (_spec: unknown) => handle);
   const host = new LocalHost({ id: "local", type: "local" }) as AgentHost;
   host.spawnAgent = spawnAgent;
-  return { host, peer, spawnAgent, kill };
+  return { host, peer, spawnAgent, kill, exit, stdout };
 }
 
 const NO_ANSWER = Symbol("no answer");
@@ -780,25 +780,61 @@ describe("opening a session", () => {
     expect(s.peer.received.map((m) => m.method)).toEqual(["initialize"]);
   });
 
-  it("says why when Codex exits before the handshake, with the end of its stderr (#1269)", async () => {
-    const s = scriptedHost({});
-    const handle = await s.spawnAgent(undefined);
-    s.spawnAgent.mockClear();
-    Object.defineProperty(handle, "stderrTail", {
-      value: () => 'Error: approval_policy = "untrusted" is no longer supported',
+  describe("a Codex that stops before the handshake finishes (#1269)", () => {
+    const SECRETISH = "provider said: token sk-live-abc123 for /home/someone/.codex/auth.json";
+    const stopped = async (stderr: string, exitFirst: boolean) => {
+      const s = scriptedHost({});
+      const handle = await s.spawnAgent(undefined);
+      s.spawnAgent.mockClear();
+      Object.defineProperty(handle, "stderrTail", { value: () => stderr });
+      if (exitFirst) s.exit({ code: 1, signal: null });
+      s.stdout.end();
+      const error = await open(s.host).then(
+        () => expect.unreachable("the session opened"),
+        (e: unknown) => e as OrcaError,
+      );
+      expect(error.code).toBe("AGENT_TRANSPORT");
+      // Nothing Codex printed reaches the public error.
+      const shown = JSON.stringify(error) + error.message;
+      for (const leak of ["sk-live", "/home/someone", "auth.json", "provider said"]) expect(shown).not.toContain(leak);
+      return { error, s };
+    };
+
+    it("names a recognized reason with a fixed diagnosis, and the exit it observed", async () => {
+      const { error } = await stopped(
+        `${SECRETISH}\nError: approval_policy = "untrusted" is no longer supported; remove this setting`,
+        true,
+      );
+      expect(error.message).toMatch(
+        /exited with code 1 before ORCA's handshake finished: a Codex config sets approval_policy = "untrusted"/,
+      );
+      expect(error.details).toEqual({
+        agentId: "codex",
+        reason: "untrusted-approval-policy",
+        exited: true,
+        exitCode: 1,
+        signal: null,
+      });
     });
-    (handle.stdio!().stdout as PassThrough).end();
-    const error = await open(s.host).then(
-      () => expect.unreachable("the session opened"),
-      (e: unknown) => e as OrcaError,
-    );
-    expect(error.code).toBe("AGENT_TRANSPORT");
-    expect(error.message).toMatch(/the Codex app-server exited before ORCA's handshake finished/);
-    expect(error.details).toEqual({
-      agentId: "codex",
-      stderr: 'Error: approval_policy = "untrusted" is no longer supported',
+
+    it("repeats nothing of output it does not recognize", async () => {
+      const { error } = await stopped(SECRETISH, true);
+      expect(error.message).toMatch(/exited with code 1 .* ORCA does not recognize its reason/);
+      expect(error.details).toEqual({
+        agentId: "codex",
+        reason: "unrecognized",
+        exited: true,
+        exitCode: 1,
+        signal: null,
+      });
     });
-    expect(s.kill).toHaveBeenCalled();
+
+    it("does not claim an exit it did not see when only the connection closed", async () => {
+      const { error, s } = await stopped(SECRETISH, false);
+      expect(error.message).toMatch(/closed its connection before ORCA's handshake finished, and ORCA stopped it/);
+      expect(error.details).toEqual({ agentId: "codex", reason: "unrecognized", exited: false });
+      expect(s.kill).toHaveBeenCalled();
+    });
   });
 
   it("refuses without a policy, with full access, never or untrusted, on another host, and for an ACP agent", async () => {

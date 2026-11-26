@@ -5,7 +5,7 @@
  *
  * - ORCA refuses a session asked for `untrusted` itself, before it starts Codex;
  * - when Codex exits before the handshake (here, its CODEX_HOME does not exist), ORCA's failure
- *   carries the end of Codex's stderr, which says why, rather than only a closed connection.
+ *   says it exited and why, with a fixed diagnosis, and repeats nothing Codex printed.
  *
  * (A profile that sets `untrusted` does not stop Codex: ORCA's `-c approval_policy="on-request"`
  * outranks it, and #1160's config check names any layer that sets the policy.)
@@ -73,7 +73,10 @@ describe.skipIf(!CODEX)("the approval policy against the real pinned Codex", () 
     const error = await failure(s.opened);
     expect(s.spawned()).toBe(1);
     expect(error.code).toBe("AGENT_TRANSPORT");
-    expect(error.message).toMatch(/exited before ORCA's handshake finished/);
-    expect(String(error.details?.stderr)).toContain(`CODEX_HOME points to "${missing}", but that path does not exist`);
+    expect(error.message).toMatch(
+      /exited with code \d+ before ORCA's handshake finished: CODEX_HOME does not name an existing directory/,
+    );
+    expect(error.details).toMatchObject({ reason: "codex-home-missing", exited: true, signal: null });
+    expect(JSON.stringify(error) + error.message).not.toContain(missing);
   });
 });
