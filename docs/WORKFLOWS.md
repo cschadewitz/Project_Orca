@@ -503,6 +503,30 @@ remove `codexExecGate` to run the agent without it. The reasons, in order:
 
 The route claims no support tier.
 
+#### Codex through its app-server (`driver: codex-app-server`, experimental, refused for now)
+
+A second way to talk to Codex (#1154, tracking #1189): instead of starting the `codex-acp`
+adapter, ORCA is to start the user's installed Codex CLI as `codex app-server` and speak its
+protocol directly. `command` then names the Codex CLI, `codex` on the agent's `PATH` or a path
+to it; ORCA appends the `app-server` subcommand after the agent's own `args`:
+
+```yaml
+  - id: codex
+    command: codex
+    driver: codex-app-server
+```
+
+Codex runs on the user's own `codex login`: ORCA passes the agent's environment through as
+configured, sets no Codex variable of its own (so Codex reads the usual `CODEX_HOME`), never
+signs in, never asks Codex to refresh a token and never reads Codex's credential files. A
+Codex that needs a login and reports none is to be refused with "run `codex login`".
+
+**Every session that asks for it is refused today**, before anything starts: the driver is not
+built yet (#1157), it runs only on ORCA's own machine (#1166), and config rejects it on an
+`orca-daemon` agent and together with `nativeToolHook` or `codexExecGate`. Nothing falls back to
+the ACP adapter: remove `driver` (or set `driver: acp`, the default) to run Codex through it.
+The driver claims no support tier and is not a guard.
+
 An `ask` is routed to the `humanInput` channel above, or upstream when ORCA runs as an ACP
 agent. **An `ask` nobody can answer is refused, never parked**: a permission cannot outlive
 the agent session that raised it, so `pause` cancels it, `auto` refuses it, and either way
