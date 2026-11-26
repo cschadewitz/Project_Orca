@@ -9,6 +9,8 @@
  *   SWEEP_OUT=/tmp/sweep pnpm exec playwright test --config packages/app/test/smoke/playwright.config.ts \
  *     --project=linux-native visual-sweep
  * SWEEP_SEED: the packed seed.mjs (default: the repo's dist). SWEEP_NODE: Node 22+ (default: this one).
+ * SWEEP_LEGACY_BIND=1: only for builds without the #1192 fix (#1202), such as 0.8.0-rc.2, which
+ * reopen after a config save only if the saved config is bound while the daemon is live.
  */
 import { expect, test, type ElectronApplication, type Page } from "@playwright/test";
 import { execFile } from "node:child_process";
@@ -26,6 +28,7 @@ const SEED =
   process.env.SWEEP_SEED ??
   fileURLToPath(new URL("../../../../tools/demo-seed/dist/orca-demo-seed/seed.mjs", import.meta.url));
 const NODE = process.env.SWEEP_NODE ?? process.execPath;
+const LEGACY_BIND = process.env.SWEEP_LEGACY_BIND === "1";
 
 let session: NativeSession;
 /** Registers the test only when SWEEP_OUT names where its screenshots go. */
@@ -401,9 +404,8 @@ sweep("seed a fresh install and capture every surface", async () => {
   const configText = join(session.root, "seeded-config.json");
   await seed(workspace, "prepare", ["--config-out", configText]);
   await saveRawConfig(launched.page, await readFile(configText, "utf8"), "seed");
-  // Builds before the #1192 fix (#1202) reopen only with this bind; on a fixed build it is harmless.
-  // Drop it once the base includes #1202.
-  await bindWhileLive(launched.page, "seed");
+  // Builds before the #1192 fix (#1202) reopen only with this extra bind; fixed builds must not need it.
+  if (LEGACY_BIND) await bindWhileLive(launched.page, "seed");
   launched = await relaunch(profile, launched);
   await connected(launched.page);
   await seed(workspace, "populate");
