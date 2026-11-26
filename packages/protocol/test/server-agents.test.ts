@@ -282,7 +282,7 @@ describe("Claude Code on the server: the person signs it in", () => {
       }
   });
 
-  it("gives no command for an install not laid out as a managed one", () => {
+  it("gives no command or configuration for an install not laid out as a managed one", () => {
     const root = "/home/casey/.local/share/orca-server";
     const dir = `${root}/agents/claude/0.109.1`;
     const good = {
@@ -299,9 +299,24 @@ describe("Claude Code on the server: the person signs it in", () => {
       { binary: "/usr/bin/evil" },
       { version: "0.109.2", dir: `${root}/agents/claude/0.109.2` },
       { dir: "/opt/agents/claude/0.109.1", home: "/opt/agents/claude/home" },
-    ])
+    ]) {
       expect(hostAgentSignInCommand({ ...good, ...changed })).toBeUndefined();
+      expect(() => hostAgentSettings({ ...good, ...changed })).toThrow(/not laid out as a managed install/);
+    }
+    expect(hostAgentSettings(good)).toContain(`CLAUDE_CONFIG_DIR: ${good.home}`);
     expect(hostAgentSignInCommand({ ...good, agent: "codex" })).toBeUndefined();
+    // Not under a managed root, or a root with a traversal in it: no settings, no entry.
+    const outside = "/home/casey/../../tmp/.local/share/orca-server";
+    expect(() =>
+      hostAgentSettings({
+        ...good,
+        dir: `${outside}/agents/claude/0.109.1`,
+        home: `${outside}/agents/claude/home`,
+        binary: `${outside}/agents/claude/0.109.1/files/node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude`,
+      }),
+    ).toThrow(/not laid out as a managed install/);
+    expect(() => hostAgentEntry("codex", outside)).toThrow(/not a managed server root/);
+    expect(() => hostAgentEntry("codex", "/opt/orca")).toThrow(/not a managed server root/);
   });
 });
 

@@ -1,15 +1,17 @@
 // @vitest-environment happy-dom
 /**
  * Agents installed on a managed server, on its Config surface (#1235): the entry goes into the
- * draft (replacing one with the same id), and the section shows only while connected to a profile
- * whose server reports installed agents.
+ * draft, an existing one with its id has only what runs the agent updated (its policy and other
+ * fields stay), a same-id entry that is not a local ACP agent is refused, and a report is shown
+ * and staged only on the connection (epoch and profile) it was read on.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import type { HostAgentView } from "../../src/daemon-connection.js";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import type { DaemonTargetSnapshot, HostAgentView } from "../../src/daemon-connection.js";
 
 const studio = {
   value: { agents: [{ id: "local", command: "x" }] } as unknown,
+  target: { epoch: 1 },
   edits: [] as unknown[],
   subscribe: () => () => {},
   editAccess: () => ({ allowed: true as const }),
@@ -19,7 +21,7 @@ const studio = {
 };
 vi.mock("../src/config/configuration-studio-context.js", () => ({ useConfigurationStudio: () => studio }));
 
-const { HostAgentsSection, agentEntryEdit } = await import("../src/config/host-agents-section.js");
+const { HostAgentsSection, agentEntryPlan } = await import("../src/config/host-agents-section.js");
 
 const entry = {
   id: "codex",
@@ -39,44 +41,114 @@ const codex: HostAgentView = {
   signIn: "device-code",
   entry,
 };
+const lab = { id: "lab", name: "Lab", destination: "casey@lab" };
 
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
   studio.edits = [];
+  studio.value = { agents: [{ id: "local", command: "x" }] };
+  studio.target = { epoch: 1 };
 });
 
-function connect(agents: HostAgentView[], profile?: { id: string; name: string; destination: string }) {
+/** A connection whose snapshot and replies the test drives. */
+function connect(agents: HostAgentView[], profile?: typeof lab) {
+  let snapshot = { epoch: 1, ...(profile ? { profile } : {}) } as DaemonTargetSnapshot;
+  const listeners = new Set<(target: DaemonTargetSnapshot) => void>();
+  const replies: ((agents: HostAgentView[]) => void)[] = [];
+  const hostAgents = vi.fn(
+    () =>
+      new Promise<{ ok: true; value: HostAgentView[] }>((resolve) =>
+        replies.push((value) => resolve({ ok: true, value })),
+      ),
+  );
   vi.stubGlobal("orca", {
     daemonConnection: {
-      read: () => ({ profile }),
-      subscribe: () => () => {},
-      profiles: { hostAgents: vi.fn(async () => ({ ok: true as const, value: agents })) },
+      read: () => snapshot,
+      subscribe: (listener: (target: DaemonTargetSnapshot) => void) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+      profiles: { hostAgents },
     },
   });
+  return {
+    hostAgents,
+    /** Answer the oldest waiting request. */
+    reply: async (value: HostAgentView[] = agents) => {
+      await act(async () => replies.shift()!(value));
+    },
+    move: (next: Partial<DaemonTargetSnapshot>) =>
+      act(() => {
+        snapshot = { ...snapshot, ...next };
+        for (const listener of listeners) listener(snapshot);
+      }),
+  };
 }
 
 describe("the agents: entry for an installed agent", () => {
-  it("is appended, replaces one with its id, or starts the list", () => {
-    expect(agentEntryEdit({ agents: [{ id: "local" }] }, entry)).toEqual({
-      kind: "insert",
-      path: ["agents"],
-      index: 1,
-      value: entry,
+  it("is appended, or starts the list", () => {
+    expect(agentEntryPlan({ agents: [{ id: "local" }] }, entry)).toEqual({
+      kind: "add",
+      edits: [{ kind: "insert", path: ["agents"], index: 1, value: entry }],
     });
-    expect(agentEntryEdit({ agents: [{ id: "local" }, { id: "codex", command: "old" }] }, entry)).toEqual({
-      kind: "set",
-      path: ["agents", 1],
-      value: entry,
+    expect(agentEntryPlan({}, entry)).toEqual({
+      kind: "add",
+      edits: [{ kind: "set", path: ["agents"], value: [entry] }],
     });
-    expect(agentEntryEdit({}, entry)).toEqual({ kind: "set", path: ["agents"], value: [entry] });
-    expect(agentEntryEdit(undefined, entry)).toEqual({ kind: "set", path: ["agents"], value: [entry] });
+    expect(agentEntryPlan(undefined, entry)).toEqual({
+      kind: "add",
+      edits: [{ kind: "set", path: ["agents"], value: [entry] }],
+    });
+  });
+
+  it("updates only what runs an existing one, keeping its policy and other settings", () => {
+    const permissions = { default: "deny", rules: [{ tool: "shell", decision: "deny" }] };
+    const existing = {
+      id: "codex",
+      name: "My Codex",
+      command: "/old/node",
+      args: ["/old/index.js"],
+      env: { CODEX_HOME: "/old/home", HTTPS_PROXY: "http://proxy:3128", TOKEN: { secret: "t" } },
+      permissions,
+      roles: ["reviewer"],
+    };
+    const plan = agentEntryPlan({ agents: [{ id: "local" }, existing] }, entry);
+    expect(plan).toEqual({
+      kind: "update",
+      edits: [
+        { kind: "set", path: ["agents", 1, "command"], value: entry.command },
+        { kind: "set", path: ["agents", 1, "args"], value: entry.args },
+        { kind: "set", path: ["agents", 1, "env", "CODEX_HOME"], value: entry.env.CODEX_HOME },
+      ],
+    });
+    // Nothing the edits touch is the policy, the name, the roles or the other env.
+    const touched = plan.kind === "update" ? plan.edits.map((edit) => edit.path.slice(2).join(".")) : [];
+    expect(touched).toEqual(["command", "args", "env.CODEX_HOME"]);
+    expect(
+      agentEntryPlan({ agents: [{ ...existing, ...entry, env: { ...existing.env, ...entry.env } }] }, entry),
+    ).toEqual({
+      kind: "current",
+    });
+  });
+
+  it("refuses an entry with its id that is not a local ACP agent", () => {
+    for (const other of [
+      { id: "codex", type: "orca-daemon", profile: "lab", workflow: "w" },
+      { id: "codex", command: "codex-acp", hostId: "builder" },
+      { id: "codex", command: "codex-acp", env: ["A=1"] },
+    ])
+      expect(agentEntryPlan({ agents: [other] }, entry)).toMatchObject({
+        kind: "conflict",
+        reason: expect.stringMatching(/already has an agent called codex/),
+      });
+    expect(agentEntryPlan({ agents: "codex" }, entry)).toMatchObject({ kind: "conflict" });
   });
 });
 
 describe("the section", () => {
   it("adds an installed agent's entry to the draft while connected to its profile", async () => {
-    connect(
+    const server = connect(
       [
         codex,
         {
@@ -88,22 +160,63 @@ describe("the section", () => {
           signIn: "device-code",
         },
       ],
-      {
-        id: "lab",
-        name: "Lab",
-        destination: "casey@lab",
-      },
+      lab,
     );
     render(<HostAgentsSection />);
+    await server.reply();
     fireEvent.click(await screen.findByRole("button", { name: "Add to configuration" }));
     expect(studio.edits).toEqual([{ kind: "insert", path: ["agents"], index: 1, value: entry }]);
     expect(screen.queryByText(/GitHub Copilot CLI/)).toBeNull();
   });
 
+  it("shows a conflicting entry's reason and stages nothing", async () => {
+    studio.value = { agents: [{ id: "codex", type: "orca-daemon", profile: "lab", workflow: "w" }] };
+    const server = connect([codex], lab);
+    render(<HostAgentsSection />);
+    await server.reply();
+    const button = await screen.findByRole("button", { name: "Update in configuration" });
+    expect(button.getAttribute("aria-disabled")).toBe("true");
+    expect(screen.getByText(/not an ACP agent/)).toBeTruthy();
+    fireEvent.click(button);
+    expect(studio.edits).toEqual([]);
+  });
+
   it("is not shown on a connection that is not a profile", () => {
-    connect([codex]);
+    const server = connect([codex]);
     const { container } = render(<HostAgentsSection />);
     expect(container.textContent).toBe("");
-    expect(window.orca.daemonConnection!.profiles!.hostAgents).not.toHaveBeenCalled();
+    expect(server.hostAgents).not.toHaveBeenCalled();
+  });
+
+  it("drops a reply that arrives after the connection changed, even to the same profile", async () => {
+    const server = connect([codex], lab);
+    const { container } = render(<HostAgentsSection />);
+    // Reconnected to the same profile before the first reply: a new epoch, so a new request.
+    server.move({ epoch: 2 });
+    studio.target = { epoch: 2 };
+    expect(server.hostAgents).toHaveBeenCalledTimes(2);
+    await server.reply([{ ...codex, entry: { ...entry, command: "/stale/node" } }]);
+    expect(container.textContent).toBe("");
+    await server.reply();
+    fireEvent.click(await screen.findByRole("button", { name: "Add to configuration" }));
+    expect(studio.edits).toEqual([{ kind: "insert", path: ["agents"], index: 1, value: entry }]);
+  });
+
+  it("stops offering a report once the connection or the draft's target moves on", async () => {
+    const server = connect([codex], lab);
+    const { container } = render(<HostAgentsSection />);
+    await server.reply();
+    const button = await screen.findByRole("button", { name: "Add to configuration" });
+    // The draft now belongs to another target: the old report is neither shown nor staged.
+    studio.target = { epoch: 2 };
+    fireEvent.click(button);
+    expect(studio.edits).toEqual([]);
+    // A same-profile reconnect: the report is cleared and read again for the new connection.
+    server.move({ epoch: 2 });
+    expect(container.textContent).toBe("");
+    expect(server.hostAgents).toHaveBeenCalledTimes(2);
+    await server.reply();
+    fireEvent.click(await screen.findByRole("button", { name: "Add to configuration" }));
+    expect(studio.edits).toHaveLength(1);
   });
 });

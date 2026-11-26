@@ -61,6 +61,8 @@ export interface HostAgent {
    * part (Claude Code: the unmodified binary, the person's own account).
    */
   signIn: "device-code" | "yourself";
+  /** The executable inside the install (`files/…`), as the server program records it. */
+  binary: string;
   /** For `yourself`: the executable inside the install (`files/…`) whose own sign-in the person runs. */
   executable?: string;
 }
@@ -72,6 +74,7 @@ export const HOST_AGENTS: Readonly<Record<string, HostAgent>> = {
     version: HOST_AGENT_LOCK.codex!.version,
     loginOrigins: ["https://auth.openai.com"],
     signIn: "device-code",
+    binary: "node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex",
   },
   copilot: {
     id: "copilot",
@@ -79,6 +82,7 @@ export const HOST_AGENTS: Readonly<Record<string, HostAgent>> = {
     version: HOST_AGENT_LOCK.copilot!.version,
     loginOrigins: ["https://github.com"],
     signIn: "device-code",
+    binary: "node_modules/@github/copilot-linux-x64/copilot",
   },
   claude: {
     id: "claude",
@@ -86,6 +90,7 @@ export const HOST_AGENTS: Readonly<Record<string, HostAgent>> = {
     version: HOST_AGENT_LOCK.claude!.version,
     loginOrigins: [],
     signIn: "yourself",
+    binary: "node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude",
     executable: "node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude",
   },
 };
@@ -322,8 +327,32 @@ function managedRoot(value: unknown): string | undefined {
  */
 function signInCommandFor(agent: HostAgent, root: string): string | undefined {
   if (agent.signIn !== "yourself" || !agent.executable) return undefined;
-  const base = `${root}/agents/${agent.id}`;
-  return `CLAUDE_CONFIG_DIR=${base}/home ${base}/${agent.version}/files/${agent.executable} auth login`;
+  const { dir, home } = managedLayout(agent, root);
+  return `CLAUDE_CONFIG_DIR=${home} ${dir}/files/${agent.executable} auth login`;
+}
+
+/** Where the pinned version of `agent` lives under the managed `root`: one layout for status, install and config. */
+function managedLayout(agent: HostAgent, root: string): { dir: string; home: string; binary: string } {
+  const dir = `${root}/agents/${agent.id}/${agent.version}`;
+  return { dir, home: `${root}/agents/${agent.id}/home`, binary: `${dir}/files/${agent.binary}` };
+}
+
+/**
+ * The managed root of an install the server reported, only when it is the pinned version laid
+ * out exactly as a managed one is: its directory, profile and executable where `managedLayout`
+ * puts them, under a managed root. Nothing is built from any other install.
+ */
+function installedRoot(installed: HostAgentInstalled): string | undefined {
+  const agent = hostAgent(installed.agent);
+  if (installed.version !== agent.version) return undefined;
+  const suffix = `/agents/${agent.id}/${agent.version}`;
+  if (!installed.dir.endsWith(suffix)) return undefined;
+  const root = managedRoot(installed.dir.slice(0, -suffix.length));
+  if (!root) return undefined;
+  const layout = managedLayout(agent, root);
+  return installed.dir === layout.dir && installed.home === layout.home && installed.binary === layout.binary
+    ? root
+    : undefined;
 }
 
 /** Every known agent's state on the server, from one run of the program there. */
@@ -481,16 +510,9 @@ export async function signInHostAgent(
 /** For an agent the person signs in themselves: what to run on the server, from where it was installed. */
 export function hostAgentSignInCommand(installed: HostAgentInstalled): string | undefined {
   const agent = hostAgent(installed.agent);
-  if (agent.signIn !== "yourself" || !agent.executable || installed.version !== agent.version) return undefined;
-  // Only an install laid out exactly as a managed one is: the version under the agent's directory
-  // in a managed root, its profile beside it, its executable inside it. Otherwise no command.
-  const suffix = `/agents/${agent.id}/${agent.version}`;
-  if (!installed.dir.endsWith(suffix)) return undefined;
-  const root = managedRoot(installed.dir.slice(0, -suffix.length));
-  if (!root) return undefined;
-  if (installed.home !== `${root}/agents/${agent.id}/home`) return undefined;
-  if (installed.binary !== `${installed.dir}/files/${agent.executable}`) return undefined;
-  return signInCommandFor(agent, root);
+  // Only from an install laid out exactly as a managed one is (see `installedRoot`).
+  const root = installedRoot(installed);
+  return root ? signInCommandFor(agent, root) : undefined;
 }
 
 /** One `agents:` entry of the server's own config: what runs an installed agent there. */
@@ -503,13 +525,14 @@ export interface HostAgentConfigEntry {
 }
 
 /**
- * The `agents:` entry that runs the pinned version of `id` installed under the managed `root`, as
- * `hostAgentSettings` writes it for an install there. Every part is fixed here.
+ * The `agents:` entry that runs the pinned version of `id` installed under the managed `root` (see
+ * `managedRoot`; any other root is refused), as `hostAgentSettings` writes it for an install
+ * there. Every part is fixed here.
  */
 export function hostAgentEntry(id: string, root: string): HostAgentConfigEntry {
   const agent = hostAgent(id);
-  const dir = `${root}/agents/${agent.id}/${agent.version}`;
-  const home = `${root}/agents/${agent.id}/home`;
+  if (managedRoot(root) !== root) throw new HostAgentRefused("That is not a managed server root.");
+  const { dir, home, binary } = managedLayout(agent, root);
   const node = `${root}/current/runtime/bin/node`;
   if (agent.id === "claude")
     return {
@@ -530,7 +553,7 @@ export function hostAgentEntry(id: string, root: string): HostAgentConfigEntry {
   return {
     id: "copilot",
     name: agent.name,
-    command: `${dir}/files/node_modules/@github/copilot-linux-x64/copilot`,
+    command: binary,
     args: ["--acp", "--stdio", "--no-auto-update", "--disable-builtin-mcps", "--no-ask-user"],
     env: { COPILOT_HOME: home, COPILOT_AUTO_UPDATE: "false", COPILOT_ALLOW_ALL: "false" },
   };
@@ -539,10 +562,13 @@ export function hostAgentEntry(id: string, root: string): HostAgentConfigEntry {
 /** The YAML for the server's own config that runs an installed agent, under `agents:`. */
 export function hostAgentSettings(installed: HostAgentInstalled): string {
   const agent = hostAgent(installed.agent);
-  const suffix = `/agents/${agent.id}/${installed.version}`;
-  if (installed.version !== agent.version || !installed.dir.endsWith(suffix))
-    throw new HostAgentRefused("The install is not under the server root.");
-  const entry = hostAgentEntry(agent.id, installed.dir.slice(0, -suffix.length));
+  // Only from an install laid out exactly as a managed one is, like the sign-in command and status.
+  const root = installedRoot(installed);
+  if (!root)
+    throw new HostAgentRefused(
+      `${agent.name} ${installed.version} is not laid out as a managed install at ${installed.dir}, so no configuration is suggested for it.`,
+    );
+  const entry = hostAgentEntry(agent.id, root);
   const quote = (value: string) =>
     /^[A-Za-z0-9._/@-]+$/.test(value) && !/^(?:true|false|null|~|[0-9.]+)$/.test(value) ? value : JSON.stringify(value);
   return [
