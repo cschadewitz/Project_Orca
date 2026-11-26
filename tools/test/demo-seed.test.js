@@ -294,12 +294,12 @@ async function freePort(host) {
 }
 
 /** Starts the stand-in daemon for `config` on `host` and returns what it was sent. */
-async function bundledDaemon({ cwd, config, host = "127.0.0.1" }) {
+async function bundledDaemon({ cwd, config, host = "127.0.0.1", port: wanted }) {
   const dir = mkdtempSync(join(tmpdir(), "demo-seed-daemon-"));
   const log = join(dir, "requests.log");
   writeFileSync(log, "");
   writeFileSync(join(dir, "orca-daemon.mjs"), FAKE_DAEMON);
-  const port = await freePort(host);
+  const port = wanted ?? (await freePort(host));
   const urlHost = host.includes(":") ? `[${host}]` : host;
   const child = spawn(
     process.execPath,
@@ -348,15 +348,30 @@ describe.skipIf(process.platform !== "linux")("finding the daemon without --url 
     "keeps the listener's address family: an IPv6 daemon's port on 127.0.0.1 gets no bearer",
     async () => {
       const selected = workspace();
-      const daemon = await bundledDaemon({ cwd: selected, config: join(selected, "orca.config.yaml"), host: "::1" });
-      // Something else on the same port number over IPv4: the old discovery rewrote to 127.0.0.1.
-      const decoy = createServer((req, res) => {
-        decoyAuth.push(req.headers.authorization ?? null);
-        res.end();
-      });
       const decoyAuth = [];
-      await new Promise((done) => decoy.listen(daemon.port, "127.0.0.1", done));
-      cleanup.push(() => new Promise((done) => decoy.close(done)));
+      // Something else on the same port number over IPv4: the old discovery rewrote to 127.0.0.1.
+      // The IPv4 side is bound first, on a port the kernel picks, so it cannot collide (#1245);
+      // only the daemon's [::1] side can be taken, and then the pair is chosen again.
+      let daemon;
+      for (let attempt = 0; attempt < 10 && !daemon; attempt++) {
+        const decoy = createServer((req, res) => {
+          decoyAuth.push(req.headers.authorization ?? null);
+          res.end();
+        });
+        await new Promise((done, failed) => {
+          decoy.once("error", failed);
+          decoy.listen(0, "127.0.0.1", done);
+        });
+        cleanup.push(() => new Promise((done) => decoy.close(done)));
+        const { port } = decoy.address();
+        daemon = await bundledDaemon({
+          cwd: selected,
+          config: join(selected, "orca.config.yaml"),
+          host: "::1",
+          port,
+        }).catch(() => undefined);
+      }
+      expect(daemon, "no port was free on both 127.0.0.1 and [::1] in ten tries").toBeDefined();
       const { code, output } = await prepare(selected);
       expect(code, output).toBe(0);
       expect(output).toContain(`daemon ${daemon.url}`);
