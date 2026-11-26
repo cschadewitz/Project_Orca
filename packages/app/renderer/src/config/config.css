@@ -257,6 +257,14 @@
   gap: var(--space-3);
 }
 
+/* One agent in the review's capability preview: its id, then its notes and list, one per line
+   (#1200). */
+.orca-config__capability {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
 /* Remote daemons (#1206): one block per configured remote, not a row, because it holds a
    sentence on where its enrollment stands and, while open, the enrollment form itself. */
 .orca-config__remotes {

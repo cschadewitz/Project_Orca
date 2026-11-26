@@ -34,11 +34,14 @@ export function ConfigurationStudioSurface({
   open,
   launch,
   onLaunch,
+  onCloseLaunch,
 }: {
   connection: ConnectionState;
   open?: ConfigDocument;
   launch?: ReactNode;
   onLaunch?: () => void;
+  /** Leaves Launch work for the configuration; the header's views call it first (#1112). */
+  onCloseLaunch?: () => void;
 }): JSX.Element {
   useSurfaceDensity();
   const narrow = useSidebarCollapsed();
@@ -112,29 +115,34 @@ export function ConfigurationStudioSurface({
                 Launch work
               </Button>
             )}
-            {!launch && (
-              <>
-                <button
-                  type="button"
-                  className={`orca-seg__btn ${textClass("label")}`}
-                  aria-pressed={templates}
-                  onClick={() => showTemplates(true)}
-                >
-                  Templates
-                </button>
-                {(["form", "raw"] as const).map((mode) => (
-                  <button
-                    key={mode}
-                    type="button"
-                    className={`orca-seg__btn ${textClass("label")}`}
-                    aria-pressed={!templates && (studio?.mode ?? "form") === mode}
-                    onClick={() => switchMode(mode)}
-                  >
-                    {mode === "form" ? "Form" : "Raw"}
-                  </button>
-                ))}
-              </>
-            )}
+            {/* The views stay in the header while Launch work is open, so there is a way back
+                to the configuration from where a person looks for one (#1112). Choosing one
+                leaves Launch work first; none of them is pressed while it is open. */}
+            <button
+              type="button"
+              className={`orca-seg__btn ${textClass("label")}`}
+              aria-pressed={!launch && templates}
+              onClick={() => {
+                onCloseLaunch?.();
+                showTemplates(true);
+              }}
+            >
+              Templates
+            </button>
+            {(["form", "raw"] as const).map((mode) => (
+              <button
+                key={mode}
+                type="button"
+                className={`orca-seg__btn ${textClass("label")}`}
+                aria-pressed={!launch && !templates && (studio?.mode ?? "form") === mode}
+                onClick={() => {
+                  onCloseLaunch?.();
+                  switchMode(mode);
+                }}
+              >
+                {mode === "form" ? "Form" : "Raw"}
+              </button>
+            ))}
           </div>
         }
       />
