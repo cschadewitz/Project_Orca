@@ -22,6 +22,9 @@ import {
   readFileSync,
   readlinkSync,
   realpathSync,
+  closeSync,
+  constants,
+  openSync,
   writeFileSync,
 } from "node:fs";
 import { randomBytes } from "node:crypto";
@@ -372,17 +375,40 @@ function writeFiles(workspace, config, files) {
   return edits;
 }
 
+/**
+ * A new file only this user can read, for the whole workspace config (which may hold values the
+ * person would not share): created exclusively, so an existing file or a link at the path is
+ * refused, never followed or overwritten.
+ */
+function privateNewFile(path) {
+  const flags = constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0);
+  try {
+    return openSync(resolve(path), flags, 0o600);
+  } catch (error) {
+    if (error.code === "EEXIST")
+      throw new Error(`--config-out ${path} already exists; name a new file`, { cause: error });
+    throw error;
+  }
+}
+
 async function prepare(call, workspace) {
   const files = assets();
   const current = await call("config.get");
   log(`workspace ${workspace}`);
+  // Claimed before anything is written, so a refused path leaves the workspace as it was.
+  const configOut = args["config-out"] ? privateNewFile(args["config-out"]) : undefined;
   const edits = writeFiles(workspace, current.config, files);
   if (edits.length === 0) {
+    if (configOut !== undefined) closeSync(configOut);
     log("config already has the demo agents, workflows and templates");
-  } else if (args["config-out"]) {
+  } else if (configOut !== undefined) {
     // Leave the write to the person (or a test) in the app's own Config > Raw editor: the
     // desktop app binds a config saved there for reopening, and refuses one saved elsewhere.
-    writeFileSync(resolve(args["config-out"]), json(applyEdits(structuredClone(current.config.parsed ?? {}), edits)));
+    try {
+      writeFileSync(configOut, json(applyEdits(structuredClone(current.config.parsed ?? {}), edits)));
+    } finally {
+      closeSync(configOut);
+    }
     log(`config: ${edits.length} edits written to ${args["config-out"]}; paste it into Config > Raw and save`);
     return { workspace, restart: true };
   } else {

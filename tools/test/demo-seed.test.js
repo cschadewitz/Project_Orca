@@ -3,15 +3,30 @@
  * pointed at, through that workspace's own loopback daemon, and only the plans it made itself.
  * A fake daemon records every request, so each case can show what the seed never sent.
  */
-import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync, spawn } from "node:child_process";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, beforeAll, expect, it } from "vitest";
 
 const SEED = fileURLToPath(new URL("../demo-seed/seed.mjs", import.meta.url));
+const BUILD = fileURLToPath(new URL("../demo-seed/build.mjs", import.meta.url));
+
+// Prepare copies the bundled scripted agent into the workspace, so the bundle must exist.
+beforeAll(() => {
+  execFileSync(process.execPath, [BUILD], { stdio: "ignore" });
+}, 120_000);
 const TOKEN = "demo-seed-test-token";
 const cleanup = [];
 afterEach(async () => {
@@ -210,3 +225,29 @@ it("with --config-out, prepare writes the config to the file and saves nothing t
   expect(written.agents.map((agent) => agent.id)).toContain("atlas");
   expect(written.workflows).toContain("first-run/workflow.yaml");
 }, 30_000);
+
+it("--config-out creates a new private file and refuses an existing file or link", async () => {
+  const selected = workspace();
+  const config = { path: join(selected, "orca.config.yaml"), revision: "r1", parsed: { agents: [] } };
+  const daemon = await fakeDaemon({ "config.get": { config }, "agents.list": { agents: [] } });
+  const run = (out) => seed(["--workspace", selected, "--url", daemon.url, "--phase", "prepare", "--config-out", out]);
+
+  const fresh = join(selected, "fresh.json");
+  expect((await run(fresh)).code).not.toBe(1);
+  expect(statSync(fresh).mode & 0o777).toBe(0o600);
+
+  const existing = join(selected, "existing.json");
+  writeFileSync(existing, "keep me\n");
+  const refused = await run(existing);
+  expect(refused.code).toBe(1);
+  expect(refused.output).toMatch(/already exists/);
+  expect(readFileSync(existing, "utf8")).toBe("keep me\n");
+
+  const target = join(selected, "target.json");
+  writeFileSync(target, "keep me too\n");
+  const link = join(selected, "link.json");
+  symlinkSync(target, link);
+  expect((await run(link)).code).toBe(1);
+  expect(readFileSync(target, "utf8")).toBe("keep me too\n");
+  expect(daemon.calls.filter((call) => MUTATIONS.includes(call.method))).toEqual([]);
+}, 60_000);

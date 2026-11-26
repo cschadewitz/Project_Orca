@@ -10,7 +10,7 @@
  *     --project=linux-native visual-sweep
  * SWEEP_SEED: the packed seed.mjs (default: the repo's dist). SWEEP_NODE: Node 22+ (default: this one).
  */
-import { test, type ElectronApplication, type Page } from "@playwright/test";
+import { expect, test, type ElectronApplication, type Page } from "@playwright/test";
 import { execFile } from "node:child_process";
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -40,6 +40,11 @@ if (OUT) {
     // A login keyring that exists and is locked, unlocked when the app asks: a signed-in desktop.
     await session.lockedKeyring();
     session.answerPrompts("unlock");
+  });
+  test.afterEach(async () => {
+    const app = running;
+    running = undefined;
+    if (app) await quit(session, app, "x11").catch(() => app.app.close().catch(() => undefined));
   });
   test.afterAll(async () => {
     await session?.stop();
@@ -152,14 +157,18 @@ async function capture(page: Page, label: string) {
 }
 
 async function seed(workspace: Workspace, phase: string, extra: string[] = []) {
-  const { stdout, stderr } = await execute(
-    NODE,
-    [SEED, "--workspace", workspace.workspace, "--phase", phase, ...extra],
-    {
-      timeout: 400_000,
-    },
-  ).catch((error) => ({ stdout: String(error.stdout), stderr: String(error.stderr) + String(error.message) }));
-  await writeFile(join(OUT, `seed-${phase}.log`), stdout + stderr);
+  // Any non-zero exit fails the sweep: prepare with --config-out exits 0, and so does populate.
+  const result = await execute(NODE, [SEED, "--workspace", workspace.workspace, "--phase", phase, ...extra], {
+    timeout: 400_000,
+  }).then(
+    ({ stdout, stderr }) => ({ ok: true, output: stdout + stderr }),
+    (error: { stdout?: string; stderr?: string; message: string }) => ({
+      ok: false,
+      output: `${error.stdout ?? ""}${error.stderr ?? ""}${error.message}`,
+    }),
+  );
+  await writeFile(join(OUT, `seed-${phase}.log`), result.output);
+  if (!result.ok) throw new Error(`demo seed ${phase} failed:\n${result.output}`);
 }
 
 async function relaunch(profile: string, old?: Launched): Promise<Launched> {
@@ -167,12 +176,15 @@ async function relaunch(profile: string, old?: Launched): Promise<Launched> {
     await quit(session, old, "x11");
   }
   const launched = await launchInstalled(session, profile, "x11");
+  running = launched;
   const log = join(OUT, `main-${++launches}.log`);
   for (const stream of [launched.app.process().stdout, launched.app.process().stderr])
     stream?.on("data", (chunk: Buffer) => void appendFile(log, chunk).catch(() => undefined));
   return launched;
 }
 let launches = 0;
+/** The app this test launched last, quit after the test whatever happened. */
+let running: Launched | undefined;
 
 const SURFACES = ["Attention", "Runs", "Plan", "Workflows", "Agents", "Config", "Machines"];
 
@@ -187,10 +199,13 @@ async function setSize(app: ElectronApplication, width: number, height: number) 
   });
 }
 
+/** Steps that failed: each is written down so the rest of the sweep still runs, and the test fails at the end. */
+const failures: string[] = [];
 async function attempt(label: string, step: () => Promise<unknown>) {
   try {
     await step();
   } catch (error) {
+    failures.push(label);
     await writeFile(join(OUT, `error-${++shot}-${label.replace(/[^a-z0-9-]+/gi, "-")}.txt`), String(error));
   }
 }
@@ -239,36 +254,6 @@ async function explore(page: Page, surface: string) {
       await capture(page, `${surface}-open-${label}`);
       await closeOverlays(page);
     });
-}
-
-/** A config saved outside the app needs the Config surface's review and bind before a reopen connects. */
-async function bindChangedConfig(page: Page, label: string) {
-  const live = await connected(page).then(
-    () => true,
-    () => false,
-  );
-  if (live) return;
-  await openSurface(page, "Config");
-  await capture(page, `${label}-config`);
-  await page.getByRole("button", { name: "Review saved configuration for reopening" }).click();
-  await page
-    .getByRole("button", { name: "Bind reviewed saved configuration" })
-    .waitFor({ timeout: 60_000 })
-    .catch(() => undefined);
-  await capture(page, `${label}-review`);
-  await writeFile(join(OUT, `${label}-review.txt`), await page.locator("main").first().innerText());
-  await page.getByRole("button", { name: "Bind reviewed saved configuration" }).click({ timeout: 5000 });
-  await page
-    .getByText(/Saved configuration bound for reopening|could not be confirmed/)
-    .first()
-    .waitFor();
-  await capture(page, `${label}-bound`);
-  await page.getByRole("button", { name: "Connect selected local workspace" }).click({ timeout: 10_000 });
-  await page
-    .getByText(/Setup was refused|^connected$/)
-    .first()
-    .waitFor({ timeout: 60_000 });
-  await capture(page, `${label}-connected`);
 }
 
 /** Config > Raw: replace the document, Validate and review, Save, Apply, as a person would. */
@@ -327,9 +312,13 @@ async function deepViews(page: Page, prefix: string) {
   await step("runs-select-waiting", "Runs", () =>
     page.getByRole("treeitem").filter({ hasText: "waiting" }).first().click({ timeout: 5000 }),
   );
-  await step("runs-select-failed", "Runs", () =>
-    page.getByRole("treeitem").filter({ hasText: "failed" }).first().click({ timeout: 5000 }),
-  );
+  await step("runs-select-failed", "Runs", async () => {
+    await click(/^Filter by status/, false);
+    await page.getByRole("menuitem", { name: "failed", exact: true }).click({ timeout: 5000 });
+    await page.getByRole("treeitem").first().click({ timeout: 5000 });
+    await click(/^Filter by status/, false);
+    await page.getByRole("menuitem", { name: "All statuses" }).click({ timeout: 5000 });
+  });
   await step("runs-expand-program", "Runs", async () => {
     const row = page.getByRole("treeitem").filter({ hasText: "Platform upgrade" }).first();
     await row.click({ timeout: 5000 });
@@ -367,11 +356,13 @@ async function deepViews(page: Page, prefix: string) {
   await step("agents-first", "Agents", () =>
     page.locator("main article, main [role=listitem]").first().click({ timeout: 5000 }),
   );
-  await step("config-launch-work", "Config", () => click("Launch work"));
   await step("config-templates", "Config", () => click("Templates"));
   await step("config-raw", "Config", () => click("Raw"));
-  await step("machines-watch", "Machines", () => click("Watch a machine…"));
+  await step("config-form", "Config", () => click("Form"));
+  await step("machines-watch", "Machines", () => click(/^Watch a machine/, false));
   await closeOverlays(page);
+  // Last of the Config views: opening Launch work collapses Config's view switcher (#1112).
+  await step("config-launch-work", "Config", () => click("Launch work"));
   await step("connect-add-profile", "Runs", async () => {
     await click(/Connect to a daemon/, false);
     await click("Add profile…");
@@ -406,7 +397,8 @@ sweep("seed a fresh install and capture every surface", async () => {
   await capture(launched.page, "first-screen");
   await firstRunSetup(launched.app, launched.page, workspace);
   await capture(launched.page, "after-first-run");
-  const configText = join(OUT, "seeded-config.json");
+  // The whole workspace config: kept with the session, not with the shareable screenshots.
+  const configText = join(session.root, "seeded-config.json");
   await seed(workspace, "prepare", ["--config-out", configText]);
   await saveRawConfig(launched.page, await readFile(configText, "utf8"), "seed");
   await bindWhileLive(launched.page, "seed");
@@ -415,6 +407,21 @@ sweep("seed a fresh install and capture every surface", async () => {
   await seed(workspace, "populate");
   const { page, app } = launched;
   await setSize(app, 1280, 900);
+  // The seed's data is there before any of it is judged by eye.
+  await openSurface(page, "Runs");
+  await expect
+    .poll(async () => Number(/(\d+)\s+runs\b/.exec(await page.locator("body").innerText())?.[1] ?? 0), {
+      timeout: 60_000,
+    })
+    .toBeGreaterThanOrEqual(40)
+    .finally(() => capture(page, "seeded-runs"));
+  await openSurface(page, "Agents");
+  for (const agent of ["atlas", "asking-builder", "planner-billing"])
+    await expect(page.getByText(agent, { exact: true }).first()).toBeVisible();
+  await openSurface(page, "Attention");
+  await expect(page.getByText(/^PERMISSION$/i).first()).toBeVisible();
+  await openSurface(page, "Workflows");
+  await expect(page.getByText("release-train", { exact: true }).first()).toBeVisible();
   await everySurface(page, "1280");
   for (const surface of SURFACES) {
     await attempt(surface, () => openSurface(page, surface));
@@ -444,27 +451,43 @@ sweep("seed a fresh install and capture every surface", async () => {
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.webContents.setZoomFactor(1.5));
   await everySurface(page, "zoom150");
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.webContents.setZoomFactor(1));
-  await writeFile(join(OUT, "workspace.txt"), workspace.workspace);
+  expect(failures, "sweep steps that failed (see error-*.txt in SWEEP_OUT)").toEqual([]);
 });
 
-/** #1192: an agent added in Config and applied (restart-required), then a reopen. MINIMAL_BIND binds first. */
-sweep("minimal: one agent added in Config, then reopen", async () => {
-  test.setTimeout(10 * 60_000);
+async function addAgentInConfig(label: string, bind: boolean) {
   await mkdir(join(OUT, "logs"), { recursive: true });
-  const workspace = await disposableWorkspace(join(session.root, "minimal"), session.env);
-  const profile = join(session.root, "profile-minimal");
+  const workspace = await disposableWorkspace(join(session.root, label), session.env);
+  const profile = join(session.root, `profile-${label}`);
   let launched = await relaunch(profile);
   await firstRunSetup(launched.app, launched.page, workspace);
   const doc = JSON.parse(await readFile(join(workspace.workspace, "orca.config.yaml"), "utf8"));
   doc.agents = [{ id: "echo", name: "Echo", command: "/bin/cat", args: [], roles: [] }];
-  await saveRawConfig(launched.page, JSON.stringify(doc, null, 2), "minimal");
-  if (process.env.MINIMAL_BIND) await bindWhileLive(launched.page, "minimal");
+  await saveRawConfig(launched.page, JSON.stringify(doc, null, 2), label);
+  if (bind) await bindWhileLive(launched.page, label);
   launched = await relaunch(profile, launched);
-  await launched.page
-    .getByText(/^connected$|^No daemon to ask$/)
-    .first()
-    .waitFor({ timeout: 60_000 });
-  await capture(launched.page, "minimal-reopen");
-  await writeFile(join(OUT, "minimal-reopen.txt"), await launched.page.locator("body").innerText());
-  if (!process.env.MINIMAL_BIND) await bindChangedConfig(launched.page, "minimal-after");
+  return launched.page;
+}
+
+/** What a fix of #1192 must make true: after the restart the app reconnects and lists the new agent. */
+async function reconnectedWithAgent(page: Page, label: string) {
+  try {
+    await connected(page);
+    await openSurface(page, "Agents");
+    await expect(page.getByText("echo", { exact: true }).first()).toBeVisible({ timeout: 30_000 });
+  } finally {
+    await capture(page, `${label}-after-restart`);
+  }
+}
+
+sweep("#1192 acceptance: an agent added in Config survives an app restart", async () => {
+  test.setTimeout(10 * 60_000);
+  // Expected to fail until #1192 is fixed: the reopened app never starts its daemon. When this
+  // starts passing, Playwright reports it, and the fix PR removes this line.
+  test.fail(true, "#1192");
+  await reconnectedWithAgent(await addAgentInConfig("issue-1192", false), "issue-1192");
+});
+
+sweep("#1192 workaround: binding the saved config before the restart keeps it reopenable", async () => {
+  test.setTimeout(10 * 60_000);
+  await reconnectedWithAgent(await addAgentInConfig("issue-1192-bound", true), "issue-1192-bound");
 });

@@ -55,7 +55,7 @@ node orca-demo-seed/seed.mjs --workspace <app workspace folder>
 | `--phase prepare\|populate\|all` | `all` | `all` prepares, and populates only if no restart is needed. |
 | `--scale <n>` | `1` | Submit the work items and workflow runs `n` times. |
 | `--agent-node <path>` | this Node | What runs the agents. The installed ORCA binary works (`/opt/ORCA/orca-desktop`); the seed then sets `ELECTRON_RUN_AS_NODE=1` for the agents. |
-| `--config-out <file>` | off | Prepare only: write the seeded config to `<file>` instead of saving it through the daemon, for pasting into the desktop app's Config > Raw (above). |
+| `--config-out <file>` | off | Prepare only: write the seeded config to `<file>` instead of saving it through the daemon, for pasting into the desktop app's Config > Raw (above). The file is the **whole** workspace config, including anything already in it that you might not share, so it is created new and private (mode 600); an existing file or link at the path is refused. Keep it out of anything you share, such as sweep screenshots, and delete it after pasting. |
 | `--settle <seconds>` | `150` | How long populate keeps answering and deciding. |
 | `--force` | off | Populate again on a seeded workspace (`demo-seed/seeded.json` marks one). |
 
