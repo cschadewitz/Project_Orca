@@ -26,6 +26,7 @@ const snapshot = (online: boolean): TailnetSnapshot => ({
 });
 
 function rig(initial: TailnetRead = { state: "running", snapshot: snapshot(true) }) {
+  let shown = ["lab", "moved"];
   let answer = initial;
   const pending: (() => void)[] = [];
   let held = false;
@@ -39,10 +40,11 @@ function rig(initial: TailnetRead = { state: "running", snapshot: snapshot(true)
       const value = answer;
       return held ? new Promise((resolve) => pending.push(() => resolve(value))) : Promise.resolve(value);
     },
-    bindings: () => [
-      { id: "lab", tailnet: { node: "nBuild1", name: "build-1.example-tailnet.ts.net" } },
-      { id: "moved", tailnet: { node: "nGone", name: "build-1.example-tailnet.ts.net" } },
-    ],
+    bindings: () =>
+      [
+        { id: "lab", tailnet: { node: "nBuild1", name: "build-1.example-tailnet.ts.net" } },
+        { id: "moved", tailnet: { node: "nGone", name: "build-1.example-tailnet.ts.net" } },
+      ].filter((binding) => shown.includes(binding.id)),
     onChange: (next) => changes.push(next),
     setInterval: (run) => {
       ticks.push(run);
@@ -62,6 +64,7 @@ function rig(initial: TailnetRead = { state: "running", snapshot: snapshot(true)
       return cleared;
     },
     answer: (next: TailnetRead) => (answer = next),
+    show: (ids: string[]) => (shown = ids),
     hold: () => (held = true),
     release: () => pending.splice(0).forEach((resolve) => resolve()),
     settle,
@@ -126,6 +129,25 @@ describe("tailnet presence", () => {
         ["bundled", "profile:lab", "profile:plain"],
       ),
     ).toEqual([{ id: "lab", tailnet: lab }]);
+  });
+
+  it("drops a profile that left the screen at once, even while a read is pending, for a new subscriber too", async () => {
+    const r = rig();
+    r.watch.watch(1, true);
+    await r.settle();
+    expect(Object.keys(r.watch.snapshot)).toEqual(["lab", "moved"]);
+    // A read is pending when `lab` leaves the screen.
+    r.hold();
+    r.ticks[0]!();
+    r.show(["moved"]);
+    r.watch.refresh();
+    // The watching window is told now, and a window joining now gets no `lab` either.
+    expect(r.changes.at(-1)).toEqual({ moved: { kind: "different-machine" } });
+    r.watch.watch(2, true);
+    expect(r.watch.snapshot).toEqual({ moved: { kind: "different-machine" } });
+    r.release();
+    await r.settle();
+    expect(r.watch.snapshot).not.toHaveProperty("lab");
   });
 
   it("says nothing without a running client", async () => {

@@ -55,7 +55,9 @@ export class TailnetPresenceWatch {
 
   constructor(private readonly o: TailnetPresenceOptions) {}
 
+  /** What is known now, only for the profiles shown now: never one that has left the screen. */
   get snapshot(): PresenceSnapshot {
+    this.prune();
     return this.current;
   }
 
@@ -70,7 +72,18 @@ export class TailnetPresenceWatch {
 
   /** The profiles on screen changed: read again now, while a window watches. */
   refresh(): void {
+    // A profile that left the screen is dropped now, not when the next read finishes.
+    if (this.prune()) this.o.onChange(this.current);
     if (this.watchers.size > 0) void this.poll();
+  }
+
+  /** Drop entries for profiles no longer shown. Whether anything was dropped. */
+  private prune(): boolean {
+    const shown = new Set(this.o.bindings().map((binding) => binding.id));
+    const kept = Object.fromEntries(Object.entries(this.current).filter(([id]) => shown.has(id)));
+    if (Object.keys(kept).length === Object.keys(this.current).length) return false;
+    this.current = kept;
+    return true;
   }
 
   close(): void {
