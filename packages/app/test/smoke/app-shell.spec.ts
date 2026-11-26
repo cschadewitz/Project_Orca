@@ -273,6 +273,9 @@ test("the window comes up on the built renderer with a bridge in it", async () =
     // #357's recovery intents (#932): confirmed retry/abandon of a reviewed checkpoint, whose key
     // lives in main. Added to `src/bridge.ts` without being recorded here; recorded with #905.
     "recoveryIntents",
+    // #1206: delegation remotes and their enrollment by the daemon that owns the workspace.
+    // Never a token: the renderer sends a fingerprint, and a credential only when one is pasted.
+    "remotes",
     "runs",
     // #702/#706's opaque review commands (3f72ee46), validated by the closed main-process
     // dispatcher. This bridge does not register the family on the production daemon.

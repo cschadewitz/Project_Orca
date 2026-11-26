@@ -10,9 +10,7 @@
  * never enroll one remote at once, and every later delegation trusts only the record either
  * leaves. Before it writes anything it requires the fence to be still held (`admitted`).
  */
-import { existsSync, mkdirSync, openSync, writeSync, fsyncSync, closeSync, renameSync } from "node:fs";
-import { randomUUID } from "node:crypto";
-import { dirname } from "node:path";
+import { existsSync } from "node:fs";
 import { OrcaError, type OrcaConfig, type RemoteDaemonSpec } from "@orca/core";
 import type {
   RemoteEnrollmentView,
@@ -22,7 +20,15 @@ import type {
   RemoteView,
 } from "@orca/protocol";
 import type { SshTunnel } from "@orca/protocol/remote-access";
-import { durableEnrollment, enrollRemote, pinFingerprints, readEnrollment, routeOf, sameRoute } from "./enrollment.js";
+import {
+  durableEnrollment,
+  enrollRemote,
+  pinFingerprints,
+  readEnrollment,
+  readIssuedToken,
+  routeOf,
+  sameRoute,
+} from "./enrollment.js";
 import { parseRemoteCredential, readRemoteCredential, remoteFiles, remoteProfile } from "./index.js";
 
 export interface RemotesSource {
@@ -58,6 +64,18 @@ function delegatedWorkflows(config: Pick<OrcaConfig, "agents">, id: string): str
   ].sort();
 }
 
+/** The credential a pasted enrollment saved in its own generation file, or undefined. */
+function pastedToken(file: string): string | undefined {
+  let record;
+  try {
+    record = readEnrollment(file);
+  } catch {
+    return undefined;
+  }
+  if (!record?.tokenFile || record.issued) return undefined;
+  return readIssuedToken(file, record);
+}
+
 function enrollmentView(remote: RemoteDaemonSpec, file: string): RemoteEnrollmentView {
   let record;
   try {
@@ -84,20 +102,6 @@ function enrollmentView(remote: RemoteDaemonSpec, file: string): RemoteEnrollmen
   };
 }
 
-/** Save a credential the person pasted where the remote's config says it lives: this user's only. */
-function saveCredential(file: string, token: string): void {
-  mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
-  const temp = `${file}.${randomUUID()}.tmp`;
-  const fd = openSync(temp, "wx", 0o600);
-  try {
-    writeSync(fd, `${token}\n`);
-    fsyncSync(fd);
-  } finally {
-    closeSync(fd);
-  }
-  renameSync(temp, file);
-}
-
 export function remotesModel(source: RemotesSource): RemotesModel {
   const view = (remote: RemoteDaemonSpec, config: Pick<OrcaConfig, "agents">): RemoteView => {
     const files = remoteFiles(source.configDir, remote);
@@ -110,7 +114,7 @@ export function remotesModel(source: RemotesSource): RemotesModel {
       workflows: delegatedWorkflows(config, remote.id),
       pinned: pinFingerprints(files.knownHostsFile),
       jumpPinned: remote.jump ? pinFingerprints(`${files.knownHostsFile}.jump`) : [],
-      credentialSaved: existsSync(files.credentialFile),
+      credentialSaved: existsSync(files.credentialFile) || pastedToken(files.enrollmentFile) !== undefined,
       enrollment: enrollmentView(remote, files.enrollmentFile),
     };
   };
@@ -140,7 +144,11 @@ export function remotesModel(source: RemotesSource): RemotesModel {
       const profile = remoteProfile(remote);
       const files = remoteFiles(source.configDir, remote);
       const workflows = delegatedWorkflows(config, remote.id);
+      // A pasted credential stays in memory: enrollment proves it under its lock and saves it in
+      // a generation file of its own only on the way to its commit, so a refusal leaves the
+      // current enrollment and its credential exactly as they were.
       let token: string | undefined;
+      let saveToken = false;
       if (params.credential !== undefined) {
         token = parseRemoteCredential(params.credential);
         if (token === undefined)
@@ -148,15 +156,18 @@ export function remotesModel(source: RemotesSource): RemotesModel {
             "CONFIG_INVALID",
             "That is not an ORCA credential. Paste the token, or the whole output of `orca auth issue <name> --preset client --json` on the remote.",
           );
-        // Again just before the write: the fence may have been lost while the request waited.
-        if (!source.admitted()) throw fenced();
-        saveCredential(files.credentialFile, token);
+        saveToken = true;
       }
-      // As the CLI decides: a saved credential is used as given; without one, or with `rotate`,
-      // the remote issues it.
       const rotate = params.rotate === true;
-      const issue = token === undefined && (rotate || !existsSync(files.credentialFile));
-      if (!issue && token === undefined) token = readRemoteCredential(remote, files.credentialFile);
+      if (token === undefined && !rotate) {
+        // As the CLI decides: a credential on file is used as given (one pasted here before, in
+        // its generation file, or one saved by hand at the configured path); without one the
+        // remote issues it.
+        const pasted = pastedToken(files.enrollmentFile);
+        if (pasted !== undefined) token = pasted;
+        else if (existsSync(files.credentialFile)) token = readRemoteCredential(remote, files.credentialFile);
+      }
+      const issue = token === undefined;
       const warnings: string[] = [];
       if (!source.admitted()) throw fenced();
       await enrollRemote({
@@ -166,10 +177,14 @@ export function remotesModel(source: RemotesSource): RemotesModel {
         file: files.enrollmentFile,
         workflows,
         receiptsDir: source.receiptsDir,
-        ...(issue ? { issue: { principal: await source.principal(), rotate } } : { token: token! }),
+        ...(issue ? { issue: { principal: await source.principal(), rotate } } : { token: token!, saveToken }),
         hostKeys: params.hostKeys ?? [],
         jumpHostKeys: params.jumpHostKeys ?? [],
         warn: (message) => warnings.push(message),
+        // The commit itself happens only while this daemon still holds the workspace's fence.
+        beforeCommit: () => {
+          if (!source.admitted()) throw fenced();
+        },
         ...(source.tunnel ? { tunnel: source.tunnel } : {}),
       });
       return { remote: view(remote, config), warnings };

@@ -143,8 +143,10 @@ review, Save reviewed changes and Apply saved configuration. The remote is then 
 jump host's, if the route has one), and choose **Enroll remote**. The app's daemon pins the key
 and has the worker issue the credential exactly as `orca remote enroll` does. On Windows, where
 the worker cannot issue the credential during enrollment, paste the output of
-`orca auth issue <name> --preset client --json` from the worker into the Credential field; the
-daemon saves it beside the config, readable only by you
+`orca auth issue <name> --preset client --json` from the worker into the Credential field. The
+daemon proves it first and saves it, readable only by you, in its own file
+(`auth/remotes/<id>.<credential id>.token`) only when the enrollment commits, so a refused
+credential never replaces the one in use
 ([#1206](https://github.com/cschadewitz/Project_Orca/issues/1206)).
 
 Enrollment pins exactly that host key and has the worker issue the parent a credential over

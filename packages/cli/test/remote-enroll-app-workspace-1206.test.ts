@@ -14,7 +14,7 @@
  */
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
@@ -227,6 +227,13 @@ edges:
   const list = async (): Promise<RemotesListResult> =>
     RemotesListResultSchema.parse(await call(parent, "remotes.list", {}));
   const remotesDir = () => join(parent.dir, "auth", "remotes");
+  /** The pasted-credential generation files beside saved-box's record (and any stray staging). */
+  const savedTokenFiles = () =>
+    existsSync(remotesDir())
+      ? readdirSync(remotesDir())
+          .filter((name) => name.startsWith("saved-box.") && name.includes(".token"))
+          .sort()
+      : [];
 
   it("is a first-run workspace whose fence still refuses `orca remote enroll` from the CLI", (ctx) => {
     if (!sshd) return ctx.skip();
@@ -355,7 +362,7 @@ edges:
       credential: "not a credential",
     });
     expect(bad).toMatchObject({ ok: false, error: { code: "CONFIG_INVALID" } });
-    expect(existsSync(join(remotesDir(), "saved-box.token"))).toBe(false);
+    expect(savedTokenFiles()).toEqual([]);
 
     // The whole `--json` output, as the person copied it.
     const enrolled = await call(parent, "remotes.enroll", {
@@ -371,14 +378,46 @@ edges:
       },
     });
     const token = (JSON.parse(issued.stdout) as { token: string }).token;
-    expect(readFileSync(join(remotesDir(), "saved-box.token"), "utf8").trim()).toBe(token);
-    expect(statSync(join(remotesDir(), "saved-box.token")).mode & 0o777).toBe(0o600);
+    // Saved in its own generation file, named by the record; the configured path is untouched.
+    const file = `saved-box.${token.split(".")[1]}.token`;
+    expect(savedTokenFiles()).toEqual([file]);
+    expect(readFileSync(join(remotesDir(), file), "utf8").trim()).toBe(token);
+    expect(statSync(join(remotesDir(), file)).mode & 0o777).toBe(0o600);
+    expect(existsSync(join(remotesDir(), "saved-box.token"))).toBe(false);
     expect(JSON.stringify(enrolled)).not.toContain(token.split(".")[2]);
 
     const runId = await admit(parent, "delegate-saved", { target: "with a saved credential" });
     expect(await finished(parent, runId)).toMatchObject({ status: "succeeded" });
     const runs = (await call(remote, "runs.list", {})).runs as { workflowId: string }[];
     expect(runs.filter((r) => r.workflowId === "build-saved")).toHaveLength(1);
+  }, 120_000);
+
+  it("leaves a working enrollment and its credential intact when a pasted replacement is refused (#1220 review)", async (ctx) => {
+    if (!sshd) return ctx.skip();
+    const record = join(remotesDir(), "saved-box.json");
+    const before = { record: readFileSync(record, "utf8"), files: savedTokenFiles() };
+    const tokenBefore = readFileSync(join(remotesDir(), before.files[0]!), "utf8");
+    // Well formed, but no credential the worker ever issued: the proof fails under the lock.
+    const stranger = `orca1.strangerid00.${"x".repeat(43)}`;
+    const refused = await parent.call("remotes.enroll", { id: "saved-box", credential: stranger });
+    expect(refused).toMatchObject({ ok: false, error: { code: "DELEGATION_REFUSED" } });
+    expect(readFileSync(record, "utf8")).toBe(before.record);
+    expect(savedTokenFiles()).toEqual(before.files);
+    expect(readFileSync(join(remotesDir(), before.files[0]!), "utf8")).toBe(tokenBefore);
+    expect(existsSync(join(remotesDir(), "saved-box.token"))).toBe(false);
+
+    // The next delegation still works, under the enrollment that was there.
+    const runId = await admit(parent, "delegate-saved", { target: "after a refused replacement" });
+    expect(await finished(parent, runId)).toMatchObject({ status: "succeeded" });
+    const runs = (await call(remote, "runs.list", {})).runs as { workflowId: string }[];
+    expect(runs.filter((r) => r.workflowId === "build-saved")).toHaveLength(2);
+
+    // Enrolling again with nothing pasted reuses the credential pasted before.
+    const again = await call(parent, "remotes.enroll", { id: "saved-box" });
+    expect(again).toMatchObject({
+      remote: { credentialSaved: true, enrollment: { state: "enrolled", issued: false } },
+    });
+    expect(savedTokenFiles()).toEqual(before.files);
   }, 120_000);
 
   it("refuses a remote the active configuration does not name", async (ctx) => {

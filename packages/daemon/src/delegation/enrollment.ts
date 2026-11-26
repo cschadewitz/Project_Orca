@@ -59,7 +59,7 @@ import {
 } from "@orca/protocol/remote-access";
 import { DELEGATION_METHODS } from "./daemon-session.js";
 import { DelegationReceipts } from "./receipts.js";
-import { RemoteDaemonClient } from "./remote-client.js";
+import { RemoteDaemonClient, RemoteFault } from "./remote-client.js";
 
 /**
  * The route a remote was enrolled over: where ssh goes (and through which jump host) and which
@@ -114,7 +114,12 @@ export const EnrollmentSchema = z
     enrolledAt: z.string(),
     /** Enrollment issued this credential (#883 part 4), so a later enrollment may revoke it. */
     issued: z.literal(true).optional(),
-    /** The issued credential's own file beside this record (`<id>.<credential id>.token`). */
+    /**
+     * The credential's own file beside this record (`<id>.<credential id>.token`): one enrollment
+     * issued, or (without `issued`) one a person pasted for the app to save (#1206). A
+     * generation file of its own, so the previous record's credential stays where it was until
+     * this record replaces it.
+     */
     tokenFile: z
       .string()
       .regex(/^[a-z0-9][a-z0-9-]{0,62}\.[A-Za-z0-9_-]{12}\.token$/)
@@ -124,7 +129,7 @@ export const EnrollmentSchema = z
   })
   .strict()
   .refine(
-    (r) => (r.issued === true) === (r.tokenFile !== undefined) && (r.issued === true) === (r.label !== undefined),
+    (r) => (r.issued === true) === (r.label !== undefined) && (r.issued !== true || r.tokenFile !== undefined),
     "issued, tokenFile and label go together",
   )
   .refine(
@@ -260,6 +265,12 @@ export interface EnrollOptions {
   receiptsDir: string;
   /** A credential the person saved; or `issue`, to have the remote issue one. */
   token?: string;
+  /**
+   * With `token`: it is a new credential, not yet on file (#1206, pasted in the app). Once it is
+   * proved, under the enrollment lock, it is saved in its own generation file, which the new
+   * record names; nothing the current record uses is touched unless this enrollment commits.
+   */
+  saveToken?: boolean;
   issue?: IssueRequest;
   /** Told about anything left to tidy by hand (a stale credential that could not be revoked). */
   warn?: (message: string) => void;
@@ -606,6 +617,8 @@ async function enrollLocked(
     });
   let issuing: PendingRevoke | undefined;
   let committed = false;
+  /** A pasted credential's generation file this enrollment wrote, taken back unless it commits. */
+  let staged: string | undefined;
   // Once the record's publication has begun, whether it is the active one is not known until
   // it is read back: what it names is never revoked on that doubt.
   let publishing = false;
@@ -643,19 +656,31 @@ async function enrollLocked(
     const prove = async (token: string, exact: { principal: string } | undefined) => {
       const client = new RemoteDaemonClient({ connect: () => tunnel.connect(), token });
       try {
-        const hello = HelloResultSchema.parse(
-          await client.call("hello", { client: "orca-daemon/enroll", ...helloOffer() }),
-        );
-        const discovery = OperatorDiscoverySchema.parse(await client.call("operator.discover", {}));
-        if (hello.identity && hello.identity.workspaceId !== discovery.target.workspaceId)
-          throw new OrcaError("DELEGATION_REFUSED", `The daemon on ${id} named two different workspaces.`, {
-            reason: "scope-changed",
-            profile: id,
-          });
-        return { discovery, problem: checkAuthority(hello, discovery, options.workflows, exact) };
+        return await proveWith(client, exact);
+      } catch (error) {
+        // The remote refusing the bearer is an answer about the credential, not a fault here.
+        if (error instanceof RemoteFault && error.code.startsWith("AUTH_"))
+          throw new OrcaError(
+            "DELEGATION_REFUSED",
+            `The daemon on ${id} did not accept the credential (${error.code}); nothing was changed here.`,
+            { reason: "auth", profile: id },
+          );
+        throw error;
       } finally {
         client.close();
       }
+    };
+    const proveWith = async (client: RemoteDaemonClient, exact: { principal: string } | undefined) => {
+      const hello = HelloResultSchema.parse(
+        await client.call("hello", { client: "orca-daemon/enroll", ...helloOffer() }),
+      );
+      const discovery = OperatorDiscoverySchema.parse(await client.call("operator.discover", {}));
+      if (hello.identity && hello.identity.workspaceId !== discovery.target.workspaceId)
+        throw new OrcaError("DELEGATION_REFUSED", `The daemon on ${id} named two different workspaces.`, {
+          reason: "scope-changed",
+          profile: id,
+        });
+      return { discovery, problem: checkAuthority(hello, discovery, options.workflows, exact) };
     };
 
     let token: string;
@@ -732,6 +757,15 @@ async function enrollLocked(
       if (previous?.issued && previous.credentialId === credentialIdOf(token)) {
         tokenFile = previous.tokenFile;
         label = previous.label;
+      } else if (previous?.tokenFile && !previous.issued && previous.credentialId === credentialIdOf(token)) {
+        // The same pasted credential again: its generation file is already the one in use.
+        tokenFile = previous.tokenFile;
+      } else if (options.saveToken) {
+        // Proved, under the lock: its own generation file, never the file the current record
+        // names, so a refusal from here to the commit leaves the current enrollment working.
+        tokenFile = tokenFileName(id, credentialIdOf(token));
+        writeAtomic(join(dir, tokenFile), `${token}\n`, durableEnrollment());
+        staged = tokenFile;
       }
     }
     workspaceId = proven.target.workspaceId;
@@ -749,7 +783,7 @@ async function enrollLocked(
       principalId: proven.principalId,
       credentialId,
       enrolledAt: new Date().toISOString(),
-      ...(tokenFile && label ? { issued: true as const, tokenFile, label } : {}),
+      ...(tokenFile && label ? { issued: true as const, tokenFile, label } : tokenFile ? { tokenFile } : {}),
     };
     // The generation being replaced is journaled before the record stops naming it, so a crash
     // right after the commit still finds it; until then the filter above ignores it.
@@ -779,6 +813,9 @@ async function enrollLocked(
       options.issue !== undefined || previous?.issued === true,
     );
     committed = true;
+    // A pasted credential the replaced record named in its own file is no longer used by anything.
+    if (previous?.tokenFile && !previous.issued && previous.tokenFile !== tokenFile)
+      rmSync(join(dir, previous.tokenFile), { force: true });
     await options.afterCommit?.();
     pending = pending.filter((p) => p.credentialId !== credentialId);
     journal();
@@ -806,6 +843,8 @@ async function enrollLocked(
     }
     await tunnel.close().catch(() => undefined);
     if (staging && existsSync(staging)) rmSync(staging, { recursive: true, force: true });
+    // Refused or cut off before the record was published: the pasted credential's file goes.
+    if (staged && !committed && !publishing) rmSync(join(dirname(options.file), staged), { force: true });
   }
 }
 
