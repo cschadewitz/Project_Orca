@@ -746,8 +746,8 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
               throw new OrcaError("AGENT_PROTOCOL", `agent ${agent.id}: Codex refused turn/start: ${error.message}`, {
                 code: error.code,
               });
-            // No answer (timeout, connection lost): Codex may be running the turn, so the session ends.
-            throw unknownStart(`no answer (${(error as Error).message})`);
+            // No usable answer (timeout, connection lost, a malformed error): Codex may be running the turn, so the session ends.
+            throw unknownStart(`no usable answer (${(error as Error).message})`);
           }
           const turnId =
             isObject(answer) && isObject(answer.turn) && typeof answer.turn.id === "string" && answer.turn.id

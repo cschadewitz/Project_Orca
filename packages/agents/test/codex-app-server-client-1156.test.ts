@@ -372,13 +372,18 @@ describe("a malformed message closes the connection", () => {
       expect(p.closed).toBe(true);
     });
 
-  it("a malformed error answer fails only that request", async () => {
+  it("a malformed error answer fails only that request, as ORCA's protocol error and not as Codex's refusal", async () => {
     const p = peer();
     const c = client(p);
     const r = c.request("account/read", {});
     await p.until(1);
     p.say({ id: 1, error: "nope" });
-    await expect(r).rejects.toMatchObject({ code: -32603 });
+    const error = await r.catch((e: unknown) => e);
+    expect(error).not.toBeInstanceOf(CodexRpcError);
+    expect(error).toMatchObject({
+      code: "AGENT_PROTOCOL",
+      message: "codex app-server answered account/read with a malformed error",
+    });
     expect(c.closed).toBeUndefined();
   });
 });

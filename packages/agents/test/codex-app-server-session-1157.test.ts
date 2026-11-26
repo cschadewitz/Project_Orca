@@ -429,7 +429,7 @@ describe("a turn", () => {
     const session = await open(s.host, { requestTimeoutMs: 100 });
     await expect(session.prompt("go")).rejects.toMatchObject({
       code: "AGENT_TRANSPORT",
-      message: expect.stringMatching(/turn\/start got no answer .*whether Codex is running the turn is unknown/),
+      message: expect.stringMatching(/turn\/start got no usable answer .*whether Codex is running the turn is unknown/),
     });
     await vi.waitFor(() => expect(s.kill).toHaveBeenCalled());
     await expect(session.prompt("again")).rejects.toThrow(/whether Codex is running the turn is unknown/);
@@ -443,6 +443,25 @@ describe("a turn", () => {
     await expect(session.prompt("go")).rejects.toThrow(/turn\/start got an answer without a turn id/);
     await vi.waitFor(() => expect(s.kill).toHaveBeenCalled());
     await expect(session.prompt("again")).rejects.toThrow(/without a turn id/);
+    await session.close();
+  });
+
+  it("ends the session when turn/start answers with a malformed error, which is no refusal", async () => {
+    const s = scriptedHost({
+      ...turnPlaying(() => undefined, "none"),
+      "turn/start": (msg, peer) => {
+        peer.say({ id: msg.id, error: { code: "-32602", message: "bad input" } });
+        return NO_ANSWER;
+      },
+    });
+    const session = await open(s.host);
+    await expect(session.prompt("go")).rejects.toMatchObject({
+      code: "AGENT_TRANSPORT",
+      message: expect.stringMatching(/turn\/start got no usable answer \(.*malformed error\).*is unknown/),
+    });
+    await vi.waitFor(() => expect(s.kill).toHaveBeenCalled());
+    await expect(session.prompt("again")).rejects.toThrow(/whether Codex is running the turn is unknown/);
+    expect(s.peer.received.filter((m) => m.method === "turn/start")).toHaveLength(1);
     await session.close();
   });
 

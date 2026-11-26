@@ -323,9 +323,13 @@ export class CodexAppServerClient {
     clearTimeout(waiting.timer);
     if (hasResult) return waiting.resolve(message.result);
     const error = message.error;
+    // A malformed error is not Codex refusing the request: it is a protocol error of ORCA's own
+    // finding, so callers never read it as a definite refusal (`CodexRpcError` is only that).
     if (!isObject(error) || typeof error.code !== "number" || typeof error.message !== "string")
       return waiting.reject(
-        new CodexRpcError(-32603, `codex app-server answered ${waiting.method} with a malformed error`, error),
+        new OrcaError("AGENT_PROTOCOL", `codex app-server answered ${waiting.method} with a malformed error`, {
+          method: waiting.method,
+        }),
       );
     waiting.reject(new CodexRpcError(error.code, error.message, error.data));
   }
