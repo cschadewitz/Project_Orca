@@ -195,7 +195,7 @@ function Write-TextFile([string]$path, [string]$text) {
   if ((Test-PlainFile $path) -and [IO.File]::ReadAllText($path) -ceq $text) { return $false }
   $temporary = Join-Path ([IO.Path]::GetDirectoryName($path)) (".{0}.{1}.tmp" -f [IO.Path]::GetFileName($path), $PID)
   [IO.File]::WriteAllText($temporary, $text, $Utf8)
-  if ([IO.File]::Exists($path)) { [IO.File]::Replace($temporary, $path, $null) } else { [IO.File]::Move($temporary, $path) }
+  if ([IO.File]::Exists($path)) { [IO.File]::Replace($temporary, $path, [NullString]::Value) } else { [IO.File]::Move($temporary, $path) }
   return $true
 }
 
