@@ -41,9 +41,7 @@ function bridge(status: FirstRunStatus, revision = saved.revision, overrides: Pa
 describe("binding a saved configuration for reopening", () => {
   it("reviews and binds exactly the revision Config saved", async () => {
     const firstRun = bridge(changed);
-    const onBinding = vi.fn();
-    expect(await bindSavedConfigurationForReopening(firstRun, saved, onBinding)).toEqual({ state: "bound" });
-    expect(onBinding).toHaveBeenCalledOnce();
+    expect(await bindSavedConfigurationForReopening(firstRun, saved)).toEqual({ state: "bound" });
     expect(firstRun.bindConfiguration).toHaveBeenCalledWith("review-1");
   });
 
@@ -68,6 +66,17 @@ describe("binding a saved configuration for reopening", () => {
     expect(await bindSavedConfigurationForReopening(firstRun, saved)).toMatchObject({ state: "refused" });
     expect(firstRun.bindConfiguration).not.toHaveBeenCalled();
     expect(firstRun.cancelConfigurationReview).toHaveBeenCalledOnce();
+  });
+
+  it("reports an unanswered setup status as unknown rather than nothing to do", async () => {
+    const firstRun = bridge(changed, saved.revision, {
+      status: vi.fn(async () => ({ ok: false as const, error: { code: "UNAVAILABLE", message: "Setup is busy." } })),
+    });
+    expect(await bindSavedConfigurationForReopening(firstRun, saved)).toMatchObject({
+      state: "refused",
+      reason: expect.stringContaining("Setup is busy."),
+    });
+    expect(firstRun.bindConfiguration).not.toHaveBeenCalled();
   });
 
   it("passes main's refusal through", async () => {

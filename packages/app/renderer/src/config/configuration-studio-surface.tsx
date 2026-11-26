@@ -221,8 +221,15 @@ export function ConfigurationStudioSurface({
             )}
             {state && (
               <section aria-label="Configuration review and activation" className="orca-config__section">
-                {state.message && <Text style="body">{state.message}</Text>}
                 {studio.reopenBinding && <ReopenBindingNotice binding={studio.reopenBinding} />}
+                {state.message && (
+                  <Text style="body">
+                    {state.message}
+                    {studio.reopenBinding?.state === "refused" && state.message.startsWith("Apply outcome:")
+                      ? " The saved configuration is not bound for reopening, so a restart will not open this workspace until it is."
+                      : ""}
+                  </Text>
+                )}
                 {state.errors.length > 0 && (
                   <ul>
                     {state.errors.map((error, index) => (
@@ -388,7 +395,7 @@ function ReopenBindingNotice({ binding }: { binding: ReopenBinding }): JSX.Eleme
     <div role="status" data-reopen-binding={binding.state}>
       <Text style="caption" as="p">
         {binding.state === "binding"
-          ? "Binding the saved configuration so this workspace reopens with it."
+          ? "Binding the saved configuration so this workspace reopens with it. Apply waits for this."
           : binding.state === "bound"
             ? "Saved configuration bound for reopening. The app starts this workspace with it next time."
             : `Saved, but not bound for reopening: ${binding.reason} Before quitting, open Project setup above and choose Review saved configuration for reopening, then bind it.`}

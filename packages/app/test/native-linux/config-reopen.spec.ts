@@ -37,11 +37,11 @@ async function saveRawConfig(page: Page, text: string): Promise<void> {
   const save = bar.getByRole("button", { name: "Save reviewed changes" });
   await expect(save).not.toHaveAttribute("aria-disabled", "true");
   await save.click();
-  // The save binds the saved configuration for reopening; nothing else is asked of the person.
-  await expect(page.locator('[data-reopen-binding="bound"]')).toBeVisible({ timeout: 60_000 });
-  const apply = page.getByRole("button", { name: "Apply saved configuration" });
-  await apply.click();
-  await expect(page.getByText(/^Apply outcome:/).first()).toBeVisible();
+  // Apply at once, as a person does. Apply waits for the save's reopen bind; the outcome is the
+  // person's cue to restart, so the quit right after it is the order that used to lose the bind.
+  await page.getByRole("button", { name: "Apply saved configuration" }).click();
+  await expect(page.getByText(/^Apply outcome:/).first()).toBeVisible({ timeout: 60_000 });
+  await expect(page.locator('[data-reopen-binding="bound"]')).toBeVisible();
 }
 
 test("an agent added in Config > Raw, saved and applied, is there after quit and reopen", async () => {

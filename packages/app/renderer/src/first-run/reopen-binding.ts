@@ -25,19 +25,21 @@ export function isWorkspaceConfig(configPath: string, workspace: string): boolea
 export async function bindSavedConfigurationForReopening(
   bridge: FirstRunBridge | undefined,
   saved: { revision: string; path: string },
-  /** Called once the save is known to need a bind, before the review starts. */
-  onBinding?: () => void,
 ): Promise<Exclude<ReopenBinding, { state: "binding" }> | undefined> {
   if (!bridge?.reviewConfiguration || !bridge.bindConfiguration) return undefined;
   const status = await bridge.status();
+  // Unknown is not "nothing to do": say so, rather than let a restart find out.
+  if (!status.ok)
+    return {
+      state: "refused",
+      reason: `Project setup could not say whether this workspace needs it. ${status.error.message}`,
+    };
   if (
-    !status.ok ||
     status.result.state !== "selection-required" ||
     !status.result.changedConfiguration ||
     !isWorkspaceConfig(saved.path, status.result.changedConfiguration.workspace)
   )
     return undefined;
-  onBinding?.();
   const review = await bridge.reviewConfiguration();
   if (!review.ok) return { state: "refused", reason: review.error.message };
   if (review.result.state !== "configuration-review")

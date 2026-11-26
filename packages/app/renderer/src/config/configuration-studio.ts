@@ -247,6 +247,7 @@ export class ConfigurationStudio {
       },
       apply: async (params) => {
         try {
+          await this.reopenSettled();
           const result = await this.adapter.apply(params, this.target);
           this.acceptApply(result);
           this.changedSource();
@@ -280,19 +281,32 @@ export class ConfigurationStudio {
   get reopenBinding(): ReopenBinding | undefined {
     return this.reopen;
   }
+  /**
+   * Starts keeping the workspace reopenable with the revision just saved, and shows that at once, before main has
+   * said whether this save needs it: Apply waits for it (see `reopenSettled`), so a person who applies and quits
+   * right after saving still quits with the bind settled, or with its refusal on screen.
+   */
   private bindForReopening(document: { revision: string; path: string }): void {
     const bridge = this.bridge.firstRun;
     if (!bridge?.reviewConfiguration || !bridge.bindConfiguration) return;
     const sequence = ++this.reopenSequence;
-    this.reopen = undefined;
+    this.reopen = { state: "binding" };
     const settle = (result: ReopenBinding | undefined) => {
       if (this.disposed || sequence !== this.reopenSequence) return;
       this.reopen = result;
       this.emit();
     };
-    void bindSavedConfigurationForReopening(bridge, { revision: document.revision, path: document.path }, () =>
-      settle({ state: "binding" }),
-    ).then(settle, () => settle({ state: "refused", reason: "Project setup could not be reached." }));
+    this.reopenPending = bindSavedConfigurationForReopening(bridge, {
+      revision: document.revision,
+      path: document.path,
+    }).then(settle, () =>
+      settle({ state: "refused", reason: "Project setup did not answer, so it is unknown whether this was bound." }),
+    );
+  }
+  private reopenPending: Promise<void> | undefined;
+  /** Apply, and with it any restart guidance, only after the save's reopen binding has settled one way or the other. */
+  private async reopenSettled(): Promise<void> {
+    await this.reopenPending;
   }
   private acceptApply(result: ConfigApplyResult): void {
     this.data = { ...this.data, generation: result.status };
@@ -498,6 +512,7 @@ export class ConfigurationStudio {
     this.rawState = { ...this.rawState, phase: "applying" };
     this.emit();
     try {
+      await this.reopenSettled();
       const result = await this.adapter.apply(
         { expectedRevision: saved.revision, expectedGeneration: saved.generation },
         this.target,
