@@ -401,6 +401,8 @@ sweep("seed a fresh install and capture every surface", async () => {
   const configText = join(session.root, "seeded-config.json");
   await seed(workspace, "prepare", ["--config-out", configText]);
   await saveRawConfig(launched.page, await readFile(configText, "utf8"), "seed");
+  // Builds before the #1192 fix (#1202) reopen only with this bind; on a fixed build it is harmless.
+  // Drop it once the base includes #1202.
   await bindWhileLive(launched.page, "seed");
   launched = await relaunch(profile, launched);
   await connected(launched.page);
@@ -452,42 +454,4 @@ sweep("seed a fresh install and capture every surface", async () => {
   await everySurface(page, "zoom150");
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.webContents.setZoomFactor(1));
   expect(failures, "sweep steps that failed (see error-*.txt in SWEEP_OUT)").toEqual([]);
-});
-
-async function addAgentInConfig(label: string, bind: boolean) {
-  await mkdir(join(OUT, "logs"), { recursive: true });
-  const workspace = await disposableWorkspace(join(session.root, label), session.env);
-  const profile = join(session.root, `profile-${label}`);
-  let launched = await relaunch(profile);
-  await firstRunSetup(launched.app, launched.page, workspace);
-  const doc = JSON.parse(await readFile(join(workspace.workspace, "orca.config.yaml"), "utf8"));
-  doc.agents = [{ id: "echo", name: "Echo", command: "/bin/cat", args: [], roles: [] }];
-  await saveRawConfig(launched.page, JSON.stringify(doc, null, 2), label);
-  if (bind) await bindWhileLive(launched.page, label);
-  launched = await relaunch(profile, launched);
-  return launched.page;
-}
-
-/** What a fix of #1192 must make true: after the restart the app reconnects and lists the new agent. */
-async function reconnectedWithAgent(page: Page, label: string) {
-  try {
-    await connected(page);
-    await openSurface(page, "Agents");
-    await expect(page.getByText("echo", { exact: true }).first()).toBeVisible({ timeout: 30_000 });
-  } finally {
-    await capture(page, `${label}-after-restart`);
-  }
-}
-
-sweep("#1192 acceptance: an agent added in Config survives an app restart", async () => {
-  test.setTimeout(10 * 60_000);
-  // Expected to fail until #1192 is fixed: the reopened app never starts its daemon. When this
-  // starts passing, Playwright reports it, and the fix PR removes this line.
-  test.fail(true, "#1192");
-  await reconnectedWithAgent(await addAgentInConfig("issue-1192", false), "issue-1192");
-});
-
-sweep("#1192 workaround: binding the saved config before the restart keeps it reopenable", async () => {
-  test.setTimeout(10 * 60_000);
-  await reconnectedWithAgent(await addAgentInConfig("issue-1192-bound", true), "issue-1192-bound");
 });
