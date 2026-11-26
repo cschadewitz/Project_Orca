@@ -45,6 +45,13 @@ export interface MenuMeasurement {
 export interface MenuPlacement {
   readonly block: "below" | "above";
   readonly inline: "start" | "end";
+  /**
+   * The width the menu has from the edge it aligns to to the far side of the area, so a menu
+   * never runs past the pane it opens in (#1112: at 1000×680 Launch work's menu, at its
+   * widest, was a pixel wider than its pane and covered the pane's scrollbar). Left out
+   * until there is a measurement.
+   */
+  readonly room?: number;
 }
 
 export const DEFAULT_PLACEMENT: MenuPlacement = { block: "below", inline: "start" };
@@ -66,7 +73,8 @@ export function placeMenu({ trigger, menu, viewport, scrolls = false }: MenuMeas
   const roomFromEnd = trigger.left + trigger.width;
   const inline = menu.width > roomFromStart && roomFromEnd > roomFromStart ? "end" : "start";
 
-  return { block, inline };
+  if (viewport.width <= 0) return { block, inline };
+  return { block, inline, room: Math.max(0, Math.floor(inline === "start" ? roomFromStart : roomFromEnd)) };
 }
 
 /** The class list for a placed menu: `.orca-menu` plus a modifier per flipped axis. */

@@ -2417,11 +2417,13 @@
   top: 100%;
   left: 0;
   z-index: var(--z-menu);
-  min-width: var(--panel-width);
   /* Never wider than the widest side pane: one long workflow name made Launch work's menu
      864px wide and ran it out of its pane (#1112). A label that does not fit is cut at its
-     end with the whole in `title` (rule 15). */
-  max-width: var(--pane-max-side);
+     end with the whole in `title` (rule 15). Nor wider than the room the menu has in the pane
+     it opens in, which `Menu` measures inside the pane's scrollbar (`--menu-room`); the floor
+     gives way to it too, since a min-width beats a max-width. */
+  min-width: min(var(--panel-width), var(--menu-room, var(--panel-width)));
+  max-width: min(var(--pane-max-side), var(--menu-room, var(--pane-max-side)));
   margin: var(--space-1) 0 0;
   padding: var(--space-1);
   list-style: none;
