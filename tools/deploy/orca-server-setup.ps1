@@ -422,12 +422,29 @@ function Test-OrcaPlatform($s) {
   Send-Step "platform" "ok" "Windows $($os.Major).$($os.Minor).$($os.Build) x64, PowerShell $($PSVersionTable.PSVersion)"
 }
 
+function Get-OrcaDriveType([string]$drive) {
+  # What Windows says the volume behind `X:\` is: Fixed, Network, Removable, CDRom, Ram,
+  # NoRootDirectory or Unknown. Any failure to tell is Unknown.
+  try {
+    return [string](New-Object IO.DriveInfo($drive)).DriveType
+  } catch {
+    return "Unknown"
+  }
+}
+
 function Test-OrcaRootPath($s) {
   # The setup directory is a path on a local drive, and neither it nor any directory above it is
   # a link, junction or other reparse point: what the person confirmed is where every write goes.
   # Checked before anything else reads or writes there, marker or no marker: a marker says only
   # who wrote a directory, not where its path leads.
   if ($s.Root -notmatch '^[A-Za-z]:\\[^\\]') { Refuse "The setup directory $($s.Root) is not on a local drive. Nothing was changed." }
+  # A drive letter is only syntax: a mapped network share has one too. What Windows says the
+  # volume is decides, and only a fixed local disk holds the locks, files and task this setup
+  # relies on.
+  $kind = Get-OrcaDriveType $s.Root.Substring(0, 3)
+  if ($kind -ne "Fixed") {
+    Refuse "The setup directory $($s.Root) is on a $kind drive, not a fixed local disk. Set up on a local disk. Nothing was changed."
+  }
   $path = $s.Root
   while ($path) {
     if ((Test-Present $path) -and (Test-Reparse $path)) {

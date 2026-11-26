@@ -207,7 +207,7 @@ try {
     $null = Register-ScheduledTask -TaskPath "\ORCA\" -TaskName "orca-server" -Xml $xml -Force
   }
 
-  Case "a setup directory reached through a junction is refused before anything there or its task is touched"
+  Case "a setup directory reached through a junction, or on a volume that is not a fixed local disk, is refused before anything there or its task is touched"
   $snapshot = {
     $files = Get-ChildItem -LiteralPath $root -Force -File | Sort-Object Name | ForEach-Object { "$($_.Name)=$((Get-FileHash -Algorithm SHA256 $_.FullName).Hash)" }
     ($files -join ";") + "|" + [string](Export-ScheduledTask -TaskPath "\ORCA\" -TaskName "orca-server")
@@ -225,6 +225,15 @@ try {
         Assert ($run.code -eq 2) "$at exits $($run.code), not 2"
         Assert-Step $run "inventory" "refused" "link or junction"
         Assert (@($run.steps | Where-Object { $_.step -in @("fence", "recover", "journal", "cleanup") }).Count -eq 0) "$at got past the inventory"
+      }
+    }
+    # A drive letter whose volume Windows reports as a network share, or cannot classify.
+    foreach ($kind in @("Network", "Unknown")) {
+      foreach ($more in @(@(), @("-Inspect"))) {
+        $run = Invoke-Setup "drive-$kind" -more $more
+        Assert ($run.code -eq 2) "a $kind drive exits $($run.code), not 2"
+        Assert-Step $run "inventory" "refused" "on a $kind drive"
+        Assert (@($run.steps | Where-Object { $_.step -in @("fence", "recover", "journal", "cleanup") }).Count -eq 0) "a $kind drive got past the inventory"
       }
     }
     Assert ((& $snapshot) -ceq $before) "the managed directory or its task changed"

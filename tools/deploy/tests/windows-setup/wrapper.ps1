@@ -7,6 +7,7 @@
 #   fail-health   trust, and the daemon's health check fails
 #   exit-at-task  trust, and the process ends where the task would be registered, as a cut
 #                 ssh session ends it
+#   drive-KIND    trust, and Windows says the setup directory's volume is KIND (Network, Unknown)
 param(
   [Parameter(Mandatory = $true)][string]$Mode,
   [string]$Version,
@@ -28,6 +29,10 @@ if ($mode -eq "fail-health") {
 }
 if ($mode -eq "exit-at-task") {
   function Install-OrcaTask { param($s) [Environment]::Exit(9) }
+}
+if ($mode -like "drive-*") {
+  $script:driveKind = $mode.Substring(6)
+  function Get-OrcaDriveType { param($drive) $script:driveKind }
 }
 $code = @(Invoke-OrcaServerSetup $options)[-1]
 exit ([int]$code)
