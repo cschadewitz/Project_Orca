@@ -773,7 +773,9 @@ export class RemoteProfiles {
       const keys = this.hostKeys(profile);
       const left = await this.revokeRetired(
         profile,
-        (command) => this.newTunnel(profile, true, keys).runOnce(command),
+        // Through the CLI each credential records; one recorded under today's name on a server
+        // installed before the rename (which has only the old one) falls back to that.
+        withLegacyServerCommand((command) => this.newTunnel(profile, true, keys).runOnce(command)),
         keys,
       );
       const outcome: RevokeOutcome = left === undefined ? "none" : left.length ? "not-reached" : "revoked";
@@ -1566,19 +1568,22 @@ export class RemoteProfiles {
   ): Promise<void> {
     const principal = principalFor(this.deps.hostname ?? osHostname(), this.installation);
     const result = await run(issueCommand(profile, principal, new Date(this.now() + this.policy.ttlMs)));
+    // Where it was issued: through the CLI that actually ran (a server installed before the
+    // rename has only the old name), so it is revoked through that one.
+    const target = { ...targetOf(profile, keys), ...(result.ranAs ? { serverCommand: result.ranAs } : {}) };
     let issued: Issued;
     try {
       issued = issuedFrom(result, profile, principal);
     } catch (error) {
       if (error instanceof StrayCredential) {
-        await run(revokeCommand(targetOf(profile, keys), error.credentialId)).catch(() => undefined);
+        await run(revokeCommand(target, error.credentialId)).catch(() => undefined);
         throw credentialRefusal("cli-failed", profile);
       }
       throw error;
     }
     const entry = {
       credentialId: issued.credentialId,
-      target: targetOf(profile, keys),
+      target,
       principal,
       ...(issued.expiresAt ? { expiresAt: issued.expiresAt } : {}),
       issuedAt: new Date(this.now()).toISOString(),

@@ -1318,6 +1318,9 @@ describe("the server CLI across the Orrery rename", () => {
       ["new-cli", "auth", "list"],
       ["old-cli", "auth", "list"],
     ]);
+    // Which CLI ran is told, so what it issued is revoked through that one.
+    expect((await old.run(["new-cli", "auth", "issue"])).ranAs).toBe("old-cli");
+    expect((await both.run(["new-cli", "auth", "issue"])).ranAs).toBeUndefined();
   });
 
   it("never retries a command the profile names, or one that ran", async () => {

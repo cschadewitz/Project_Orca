@@ -358,6 +358,11 @@ export interface RemoteResult {
   stdout: string;
   /** The command's own error lines, without ssh's: to classify, never to show or log. */
   serverLines: string[];
+  /**
+   * The CLI that actually ran, when {@link withLegacyServerCommand} ran another than the one
+   * asked for: what a credential it issued must be revoked through.
+   */
+  ranAs?: string;
 }
 
 /**
@@ -384,7 +389,8 @@ export function withLegacyServerCommand(
   return async (command) => {
     const result = await run(command);
     if (command[0] !== names.current || names.current === names.legacy) return result;
-    return commandNotFound(result) ? run([names.legacy, ...command.slice(1)]) : result;
+    if (!commandNotFound(result)) return result;
+    return { ...(await run([names.legacy, ...command.slice(1)])), ranAs: names.legacy };
   };
 }
 

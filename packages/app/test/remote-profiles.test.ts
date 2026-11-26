@@ -6,7 +6,9 @@
 import { PROTOCOL_VERSION, type HelloResult } from "@orca/protocol";
 import {
   CredentialSlots,
+  DEFAULT_SERVER_COMMAND,
   pinState,
+  RENAMED_SERVER_COMMAND,
   tunnelKeyIdentity,
   TunnelRefusal,
   type SecretCipher,
@@ -62,6 +64,8 @@ class FakeServer {
   /** Tokens the daemon accepts besides live issued ones (an imported credential). */
   readonly accepted = new Set<string>([TOKEN]);
   fail?: { code: number; lines: string[] } | undefined;
+  /** The CLI names the server has, when not every name (a server installed before the rename). */
+  clis?: string[] | undefined;
   /** The daemon answers from another workspace: it knows none of the issued credentials. */
   otherWorkspace = false;
   /** The daemon cannot be asked: every check comes back `unknown`. */
@@ -97,6 +101,8 @@ class FakeServer {
     this.commands.push([...command]);
     if (command[0] === "python3") return command.includes("--inspect") ? this.inspect : this.setup;
     if (this.fail) return { code: this.fail.code, stdout: "", serverLines: this.fail.lines };
+    if (this.clis && !this.clis.includes(command[0]!))
+      return { code: 127, stdout: "", serverLines: [`bash: line 1: ${command[0]}: command not found`] };
     const words = [...command];
     const flag = (name: string) => {
       const at = words.indexOf(name);
@@ -2051,6 +2057,42 @@ describe("the server command across the orca-cli default (#1207)", () => {
     profiles.save({ id: "lab", name: "Lab", destination: "casey@lab", serverCommand: "orca-cli" });
     await (await profiles.open("lab")).release();
     expect(verbs(server.commands)).toEqual([`${before} auth issue`, "orca-cli auth issue", `${before} auth revoke`]);
+  });
+
+  // A server installed before the rename has its CLI only under RENAMED_SERVER_COMMAND, while
+  // the profile names DEFAULT_SERVER_COMMAND (the same name until the codemod runs).
+  it("records the CLI that issued a credential on a server installed before the rename, and revokes through it", async () => {
+    const { dir, profiles, server } = store();
+    profiles.save({ name: "Lab", destination: "casey@lab" });
+    pin(dir);
+    server.clis = [RENAMED_SERVER_COMMAND];
+    await (await profiles.open("lab")).release();
+    const record = JSON.parse(readFileSync(join(dir, "credentials", "lab.json"), "utf8"));
+    expect(record.current.target.serverCommand).toBe(RENAMED_SERVER_COMMAND);
+    expect(server.live()).toHaveLength(1);
+    await expect(profiles.remove("lab")).resolves.toBe("revoked");
+    expect(server.live()).toEqual([]);
+    const ran = server.commands.filter((command) => command[0] !== "python3");
+    expect(ran.filter((command) => command[2] === "revoke").map((command) => command[0])).toEqual([
+      RENAMED_SERVER_COMMAND,
+    ]);
+    // Never the bare name, which is the GNOME screen reader.
+    expect(ran.some((command) => command[0] === before)).toBe(false);
+  });
+
+  it("revokes a credential recorded under today's CLI through the old one when that is all the server has", async () => {
+    const { dir, profiles, server } = store();
+    profiles.save({ name: "Lab", destination: "casey@lab" });
+    pin(dir);
+    await (await profiles.open("lab")).release();
+    const file = join(dir, "credentials", "lab.json");
+    const record = JSON.parse(readFileSync(file, "utf8"));
+    record.current.target.serverCommand = DEFAULT_SERVER_COMMAND;
+    writeFileSync(file, JSON.stringify(record));
+    server.clis = [RENAMED_SERVER_COMMAND];
+    await expect(profiles.remove("lab")).resolves.toBe("revoked");
+    expect(server.live()).toEqual([]);
+    expect(server.commands.some((command) => command[0] === before)).toBe(false);
   });
 
   it("revokes a credential recorded before 0.8.1, which named no command, through orca", async () => {
