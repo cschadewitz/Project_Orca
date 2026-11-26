@@ -27,8 +27,13 @@ it("discovers the adapter's Python tests, including the ones that once ran nowhe
   for (const name of ELSEWHERE) expect(files).toContain(name);
 });
 
+// Each test runs a whole Python suite, which can come close to the default 30 s on a busy runner.
 for (const name of files.filter((file) => !ELSEWHERE.has(file))) {
-  it.skipIf(process.platform === "win32")(`tools/deploy/${name}`, () => {
-    expect(() => execFileSync("python3", ["-B", `tools/deploy/${name}`], { stdio: "pipe" })).not.toThrow();
-  });
+  it.skipIf(process.platform === "win32")(
+    `tools/deploy/${name}`,
+    () => {
+      expect(() => execFileSync("python3", ["-B", `tools/deploy/${name}`], { stdio: "pipe" })).not.toThrow();
+    },
+    90_000,
+  );
 }

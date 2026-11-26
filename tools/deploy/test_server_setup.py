@@ -776,8 +776,14 @@ class ServerSetupTests(unittest.TestCase):
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         self.assertEqual(result.returncode, 2)
         self.assertIn("--version takes", result.stderr)
-        # A real run, refused on this test host's platform or systemd, still reads the adapter.
-        result = subprocess.run([sys.executable, "-", "--version", "0.8.0", "--root", str(self.tmp / "srv")],
+        # A real run, refused on this test host's platform or systemd, still reads the adapter. It
+        # stages from an empty local bundle directory: without --bundle it would download the
+        # published release of that version, which made this test slow and network-bound once
+        # v0.8.0 existed.
+        empty = self.tmp / "no-bundle"
+        empty.mkdir()
+        result = subprocess.run([sys.executable, "-", "--version", "0.8.0", "--root", str(self.tmp / "srv"),
+                                 "--bundle", str(empty)],
                                 input=program, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                 env={**os.environ, "HOME": str(self.home)})
         line = json.loads(result.stdout.splitlines()[-1][len("orca-setup: "):])
