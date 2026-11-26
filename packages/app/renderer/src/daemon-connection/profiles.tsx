@@ -7,6 +7,8 @@
  */
 import { useEffect, useRef, useState, type JSX } from "react";
 import type {
+  AgentSignInView,
+  HostAgentView,
   LoginApprovalView,
   RemoteProfileInput,
   RemoteProfilesBridge,
@@ -199,6 +201,8 @@ export function ConnectionProfiles({
   const [addingMachine, setAddingMachine] = useState(false);
   /** Tailscale SSH waits for the person to approve a connection (#1228). */
   const [approval, setApproval] = useState<LoginApprovalView>();
+  /** The profile whose server's agents are shown (#1236). */
+  const [agentsFor, setAgentsFor] = useState<string>();
   const live = useRef(true);
   /** The armed removal row: Keep takes focus when it appears (RULES.md 17). */
   const armedRow = useRef<HTMLDivElement>(null);
@@ -368,6 +372,16 @@ export function ConnectionProfiles({
                   Set up ORCA server
                 </Button>
               )}
+              {profiles.hostAgents && profile.hostKeyPinned && (
+                <Button
+                  size="sm"
+                  disabled={disabled}
+                  aria-expanded={agentsFor === profile.id}
+                  onClick={() => setAgentsFor(agentsFor === profile.id ? undefined : profile.id)}
+                >
+                  Agents
+                </Button>
+              )}
               {profile.credentialImported && (
                 <Button
                   size="sm"
@@ -423,6 +437,14 @@ export function ConnectionProfiles({
           )}
         </div>
       ))}
+      {agentsFor && profiles.hostAgents && (
+        <HostAgents
+          key={agentsFor}
+          profiles={profiles}
+          profileId={agentsFor}
+          name={list.find((p) => p.id === agentsFor)?.name ?? "this machine"}
+        />
+      )}
       {editing ? (
         <ProfileEditor
           draft={editing}
@@ -538,6 +560,164 @@ export function ConnectionProfiles({
         </Text>
       )}
     </section>
+  );
+}
+
+/**
+ * The agents ORCA can put on a managed server (#1236): each one's pinned version, whether that
+ * exact install is there and whether it is signed in. Install carries the pinned packages from
+ * this computer and shows the server config that runs the agent; Sign in runs the agent's own
+ * device-code sign-in there, and shows the page's host and the code. Main opens the page.
+ */
+export function HostAgents({
+  profiles,
+  profileId,
+  name,
+}: {
+  profiles: RemoteProfilesBridge;
+  profileId: string;
+  name: string;
+}): JSX.Element {
+  const [agents, setAgents] = useState<HostAgentView[]>();
+  const [working, setWorking] = useState<string>();
+  const [error, setError] = useState<string>();
+  const [settings, setSettings] = useState<{ agent: string; text: string }>();
+  const [prompt, setPrompt] = useState<AgentSignInView>();
+  const live = useRef(true);
+  const refresh = async () => {
+    const result = await profiles.hostAgents?.(profileId);
+    if (!live.current || !result) return;
+    if (result.ok) setAgents(result.value);
+    else setError(result.message);
+  };
+  useEffect(() => {
+    live.current = true;
+    void refresh();
+    return () => {
+      live.current = false;
+    };
+  }, [profileId]);
+  useEffect(
+    () =>
+      profiles.onAgentSignIn?.((next) => {
+        if (next.profileId === profileId) setPrompt(next);
+      }),
+    [profiles, profileId],
+  );
+  const act = async (
+    agent: string,
+    action: () => Promise<{ ok: true } | { ok: false; message: string } | undefined> | undefined,
+  ) => {
+    setWorking(agent);
+    setError(undefined);
+    const result = await action();
+    if (!live.current) return;
+    setWorking(undefined);
+    setPrompt(undefined);
+    if (result && !result.ok) setError(result.message);
+    await refresh();
+  };
+  return (
+    <div className="orca-connection-stack" role="group" aria-label={`Agents on ${name}`}>
+      <Text style="caption" as="p">
+        Agents on {name}. Installing copies the version this ORCA pins from this computer; signing in uses the
+        agent&apos;s own sign-in, approved in your browser, and the sign-in stays on that machine.
+      </Text>
+      {!agents && !error && (
+        <Text style="caption" as="p" role="status">
+          Checking the machine…
+        </Text>
+      )}
+      {agents?.map((agent) => (
+        <div key={agent.agent} className="orca-dialog__actions">
+          <Text style="caption" as="span">
+            {agent.name} {agent.version}:{" "}
+            {agent.problem
+              ? `not usable (${agent.problem})`
+              : !agent.installed
+                ? "not installed"
+                : agent.signedIn === "yes"
+                  ? "signed in"
+                  : agent.signedIn === "no"
+                    ? "not signed in"
+                    : "sign-in unknown"}
+          </Text>
+          {!agent.installed && !agent.problem && (
+            <Button
+              size="sm"
+              disabled={working !== undefined}
+              onClick={() =>
+                void act(agent.agent, async () => {
+                  const result = await profiles.installHostAgent?.(profileId, agent.agent);
+                  if (result?.ok) setSettings({ agent: agent.agent, text: result.value.settings });
+                  return result;
+                })
+              }
+            >
+              {working === agent.agent ? "Installing…" : "Install"}
+            </Button>
+          )}
+          {agent.installed && agent.signedIn !== "yes" && (
+            <Button
+              size="sm"
+              disabled={working !== undefined}
+              onClick={() => void act(agent.agent, () => profiles.signInHostAgent?.(profileId, agent.agent))}
+            >
+              {working === agent.agent ? "Signing in…" : "Sign in"}
+            </Button>
+          )}
+        </div>
+      ))}
+      {prompt && (
+        <div className="orca-connection-stack" role="alert">
+          <Text style="caption" as="p">
+            {prompt.code ? (
+              <>
+                Enter the code <span className={textClass("mono-id")}>{prompt.code}</span>
+                {prompt.host ? (
+                  <>
+                    {" "}
+                    on <span className={textClass("mono-id")}>{prompt.host}</span>
+                  </>
+                ) : null}
+                , then wait here.
+              </>
+            ) : (
+              <>
+                Sign in on <span className={textClass("mono-id")}>{prompt.host}</span>, then wait here.
+              </>
+            )}
+          </Text>
+          {prompt.host && profiles.openAgentSignIn && (
+            <div className="orca-dialog__actions">
+              <Button
+                size="sm"
+                tone="primary"
+                onClick={() => void profiles.openAgentSignIn?.(prompt.profileId, prompt.agent, prompt.attempt)}
+              >
+                Open sign-in page
+              </Button>
+            </div>
+          )}
+        </div>
+      )}
+      {settings && (
+        <div className="orca-connection-stack">
+          <Text style="caption" as="p">
+            To run it there, add this to the server&apos;s orca.config.yaml (Config &gt; Raw after connecting), then
+            apply it:
+          </Text>
+          <pre className={textClass("mono-id")} aria-label={`Server config for ${settings.agent}`}>
+            {settings.text}
+          </pre>
+        </div>
+      )}
+      {error && (
+        <Text style="caption" as="p" role="alert">
+          {error}
+        </Text>
+      )}
+    </div>
   );
 }
 

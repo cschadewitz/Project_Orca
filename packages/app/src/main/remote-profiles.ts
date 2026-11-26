@@ -14,7 +14,7 @@
  * Tunnels are shared per profile and reference counted, so a reconnect to the profile that
  * is already on screen reuses the open tunnel instead of starting a second ssh.
  */
-import { mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import type { Duplex } from "node:stream";
 import { hostname as osHostname } from "node:os";
 import { join } from "node:path";
@@ -41,7 +41,27 @@ import { OperatorDiscoverySchema } from "@orca/protocol";
 import { CredentialTransportUnavailable, type DaemonTokenSource } from "../client/auth.js";
 import { DaemonClient, DaemonClientError } from "../client/daemon-client.js";
 import { streamTransport, type StreamTransport } from "../client/stream-transport.js";
-import type { RemoteProfileView } from "../daemon-connection.js";
+import type { HostAgentView, RemoteProfileView } from "../daemon-connection.js";
+import {
+  HOST_AGENTS,
+  hostAgent,
+  hostAgentSettings,
+  hostAgentsProgram,
+  hostAgentStatus,
+  HostAgentRefused,
+  installHostAgent,
+  prepareHostAgent,
+  signInHostAgent,
+  type HostAgentLoginPrompt,
+  type HostAgentPackage,
+} from "@orca/protocol/server-agents";
+
+/** What agent work was checked against when it began (#1236). */
+interface AgentTarget {
+  profile: ConnectionProfile;
+  revision: number;
+  keys: string;
+}
 import { ConnectionRefusal } from "./connection-target.js";
 import {
   confirmationCode,
@@ -72,6 +92,7 @@ import {
 } from "@orca/protocol/tailnet";
 import {
   dropCourier,
+  httpsFetch,
   prepareCourier,
   pushCourier,
   type CourierFetch,
@@ -243,6 +264,8 @@ export interface RemoteProfilesDeps {
   sshBinary?: string;
   /** Test seam over `new SshTunnel`. */
   tunnel?: (options: SshTunnelOptions) => SshTunnel;
+  /** Test seam (#1236): agent packages instead of the pinned ones. */
+  hostAgentPackages?: Readonly<Record<string, readonly HostAgentPackage[]>>;
   /** Tunnel state changes, for the console. Never carries ssh output. */
   onTunnelState?: (profileId: string, state: TunnelState) => void;
   /** Names this computer in the principal of issued credentials. Default: the OS host name. */
@@ -320,6 +343,8 @@ export class RemoteProfiles {
   private readonly removing = new Set<string>();
   /** Profiles whose server is being set up (#881): nothing may connect, edit or remove them meanwhile. */
   private readonly serverSetups = new Set<string>();
+  /** Agent work running on a profile's server (#1236), with the tunnels it has open. */
+  private readonly agentLeases = new Map<string, Set<SshTunnel>>();
   /** The inspection each profile's confirmation was given for (#881): one at a time, used once. */
   private readonly inspections = new Map<
     string,
@@ -688,6 +713,7 @@ export class RemoteProfiles {
   private assertIdle(id: string, what: "editing" | "removing" | "importing" | "resetting"): void {
     if (this.removing.has(id)) throw new ConnectionRefusal("That profile is being removed.");
     if (this.serverSetups.has(id)) throw new ConnectionRefusal("That profile's server is being set up.");
+    if (this.agentLeases.has(id)) throw new ConnectionRefusal("An agent action is running on that machine.");
     if (this.tunnels.has(id) || this.setups.has(id)) {
       const verb = {
         editing: "editing",
@@ -886,6 +912,9 @@ export class RemoteProfiles {
       if (pending) dropDiscovery(pending.discovery);
       throw new ConnectionRefusal("That confirmation is not current. Check the server again, then confirm.");
     }
+    // Held from here, before anything is awaited, so no agent action (or anything else
+    // `assertIdle` guards) starts while the bundle is fetched; released on every way out.
+    this.serverSetups.add(id);
     let program: string;
     let courier: CourierPackage | undefined;
     try {
@@ -900,17 +929,17 @@ export class RemoteProfiles {
           ...(this.deps.courierFetch ? { fetch: this.deps.courierFetch } : {}),
         });
     } catch (error) {
+      this.serverSetups.delete(id);
       dropDiscovery(pending.discovery);
       throw error;
     }
-    if (this.revision(id) !== revision || this.closed) {
-      dropDiscovery(pending.discovery);
-      throw new ConnectionRefusal("The profile changed while the server bundle was fetched. Check it again.");
-    }
-    enrollDiscovered(pending.discovery, this.pins(id), profile.jump !== undefined);
-    this.serverSetups.add(id);
     let setup: SetupOutcome;
     try {
+      if (this.revision(id) !== revision || this.closed) {
+        dropDiscovery(pending.discovery);
+        throw new ConnectionRefusal("The profile changed while the server bundle was fetched. Check it again.");
+      }
+      enrollDiscovered(pending.discovery, this.pins(id), profile.jump !== undefined);
       const tunnel = this.newTunnel(profile, true, pending.discovery.keys);
       try {
         await tunnel.open();
@@ -957,6 +986,140 @@ export class RemoteProfiles {
       return { setup, signIn: { ok: true } };
     } catch (error) {
       return { setup, signIn: { ok: false, message: error instanceof Error ? error.message : String(error) } };
+    }
+  }
+
+  /**
+   * The agents on the profile's managed server (#1236): each one this ORCA pins, whether that
+   * exact install is there and whether it is signed in. Over a pinned-only connection; only with
+   * the `tailnet-hosts` flag on.
+   */
+  async hostAgents(id: string, scripts: string): Promise<HostAgentView[]> {
+    return this.agentWork(id, async (target) => {
+      const found = await this.withAgentTunnel(target, (tunnel) => hostAgentStatus(tunnel, hostAgentsProgram(scripts)));
+      return Object.values(HOST_AGENTS).map((agent): HostAgentView => {
+        const status = found.find((item) => item.agent === agent.id);
+        return {
+          agent: agent.id,
+          name: agent.name,
+          version: agent.version,
+          installed: status?.versions.includes(agent.version) ?? false,
+          signedIn: status?.signedIn ?? "unknown",
+          ...(status?.problem ? { problem: status.problem } : {}),
+        };
+      });
+    });
+  }
+
+  /**
+   * Install the agent's pinned packages on the profile's managed server from this computer
+   * (#1236), and return the server config that runs it. Nothing is fetched or cached unless the
+   * profile may take it, and the install goes only to the machine the profile named, with the
+   * host keys it had, when the fetch began.
+   */
+  async installHostAgent(id: string, agentId: string, scripts: string): Promise<{ settings: string }> {
+    const agent = this.knownAgent(agentId);
+    return this.agentWork(id, async (target) => {
+      const program = hostAgentsProgram(scripts);
+      const prepared = await prepareHostAgent(agent.id, {
+        cacheDir: join(this.deps.dir, "courier", "agents"),
+        fetch: this.deps.courierFetch ?? httpsFetch,
+        ...(this.deps.hostAgentPackages?.[agent.id] ? { packages: this.deps.hostAgentPackages[agent.id] } : {}),
+      }).catch((error: unknown) => {
+        throw error instanceof HostAgentRefused ? new ConnectionRefusal(error.message) : error;
+      });
+      try {
+        return await this.withAgentTunnel(target, async (tunnel) => ({
+          settings: hostAgentSettings(await installHostAgent(tunnel, prepared, program)),
+        }));
+      } finally {
+        rmSync(prepared.dir, { recursive: true, force: true });
+      }
+    });
+  }
+
+  /**
+   * Sign the agent in on the profile's managed server with its own device code (#1236).
+   * `onPrompt` gets the sign-in page and code to show; the credential stays on the server.
+   * `signal` ends the sign-in there.
+   */
+  async signInHostAgent(
+    id: string,
+    agentId: string,
+    scripts: string,
+    onPrompt: (prompt: HostAgentLoginPrompt) => void,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const agent = this.knownAgent(agentId);
+    await this.agentWork(id, (target) =>
+      this.withAgentTunnel(target, (tunnel) =>
+        signInHostAgent(
+          (command, onLine, input) => tunnel.execStreaming(command, onLine, input),
+          agent.id,
+          hostAgentsProgram(scripts),
+          onPrompt,
+          undefined,
+          signal,
+        ),
+      ),
+    );
+  }
+
+  private knownAgent(agentId: string) {
+    try {
+      return hostAgent(agentId);
+    } catch (error) {
+      throw new ConnectionRefusal(error instanceof Error ? error.message : "Unknown agent.");
+    }
+  }
+
+  /**
+   * Agent work on one profile's server, as a lease the profile's lifecycle sees: while it runs,
+   * the profile cannot be edited, removed, reset or set up (`assertIdle`), and a second agent
+   * action on it is refused. Everything is checked before any work: the flag, the profile, a
+   * pinned host key. `work` gets the target as it was then: the profile, its revision and keys.
+   */
+  private async agentWork<T>(id: string, work: (target: AgentTarget) => Promise<T>): Promise<T> {
+    if (this.closed) throw new ConnectionRefusal("The app is closing.");
+    if (!tailnetEnabled(this.deps.tailnet?.features))
+      throw new ConnectionRefusal("Agents on a server are not available in this build.");
+    if (this.removing.has(id)) throw new ConnectionRefusal("That profile is being removed.");
+    if (this.serverSetups.has(id)) throw new ConnectionRefusal("That profile's server is being set up.");
+    if (this.agentLeases.has(id)) throw new ConnectionRefusal("Another agent action is running on that machine.");
+    const profile = this.get(id);
+    if (!profile) throw new ConnectionRefusal("That profile no longer exists.");
+    if (pinState(this.pins(id)) !== "pinned")
+      throw new ConnectionRefusal("Set up the ORCA server on this machine first.");
+    const target: AgentTarget = { profile, revision: this.revision(id), keys: this.hostKeys(profile) };
+    this.agentLeases.set(id, new Set());
+    try {
+      return await work(target);
+    } finally {
+      this.agentLeases.delete(id);
+    }
+  }
+
+  /**
+   * One pinned-only connection for agent work, only to the target as it was when the work began:
+   * the same profile revision, carrying nothing unless its pins vouch for the same host keys.
+   * Closed with the work, or when the app closes.
+   */
+  private async withAgentTunnel<T>(target: AgentTarget, work: (tunnel: SshTunnel) => Promise<T>): Promise<T> {
+    const id = target.profile.id;
+    const lease = this.agentLeases.get(id);
+    if (this.closed || !lease || this.revision(id) !== target.revision || this.hostKeys(target.profile) !== target.keys)
+      throw new ConnectionRefusal("The profile changed while the agent was being prepared. Nothing was installed.");
+    const tunnel = this.newTunnel(target.profile, true, target.keys);
+    lease.add(tunnel);
+    try {
+      await tunnel.open();
+      return await work(tunnel);
+    } catch (error) {
+      if (error instanceof HostAgentRefused) throw new ConnectionRefusal(error.message);
+      throw error;
+    } finally {
+      lease.delete(tunnel);
+      await tunnel.close();
     }
   }
 
@@ -1023,6 +1186,7 @@ export class RemoteProfiles {
   forgetHostKey(id: string): void {
     if (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(id)) throw new ConnectionRefusal("Invalid profile");
     if (this.removing.has(id)) throw new ConnectionRefusal("That profile is being removed.");
+    if (this.agentLeases.has(id)) throw new ConnectionRefusal("An agent action is running on that machine.");
     const shared = this.tunnels.get(id);
     if (
       this.setups.has(id) ||
@@ -1239,7 +1403,8 @@ export class RemoteProfiles {
     const all = [...this.tunnels.values()];
     this.tunnels.clear();
     for (const shared of all) if (shared.renewal) clearInterval(shared.renewal);
-    await Promise.all(all.map((shared) => shared.tunnel.close()));
+    const agentTunnels = [...this.agentLeases.values()].flatMap((lease) => [...lease]);
+    await Promise.all([...all.map((shared) => shared.tunnel.close()), ...agentTunnels.map((tunnel) => tunnel.close())]);
   }
 
   /** While the tunnel is open, renew its credential when it comes due. */

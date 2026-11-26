@@ -30,6 +30,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { HOST_AGENT_LOCK, type HostAgentPackage } from "./host-agents-lock.js";
+export type { HostAgentPackage } from "./host-agents-lock.js";
 import type { RemoteCommand } from "./remote-access.js";
 import {
   CourierRefused,
@@ -358,7 +359,10 @@ export async function signInHostAgent(
   program: string,
   onPrompt: (prompt: HostAgentLoginPrompt) => void,
   timeoutMs = LOGIN_TIMEOUT_MS,
+  /** Ends the sign-in on the server: the person went away (its window closed, say). */
+  signal?: AbortSignal,
 ): Promise<void> {
+  if (signal?.aborted) throw new HostAgentRefused("The sign-in was cancelled.");
   const agent = hostAgent(id);
   const seen: HostAgentLoginPrompt = {};
   let shown = "";
@@ -387,8 +391,11 @@ export async function signInHostAgent(
     program,
   );
   const timer = setTimeout(() => command.kill(), timeoutMs);
+  const cancel = () => command.kill();
+  signal?.addEventListener("abort", cancel, { once: true });
   try {
     const exit = await command.exit;
+    if (signal?.aborted) throw new HostAgentRefused(`${agent.name}'s sign-in was cancelled.`);
     if (refused) throw new HostAgentRefused(refused);
     if (exit.kind === "exited" && exit.code === 0 && started) return;
     if (exit.kind === "exited" && exit.code === 127) throw new HostAgentRefused("The server has no python3.");
@@ -397,6 +404,7 @@ export async function signInHostAgent(
     throw new HostAgentRefused(`${agent.name} was not signed in on the server.`);
   } finally {
     clearTimeout(timer);
+    signal?.removeEventListener("abort", cancel);
   }
 }
 

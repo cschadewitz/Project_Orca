@@ -17,8 +17,10 @@
  * is written in the form the emit actually has; the type imports are erased either way.
  */
 import type {
+  AgentSignInView,
   DaemonTargetSnapshot,
   FleetSnapshot,
+  HostAgentView,
   LoginApprovalView,
   ProfileRemoval,
   ProfileResult,
@@ -56,6 +58,8 @@ const { contextBridge, ipcRenderer } = electron;
  * rules that make a bare `<T>` on an arrow ambiguous, and the comma is the disambiguator.
  */
 let targetEpoch = (ipcRenderer.sendSync("orca:daemon.read") as DaemonTargetSnapshot).epoch;
+/** The incubating `tailnet-hosts` flag (#1225), as main reads it: agents on a server are offered only with it on. */
+const tailnetHosts = ipcRenderer.sendSync("orca:profiles.tailnetHosts") === true;
 
 const call = <T,>(channel: string, params?: unknown): Promise<BridgeResult<T>> =>
   ipcRenderer.invoke(channel, params, targetEpoch) as Promise<BridgeResult<T>>;
@@ -279,6 +283,27 @@ const bridge: OrcaBridge = {
       },
       openLoginApproval: (id) =>
         ipcRenderer.invoke("orca:profiles.openLoginApproval", id) as Promise<ProfileResult<null>>,
+      ...(tailnetHosts
+        ? {
+            hostAgents: (id: string) =>
+              ipcRenderer.invoke("orca:profiles.hostAgents", id) as Promise<ProfileResult<HostAgentView[]>>,
+            installHostAgent: (id: string, agent: string) =>
+              ipcRenderer.invoke("orca:profiles.installHostAgent", id, agent) as Promise<
+                ProfileResult<{ settings: string }>
+              >,
+            signInHostAgent: (id: string, agent: string) =>
+              ipcRenderer.invoke("orca:profiles.signInHostAgent", id, agent) as Promise<ProfileResult<null>>,
+            onAgentSignIn: (listener: (prompt: AgentSignInView) => void) => {
+              const forward = (_event: unknown, prompt: AgentSignInView) => listener(prompt);
+              ipcRenderer.on("orca:profiles.agentSignIn", forward);
+              return () => {
+                ipcRenderer.off("orca:profiles.agentSignIn", forward);
+              };
+            },
+            openAgentSignIn: (id: string, agent: string, attempt: string) =>
+              ipcRenderer.invoke("orca:profiles.openAgentSignIn", id, agent, attempt) as Promise<ProfileResult<null>>,
+          }
+        : {}),
     },
     fleet: {
       read: () => ipcRenderer.sendSync("orca:fleet.read") as FleetSnapshot,

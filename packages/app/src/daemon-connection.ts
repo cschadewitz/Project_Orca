@@ -155,6 +155,30 @@ export interface LoginApprovalView {
   host: string;
 }
 
+/** One agent ORCA can put on a managed server (#1236), and its state there. */
+export interface HostAgentView {
+  agent: string;
+  name: string;
+  /** The version this ORCA pins. */
+  version: string;
+  /** That exact install is on the server, unchanged since it was installed. */
+  installed: boolean;
+  signedIn: "yes" | "no" | "unknown";
+  /** Why the install there cannot be used, when it is there but changed. */
+  problem?: string;
+}
+
+/** An agent's sign-in on a server waits for the person (#1236): the page's host and the code to enter. */
+export interface AgentSignInView {
+  profileId: string;
+  agent: string;
+  /** Which sign-in this prompt is for: opening its page names it. */
+  attempt: string;
+  /** The sign-in page's host, to name it; main opens the page itself. */
+  host?: string;
+  code?: string;
+}
+
 /** Profile management. Every call is main-process work; secrets never cross this bridge. */
 export interface RemoteProfilesBridge {
   list(this: void): Promise<RemoteProfileView[]>;
@@ -190,6 +214,16 @@ export interface RemoteProfilesBridge {
   onLoginApproval?(this: void, listener: (approval: LoginApprovalView) => void): () => void;
   /** Open the approval page main last received for this profile, in the browser. */
   openLoginApproval?(this: void, id: string): Promise<ProfileResult<null>>;
+  /** The agents on the profile's managed server (#1236). Absent unless the `tailnet-hosts` flag is on. */
+  hostAgents?(this: void, id: string): Promise<ProfileResult<HostAgentView[]>>;
+  /** Install the agent's pinned packages there from this computer; returns the server config that runs it. */
+  installHostAgent?(this: void, id: string, agent: string): Promise<ProfileResult<{ settings: string }>>;
+  /** Run the agent's own device-code sign-in there; resolves when it is signed in. */
+  signInHostAgent?(this: void, id: string, agent: string): Promise<ProfileResult<null>>;
+  /** An agent's sign-in waits for the person: the page to open and the code to enter. */
+  onAgentSignIn?(this: void, listener: (prompt: AgentSignInView) => void): () => void;
+  /** Open the sign-in page main last received for this profile and agent, in the browser. */
+  openAgentSignIn?(this: void, id: string, agent: string, attempt: string): Promise<ProfileResult<null>>;
 }
 export interface DaemonConnectionBridge {
   read(this: void): DaemonTargetSnapshot;

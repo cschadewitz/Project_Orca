@@ -387,6 +387,46 @@ describe("signing an agent in on the server", () => {
     );
   });
 
+  it("ends the sign-in on the server when it is cancelled, and starts none once cancelled", async () => {
+    let kills = 0;
+    let finish: (exit: RemoteCommandExit) => void = () => {};
+    let started = 0;
+    const stream = (_command: readonly string[], onLine: (stream: "stdout" | "stderr", line: string) => void) => {
+      started += 1;
+      queueMicrotask(() => {
+        onLine("stdout", 'orca-agents: {"step":"login","result":"started"}');
+        onLine("stdout", "Open https://github.com/login/device and enter ABCD-1234");
+      });
+      return {
+        exit: new Promise<RemoteCommandExit>((resolve) => (finish = resolve)),
+        kill: () => {
+          kills += 1;
+          finish({ kind: "signalled", signal: "SIGTERM" });
+        },
+      } satisfies RemoteCommand;
+    };
+    const controller = new AbortController();
+    const prompts: unknown[] = [];
+    const running = signInHostAgent(
+      stream,
+      "copilot",
+      "program",
+      (prompt) => {
+        prompts.push(prompt);
+        controller.abort();
+      },
+      undefined,
+      controller.signal,
+    );
+    await expect(running).rejects.toThrow(/sign-in was cancelled/);
+    expect(prompts).toHaveLength(1);
+    expect(kills).toBe(1);
+    await expect(signInHostAgent(stream, "copilot", "program", () => {}, undefined, controller.signal)).rejects.toThrow(
+      /cancelled/,
+    );
+    expect(started).toBe(1);
+  });
+
   it("refuses to sign in an agent that is not installed", async () => {
     const host = server();
     const { program } = copilotPackages();
