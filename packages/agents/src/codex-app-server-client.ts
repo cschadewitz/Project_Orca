@@ -98,9 +98,14 @@ export function stdioLineTransport(
     io.stdout.off("data", onData);
     for (const l of closeListeners) l(error);
   };
+  const tooLong = () => finish(new Error(`codex app-server sent a line longer than ${max} bytes`));
+  // A line's length is every byte before its newline (a CR included), counted across chunks
+  // and checked before anything is joined, decoded or delivered: the same bytes are accepted
+  // or refused however stdout happens to split them.
   const onData = (chunk: Buffer | string) => {
     let data = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
     for (let nl = data.indexOf(10); nl !== -1 && !closed; nl = data.indexOf(10)) {
+      if (pendingBytes + nl > max) return tooLong();
       pending.push(data.subarray(0, nl));
       const line = Buffer.concat(pending).toString("utf8");
       pending = [];
@@ -110,11 +115,8 @@ export function stdioLineTransport(
       if (trimmed.length > 0) for (const l of lineListeners) l(trimmed);
     }
     if (closed || data.length === 0) return;
+    if (pendingBytes + data.length > max) return tooLong();
     pendingBytes += data.length;
-    if (pendingBytes > max) {
-      finish(new Error(`codex app-server sent a line longer than ${max} bytes`));
-      return;
-    }
     pending.push(data);
   };
   io.stdout.on("data", onData);

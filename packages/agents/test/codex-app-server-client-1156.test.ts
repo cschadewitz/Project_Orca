@@ -398,6 +398,42 @@ describe("stdio line framing", () => {
     expect(() => s.t.send("x")).toThrow(/closed/);
   });
 
+  it("holds a completed line to the limit, delivering nothing from it, however the bytes are split", () => {
+    const line = "x".repeat(9);
+    const splits = [[line + "\n"], [line.slice(0, 4), line.slice(4) + "\n"], ["xxxxxxxx", "x\n"], ["xxxxxxxxx", "\n"]];
+    for (const chunks of splits) {
+      const s = io(8);
+      s.stdout.write('{"a":1}\n');
+      for (const c of chunks) s.stdout.write(c);
+      expect(s.lines, JSON.stringify(chunks)).toEqual(['{"a":1}']);
+      expect(s.closes).toHaveLength(1);
+      expect(s.closes[0]?.message).toBe("codex app-server sent a line longer than 8 bytes");
+    }
+  });
+
+  it("accepts a line of exactly the limit, whole or split, and counts a CR toward it", () => {
+    for (const chunks of [["12345678\n"], ["1234", "5678\n"], ["12345678", "\n"]]) {
+      const s = io(8);
+      for (const c of chunks) s.stdout.write(c);
+      expect(s.lines, JSON.stringify(chunks)).toEqual(["12345678"]);
+      expect(s.closes).toEqual([]);
+    }
+    const crlf = io(8);
+    crlf.stdout.write("1234567\r\n");
+    expect(crlf.lines).toEqual(["1234567"]);
+    const over = io(8);
+    over.stdout.write("12345678\r\n");
+    expect(over.lines).toEqual([]);
+    expect(over.closes).toHaveLength(1);
+  });
+
+  it("refuses the rest of a chunk once a line in it is over the limit", () => {
+    const s = io(8);
+    s.stdout.write('123456789\n{"b":2}\n');
+    expect(s.lines).toEqual([]);
+    expect(s.closes).toHaveLength(1);
+  });
+
   it("closes once when the output ends", async () => {
     const s = io();
     s.stdout.end();
