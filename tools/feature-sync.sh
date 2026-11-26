@@ -8,7 +8,10 @@ set -euo pipefail
 git config user.name "github-actions[bot]"
 git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 summary() { echo "$*" | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"; }
-gh label create sync-conflict --repo "$REPO" --force --color d93f0b \
+# Issues and labels go through ISSUES_TOKEN (the workflow's own GITHUB_TOKEN, which has
+# `issues: write`): the release App that pushes and merges is not granted Issues.
+gh_issues() { GH_TOKEN="${ISSUES_TOKEN:-$GH_TOKEN}" gh "$@"; }
+gh_issues label create sync-conflict --repo "$REPO" --force --color d93f0b \
   --description "main does not merge cleanly into a feature branch" >/dev/null 2>&1 || true
 
 git fetch -q --prune origin '+refs/heads/*:refs/remotes/origin/*'
@@ -97,7 +100,7 @@ ruleset_problem() {
 
 # conflict_issue NAME: the open sync-conflict issue for feature/NAME, or empty.
 conflict_issue() {
-  gh issue list --repo "$REPO" --state open --label sync-conflict --search "\"feature/$1\" in:title" \
+  gh_issues issue list --repo "$REPO" --state open --label sync-conflict --search "\"feature/$1\" in:title" \
     --json number,title --jq ".[] | select(.title == \"Sync conflict: feature/$1\") | .number" | head -n 1
 }
 
@@ -106,10 +109,17 @@ for name in "${branches[@]}"; do
   feature="feature/$name"
   sync="feature-sync/$name"
   head=$(git rev-parse "refs/remotes/origin/$feature")
+  # A branch that shares no history with main cannot be synced by a merge; that is no file
+  # conflict for an issue, but a branch to archive or rebuild from main.
+  if ! git merge-base "$main" "$head" >/dev/null 2>&1; then
+    summary "$feature shares no history with main; skipped. Archive it, or rebuild it from main."
+    echo "::warning::$feature shares no history with main; skipped"
+    continue
+  fi
   if git merge-base --is-ancestor "$main" "$head"; then
     summary "$feature already contains main."
     issue=$(conflict_issue "$name")
-    [ -z "$issue" ] || gh issue close "$issue" --repo "$REPO" --comment "$feature now contains main." >/dev/null
+    [ -z "$issue" ] || gh_issues issue close "$issue" --repo "$REPO" --comment "$feature now contains main." >/dev/null
     continue
   fi
 
@@ -158,9 +168,9 @@ for name in "${branches[@]}"; do
       "$main" "$feature" "$head" "${files:-- (none listed)}" "$feature")
     issue=$(conflict_issue "$name")
     if [ -n "$issue" ]; then
-      gh issue comment "$issue" --repo "$REPO" --body "$body" >/dev/null
+      gh_issues issue comment "$issue" --repo "$REPO" --body "$body" >/dev/null
     else
-      gh issue create --repo "$REPO" --title "Sync conflict: $feature" --label sync-conflict --body "$body" >/dev/null
+      gh_issues issue create --repo "$REPO" --title "Sync conflict: $feature" --label sync-conflict --body "$body" >/dev/null
     fi
     summary "$feature: main conflicts; reported."
     continue
@@ -176,5 +186,5 @@ for name in "${branches[@]}"; do
     summary "$feature: refreshed sync #$pr."
   fi
   issue=$(conflict_issue "$name")
-  [ -z "$issue" ] || gh issue close "$issue" --repo "$REPO" --comment "main merges cleanly into $feature again." >/dev/null
+  [ -z "$issue" ] || gh_issues issue close "$issue" --repo "$REPO" --comment "main merges cleanly into $feature again." >/dev/null
 done
