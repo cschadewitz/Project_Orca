@@ -29,6 +29,10 @@
     "./server-setup": {
       "types": "./dist/server-setup.d.ts",
       "import": "./dist/server-setup.js"
+    },
+    "./tailnet": {
+      "types": "./dist/tailnet.d.ts",
+      "import": "./dist/tailnet.js"
     }
   },
   "files": [

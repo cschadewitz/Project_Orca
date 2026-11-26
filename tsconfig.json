@@ -24,6 +24,7 @@
       "@orca/protocol/update-handoff": ["./packages/protocol/src/update-handoff.ts"],
       "@orca/protocol/remote-access": ["./packages/protocol/src/remote-access.ts"],
       "@orca/protocol/server-setup": ["./packages/protocol/src/server-setup.ts"],
+      "@orca/protocol/tailnet": ["./packages/protocol/src/tailnet.ts"],
       "@orca/protocol": ["./packages/protocol/src/index.ts"],
       "@orca/daemon": ["./packages/daemon/src/index.ts"],
       "@orca/design": ["./packages/design/src/index.ts"]

@@ -30,6 +30,7 @@ export default defineConfig({
       "@orca/protocol/update-handoff": src("protocol", "update-handoff"),
       "@orca/protocol/remote-access": src("protocol", "remote-access"),
       "@orca/protocol/server-setup": src("protocol", "server-setup"),
+      "@orca/protocol/tailnet": src("protocol", "tailnet"),
       "@orca/protocol": pkg("protocol"),
       "@orca/daemon": pkg("daemon"),
       "@orca/design": pkg("design"),
