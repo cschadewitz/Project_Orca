@@ -27,6 +27,7 @@ on:
     paths:
       - packages/agents/src/claude-pre-tool-hook.ts
       - packages/agents/src/native-tool-hook-session.ts
+      - packages/agents/src/codex-image.ts
       - packages/agents/src/bin/claude-pre-tool-hook.ts
       - packages/agents/src/bin/hook-output-guard.ts
       - packages/agents/test/fixtures/hook-output-guard/**

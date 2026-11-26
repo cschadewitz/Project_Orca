@@ -543,6 +543,29 @@ refuses a session whose Codex reports another version, or whose protocol lacks a
 session needs. The **Codex app-server protocol** workflow regenerates the types from the pinned
 Codex and fails on any drift.
 
+ORCA checks the Codex it starts against the builds it verified (#1162). Each verified version
+has a SHA-256 per platform for Codex's native binary (today 0.171.0 on `linux-x64`; the ACP
+route's verified pairs read the same digests). Before every start, including a restart, ORCA
+resolves `command` to the file itself and hashes it through one open descriptor that must stay
+unchanged while it is read (bounded in time); a file that is not a verified build for this
+machine is not started, so the host reads no secret for it. A machine with no verified build is
+refused before anything starts, and a close or cancel during the check starts nothing. Then,
+before ORCA sends it anything, ORCA opens the image the kernel runs for its own child once
+(`/proc/<pid>/exe`, the child checked to be the same before and after) and requires the inode
+and digest of that descriptor to be those of the file it checked, or the process is stopped. The
+version `initialize` reports must be that build's. A restart onto another build ends the
+session. Nothing a process reports is executed or trusted for this.
+
+This holds under a trusted-install assumption: the file is still started by its path after the
+check, so a same-user process that rewrites or replaces it in between gets a start, with the
+session's environment and secrets, before the child check stops it ahead of any thread. Starting
+exactly the checked bytes is tracked in #1286.
+
+`command` must name the native `codex` binary: an npm install's `codex` command is a Node script
+that then starts the binary, and is refused (with npm, the binary is
+`node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex` under the
+`@openai/codex` install).
+
 ORCA sets the thread's approval policy (`on-request`: Codex 0.171.0 refuses `untrusted` at
 startup, so ORCA refuses a session asked for it before starting Codex), the reviewer `user` and
 the sandbox (`read-only` or `workspace-write`; never full access) as session flags

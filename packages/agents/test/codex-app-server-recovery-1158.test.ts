@@ -17,7 +17,7 @@ import {
   type CodexSessionContinuity,
   type SessionUpdateEvent,
 } from "../src/index.js";
-import { CONFIG_ANSWERS, configRead, WRITE_SANDBOX } from "./codex-config-fixture.js";
+import { CONFIG_ANSWERS, configRead, WRITE_SANDBOX, PINNED_IMAGE, VERIFIED_IMAGE } from "./codex-config-fixture.js";
 
 const CWD = process.cwd();
 const INIT = { userAgent: "orca/0.171.0 (test)", codexHome: "/h/.codex", platformFamily: "unix", platformOs: "linux" };
@@ -147,6 +147,7 @@ const open = (host: AgentHost, more: Partial<Parameters<typeof openCodexAppServe
     cwd: CWD,
     thread: { approvalPolicy: "on-request", sandbox: "workspace-write" },
     logger: silentLogger,
+    ...VERIFIED_IMAGE,
     sleep: async () => {},
     ...more,
   });
@@ -413,6 +414,82 @@ describe("an app-server that exits", () => {
       await expect(session.prompt("again")).rejects.toBe(error);
       expect(s.spawnAgent).toHaveBeenCalledTimes(2);
     });
+  });
+
+  it("ends the session, without starting it, when the file is another build at a restart (#1162)", async () => {
+    const s = scriptedHost(() => BASE);
+    let starts = 0;
+    const imageFile = vi.fn(async () => (++starts === 1 ? PINNED_IMAGE : { ...PINNED_IMAGE, sha256: "0".repeat(64) }));
+    const session = await open(s.host, { imageFile });
+    s.procs[0]!.crash();
+    await settle();
+    const error = (await session.prompt("go").catch((e: unknown) => e)) as OrcaError;
+    expect(error.code).toBe("NOT_SUPPORTED");
+    expect(error.details).toMatchObject({ reason: "codex-image-unverified" });
+    expect(imageFile).toHaveBeenCalledTimes(2);
+    // Never started: the host was asked once, for the first process.
+    expect(s.spawnAgent).toHaveBeenCalledTimes(1);
+    await expect(session.prompt("again")).rejects.toBe(error);
+    expect(s.spawnAgent).toHaveBeenCalledTimes(1);
+  });
+
+  it("starts nothing when a restart is cancelled or closed while its file is checked (#1162)", async () => {
+    const held = () => {
+      let release!: () => void;
+      let calls = 0;
+      const gate = new Promise<void>((r) => (release = r));
+      const imageFile = vi.fn(async () => {
+        if (++calls > 1) await gate;
+        return PINNED_IMAGE;
+      });
+      return { imageFile, release: () => release() };
+    };
+
+    const a = held();
+    const s = scriptedHost(() => BASE);
+    const session = await open(s.host, { imageFile: a.imageFile });
+    s.procs[0]!.crash();
+    await settle();
+    const turn = session.prompt("go");
+    await settle();
+    expect(a.imageFile).toHaveBeenCalledTimes(2);
+    const cancelled = session.cancel();
+    a.release();
+    await cancelled;
+    await expect(turn).resolves.toMatchObject({ stopReason: "cancelled" });
+    expect(s.spawnAgent).toHaveBeenCalledTimes(1);
+
+    const b = held();
+    const t = scriptedHost(() => BASE);
+    const other = await open(t.host, { imageFile: b.imageFile });
+    t.procs[0]!.crash();
+    await settle();
+    const pending = other.prompt("go");
+    await settle();
+    expect(b.imageFile).toHaveBeenCalledTimes(2);
+    const closed = other.close();
+    b.release();
+    await closed;
+    await expect(pending).rejects.toMatchObject({ code: "RUN_STATE" });
+    expect(t.spawnAgent).toHaveBeenCalledTimes(1);
+  });
+
+  it("ends the session when a restarted process does not run the checked file (#1162)", async () => {
+    const s = scriptedHost(() => BASE);
+    const imageDigest = vi.fn(async (pid: number | undefined) =>
+      pid === 4000 ? PINNED_IMAGE : { ...PINNED_IMAGE, ino: PINNED_IMAGE.ino + 1 },
+    );
+    const session = await open(s.host, { imageDigest });
+    s.procs[0]!.crash();
+    await settle();
+    const error = (await session.prompt("go").catch((e: unknown) => e)) as OrcaError;
+    expect(error.code).toBe("NOT_SUPPORTED");
+    expect(error.details).toMatchObject({ reason: "codex-image-unverified" });
+    expect(imageDigest.mock.calls.map((c) => c[0])).toEqual([4000, 4001]);
+    expect(s.procs[1]!.received).toEqual([]);
+    expect(s.procs[1]!.kill).toHaveBeenCalled();
+    await expect(session.prompt("again")).rejects.toBe(error);
+    expect(s.spawnAgent).toHaveBeenCalledTimes(2);
   });
 
   it("never answers an ask once its process is gone", async () => {

@@ -1,3 +1,5 @@
+import { CODEX_VERIFIED_IMAGES } from "../src/codex-image.js";
+
 /** What a stock Codex 0.171.0 answers for ORCA's config checks (#1160), as the real one did. */
 export const WRITE_SANDBOX = {
   type: "workspaceWrite",
@@ -50,4 +52,15 @@ export const CONFIG_ANSWERS = {
   "config/read": () => configRead(),
   "configRequirements/read": () => NO_REQUIREMENTS,
   "hooks/list": () => NO_HOOKS,
+};
+
+/**
+ * The image checks a fake app-server passes (#1162): this "machine" is linux-x64, and the file
+ * ORCA starts, and the process it then runs, are the verified Codex 0.171.0 build.
+ */
+export const PINNED_IMAGE = { sha256: CODEX_VERIFIED_IMAGES["0.171.0"]!["linux-x64"]!, dev: 64769, ino: 1162 };
+export const VERIFIED_IMAGE = {
+  imageTarget: "linux-x64",
+  imageFile: async () => PINNED_IMAGE,
+  imageDigest: async () => PINNED_IMAGE,
 };

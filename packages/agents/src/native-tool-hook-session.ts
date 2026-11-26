@@ -55,7 +55,7 @@
  * removes the context file and the runtime record when the session ends.
  */
 import { spawn } from "node:child_process";
-import { createReadStream, existsSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { mkdir, readdir, readFile, readlink, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { userInfo } from "node:os";
@@ -71,6 +71,7 @@ import {
   type ClaudeHookContext,
   type ClaudeRuntimeAttestation,
 } from "./claude-pre-tool-hook.js";
+import { CODEX_VERIFIED_IMAGES, procImageSha256, procStat } from "./codex-image.js";
 import { openHookTelemetrySpool, type HookTelemetrySpool } from "./hook-telemetry.js";
 import type { ProtectedPaths } from "./permissions.js";
 
@@ -192,8 +193,7 @@ export const CODEX_HOOK_VERIFIED_PAIRS: readonly {
   {
     adapter: "2.9.0",
     runtime: "0.171.0",
-    // @openai/codex-linux-x64@0.171.0, vendor/x86_64-unknown-linux-musl/bin/codex.
-    images: { "linux-x64": "b76a027d6b210f9a8da7aaf321dd235c700f0ef7a794d4a5314b9af6c134f0f0" },
+    images: CODEX_VERIFIED_IMAGES["0.171.0"]!,
   },
 ];
 
@@ -825,18 +825,6 @@ export interface NativeToolHookSessionOptions {
 
 export type NativeToolHookStatus = "pending" | "claude" | "claude-verified" | "codex";
 
-/** A process's parent and start time, from `/proc/<pid>/stat` (Linux). */
-async function procStat(pid: number): Promise<{ ppid: number; start: string } | undefined> {
-  try {
-    const stat = await readFile(`/proc/${pid}/stat`, "utf8");
-    const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
-    // After the name: state, ppid, ...; starttime is field 22 overall, 20 here.
-    return { ppid: Number(fields[1]), start: fields[19]! };
-  } catch {
-    return undefined;
-  }
-}
-
 /** Reads `/proc` (Linux): each process's parent and argument list. */
 async function processTable(): Promise<Map<number, { ppid: number; argv: string[] }>> {
   const table = new Map<number, { ppid: number; argv: string[] }>();
@@ -880,16 +868,10 @@ export async function processImageDigest(
   };
   const before = await lineage();
   if (before === undefined) return { error: `process ${pid} is not running under the agent ORCA started` };
-  let sha256: string;
-  try {
-    const hash = createHash("sha256");
-    for await (const chunk of createReadStream(`/proc/${pid}/exe`)) hash.update(chunk as Buffer);
-    sha256 = hash.digest("hex");
-  } catch (error) {
-    return { error: `its image cannot be read (${error instanceof Error ? error.message : String(error)})` };
-  }
+  const image = await procImageSha256(pid);
+  if ("error" in image) return image;
   if ((await lineage()) !== before) return { error: `process ${pid} changed while its image was read` };
-  return { sha256 };
+  return image;
 }
 
 export interface NativeToolHookSession {

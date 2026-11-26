@@ -36,6 +36,7 @@ on:
       - packages/cli/test/codex-exec-gate-route-1026.test.ts
       - packages/agents/src/claude-pre-tool-hook.ts
       - packages/agents/src/native-tool-hook-session.ts
+      - packages/agents/src/codex-image.ts
       - packages/agents/src/acp-session.ts
       - packages/agents/src/permissions.ts
       - packages/agents/test/codex-exec-isolation-1026.test.ts

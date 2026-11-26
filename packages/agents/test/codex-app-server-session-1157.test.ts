@@ -4,6 +4,7 @@
  * given), how a turn's items become ACP updates and its end a stop reason, cancel, asks
  * declined until #1159, config options, close, and the host handle's one-reader rule.
  */
+import { realpathSync } from "node:fs";
 import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import type * as acp from "@agentclientprotocol/sdk";
@@ -21,7 +22,14 @@ import {
   type AgentProcessHandle,
   type SessionUpdateEvent,
 } from "../src/index.js";
-import { CONFIG_ANSWERS, configRead, NO_HOOKS, WRITE_SANDBOX } from "./codex-config-fixture.js";
+import {
+  CONFIG_ANSWERS,
+  configRead,
+  NO_HOOKS,
+  WRITE_SANDBOX,
+  PINNED_IMAGE,
+  VERIFIED_IMAGE,
+} from "./codex-config-fixture.js";
 
 const CWD = process.cwd();
 const INIT = {
@@ -140,6 +148,7 @@ const open = (host: AgentHost, more: Partial<Parameters<typeof openCodexAppServe
     cwd: CWD,
     thread: { approvalPolicy: "on-request", sandbox: "workspace-write" },
     logger: silentLogger,
+    ...VERIFIED_IMAGE,
     ...more,
   });
 
@@ -879,6 +888,98 @@ describe("opening a session", () => {
       /does not ask for driver: codex-app-server/,
     );
     expect(s.spawnAgent).not.toHaveBeenCalled();
+  });
+});
+
+describe("the Codex image ORCA starts (#1162)", () => {
+  const OTHER = "0".repeat(64);
+
+  it("refuses a machine with no verified build before anything starts", async () => {
+    const t = scriptedHost(BASE);
+    const error = (await open(t.host, { imageTarget: "win32-x64" }).catch((e: unknown) => e)) as OrcaError;
+    expect(error.code).toBe("NOT_SUPPORTED");
+    expect(error.message).toMatch(
+      /ORCA has no verified Codex build for win32-x64\. ORCA does not start this session\./,
+    );
+    expect(error.details).toMatchObject({ reason: "codex-image-unverified", platform: "win32-x64" });
+    expect(t.spawnAgent).not.toHaveBeenCalled();
+  });
+
+  it("checks the file before starting it: another build is never started, and no secret is read for it", async () => {
+    const t = scriptedHost(BASE);
+    const imageFile = vi.fn(async () => ({ ...PINNED_IMAGE, sha256: OTHER }));
+    const imageDigest = vi.fn(VERIFIED_IMAGE.imageDigest);
+    const error = (await open(t.host, { imageFile, imageDigest }).catch((e: unknown) => e)) as OrcaError;
+    // The resolved file itself (here the test's node binary) is what is checked.
+    expect(imageFile).toHaveBeenCalledWith(realpathSync(process.execPath));
+    expect(error.code).toBe("NOT_SUPPORTED");
+    expect(error.message).toMatch(/the Codex at its command is not a build ORCA verified/);
+    expect(error.message).toMatch(/ORCA verified Codex 0\.171\.0 for linux-x64/);
+    expect(error.details).toMatchObject({ reason: "codex-image-unverified", platform: "linux-x64", sha256: OTHER });
+    // Not launched: the host, which reads and delivers the secrets as it starts the process,
+    // was never asked to, and there is no process to attest.
+    expect(t.spawnAgent).not.toHaveBeenCalled();
+    expect(imageDigest).not.toHaveBeenCalled();
+  });
+
+  it("refuses a file it cannot check, without starting it", async () => {
+    const t = scriptedHost(BASE);
+    const error = (await open(t.host, {
+      imageFile: async () => ({ error: "it changed while ORCA read it" }),
+    }).catch((e: unknown) => e)) as OrcaError;
+    expect(error.message).toMatch(/ORCA could not check the Codex at its command before starting it: it changed/);
+    expect(t.spawnAgent).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["another inode", { ...PINNED_IMAGE, ino: PINNED_IMAGE.ino + 1 }],
+    ["another digest", { ...PINNED_IMAGE, sha256: OTHER }],
+  ])(
+    "stops a launched process whose image is not the checked file (%s) before saying anything to it",
+    async (_, seen) => {
+      const t = scriptedHost(BASE);
+      const imageDigest = vi.fn(async () => seen);
+      const error = (await open(t.host, { imageDigest }).catch((e: unknown) => e)) as OrcaError;
+      expect(t.spawnAgent).toHaveBeenCalledTimes(1);
+      expect(imageDigest).toHaveBeenCalledWith(4242);
+      expect(error.code).toBe("NOT_SUPPORTED");
+      expect(error.message).toMatch(/the process ORCA started does not run the Codex file ORCA checked/);
+      expect(error.details).toMatchObject({ reason: "codex-image-unverified" });
+      // Launched, but no protocol message reached it, and it was stopped.
+      expect(t.peer.received).toEqual([]);
+      expect(t.kill).toHaveBeenCalled();
+    },
+  );
+
+  it("refuses when the launched image cannot be attested, with ORCA's reason only", async () => {
+    const t = scriptedHost(BASE);
+    const error = (await open(t.host, {
+      imageDigest: async () => ({ error: "process 4242 is not running as a child ORCA started" }),
+    }).catch((e: unknown) => e)) as OrcaError;
+    expect(error.message).toMatch(/ORCA could not attest the Codex it started: process 4242 is not running as a child/);
+    expect(t.peer.received).toEqual([]);
+  });
+
+  it("gives a process that exited before its image was read the startup diagnosis", async () => {
+    const t = scriptedHost(BASE);
+    const error = (await open(t.host, {
+      imageDigest: async () => {
+        t.exit({ code: 1, signal: null });
+        return { error: "process 4242 is not running as a child ORCA started" };
+      },
+    }).catch((e: unknown) => e)) as OrcaError;
+    expect(error.code).toBe("AGENT_TRANSPORT");
+    expect(error.message).toMatch(/exited with code 1 before ORCA's handshake finished/);
+    expect(error.details).toMatchObject({ exited: true, exitCode: 1 });
+    expect(t.peer.received).toEqual([]);
+  });
+
+  it("refuses a verified image whose handshake reports another version", async () => {
+    const t = scriptedHost({ ...BASE, initialize: () => ({ ...INIT, userAgent: "orca/0.170.0 (test)" }) });
+    const error = (await open(t.host).catch((e: unknown) => e)) as OrcaError;
+    expect(error.code).toBe("NOT_SUPPORTED");
+    expect(error.message).toMatch(/Codex 0\.170\.0/);
+    expect(t.peer.received.map((m) => m.method)).not.toContain("thread/start");
   });
 });
 
