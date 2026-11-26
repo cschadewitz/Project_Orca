@@ -1,6 +1,6 @@
 /** Indexed admission journal. Only opaque pointers/counters are public; records reuse ExecutionStore. */
 import { createHmac, randomUUID } from "node:crypto";
-import { mkdir, open, readFile, readdir, rename, unlink } from "node:fs/promises";
+import { mkdir, open, readFile, readdir, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
@@ -15,6 +15,7 @@ import type {
 } from "../../core/src/model/admission-retry.js";
 import type { ExecutionStore } from "./execution-store.js";
 import { withFileLock } from "./file-lock.js";
+import { replaceFile } from "./durable-file.js";
 
 const idPattern = /^retry_[a-f0-9-]{36}$/;
 const Pointer = z.strictObject({ operationId: z.string().regex(idPattern), ref: z.string().uuid() });
@@ -81,7 +82,7 @@ export class FileRetryClaimStore implements RetryClaimStore {
       } finally {
         await handle.close();
       }
-      await rename(tmp, join(this.dir, name));
+      await replaceFile(tmp, join(this.dir, name));
       if (process.platform !== "win32") {
         for (const dir of [this.dir, this.options.storeDir]) {
           const handle = await open(dir, "r");

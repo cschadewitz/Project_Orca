@@ -100,10 +100,13 @@
 
 /* A narrow surface: 800×600 at 150% zoom leaves about 530 CSS pixels, and beside a step detail
    at its floor the tree had room for a status chip and one letter of each title (#1193). Below
-   44em the two columns fold into one. The step detail is not shown until a run is selected —
+   50em the two columns fold into one. The step detail is not shown until a run is selected —
    "Select a run" took half the room to say so — and then sits under the tree and timeline,
-   sharing the height with them. Its splitter goes with it: there is no column to drag. */
-@container runs (max-width: 44em) {
+   sharing the height with them. Its splitter goes with it: there is no column to drag.
+   The point is 50em, not the 44em it was: the detail never goes under its 320px floor, so
+   between the two the tree kept under 300px and clipped titles to about eighteen characters
+   (1000×680 at 150%, found by the Windows layout check, #1284). */
+@container runs (max-width: 50em) {
   .orca-runs__split {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr);

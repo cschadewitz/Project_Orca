@@ -29,11 +29,12 @@
  */
 import { hostname } from "node:os";
 import { randomUUID } from "node:crypto";
-import { link, mkdir, readdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { link, mkdir, readdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 import { OrcaError, systemClock, type Clock } from "@orca/core";
 import { breakIfStale, processAlive, withFileLock } from "./file-lock.js";
+import { replaceFile } from "./durable-file.js";
 
 export const LeaseSchema = z.object({
   /** What is held. The engine uses `run:<runId>`; the namespace is the caller's to choose. */
@@ -478,7 +479,7 @@ export class FileLeaseStore implements LeaseStore {
   private async overwrite(file: string, lease: Lease): Promise<void> {
     const tmp = this.tmp(file);
     await writeFile(tmp, serializeLease(lease), "utf8");
-    await rename(tmp, file);
+    await replaceFile(tmp, file);
   }
 
   private tmp(file: string): string {
