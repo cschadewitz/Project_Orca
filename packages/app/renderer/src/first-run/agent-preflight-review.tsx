@@ -34,8 +34,8 @@ const pinText = (pin: NonNullable<FirstRunAgentCheck["evidence"]["codexPin"]>): 
     : pin.state === "unpinned"
       ? "Its bytes are not a Codex build ORCA pinned for this platform, so ORCA will not start it. An npm install's codex command is a Node script; point the command at the native codex binary of a pinned version."
       : pin.state === "no-platform-pin"
-        ? "ORCA pinned no Codex build for this platform, so it will not start Codex with this driver here. Its bytes were not read."
-        : "Its bytes could not be read to the end within the check's limits, or changed while being read, so whether it is a pinned Codex build is unknown, and ORCA will not start it.";
+        ? "ORCA pinned no Codex build for this platform, so it will not start Codex with this driver here. Its bytes were not hashed."
+        : "Its bytes could not be read to the end within the check's size and time limits, or changed while being read, so whether it is a pinned Codex build is unknown, and ORCA will not start it.";
 
 /** What the experimental Codex app-server driver does not cover, shown before anyone relies on it (#1066, #1167). */
 function CodexAppServerCaveats({ pin }: { pin: FirstRunAgentCheck["evidence"]["codexPin"] }): JSX.Element {

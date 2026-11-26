@@ -39,32 +39,42 @@ export const CODEX_PIN_MAX_BYTES = 512 * 1024 * 1024;
 /** How long the pin check may take before it gives up: it is advisory and must not hold the review. */
 export const CODEX_PIN_TIMEOUT_MS = 15_000;
 
+/** What the pin check needs of an open file: its stat and positional reads. */
+export interface PinFile {
+  stat(): Promise<{ size: number; ino: number; mtimeMs: number; ctimeMs: number }>;
+  read(buffer: Buffer, offset: number, length: number, position: number): Promise<{ bytesRead: number }>;
+}
+
 /**
  * Compares the open file's bytes, read through `file`, with the pins. Only on a platform that
- * has a pin; never past `maxBytes` or `timeoutMs`; and `unreadable` unless the file is the same
- * (inode, size, modification and change times) before and after, and was read to its end.
+ * has a pin (otherwise nothing is hashed); never past `maxBytes`; and `unreadable` unless the
+ * file is the same (inode, size, modification and change times) before and after, and was read
+ * to its end. The caller waits at most `timeoutMs`: once the deadline wins, the answer is
+ * `unreadable` and `abandoned` is set, so the caller does not wait on the file either, and no
+ * read still in flight can turn into a result.
  */
-async function codexPin(
-  file: import("node:fs/promises").FileHandle,
+export async function codexPin(
+  file: PinFile,
   target: string,
   limits: {
     pins?: Readonly<Record<string, Readonly<Record<string, string>>>>;
     maxBytes?: number;
     timeoutMs?: number;
   },
-): Promise<NonNullable<FirstRunAgentCheck["evidence"]["codexPin"]>> {
+): Promise<{ pin: NonNullable<FirstRunAgentCheck["evidence"]["codexPin"]>; abandoned: boolean }> {
   const pins = limits.pins ?? CODEX_PINNED_IMAGES;
-  if (!Object.values(pins).some((images) => images[target] !== undefined)) return { state: "no-platform-pin" };
+  if (!Object.values(pins).some((images) => images[target] !== undefined))
+    return { pin: { state: "no-platform-pin" }, abandoned: false };
   const maxBytes = limits.maxBytes ?? CODEX_PIN_MAX_BYTES;
-  const deadline = Date.now() + (limits.timeoutMs ?? CODEX_PIN_TIMEOUT_MS);
-  try {
+  let expired = false;
+  const work = async (): Promise<NonNullable<FirstRunAgentCheck["evidence"]["codexPin"]>> => {
     const before = await file.stat();
     if (before.size > maxBytes) return { state: "unreadable" };
     const hash = createHash("sha256");
     const chunk = Buffer.alloc(1 << 20);
     let position = 0;
     for (;;) {
-      if (Date.now() > deadline) return { state: "unreadable" };
+      if (expired) return { state: "unreadable" };
       const { bytesRead } = await file.read(chunk, 0, chunk.length, position);
       if (bytesRead === 0) break;
       position += bytesRead;
@@ -78,11 +88,24 @@ async function codexPin(
       after.ino === before.ino &&
       after.mtimeMs === before.mtimeMs &&
       after.ctimeMs === before.ctimeMs;
-    if (!same) return { state: "unreadable" };
+    if (!same || expired) return { state: "unreadable" };
     const version = pinnedCodexVersion(hash.digest("hex"), target, pins);
     return version ? { state: "pinned", version } : { state: "unpinned" };
-  } catch {
-    return { state: "unreadable" };
+  };
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<"expired">((resolve) => {
+    timer = setTimeout(() => resolve("expired"), Math.max(0, limits.timeoutMs ?? CODEX_PIN_TIMEOUT_MS));
+  });
+  const running = work().catch(() => ({ state: "unreadable" }) as const);
+  try {
+    const first = await Promise.race([running, deadline]);
+    if (first === "expired") {
+      expired = true;
+      return { pin: { state: "unreadable" }, abandoned: true };
+    }
+    return { pin: first, abandoned: false };
+  } finally {
+    clearTimeout(timer);
   }
 }
 export async function inspectLocalTool(
@@ -138,6 +161,7 @@ export async function inspectLocalTool(
         continue;
       }
       const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+      let abandoned = false;
       try {
         const info = await file.stat();
         if (!info.isFile()) {
@@ -152,12 +176,15 @@ export async function inspectLocalTool(
         }
         if (machOArchitectureMismatch(header.subarray(0, bytesRead), process.platform, process.arch))
           return result("architecture");
-        return result(
-          "handshake-required",
-          agent.driver === "codex-app-server" ? await codexPin(file, target, codex) : undefined,
-        );
+        if (agent.driver !== "codex-app-server") return result("handshake-required");
+        const checked = await codexPin(file, target, codex);
+        // A pin check that ran out of time may still have a read in flight on this descriptor:
+        // its close is left to finish on its own rather than hold the review.
+        abandoned = checked.abandoned;
+        return result("handshake-required", checked.pin);
       } finally {
-        await file.close();
+        if (abandoned) void file.close().catch(() => undefined);
+        else await file.close();
       }
     } catch (error) {
       if (!(typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT"))
