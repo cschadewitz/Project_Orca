@@ -1,10 +1,10 @@
 /**
  * Visual sweep of the installed app on a seeded fresh install: first-run setup, the demo seed
  * (tools/demo-seed) applied through Config > Raw, then every surface and the main detail views,
- * at several window sizes and 150% zoom. Each capture also records an in-page layout audit
+ * at several window sizes, 150% zoom and in the dark theme. Each capture also records an in-page layout audit
  * (overlapping, covered, clipped and off-window controls) in audit.json.
  *
- * Opt-in and slow (about 8 minutes), so it runs only when SWEEP_OUT is set:
+ * Opt-in and slow (a few minutes), so it runs only when SWEEP_OUT is set:
  *   node tools/demo-seed/build.mjs
  *   SWEEP_OUT=/tmp/sweep pnpm exec playwright test --config packages/app/test/smoke/playwright.config.ts \
  *     --project=linux-native visual-sweep
@@ -321,13 +321,21 @@ async function deepViews(page: Page, prefix: string) {
     await page.getByRole("treeitem").first().click({ timeout: 5000 });
     await click(/^Filter by status/, false);
     await page.getByRole("menuitem", { name: "All statuses" }).click({ timeout: 5000 });
+    await whenReady(page, `${prefix}-runs-rows-after-clearing-the-filter`, runsReady(page));
   });
   await step("runs-expand-program", "Runs", async () => {
     const row = page.getByRole("treeitem").filter({ hasText: "Platform upgrade" }).first();
     await row.click({ timeout: 5000 });
     await page.keyboard.press("ArrowRight");
   });
-  await step("runs-board", "Runs", () => click("Board"));
+  await step("runs-board", "Runs", async () => {
+    await click("Board");
+    // Ready: the board shows the followed runs, and none of their cards is still loading.
+    await whenReady(page, `${prefix}-board-cards`, async () => {
+      await expect(page.locator("article.orca-board__card").first()).toBeVisible({ timeout: 30_000 });
+      await expect(page.locator("article.orca-board__card--loading")).toHaveCount(0, { timeout: 30_000 });
+    });
+  });
   await step("runs-search", "Runs", async () => {
     await click("Search");
     await page.keyboard.type("export");
@@ -341,14 +349,21 @@ async function deepViews(page: Page, prefix: string) {
     "Parallel security audit",
     "Hotfix with a nested release train",
   ])
-    await step(`workflow-${name}`, "Workflows", () =>
-      page
+    await step(`workflow-${name}`, "Workflows", async () => {
+      await page
         .getByRole("row")
         .filter({ hasText: name })
         .first()
         .getByRole("button", { name: "Open" })
-        .click({ timeout: 5000 }),
-    );
+        .click({ timeout: 5000 });
+      // Ready: the workflow view itself (it renders only once the definition loaded), live
+      // rather than the last-known copy, on the page for this workflow.
+      await whenReady(page, `${prefix}-workflow-${name}`, async () => {
+        await expect(page.locator(".orca-wf").first()).toBeVisible({ timeout: 30_000 });
+        await expect(page.locator(".orca-wf .orca-banner--stale")).toHaveCount(0);
+        await expect(page.locator("main").first()).toContainText(name);
+      });
+    });
   await step("workflow-edit-wide", "Workflows", () =>
     page
       .getByRole("row")
@@ -383,12 +398,53 @@ async function deepViews(page: Page, prefix: string) {
   await closeOverlays(page);
 }
 
+/**
+ * Waits until the view shows its data (`ready` asserts it positively) and records how long that
+ * took in load-times.json. A view that never got there is a failed step, not a capture: a
+ * diagnostic screenshot is saved as `not-ready-<label>` and the error is rethrown, so the sweep
+ * fails rather than passing on a loading or error view.
+ */
+async function whenReady(page: Page, label: string, ready: () => Promise<unknown>) {
+  const started = Date.now();
+  try {
+    await ready();
+  } catch (error) {
+    await appendFile(
+      join(OUT, "load-times.json"),
+      `${JSON.stringify({ label, ready: false, ms: Date.now() - started })}\n`,
+    );
+    await capture(page, `not-ready-${label}`);
+    throw error;
+  }
+  await appendFile(
+    join(OUT, "load-times.json"),
+    `${JSON.stringify({ label, ready: true, ms: Date.now() - started })}\n`,
+  );
+}
+
+/** Runs has rows. */
+const runsReady = (page: Page) => () => expect(page.getByRole("treeitem").first()).toBeVisible({ timeout: 30_000 });
+
 async function everySurface(page: Page, prefix: string) {
   for (const surface of SURFACES)
     await attempt(`${prefix}-${surface}`, async () => {
       await openSurface(page, surface);
+      // Runs shows a loading state first; the capture is of its data, so wait for a row.
+      if (surface === "Runs") await whenReady(page, `${prefix}-runs-rows`, runsReady(page));
       await capture(page, `${prefix}-${surface}`);
     });
+}
+
+/** Switches the whole app to `theme` the way a person does: ⌘⇧L / Ctrl+⇧L cycles system → light → dark. */
+async function chooseTheme(page: Page, theme: "light" | "dark") {
+  const current = () => page.evaluate(() => document.documentElement.getAttribute("data-theme"));
+  for (let press = 0; press < 3 && (await current()) !== theme; press++) {
+    const before = await current();
+    await page.keyboard.press("Control+Shift+KeyL");
+    // Each press must visibly change the theme, or the shortcut did not take effect.
+    await expect.poll(current).not.toBe(before);
+  }
+  expect(await current()).toBe(theme);
 }
 
 sweep("seed a fresh install and capture every surface", async () => {
@@ -455,5 +511,23 @@ sweep("seed a fresh install and capture every surface", async () => {
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.webContents.setZoomFactor(1.5));
   await everySurface(page, "zoom150");
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.webContents.setZoomFactor(1));
+  // The same surfaces, detail views and overlays in the dark theme, at full size and at 800×600.
+  await attempt("dark-theme", () => chooseTheme(page, "dark"));
+  await everySurface(page, "dark-1280");
+  await deepViews(page, "dark-deep");
+  await attempt("dark-palette", async () => {
+    await openSurface(page, "Runs");
+    await page.keyboard.press("Control+K");
+    await capture(page, "dark-commands-palette");
+    await closeOverlays(page);
+  });
+  await attempt("dark-connect-dialog", async () => {
+    await page.getByRole("button", { name: /Connect to a daemon/ }).click({ timeout: 3000 });
+    await capture(page, "dark-connect-dialog");
+    await closeOverlays(page);
+  });
+  await setSize(app, 800, 600);
+  await everySurface(page, "dark-800");
+  await setSize(app, 1280, 900);
   expect(failures, "sweep steps that failed (see error-*.txt in SWEEP_OUT)").toEqual([]);
 });
