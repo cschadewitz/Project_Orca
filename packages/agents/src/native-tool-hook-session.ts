@@ -608,6 +608,42 @@ export function codexHookConfig(base: string | undefined, command: string): stri
   });
 }
 
+/** A TOML basic string: JSON's string escapes are TOML's. */
+const tomlString = (v: string) => JSON.stringify(v);
+
+/**
+ * The `-c` session flags that install ORCA's hook in a Codex ORCA starts itself (`codex
+ * app-server`, #1161): the same hook, timeout and `hooks.state` trust as `codexHookConfig`,
+ * keyed as Codex keys a session-flag hook (`CODEX_HOOK_KEY`), and hosted web search off.
+ * Placed after the agent's own arguments, so they win over any `-c` there.
+ */
+export function codexHookSessionFlags(command: string): string[] {
+  const hook = `{type="command",command=${tomlString(command)},timeout=${CODEX_PRE_TOOL_TIMEOUT_SECONDS}}`;
+  const trust = `{${tomlString(CODEX_HOOK_KEY)}={trusted_hash=${tomlString(codexHookTrustHash(command, CODEX_PRE_TOOL_TIMEOUT_SECONDS))}}}`;
+  return [
+    "-c",
+    `hooks.PreToolUse=[{matcher="*",hooks=[${hook}]}]`,
+    "-c",
+    `hooks.state=${trust}`,
+    "-c",
+    `web_search="disabled"`,
+  ];
+}
+
+/** ORCA's hook in a Codex app-server session, from `NativeToolHookSession.codexAppServer` (#1161). */
+export interface CodexAppServerHook {
+  /** The `-c` flags that install it, placed before the `app-server` subcommand. */
+  sessionFlags: readonly string[];
+  /** The command `hooks/list` must report for ORCA's hook (`CODEX_HOOK_KEY`). */
+  command: string;
+  /**
+   * The admission checks against the app-server process ORCA started (`pid`): the fail-closed
+   * line and the probe, in the environment that process gives hooks, under one deadline joined
+   * with `cancelled`. Throws (refusing the session) unless the hook blocks as it must.
+   */
+  admit: (pid: number | undefined, cancelled?: AbortSignal) => Promise<void>;
+}
+
 /** What the Codex adapter's `_codex/hooks/list` says about one hook (the fields ORCA reads). */
 interface CodexListedHook {
   key?: unknown;
@@ -888,6 +924,14 @@ export interface NativeToolHookSession {
   /** Which agent took the hook, and whether its runtime has been attested. */
   status: () => NativeToolHookStatus;
   /**
+   * The hook for a Codex that ORCA starts itself as `codex app-server` (#1161), after `prepare`:
+   * the `-c` session flags that install it, trusted, with hosted web search off; the command
+   * Codex's `hooks/list` must report as ORCA's hook; and the admission checks, run against the
+   * app-server process ORCA started (whose image ORCA has already attested, #1162). Throws
+   * (refusing the session) on a platform the hook is not verified on, or before `prepare`.
+   */
+  codexAppServer: () => CodexAppServerHook;
+  /**
    * Check, once the session has started and before it is given work, that the runtime it runs
    * is the image pinned for the adapter's version. Claude only: Codex's runtime is attested in
    * `sessionMeta`, before the session is created, so this does nothing there. Throws (refusing
@@ -964,8 +1008,113 @@ export function nativeToolHookSession(opts: NativeToolHookSessionOptions): Nativ
         },
       );
   };
+  /**
+   * The Codex admission both routes share, under one deadline joined with the run's
+   * cancellation and the session's own end: `locate` finds (and, on the ACP route, attests) the
+   * Codex process that will run the hook; then the probe runs in the environment that very
+   * process will give the hook, the fail-closed line is checked, and the hook must block a call
+   * it must block with its receipt.
+   */
+  const admitCodex = async (
+    cancelled: AbortSignal | undefined,
+    locate: (stopped: <T>(step: Promise<T>) => Promise<T>, admission: AbortSignal) => Promise<number>,
+  ): Promise<void> => {
+    const codexCmd = codexCommand!;
+    const key = probeKey!;
+    const contextFile = file!;
+    // One deadline for every check below, joined with the run's cancellation and the
+    // session's own end: when any fires, the step running is stopped and nothing further
+    // starts.
+    const deadline = AbortSignal.timeout(opts.codexAdmissionDeadlineMs ?? CODEX_ADMISSION_DEADLINE_MS);
+    const admission = AbortSignal.any([
+      deadline,
+      ...(cancelled ? [cancelled] : []),
+      ...(opts.signal ? [opts.signal] : []),
+    ]);
+    const stopped = async <T>(step: Promise<T>): Promise<T> => {
+      let onAbort = () => undefined as void;
+      const aborted = new Promise<never>((_, reject) => {
+        onAbort = () =>
+          reject(
+            opts.signal?.aborted
+              ? new OrcaError("CANCELLED", "the run was cancelled while ORCA checked the agent's hook", {
+                  agentId: opts.agentId,
+                })
+              : refuse(
+                  deadline.aborted
+                    ? "ORCA's startup checks of the hook did not finish within their deadline"
+                    : "the session ended before ORCA's startup checks of the hook finished",
+                  { admission: deadline.aborted ? "timeout" : "cancelled" },
+                ),
+          );
+        if (admission.aborted) onAbort();
+        else admission.addEventListener("abort", onAbort, { once: true });
+      });
+      try {
+        return await Promise.race([step, aborted]);
+      } finally {
+        admission.removeEventListener("abort", onAbort);
+      }
+    };
+    const pid = await locate(stopped, admission);
+    // The probe runs in the environment Codex itself will give the hook, not in a copy of
+    // what ORCA meant to give the agent.
+    const env = await stopped((opts.codexEnvironment ?? codexHookEnvironment)(pid));
+    if ("error" in env) throw refuse(`ORCA could not run its startup check as Codex runs the hook: ${env.error}`);
+    const shell = (opts.codexShell ?? codexHookShell)();
+    if ("error" in shell) throw refuse(`ORCA could not run its startup check as Codex runs the hook: ${shell.error}`);
+    const line = await stopped(
+      checkCodexFailClosedLine({ runtime: opts.runtime, cwd: opts.workspaceCwd, shell, env, signal: admission }),
+    );
+    if (!line.ok)
+      throw refuse(
+        `the fail-closed line around the hook does not block on this install (${line.check}: ${line.detail})`,
+        { failClosedCheck: line.check },
+      );
+    const probe = await stopped(
+      probeCodexHook({
+        command: codexCmd,
+        cwd: opts.workspaceCwd,
+        contextFile,
+        probeKey: key,
+        shell,
+        env,
+        signal: admission,
+      }),
+    );
+    if (!probe.blocked)
+      throw refuse(`the hook did not block a call it must block when run as Codex runs it (${probe.detail})`, {
+        probe: probe.diagnostics,
+      });
+  };
   return {
     status: () => status,
+    codexAppServer: () => {
+      if (file === undefined || opts.script === undefined || codexCommand === undefined || probeKey === undefined)
+        throw refuse("the hook was not prepared before Codex started");
+      const platform = opts.platform ?? process.platform;
+      if (!CODEX_HOOK_VERIFIED_PLATFORMS.includes(platform))
+        throw refuse(
+          `ORCA has verified the hook with Codex only on ${CODEX_HOOK_VERIFIED_PLATFORMS.join(", ")}, not ${platform}`,
+          {
+            platform,
+          },
+        );
+      const command = codexCommand;
+      return {
+        sessionFlags: codexHookSessionFlags(command),
+        command,
+        admit: async (pid, cancelled) => {
+          // The process is ORCA's own child, its image already attested (#1162): no search
+          // below an adapter, and the probe runs in the environment that process gives hooks.
+          await admitCodex(cancelled, async () => {
+            if (pid === undefined) throw refuse("ORCA does not know the Codex app-server's process id");
+            return pid;
+          });
+          status = "codex";
+        },
+      };
+    },
     telemetry: () => spool,
     cleanup: async () => {
       // The hook writes nothing once the agent is gone; the last lines are read before the
@@ -1032,7 +1181,6 @@ export function nativeToolHookSession(opts: NativeToolHookSessionOptions): Nativ
     sessionMeta: async (agentInfo, ext, agentPid, cancelled) => {
       if (file === undefined || opts.script === undefined || codexCommand === undefined || probeKey === undefined)
         throw refuse("the hook was not prepared before the agent started");
-      const key = probeKey;
       if (!agentInfo) throw refuse("the agent did not say at initialize which adapter it is");
       agentProcess = agentPid;
       const platform = opts.platform ?? process.platform;
@@ -1066,85 +1214,24 @@ export function nativeToolHookSession(opts: NativeToolHookSessionOptions): Nativ
           throw refuse(
             "the agent's own CODEX_CONFIG already sets hooks, or is not a JSON object, so ORCA cannot add its own",
           );
-        // One deadline for every check below, joined with the run's cancellation and the
-        // session's own end: when any fires, the step running is stopped and nothing further
-        // starts.
-        const deadline = AbortSignal.timeout(opts.codexAdmissionDeadlineMs ?? CODEX_ADMISSION_DEADLINE_MS);
-        const admission = AbortSignal.any([
-          deadline,
-          ...(cancelled ? [cancelled] : []),
-          ...(opts.signal ? [opts.signal] : []),
-        ]);
-        const stopped = async <T>(step: Promise<T>): Promise<T> => {
-          let onAbort = () => undefined as void;
-          const aborted = new Promise<never>((_, reject) => {
-            onAbort = () =>
-              reject(
-                opts.signal?.aborted
-                  ? new OrcaError("CANCELLED", "the run was cancelled while ORCA checked the agent's hook", {
-                      agentId: opts.agentId,
-                    })
-                  : refuse(
-                      deadline.aborted
-                        ? "ORCA's startup checks of the hook did not finish within their deadline"
-                        : "the session ended before ORCA's startup checks of the hook finished",
-                      { admission: deadline.aborted ? "timeout" : "cancelled" },
-                    ),
-              );
-            if (admission.aborted) onAbort();
-            else admission.addEventListener("abort", onAbort, { once: true });
-          });
+        await admitCodex(cancelled, async (stopped, admission) => {
+          let listed: unknown;
           try {
-            return await Promise.race([step, aborted]);
-          } finally {
-            admission.removeEventListener("abort", onAbort);
+            listed = await stopped(ext("_codex/hooks/list", { cwd: opts.workspaceCwd }));
+          } catch (error) {
+            if (admission.aborted) throw error;
+            throw refuse(
+              `the adapter could not list its hooks (${error instanceof Error ? error.message : String(error)})`,
+            );
           }
-        };
-        let listed: unknown;
-        try {
-          listed = await stopped(ext("_codex/hooks/list", { cwd: opts.workspaceCwd }));
-        } catch (error) {
-          if (admission.aborted) throw error;
-          throw refuse(
-            `the adapter could not list its hooks (${error instanceof Error ? error.message : String(error)})`,
-          );
-        }
-        const problem = codexHookListProblem(listed, codexCommand);
-        if (problem !== undefined) throw refuse(problem);
-        // The adapter has started Codex by now (it answered from it); attest that process.
-        const found = await stopped((opts.codexProcess ?? codexRuntimeProcess)(agentPid));
-        if ("error" in found) throw refuse(`ORCA could not tell which Codex the adapter runs (${found.error})`);
-        await stopped(attest(CODEX_HOOK_VERIFIED_PAIRS, agentInfo.version, found.pid, "Codex"));
-        // The probe runs in the environment Codex itself will give the hook, not in a copy of
-        // what ORCA meant to give the agent.
-        const env = await stopped((opts.codexEnvironment ?? codexHookEnvironment)(found.pid));
-        if ("error" in env) throw refuse(`ORCA could not run its startup check as Codex runs the hook: ${env.error}`);
-        const shell = (opts.codexShell ?? codexHookShell)();
-        if ("error" in shell)
-          throw refuse(`ORCA could not run its startup check as Codex runs the hook: ${shell.error}`);
-        const line = await stopped(
-          checkCodexFailClosedLine({ runtime: opts.runtime, cwd: opts.workspaceCwd, shell, env, signal: admission }),
-        );
-        if (!line.ok)
-          throw refuse(
-            `the fail-closed line around the hook does not block on this install (${line.check}: ${line.detail})`,
-            { failClosedCheck: line.check },
-          );
-        const probe = await stopped(
-          probeCodexHook({
-            command: codexCommand,
-            cwd: opts.workspaceCwd,
-            contextFile: file,
-            probeKey: key,
-            shell,
-            env,
-            signal: admission,
-          }),
-        );
-        if (!probe.blocked)
-          throw refuse(`the hook did not block a call it must block when run as Codex runs it (${probe.detail})`, {
-            probe: probe.diagnostics,
-          });
+          const problem = codexHookListProblem(listed, codexCommand!);
+          if (problem !== undefined) throw refuse(problem);
+          // The adapter has started Codex by now (it answered from it); attest that process.
+          const found = await stopped((opts.codexProcess ?? codexRuntimeProcess)(agentPid));
+          if ("error" in found) throw refuse(`ORCA could not tell which Codex the adapter runs (${found.error})`);
+          await stopped(attest(CODEX_HOOK_VERIFIED_PAIRS, agentInfo.version, found.pid, "Codex"));
+          return found.pid;
+        });
         status = "codex";
         adapterVersion = agentInfo.version;
         return undefined;

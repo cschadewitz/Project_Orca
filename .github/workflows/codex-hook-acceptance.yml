@@ -20,7 +20,7 @@ name: Codex hook acceptance
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, "feature/**"]
     paths:
       - packages/agents/src/claude-pre-tool-hook.ts
       - packages/agents/src/native-tool-hook-session.ts

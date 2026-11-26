@@ -74,6 +74,7 @@ import {
   ownChildImageDigest,
   type ImageIdentity,
 } from "./codex-image.js";
+import type { CodexAppServerHook } from "./native-tool-hook-session.js";
 import type { FileUpdateChange } from "./codex-protocol/0.171.0/v2/FileUpdateChange.js";
 import {
   codexAskRequest,
@@ -211,6 +212,13 @@ export interface OpenCodexAppServerSessionOptions {
    * sends it anything, so the caller can redact them from what the run records.
    */
   onSecretValues?: (values: readonly string[]) => void;
+  /**
+   * ORCA's pre-tool hook (#1161), from `NativeToolHookSession.codexAppServer()` after `prepare`:
+   * installed through the session flags, required by the config check as the only hook, and
+   * admitted (fail-closed line and probe) against each app-server ORCA starts before a thread
+   * starts or resumes on it. The context file's environment must reach Codex through `env`.
+   */
+  nativeToolHook?: CodexAppServerHook;
   /** For tests: how the Codex executable is checked before ORCA starts it (#1162). */
   imageFile?: (path: string) => Promise<ImageIdentity | { error: string }>;
   /** For tests: how the image of the app-server ORCA started is attested (#1162). */
@@ -812,7 +820,7 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
   const launch = await codexAppServerLaunch(agent, {
     cwd: opts.cwd,
     env: { ...process.env, ...(opts.env ?? {}) },
-    sessionFlags: codexSessionFlags(opts.thread),
+    sessionFlags: [...codexSessionFlags(opts.thread), ...(opts.nativeToolHook?.sessionFlags ?? [])],
   });
   // The file itself, not a link to it, is what is checked and then started: a link moved in
   // between cannot change what runs.
@@ -1471,6 +1479,8 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
     if (why) return fail(why);
     if (!proc.stdio)
       return fail(new OrcaError("NOT_SUPPORTED", `host ${opts.host.id} cannot give an agent's raw stdio`));
+    /** This connection's life: aborted when its client closes (a close, a cancel, an exit). */
+    const lifetime = new AbortController();
     const client: CodexAppServerClient = new CodexAppServerClient(stdioLineTransport(proc.stdio()), {
       requestTimeoutMs: opts.requestTimeoutMs ?? 30_000,
       onNotification: (method, params) => {
@@ -1506,7 +1516,11 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
         }
         throw new CodexRpcError(-32601, `ORCA does not answer ${method} yet`);
       },
-      onClose: (error) => connectionClosed(c, error),
+      onClose: (error) => {
+        // Whatever still runs for this connection (the hook's admission, #1161) stops with it.
+        lifetime.abort(error);
+        connectionClosed(c, error);
+      },
     });
     c.client = client;
     try {
@@ -1535,6 +1549,27 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
           },
         );
       c.account = account;
+      // ORCA's hook, when installed, is admitted against this very process before any thread
+      // starts or resumes on it; a restart that cannot be admitted ends the session (#1161).
+      // The admission is bound to this connection: a close, a cancel or the process ending
+      // stops the probe, and the caller's own outcome (closed, cancelled) is reported as such,
+      // not as a refusal of the hook.
+      if (opts.nativeToolHook) {
+        const before = stopped();
+        if (before) throw before;
+        if (lifetime.signal.aborted) throw client.closed ?? new OrcaError("AGENT_TRANSPORT", "the app-server closed");
+        try {
+          await opts.nativeToolHook.admit(proc.pid, lifetime.signal);
+        } catch (error) {
+          const why = stopped();
+          if (why) throw why;
+          if (lifetime.signal.aborted) throw client.closed ?? error;
+          if (replacement && error instanceof OrcaError && error.code === "NOT_SUPPORTED") breakSession(error);
+          throw error;
+        }
+        const late = stopped();
+        if (late) throw late;
+      }
       return c;
     } catch (error) {
       // Codex stopped answering before the handshake finished. Its stderr may hold the user's
@@ -1616,7 +1651,7 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
     const requirements = await c.client.request("configRequirements/read", undefined);
     const hooks = await c.client.request("hooks/list", thread ? { threadId: thread } : { cwds: [opts.cwd] });
     try {
-      return codexConfigCheck(agent.id, opts.thread, { config, requirements, hooks });
+      return codexConfigCheck(agent.id, opts.thread, { config, requirements, hooks }, opts.nativeToolHook?.command);
     } catch (error) {
       throw configRefusal(error as OrcaError);
     }

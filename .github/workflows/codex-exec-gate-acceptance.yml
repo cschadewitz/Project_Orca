@@ -27,7 +27,7 @@ name: Codex exec gate acceptance
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, "feature/**"]
     paths:
       - packages/agents/src/codex-exec-gate.ts
       - packages/agents/src/codex-exec-gate-policy.ts

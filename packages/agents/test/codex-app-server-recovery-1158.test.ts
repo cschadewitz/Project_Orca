@@ -7,7 +7,7 @@
  */
 import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
-import { AgentSpecSchema, silentLogger, type OrcaError } from "@orca/core";
+import { AgentSpecSchema, OrcaError as OrcaErrorClass, silentLogger, type OrcaError } from "@orca/core";
 import {
   codexHistoryUpdates,
   LocalHost,
@@ -17,7 +17,15 @@ import {
   type CodexSessionContinuity,
   type SessionUpdateEvent,
 } from "../src/index.js";
-import { CONFIG_ANSWERS, configRead, WRITE_SANDBOX, PINNED_IMAGE, VERIFIED_IMAGE } from "./codex-config-fixture.js";
+import {
+  CONFIG_ANSWERS,
+  configRead,
+  WRITE_SANDBOX,
+  PINNED_IMAGE,
+  VERIFIED_IMAGE,
+  HOOKED_CONFIG_ANSWERS,
+  HOOK_COMMAND,
+} from "./codex-config-fixture.js";
 
 const CWD = process.cwd();
 const INIT = { userAgent: "orca/0.171.0 (test)", codexHome: "/h/.codex", platformFamily: "unix", platformOs: "linux" };
@@ -490,6 +498,94 @@ describe("an app-server that exits", () => {
     expect(s.procs[1]!.kill).toHaveBeenCalled();
     await expect(session.prompt("again")).rejects.toBe(error);
     expect(s.spawnAgent).toHaveBeenCalledTimes(2);
+  });
+
+  it("ends the session when ORCA's hook cannot be admitted on a restarted app-server (#1161)", async () => {
+    const s = scriptedHost(() => ({ ...BASE, ...HOOKED_CONFIG_ANSWERS }));
+    const admit = vi.fn(async (pid: number | undefined) => {
+      if (pid !== 4000) throw new OrcaErrorClass("NOT_SUPPORTED", "the hook did not block a call it must block");
+    });
+    const session = await open(s.host, { nativeToolHook: { sessionFlags: [], command: HOOK_COMMAND, admit } });
+    s.procs[0]!.crash();
+    await settle();
+    const error = (await session.prompt("go").catch((e: unknown) => e)) as OrcaError;
+    expect(error.code).toBe("NOT_SUPPORTED");
+    expect(admit.mock.calls.map((c) => c[0])).toEqual([4000, 4001]);
+    expect(methods(s.procs[1]!)).not.toContain("thread/resume");
+    expect(methods(s.procs[1]!)).not.toContain("turn/start");
+    await expect(session.prompt("again")).rejects.toBe(error);
+    expect(s.spawnAgent).toHaveBeenCalledTimes(2);
+  });
+
+  it("stops a held hook admission on a restart when the prompt is cancelled or the session closes (#1161)", async () => {
+    for (const end of ["cancel", "close"] as const) {
+      const seen: AbortSignal[] = [];
+      const admit = vi.fn(async (pid: number | undefined, signal?: AbortSignal) => {
+        if (pid === 4000) return;
+        seen.push(signal!);
+        // Held until the connection it belongs to is stopped.
+        await new Promise<void>((_, reject) =>
+          signal!.addEventListener("abort", () =>
+            reject(
+              new OrcaErrorClass(
+                "NOT_SUPPORTED",
+                "the session ended before ORCA's startup checks of the hook finished",
+              ),
+            ),
+          ),
+        );
+      });
+      const s = scriptedHost(() => ({ ...BASE, ...HOOKED_CONFIG_ANSWERS }));
+      const session = await open(s.host, { nativeToolHook: { sessionFlags: [], command: HOOK_COMMAND, admit } });
+      s.procs[0]!.crash();
+      await settle();
+      const turn = session.prompt("go");
+      await settle();
+      expect(admit.mock.calls.map((c) => c[0])).toEqual([4000, 4001]);
+      expect(seen[0]!.aborted).toBe(false);
+      if (end === "cancel") {
+        await session.cancel();
+        // The caller's own outcome, not a refusal of the hook, and the session lives on.
+        await expect(turn).resolves.toMatchObject({ stopReason: "cancelled" });
+      } else {
+        await session.close();
+        await expect(turn).rejects.toMatchObject({ code: "RUN_STATE" });
+      }
+      expect(seen[0]!.aborted).toBe(true);
+      expect(methods(s.procs[1]!)).not.toContain("thread/resume");
+      expect(methods(s.procs[1]!)).not.toContain("turn/start");
+      expect(s.procs[1]!.kill).toHaveBeenCalled();
+      if (end === "close") continue;
+      // A cancel is not a hook refusal: the next prompt restarts again.
+      admit.mockImplementation(async () => {});
+      await expect(session.prompt("again")).resolves.toMatchObject({ stopReason: "end_turn" });
+      await session.close();
+    }
+  });
+
+  it("stops a held hook admission when the opening app-server exits (#1161)", async () => {
+    let seen: AbortSignal | undefined;
+    const s = scriptedHost(() => ({ ...BASE, ...HOOKED_CONFIG_ANSWERS }));
+    const opening = open(s.host, {
+      nativeToolHook: {
+        sessionFlags: [],
+        command: HOOK_COMMAND,
+        admit: async (_pid, signal) => {
+          seen = signal;
+          await new Promise<void>((_, reject) =>
+            signal!.addEventListener("abort", () => reject(new OrcaErrorClass("NOT_SUPPORTED", "ended"))),
+          );
+        },
+      },
+    }).catch((e: unknown) => e);
+    await settle();
+    expect(seen?.aborted).toBe(false);
+    s.procs[0]!.crash();
+    const error = (await opening) as OrcaError;
+    expect(seen?.aborted).toBe(true);
+    // The process ended: reported as Codex exiting, not as the hook refused.
+    expect(error.code).toBe("AGENT_TRANSPORT");
+    expect(methods(s.procs[0]!)).not.toContain("thread/start");
   });
 
   it("never answers an ask once its process is gone", async () => {
