@@ -29,6 +29,7 @@ on:
       - packages/cli/src/codex-app-server-factory.ts
       - packages/cli/test/codex-app-server-installed-evidence-1165.test.ts
       - packages/cli/test/codex-model-stand-in.ts
+      - packages/cli/test/codex-app-server-wire.ts
       - .github/workflows/codex-app-server-acceptance.yml
   schedule:
     - cron: "47 7 * * 1"
