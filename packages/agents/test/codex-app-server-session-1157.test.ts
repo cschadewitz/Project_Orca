@@ -780,14 +780,39 @@ describe("opening a session", () => {
     expect(s.peer.received.map((m) => m.method)).toEqual(["initialize"]);
   });
 
-  it("refuses without a policy, with full access or never, on another host, and for an ACP agent", async () => {
+  it("says why when Codex exits before the handshake, with the end of its stderr (#1269)", async () => {
+    const s = scriptedHost({});
+    const handle = await s.spawnAgent(undefined);
+    s.spawnAgent.mockClear();
+    Object.defineProperty(handle, "stderrTail", {
+      value: () => 'Error: approval_policy = "untrusted" is no longer supported',
+    });
+    (handle.stdio!().stdout as PassThrough).end();
+    const error = await open(s.host).then(
+      () => expect.unreachable("the session opened"),
+      (e: unknown) => e as OrcaError,
+    );
+    expect(error.code).toBe("AGENT_TRANSPORT");
+    expect(error.message).toMatch(/the Codex app-server exited before ORCA's handshake finished/);
+    expect(error.details).toEqual({
+      agentId: "codex",
+      stderr: 'Error: approval_policy = "untrusted" is no longer supported',
+    });
+    expect(s.kill).toHaveBeenCalled();
+  });
+
+  it("refuses without a policy, with full access, never or untrusted, on another host, and for an ACP agent", async () => {
     const s = scriptedHost(BASE);
     for (const thread of [
       undefined,
       { approvalPolicy: "never", sandbox: "workspace-write" },
+      // Codex 0.171.0 refuses untrusted at startup (#1269)
+      { approvalPolicy: "untrusted", sandbox: "workspace-write" },
       { approvalPolicy: "on-request", sandbox: "danger-full-access" },
     ])
-      await expect(open(s.host, { thread: thread as never })).rejects.toThrow(/needs an approval policy/);
+      await expect(open(s.host, { thread: thread as never })).rejects.toThrow(
+        /needs the approval policy on-request \(Codex no longer supports untrusted\)/,
+      );
     const ssh = scriptedHost(BASE).host;
     Object.defineProperty(ssh, "spec", { value: { id: "box", type: "ssh" } });
     await expect(open(ssh)).rejects.toThrow(/runs on ssh host box/);

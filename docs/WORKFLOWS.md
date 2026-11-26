@@ -537,7 +537,8 @@ refuses a session whose Codex reports another version, or whose protocol lacks a
 session needs. The **Codex app-server protocol** workflow regenerates the types from the pinned
 Codex and fails on any drift.
 
-ORCA sets the thread's approval policy (`untrusted` or `on-request`), the reviewer `user` and
+ORCA sets the thread's approval policy (`on-request`: Codex 0.171.0 refuses `untrusted` at
+startup, so ORCA refuses a session asked for it before starting Codex), the reviewer `user` and
 the sandbox (`read-only` or `workspace-write`; never full access) as session flags
 (`codex -c approval_policy=… app-server`) and as thread parameters, then reads back what Codex
 will run with (`config/read`, `configRequirements/read`, `hooks/list`), before the thread starts

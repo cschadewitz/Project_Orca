@@ -57,9 +57,9 @@ const flagsLayer = layer(FLAGS, {
 
 describe("the session flags", () => {
   it("set ORCA's approval policy, the reviewer user and the sandbox as TOML strings", () => {
-    expect(codexSessionFlags({ approvalPolicy: "untrusted", sandbox: "read-only" })).toEqual([
+    expect(codexSessionFlags({ approvalPolicy: "on-request", sandbox: "read-only" })).toEqual([
       "-c",
-      'approval_policy="untrusted"',
+      'approval_policy="on-request"',
       "-c",
       'approvals_reviewer="user"',
       "-c",

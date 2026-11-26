@@ -677,14 +677,16 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
     });
   if (opts.host.spec.type !== "local") throw codexAppServerRefused(agent, "non-local-host", opts.host.spec)!;
   const policy = opts.thread as Partial<CodexThreadPolicy> | undefined;
+  // Codex 0.171.0 refuses approval_policy="untrusted" at startup, so on-request is the only
+  // policy under which Codex asks before it acts outside its sandbox (#1269).
   if (
     !policy ||
-    !["untrusted", "on-request"].includes(policy.approvalPolicy as string) ||
+    policy.approvalPolicy !== "on-request" ||
     !["read-only", "workspace-write"].includes(policy.sandbox as string)
   )
     throw new OrcaError(
       "NOT_SUPPORTED",
-      `agent ${agent.id}: a Codex app-server session needs an approval policy (untrusted or on-request) and a sandbox (read-only or workspace-write)`,
+      `agent ${agent.id}: a Codex app-server session needs the approval policy on-request (Codex no longer supports untrusted) and a sandbox (read-only or workspace-write)`,
       { agentId: agent.id },
     );
   if (opts.requireContextRecovery && !opts.resumeThreadId?.trim()) throw codexRecoveryFailure("missing-thread-id");
@@ -1264,8 +1266,10 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
     const c = { proc, cleanup } as Connection;
     owned.add(c);
     if (replacement) starting = c;
-    const fail = async (error: unknown): Promise<never> => {
+    const fail = async (reason: unknown): Promise<never> => {
       await cleanup().catch(() => undefined);
+      // Read once the process is stopped, so a reason built from its stderr sees all of it.
+      const error = typeof reason === "function" ? (reason as () => unknown)() : reason;
       const failure = redactError(error instanceof Error ? error : new Error(String(error)), values);
       throw withStartupTermination(failure, proc.exited);
     };
@@ -1321,7 +1325,20 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
       c.account = account;
       return c;
     } catch (error) {
+      // Codex exited before it answered: say so, with the end of its stderr (redacted with the
+      // rest of the failure), which holds its reason, such as a refused setting.
+      const exited = client.closed !== undefined && error instanceof OrcaError && error.code === "AGENT_TRANSPORT";
       client.close("closed after a refused open");
+      if (exited)
+        return fail(
+          () =>
+            new OrcaError(
+              "AGENT_TRANSPORT",
+              `agent ${agent.id}: the Codex app-server exited before ORCA's handshake finished; the end of its stderr is in the details`,
+              { agentId: agent.id, stderr: proc.stderrTail() },
+              { cause: error },
+            ),
+        );
       return fail(error);
     }
   };
