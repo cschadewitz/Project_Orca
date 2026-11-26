@@ -54,13 +54,14 @@ function commit(dir: string, text: string) {
 }
 
 /** A server whose home is a temporary directory, with ORCA set up there (its root exists). */
-function server(options: { setUp?: boolean } = {}) {
+function server(options: { setUp?: boolean; fail?: (command: readonly string[]) => boolean } = {}) {
   const home = tmp();
   if (options.setUp !== false) mkdirSync(join(home, ".local/share/orca-server"), { recursive: true });
   const commands: string[][] = [];
   const transport: CourierTransport = {
     exec: (command) => {
       commands.push([...command]);
+      if (options.fail?.(command)) return Promise.resolve({ code: 1, stdout: "" });
       const result = spawnSync(command[0]!, command.slice(1), { cwd: home, env, encoding: "utf8" });
       return Promise.resolve({ code: result.status ?? 255, stdout: result.stdout ?? "" });
     },
@@ -123,8 +124,60 @@ describe("pushRepository", () => {
     git(first.checkout, "commit", "-q", "-am", "server edit");
     commit(local, "two\n");
     const second = await push(local, host.transport);
-    expect(second.checkoutState).toMatchObject({ kind: "kept" });
+    expect(second.checkoutState).toMatchObject({ kind: "kept", usable: true });
     expect(git(second.hub, "rev-parse", "refs/heads/main")).toBe(git(local, "rev-parse", "HEAD"));
+  });
+
+  it("never touches a checkout whose origin is another repository, and offers no settings for it", async () => {
+    const local = repo();
+    const host = server();
+    const elsewhere = repo("someone else's\n");
+    mkdirSync(join(host.root, "checkouts"), { recursive: true });
+    git(host.root, "clone", "-q", elsewhere, join(host.root, "checkouts/app"));
+    const before = git(join(host.root, "checkouts/app"), "rev-parse", "HEAD");
+    const pushed = await push(local, host.transport);
+    expect(pushed.checkoutState).toMatchObject({ kind: "kept", usable: false });
+    expect(workspaceSnippet(pushed)).toBeUndefined();
+    expect(git(pushed.checkout, "rev-parse", "HEAD")).toBe(before);
+    expect(host.commands.some((c) => c.includes(pushed.checkout) && (c.includes("fetch") || c.includes("merge")))).toBe(
+      false,
+    );
+  });
+
+  it("does not merge when the checkout's fetch fails, and offers no settings when the first clone fails", async () => {
+    const local = repo();
+    const failing = { fetch: false, clone: false };
+    const host = server({
+      fail: (command) =>
+        (failing.fetch && command[3] === "fetch" && command[2]!.endsWith("/checkouts/app")) ||
+        (failing.clone && command[1] === "clone"),
+    });
+    failing.clone = true;
+    const refused = await push(local, host.transport);
+    expect(refused.checkoutState).toMatchObject({ kind: "kept", usable: false });
+    expect(workspaceSnippet(refused)).toBeUndefined();
+    failing.clone = false;
+    await push(local, host.transport);
+    failing.fetch = true;
+    commit(local, "two\n");
+    host.commands.length = 0;
+    const kept = await push(local, host.transport);
+    expect(kept.checkoutState).toMatchObject({ kind: "kept", reason: expect.stringMatching(/could not fetch/) });
+    expect(host.commands.some((c) => c.includes("merge"))).toBe(false);
+  });
+
+  it("updates no ref when any one of them is refused", async () => {
+    const local = repo();
+    const host = server();
+    await push(local, host.transport);
+    const other = repo("another project\n");
+    git(other, "branch", "feature");
+    await expect(push(other, host.transport, "app", ["refs/heads/main", "refs/heads/feature"])).rejects.toThrow(
+      /Nothing was overwritten/,
+    );
+    const hub = `${host.root}/repos/app.git`;
+    expect(git(hub, "rev-parse", "refs/heads/main")).toBe(git(local, "rev-parse", "HEAD"));
+    expect(() => git(hub, "rev-parse", "--verify", "-q", "refs/heads/feature")).toThrow();
   });
 
   it("refuses a machine that is not set up yet, before anything is made", async () => {

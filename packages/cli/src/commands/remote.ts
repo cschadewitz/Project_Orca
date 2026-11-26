@@ -343,10 +343,13 @@ async function pushRepoCommand(ctx: CommandContext, destination: string, deps: R
             ? `The checkout ${pushed.checkout} was left as it was: ${pushed.checkoutState.reason}.`
             : `Checkout: ${pushed.checkout} (${pushed.checkoutState.kind}).`,
         );
-        ctx.out("To work there, set this in the server's orca.config.yaml, then apply it:");
-        ctx.out(workspaceSnippet(pushed));
+        const snippet = workspaceSnippet(pushed);
+        if (snippet) {
+          ctx.out("To work there, set this in the server's orca.config.yaml, then apply it:");
+          ctx.out(snippet);
+        } else ctx.err(`There is no checkout of ${pushed.hub} to work in yet. Fix the above, then push again.`);
       }
-      return 0;
+      return workspaceSnippet(pushed) ? 0 : 1;
     } finally {
       rmSync(bundle.dir, { recursive: true, force: true });
       await tunnel.close();

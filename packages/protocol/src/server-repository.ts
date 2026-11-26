@@ -16,11 +16,10 @@
  * Behind the incubating `tailnet-hosts` flag: nothing calls it while the flag is off.
  */
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CourierRefused, dropCourier, pushCourier, type CourierTransport } from "./server-courier.js";
+import { CourierRefused, dropCourier, fileSha256, pushCourier, type CourierTransport } from "./server-courier.js";
 
 /** Where the setup puts the server, relative to the account's home (`orca-server-setup.py`). */
 export const SERVER_ROOT_FROM_HOME = ".local/share/orca-server";
@@ -120,7 +119,7 @@ export async function bundleRepository(
     if (made.code !== 0) throw new RepositoryRefused(`git could not bundle ${refs.join(", ")} here.`);
     const size = statSync(path).size;
     if (size > BUNDLE_LIMIT) throw new RepositoryRefused("The repository is larger than 4 GiB as a bundle.");
-    return { dir, path, sha256: createHash("sha256").update(readFileSync(path)).digest("hex"), size };
+    return { dir, path, sha256: await fileSha256(path), size };
   } catch (error) {
     rmSync(dir, { recursive: true, force: true });
     throw error;
@@ -135,8 +134,12 @@ export interface RepositoryPushed {
   /** The working checkout, whose `origin` is `hub`: the value for `workspace.repo`. */
   checkout: string;
   refs: string[];
-  /** `created`: cloned now; `updated`: its branch moved forward; `kept`: left as it was, with why. */
-  checkoutState: { kind: "created" | "updated" } | { kind: "kept"; reason: string };
+  /**
+   * `created`: cloned now; `updated`: its branch moved to the pushed commit; `kept`: left as it
+   * was, with why. `usable`: it is still a checkout of this push's repository, so the workspace
+   * settings apply to it.
+   */
+  checkoutState: { kind: "created" | "updated" } | { kind: "kept"; reason: string; usable: boolean };
 }
 
 const run = async (transport: CourierTransport, command: readonly string[], timeoutMs = GIT_TIMEOUT_MS) =>
@@ -183,6 +186,8 @@ export async function pushRepository(
       "-q",
       "--no-tags",
       "--no-write-fetch-head",
+      // All or nothing: one refused ref leaves every other ref as it was.
+      "--atomic",
       file,
       ...options.refs.map((ref) => `${ref}:${ref}`),
     ]);
@@ -196,32 +201,55 @@ export async function pushRepository(
 
   const branch = options.refs.find((ref) => ref.startsWith("refs/heads/"));
   if (branch) await run(transport, ["git", "-C", hub, "symbolic-ref", "HEAD", branch]);
-  const exists = (await run(transport, ["test", "-d", `${checkout}/.git`])).code === 0;
-  let checkoutState: RepositoryPushed["checkoutState"];
-  if (!exists) {
-    const cloned = await run(transport, ["git", "clone", "-q", "--no-hardlinks", "--", hub, checkout]);
-    checkoutState = cloned.code === 0 ? { kind: "created" } : { kind: "kept", reason: "it could not be cloned" };
-  } else if (!branch) {
-    checkoutState = { kind: "kept", reason: "only tags were pushed" };
-  } else {
-    const short = branch.slice("refs/heads/".length);
-    const current = await run(transport, ["git", "-C", checkout, "symbolic-ref", "-q", "HEAD"]);
-    if (current.stdout.trim() !== branch)
-      checkoutState = { kind: "kept", reason: `it is on another branch than ${short}` };
-    else {
-      await run(transport, ["git", "-C", checkout, "fetch", "-q", "--no-tags", "origin"]);
-      const moved = await run(transport, ["git", "-C", checkout, "merge", "-q", "--ff-only", `origin/${short}`]);
-      checkoutState =
-        moved.code === 0
-          ? { kind: "updated" }
-          : { kind: "kept", reason: "it has changes of its own, so it was not moved forward" };
-    }
-  }
+  const checkoutState = await updateCheckout(transport, hub, checkout, branch);
   return { name: options.name, hub, checkout, refs: [...options.refs], checkoutState };
 }
 
-/** The workspace settings that make the daemon work in the pushed checkout (docs/WORKFLOWS.md). */
-export function workspaceSnippet(pushed: RepositoryPushed): string {
+/**
+ * Create the checkout from the hub, or move it forward to exactly the commit the hub's `branch`
+ * now names. An existing checkout is touched only when its `origin` is this hub: anything else
+ * at that path is someone else's and is left alone, and is not a workspace this push made.
+ */
+async function updateCheckout(
+  transport: CourierTransport,
+  hub: string,
+  checkout: string,
+  branch: string | undefined,
+): Promise<RepositoryPushed["checkoutState"]> {
+  const kept = (reason: string, usable: boolean) => ({ kind: "kept" as const, reason, usable });
+  if ((await run(transport, ["test", "-e", checkout])).code !== 0) {
+    const cloned = await run(transport, ["git", "clone", "-q", "--no-hardlinks", "--", hub, checkout]);
+    return cloned.code === 0 ? { kind: "created" } : kept("it could not be cloned", false);
+  }
+  const origin = await run(transport, ["git", "-C", checkout, "remote", "get-url", "origin"]);
+  if (origin.code !== 0 || origin.stdout.trim() !== hub)
+    return kept(`it is not a checkout of ${hub}, so it was not touched`, false);
+  if (!branch) return kept("only tags were pushed", true);
+  const short = branch.slice("refs/heads/".length);
+  const current = await run(transport, ["git", "-C", checkout, "symbolic-ref", "-q", "HEAD"]);
+  if (current.code !== 0 || current.stdout.trim() !== branch) return kept(`it is not on ${short}`, true);
+  // The exact commit the hub's branch names now, never what some other remote says.
+  const tip = await run(transport, ["git", "-C", hub, "rev-parse", "-q", "--verify", branch]);
+  const commit = tip.stdout.trim();
+  if (tip.code !== 0 || !/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(commit))
+    return kept("the pushed branch could not be read", true);
+  const fetched = await run(transport, ["git", "-C", checkout, "fetch", "-q", "--no-tags", "--", hub, branch]);
+  if (fetched.code !== 0) return kept("it could not fetch from the server's repository", true);
+  const moved = await run(transport, ["git", "-C", checkout, "merge", "-q", "--ff-only", commit]);
+  return moved.code === 0 ? { kind: "updated" } : kept("it has changes of its own, so it was not moved forward", true);
+}
+
+/** Whether the checkout is one this push's repository backs, so the daemon can work there. */
+export function checkoutUsable(pushed: RepositoryPushed): boolean {
+  return pushed.checkoutState.kind !== "kept" || pushed.checkoutState.usable;
+}
+
+/**
+ * The workspace settings that make the daemon work in the pushed checkout (docs/WORKFLOWS.md).
+ * Only for a usable checkout: there is nothing to point a daemon at otherwise.
+ */
+export function workspaceSnippet(pushed: RepositoryPushed): string | undefined {
+  if (!checkoutUsable(pushed)) return undefined;
   const branches = pushed.refs.filter((ref) => ref.startsWith("refs/heads/"));
   return [
     "workspace:",

@@ -270,9 +270,11 @@ This computer writes the branch (or each `--ref`, a full branch or tag name) int
 copies it over the host key `remote add` pinned, and the host fetches it into
 `~/.local/share/orca-server/repos/<name>.git`. A checkout beside it,
 `~/.local/share/orca-server/checkouts/<name>`, has that repository as `origin`. A later push
-moves both forward; a branch the host has at a commit your push does not build on is refused,
-never overwritten, and a checkout with changes of its own is left as it is. The host needs `git`.
-The command prints the `workspace:` settings (`provider: git-worktree`, `repo:` the checkout,
+moves both forward. A branch the host has at a commit your push does not build on is refused,
+never overwritten, and with several refs none of them moves. A checkout with changes of its own is
+left as it is, and so is anything at that path whose `origin` is another repository. The host
+needs `git`. When there is a checkout of the pushed repository, the command prints the
+`workspace:` settings (`provider: git-worktree`, `repo:` the checkout,
 `allowedRefs:` the pushed branches) for the server's `orca.config.yaml`, so delegated steps can
 name a pushed `gitRef`. To set them from this computer, connect the app to the machine's profile
 and use Config > Raw: Validate and review, Save reviewed changes, then Apply saved
