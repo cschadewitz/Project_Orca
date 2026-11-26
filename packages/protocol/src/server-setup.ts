@@ -12,10 +12,11 @@
  *
  * A Windows server (#1238) runs `tools/deploy/orca-server-setup.ps1` instead, in its own Windows
  * PowerShell: Windows OpenSSH hands the command to cmd.exe, so the words are a fixed
- * `powershell ... -Command -`, and standard input carries one bootstrap line, with the setup's
- * arguments in it as PowerShell literals, followed by the script, which that line reads to its
- * end and runs (`windowsProgram`). The setup downloads its own signed bundle there and reports
- * the same lines. `discoverServer` tells the two apart by asking the server (`ver`).
+ * `powershell ... -Command -`, which runs standard input one line at a time. Each line is a
+ * whole statement (`windowsProgram`): the setup's arguments as PowerShell literals, the script
+ * as shipped in base64 chunks, and a last line that decodes and runs it. The setup downloads its
+ * own signed bundle there and reports the same lines. `discoverServer` tells the two apart by
+ * asking the server (`ver`).
  *
  * Nothing is installed on a key nobody confirmed (#881 review): `discoverServer` connects
  * read-only, with a first-seen key held in a scratch pin file rather than enrolled, and runs
@@ -162,20 +163,28 @@ export const WINDOWS_COMMAND = [
 /** A PowerShell single-quoted literal: nothing in it expands. */
 const literal = (value: string) => `'${value.replace(/'/g, "''")}'`;
 
+/** How much of the script one line of standard input carries, as base64. */
+const CHUNK = 4000;
+
 /**
- * The Windows setup's standard input: one line that reads the rest of standard input, the
- * script as shipped, and runs it with exactly `options`, then the script. The script's own exit
- * code ends PowerShell. `options` are checked before they get here.
+ * The Windows setup's standard input. `-Command -` runs it a line at a time, and only a whole
+ * statement per line is safe (a script read whole from inside one of those lines can deadlock
+ * with the host's own reading), so: `options` as a hashtable, the script as shipped carried in
+ * base64 chunks, then one line that decodes the script and runs it with exactly `options`. The
+ * script's own exit code ends PowerShell. `options` are checked before they get here.
  */
 export function windowsProgram(dir: string, options: Record<string, string | number | true>): string {
-  const script = readFileSync(join(dir, WINDOWS_SETUP_SCRIPT), "utf8");
-  // Read as the console's code page: only ASCII means the same in every one.
-  if (!/^[\t\n\r -~]*$/.test(script)) throw new Error(`${WINDOWS_SETUP_SCRIPT} is not plain ASCII`);
+  const script = readFileSync(join(dir, WINDOWS_SETUP_SCRIPT)).toString("base64");
   const pairs = Object.entries(options).map(
     ([name, value]) =>
       `${name}=${value === true ? "$true" : typeof value === "number" ? String(value) : literal(value)}`,
   );
-  return `$o=@{${pairs.join(";")}}; & ([scriptblock]::Create([Console]::In.ReadToEnd())) @o; exit $LASTEXITCODE\n${script}`;
+  const lines = [`$o=@{${pairs.join(";")}}`, "$b=New-Object System.Text.StringBuilder"];
+  for (let at = 0; at < script.length; at += CHUNK) lines.push(`[void]$b.Append('${script.slice(at, at + CHUNK)}')`);
+  lines.push(
+    "& ([scriptblock]::Create([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($b.ToString())))) @o; exit $LASTEXITCODE",
+  );
+  return `${lines.join("\n")}\n`;
 }
 
 /** The read-only inspection on a server running `os`. */

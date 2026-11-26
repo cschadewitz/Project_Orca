@@ -190,8 +190,8 @@ describe("a Windows server (#1238)", () => {
     expect(await serverOs(answering(result("Microsoft Windows, said a shell script")))).toBe("linux");
   });
 
-  it("sends fixed PowerShell words, and the setup on standard input behind one line carrying its arguments", () => {
-    const script = readFileSync(join(DEPLOY, WINDOWS_SETUP_SCRIPT), "utf8");
+  it("sends fixed PowerShell words, and on standard input whole statements carrying its arguments and the script", () => {
+    const script = readFileSync(join(DEPLOY, WINDOWS_SETUP_SCRIPT));
     const inspect = inspectInvocation("windows", DEPLOY, "0.9.0", 6722);
     expect(inspect.command).toEqual(WINDOWS_COMMAND);
     expect(inspect.command).toEqual([
@@ -203,13 +203,25 @@ describe("a Windows server (#1238)", () => {
       "-Command",
       "-",
     ]);
-    expect(inspect.input).toBe(
-      `$o=@{Version='0.9.0';Port=6722;Inspect=$true}; & ([scriptblock]::Create([Console]::In.ReadToEnd())) @o; exit $LASTEXITCODE\n${script}`,
+    const lines = inspect.input.split("\n");
+    expect(lines.at(-1)).toBe("");
+    expect(lines[0]).toBe("$o=@{Version='0.9.0';Port=6722;Inspect=$true}");
+    expect(lines[1]).toBe("$b=New-Object System.Text.StringBuilder");
+    expect(lines.at(-2)).toBe(
+      "& ([scriptblock]::Create([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($b.ToString())))) @o; exit $LASTEXITCODE",
     );
+    // The chunks between are the script as shipped, byte for byte, each a statement of its own.
+    const chunks = lines
+      .slice(2, -2)
+      .map((line) => /^\[void\]\$b\.Append\('([A-Za-z0-9+/=]{1,4000})'\)$/.exec(line)?.[1]);
+    expect(chunks.every((chunk) => chunk !== undefined)).toBe(true);
+    expect(Buffer.from(chunks.join(""), "base64").equals(script)).toBe(true);
+    expect(chunks.length).toBeGreaterThan(1);
+
     const setup = setupInvocation("windows", DEPLOY, "0.9.0", 6723, { account, root, current: null });
     expect(setup.command).toEqual(WINDOWS_COMMAND);
     expect(setup.input.split("\n")[0]).toBe(
-      `$o=@{Version='0.9.0';Port=6723;ExpectAccount='${account}';ExpectRoot='${root}';ExpectCurrent='none'}; & ([scriptblock]::Create([Console]::In.ReadToEnd())) @o; exit $LASTEXITCODE`,
+      `$o=@{Version='0.9.0';Port=6723;ExpectAccount='${account}';ExpectRoot='${root}';ExpectCurrent='none'}`,
     );
     expect(setupInvocation("windows", DEPLOY, "0.9.0", 6722, { account, root, current: "0.8.0" }).input).toContain(
       "ExpectCurrent='0.8.0'",
@@ -234,16 +246,6 @@ describe("a Windows server (#1238)", () => {
     expect(() => run({ account, root, current: "latest" })).toThrow(/Not a release version/);
     expect(() => run({ account, root, current: null }, "C:/Temp/bundle")).toThrow(/not available yet/);
     expect(() => inspectInvocation("windows", DEPLOY, "0.9", 6722)).toThrow(/Not a release version/);
-  });
-
-  it("sends only a plain ASCII script, which reads the same in every console code page", () => {
-    const dir = mkdtempSync(join(tmpdir(), "orca-windows-setup-"));
-    try {
-      writeFileSync(join(dir, WINDOWS_SETUP_SCRIPT), "Write-Host 'caf\u00e9'\n");
-      expect(() => inspectInvocation("windows", dir, "0.9.0", 6722)).toThrow(/plain ASCII/);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
   });
 
   it("reads what a Windows inspection found, in Windows forms only", () => {
