@@ -66,6 +66,7 @@ import { directAdmissionAuthority } from "./admission-retry.js";
 import { holds, type Principal } from "./auth/principal.js";
 import type { JudgeBudgetInspection } from "./judge-budget.js";
 import { judgeKeyStatus, judgeStatus } from "./judge-status.js";
+import { remotesModel, type RemotesSource } from "./delegation/remotes-model.js";
 import type { JudgeKeyState } from "@orca/protocol";
 import {
   HostResourceReadModel,
@@ -96,6 +97,11 @@ export interface DaemonOptions extends MethodContext {
     /** The key check (`judgeKeyStatus` by default); tests inject one to count probes. */
     key?: (config: Pick<OrcaConfig, "review" | "secrets" | "hosts"> | undefined) => Promise<JudgeKeyState>;
   };
+  /**
+   * `remotes.list` and `remotes.enroll` (#1206): enrollment of delegation remotes by this daemon.
+   * Given only by a daemon that may write its workspace (never `--read-only`).
+   */
+  remotesSource?: RemotesSource;
   /** Installed protected evidence reader; never a callback that attaches execution. */
   admissionExecutionSource?: ((runId: string) => Promise<AdmissionExecutionView | undefined>) | undefined;
   /** Actual protected runtime and registered retry services; never a placeholder capability. */
@@ -242,6 +248,15 @@ const NO_RESOURCES: ResourceResolver = {
   claimRun: async () => undefined,
   workflowExists: () => false,
 };
+
+/** How many times a revision read observes a busy run before reporting it unsettled. */
+const OBSERVATION_ATTEMPTS = 3;
+/** The history moved while it was being observed: retryable, and never a refusal. */
+function unsettledObservation(error: unknown): boolean {
+  if (!isOrcaError(error) || error.code !== "RUN_STATE") return false;
+  const reason = error.details?.reason;
+  return reason === "observation-changed" || reason === "revision-observation-uncertain";
+}
 
 export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
   const host = opts.host ?? "127.0.0.1";
@@ -467,6 +482,18 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
       const { access } = accessFor(invocation);
       return { service: sources.services.forAccess(access), access };
     };
+    /* A revision read observes a run's whole history and checks it is unchanged after. A run
+       that is busy appending (a running agent step) moves under it, which is a fact about
+       timing, not a failure (#1213): observe it again a few times before giving up. */
+    const settledBoundaries = async (runId: string) => {
+      for (let attempt = 1; ; attempt++) {
+        try {
+          return await sources.readBoundaries(runId);
+        } catch (error) {
+          if (attempt >= OBSERVATION_ATTEMPTS || !unsettledObservation(error)) throw error;
+        }
+      }
+    };
     ctx.revisionBoundaries = async (invocation, runId) => {
       const { currentPrincipal } = accessFor(invocation);
       const visible = async () => {
@@ -483,11 +510,12 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
       if (!(await visible())) return [];
       let boundaries;
       try {
-        boundaries = await sources.readBoundaries(runId);
+        boundaries = await settledBoundaries(runId);
       } catch (error) {
-        // An active interpreter can own the fence. Absence of this optional projection
-        // makes no claim about revision acceptance; unexpected store/auth failures surface.
-        if (isOrcaError(error) && error.code === "RUN_LEASED") return [];
+        // An active interpreter can own the fence, or keep appending past every attempt to
+        // observe it still. Absence of this optional projection makes no claim about revision
+        // acceptance; unexpected store/auth failures surface.
+        if (isOrcaError(error) && (error.code === "RUN_LEASED" || unsettledObservation(error))) return [];
         throw error;
       }
       return (await visible()) ? boundaries : [];
@@ -521,9 +549,11 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
         if (!(await visible(runId))) continue;
         let boundaries;
         try {
-          boundaries = await sources.readBoundaries(runId);
+          boundaries = await settledBoundaries(runId);
         } catch (error) {
-          if (isOrcaError(error) && error.code === "RUN_LEASED") {
+          // A run still being written is not a failed refresh (#1213): it is reported as an
+          // omission, so the client says part of the list is unavailable instead of failing.
+          if (isOrcaError(error) && (error.code === "RUN_LEASED" || unsettledObservation(error))) {
             if (await visible(runId)) omitted(runId, "boundary-unavailable");
             continue;
           }
@@ -729,6 +759,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
       });
     };
   }
+  if (opts.remotesSource) ctx.remotes = remotesModel(opts.remotesSource);
   if (opts.hostResourceSource && identity && auth.mode === "token") {
     const resources = new HostResourceReadModel(identity, opts.hostResourceSource);
     ctx.hostResourceRead = (params, invocation) => {

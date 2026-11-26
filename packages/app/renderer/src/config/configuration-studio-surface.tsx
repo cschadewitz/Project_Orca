@@ -18,6 +18,7 @@ import { RawView } from "./raw-view.js";
 import { CapabilityPreview } from "./capability-preview-view.js";
 import { PermissionsView } from "./permissions-view.js";
 import { PreferencesSection } from "./preferences-section.js";
+import { RemotesSection } from "./remotes-section.js";
 import { StorageSection } from "./storage-section.js";
 import { JudgeSetup } from "./judge-setup.js";
 import { agentPolicies } from "./config-model.js";
@@ -73,6 +74,8 @@ export function ConfigurationStudioSurface({
   save.current = () => {
     void studio?.save(policyConfirmed);
   };
+  // Every disabled state of Apply names its own reason, never a stale "save first" (#1210).
+  const applyBlocked = studio ? (studio.busyReason ?? studio.reason("apply")) : undefined;
   const canSave = !launch && studio?.review !== undefined && !studio.busy && studio.reason("save") === undefined;
   useEffect(() => {
     if (!canSave || templates) return;
@@ -323,8 +326,8 @@ export function ConfigurationStudioSurface({
                 )}
                 {state.phase === "saved" && (
                   <Button
-                    disabled={studio.busy || !!studio.reason("apply")}
-                    {...(studio.reason("apply") ? { disabledReason: studio.reason("apply")! } : {})}
+                    disabled={applyBlocked !== undefined}
+                    {...(applyBlocked ? { disabledReason: applyBlocked } : {})}
                     onClick={() => {
                       void studio.apply();
                     }}
@@ -390,6 +393,8 @@ export function ConfigurationStudioSurface({
         )}
         {/* Where the plain-language rule judge's setup stands (#701); offered only by a daemon that lists it. */}
         <JudgeSetup />
+        {/* Delegation remotes this daemon enrolls (#1206); offered only by a daemon that lists them. */}
+        <RemotesSection />
         <StorageSection />
         <PreferencesSection surfaces={SURFACES.map((surface) => ({ id: surface.id, label: surface.label }))} />
       </div>

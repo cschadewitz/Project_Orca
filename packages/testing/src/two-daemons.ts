@@ -52,6 +52,12 @@ export interface TestDaemonOptions {
   executable?: string;
   /** How long `close` waits after SIGTERM, and again after SIGKILL. Defaults to 5 s. */
   stopMs?: number;
+  /**
+   * Runs once `orca.config.yaml` is written and before the daemon starts, with the store's
+   * working directory: for a fixture that needs more beside the config, such as the claim of a
+   * workspace the desktop app set up in first-run (#1206).
+   */
+  prepare?: (dir: string) => Promise<void> | void;
 }
 
 /** One JSON-RPC answer, as the daemon sent it. */
@@ -89,6 +95,12 @@ export async function startTestDaemon(options: TestDaemonOptions): Promise<TestD
   await mkdir(dir);
   await mkdir(home);
   await writeFile(join(dir, "orca.config.yaml"), options.config ?? "workflows: []\ntemplates: []\n");
+  try {
+    await options.prepare?.(dir);
+  } catch (error) {
+    await rm(root, { recursive: true, force: true });
+    throw error;
+  }
 
   const child = spawn(
     options.executable ?? process.execPath,

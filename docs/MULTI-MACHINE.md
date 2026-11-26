@@ -12,9 +12,22 @@ agents on another, and the app can watch all of them.
 | [3. App watching several daemons](#3-the-app-watching-several-daemons) | one per machine, independent | each daemon's own machine | each machine | the app's SSH profiles |
 | [4. Parent delegating to remote daemons](#4-a-parent-daemon-delegating-to-remote-daemons) | a parent and one or more workers | each worker | the worker owns the work; the parent records the step | sshd on each worker, enrolled |
 
+Commands below are written as `orca-cli …`, the command line the Windows and Ubuntu desktop
+installs put on `PATH` (#1207): on Windows the installer adds `resources\bin` under the install
+directory to your user `PATH` (open a new terminal after installing), and on Ubuntu the
+package installs `/usr/bin/orca-cli`. Plain `orca` is not used because on Ubuntu Desktop it
+is the GNOME screen reader. In a source checkout, `pnpm run orca …` runs the same CLI.
+
+The server's CLI is a remote's `serverCommand`. A profile you create in the app uses `orca-cli`
+when you leave it empty; a server made by the app's server setup uses its own launcher's full
+path. Where it is left out, in a workspace config's `remotes[]` or on a profile saved before
+0.8.1, it means `orca`, as it always has, so a remote set up earlier keeps working while its
+server still runs an older ORCA. Write `serverCommand: orca-cli` for a server with a desktop
+install: on Ubuntu Desktop, `orca` there is the screen reader.
+
 ## 1. Local only
 
-The desktop app starts its bundled daemon, or you run `orca serve` in a workspace. Agents
+The desktop app starts its bundled daemon, or you run `orca-cli serve` in a workspace. Agents
 are local processes (`hosts` omitted, or `type: local`).
 
 ```yaml
@@ -49,7 +62,7 @@ agents:
   - { id: claude-remote, command: claude-code-acp, hostId: buildbox }
 ```
 
-The same host can run **`orca acp`** as the agent, so that the remote machine runs a whole
+The same host can run **`orca-cli acp`** as the agent, so that the remote machine runs a whole
 ORCA workflow for a step, without a daemon there:
 
 ```yaml
@@ -74,7 +87,7 @@ more of them read-only. See [daemon connections](daemon-connection.md#watching-s
 
 1. Make each machine a managed server once: in the app, **Add a machine…** in the
    connection dialog. From a source checkout, use
-   `orca remote add user@host` and then `orca remote add user@host --confirm CODE`
+   `orca-cli remote add user@host` and then `orca-cli remote add user@host --confirm CODE`
    ([one-step setup](daemon-connection.md#add-a-machine-one-step-server-setup-881)). This
    pins the host keys you confirmed and installs the signed server bundle.
 2. Save an SSH profile for each one. The app signs in automatically
@@ -116,7 +129,7 @@ remotes:
   - id: build-box
     destination: ci@build-box.example
     identityFile: /home/me/.ssh/id_ed25519
-    # serverCommand: orca              # the worker's CLI on the ssh login's PATH
+    serverCommand: orca-cli             # the worker's CLI on the ssh login's PATH (omitted: orca)
     # serverConfig: /srv/orca/orca.config.yaml
 agents:
   - { id: remote-builder, type: orca-daemon, profile: build-box, workflow: build }
@@ -131,12 +144,23 @@ verified that endpoint.
 # on build-box itself (console, or a session already pinned to its key)
 ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
 # on the parent, in its workspace
-orca remote enroll build-box --host-key SHA256:...
+orca-cli remote enroll build-box --host-key SHA256:...
 ```
 
-The parent must be a workspace the CLI owns (one you run with `orca serve`). A workspace the
-desktop app set up in first-run refuses `orca remote enroll` ("First-run mutation requires owned
-daemon admission"), and the app has no enrollment screen yet
+A CLI-owned workspace (one you run with `orca-cli serve`) enrolls with the command above. A
+workspace the desktop app set up in first-run enrolls from the app instead: only the daemon the
+app launched may write that workspace, so its first-run fence refuses `orca-cli remote enroll`
+("First-run mutation requires owned daemon admission"). Add the `remotes:` entry and the
+`type: orca-daemon` agent in Config > Raw, then Validate and review, Save reviewed changes and
+Apply saved configuration. A new remote takes effect when the app's daemon next starts, so quit
+and reopen the app. The remote is then listed under **Remote daemons** on the Config surface.
+Choose **Enroll**, enter the fingerprint (and the jump host's, if the route has one), and choose
+**Enroll remote**. The app's daemon pins the key and has the worker issue the credential exactly
+as `orca-cli remote enroll` does. On Windows, where the worker cannot issue the credential during
+enrollment, paste the output of `orca-cli auth issue <name> --preset client --json` from the worker
+(its `serverCommand`) into the Credential field. The daemon proves it first and saves it, readable only by you, in its
+own file (`auth/remotes/<id>.<credential id>.token`) only when the enrollment commits, so a
+refused credential never replaces the one in use
 ([#1206](https://github.com/cschadewitz/Project_Orca/issues/1206)).
 
 Enrollment pins exactly that host key and has the worker issue the parent a credential over
@@ -166,7 +190,7 @@ fetch. Windows parents do not issue credentials during enrollment, so save one b
 | You want… | Use |
 | --- | --- |
 | an agent binary on a machine with no ORCA daemon, and history on this machine | SSH host (setup 2) |
-| a whole ORCA workflow on a machine with no daemon, for the length of one session | `orca acp` on an SSH host (setup 2) |
+| a whole ORCA workflow on a machine with no daemon, for the length of one session | `orca-cli acp` on an SSH host (setup 2) |
 | work that survives a dropped connection, a worker that enforces its own caps for every parent, and history on the worker | daemon delegation (setup 4) |
 | to see several machines' own work side by side | the app's Machines surface (setup 3) |
 

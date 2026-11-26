@@ -71,6 +71,7 @@ function everyAnsweredMethod(): string[] {
     judgeStatus: async () => {
       throw new Error("inventory fixture must not execute");
     },
+    remotes: present,
   };
   return Object.keys(methodsFor(full));
 }

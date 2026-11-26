@@ -70,6 +70,12 @@ import {
   WorkflowsListParamsSchema,
 } from "@orca/protocol";
 import { hello, startDaemon, type DaemonHandle, type MethodTable } from "@orca/daemon";
+import {
+  REMOTES_ENROLL_METHOD,
+  REMOTES_LIST_METHOD,
+  RemotesEnrollParamsSchema,
+  RemotesListParamsSchema,
+} from "@orca/protocol";
 /* The renderer's fixtures, read as data. They are protocol-shaped constants with no DOM in
    them — the plan ones came off a real `PlanModel` run — and `fake-bridge.test.ts` already
    parses each one through its schema, so this file borrows them rather than keeping a
@@ -446,6 +452,62 @@ describe("the judge status method", () => {
   it("sends no parameters and returns the parsed status", async () => {
     expect(await new DaemonClient(d.url).judgeStatus()).toEqual(answer);
     expect(seen).toEqual({});
+  });
+});
+
+/** `remotes.list` and `remotes.enroll` (#1206): parsed against the protocol's schemas. */
+describe("the remotes methods", () => {
+  const remote = {
+    id: "build-box",
+    name: "Build box",
+    destination: "ci@build.example",
+    workflows: ["build"],
+    pinned: [],
+    jumpPinned: [],
+    credentialSaved: false,
+    enrollment: { state: "none" as const },
+  };
+  const seen: { method: string; params: unknown }[] = [];
+  const table: MethodTable = {
+    [HELLO_METHOD]: hello,
+    [REMOTES_LIST_METHOD]: {
+      params: RemotesListParamsSchema,
+      handle: (p: unknown) => {
+        seen.push({ method: REMOTES_LIST_METHOD, params: p });
+        return { remotes: [remote], canIssue: true };
+      },
+    },
+    [REMOTES_ENROLL_METHOD]: {
+      params: RemotesEnrollParamsSchema,
+      handle: (p: unknown) => {
+        seen.push({ method: REMOTES_ENROLL_METHOD, params: p });
+        return { remote: { ...remote, pinned: ["SHA256:k"] }, warnings: [] };
+      },
+    },
+  };
+  let d: DaemonHandle;
+  beforeAll(async () => {
+    d = await startDaemon({
+      orcaVersion: "0.1.0-test",
+      capabilities: ["runs.read"],
+      auth: { mode: "loopback-unauthenticated" },
+      methods: table,
+    });
+  });
+  afterAll(async () => {
+    await d.close();
+  });
+
+  it("lists with no parameters and enrolls with exactly what it was given", async () => {
+    const client = new DaemonClient(d.url);
+    expect(await client.remotesList()).toEqual({ remotes: [remote], canIssue: true });
+    expect((await client.remotesEnroll({ id: "build-box", hostKeys: ["SHA256:k"] })).remote.pinned).toEqual([
+      "SHA256:k",
+    ]);
+    expect(seen).toEqual([
+      { method: REMOTES_LIST_METHOD, params: {} },
+      { method: REMOTES_ENROLL_METHOD, params: { id: "build-box", hostKeys: ["SHA256:k"], jumpHostKeys: [] } },
+    ]);
   });
 });
 
