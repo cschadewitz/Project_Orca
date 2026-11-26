@@ -14,13 +14,15 @@
  */
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { fenceBoot, fenceDirectory, fenceHash, fenceWrite } from "@orca/protocol/first-run-fence";
 import { RemotesListResultSchema, type RemotesListResult } from "@orca/protocol";
+import { RemoteDaemonSpecSchema } from "@orca/core";
+import { remotesModel } from "@orca/daemon";
 import {
   CLI_ENTRY,
   loopbackSshd,
@@ -418,6 +420,77 @@ edges:
       remote: { credentialSaved: true, enrollment: { state: "enrolled", issued: false } },
     });
     expect(savedTokenFiles()).toEqual(before.files);
+  }, 120_000);
+
+  it("reads the stored credential under the enrollment lock, so a replacement that finished first is the one it proves (#1220 review)", async (ctx) => {
+    if (!sshd) return ctx.skip();
+    const record = join(remotesDir(), "saved-box.json");
+    const [stale] = savedTokenFiles();
+    expect(stale).toBeDefined();
+    // A second credential the worker issued: the generation another enrollment will have
+    // committed while this one was still waiting for the lock.
+    const issued = spawnSync(
+      process.execPath,
+      [CLI_ENTRY, "auth", "issue", "app-parent-2", "--preset", "client", "--json"],
+      {
+        cwd: remote.dir,
+        encoding: "utf8",
+        env: { PATH: process.env.PATH ?? "", HOME: join(remote.dir, "..", "home") },
+      },
+    );
+    expect(issued.status, issued.stderr).toBe(0);
+    const replacement = (JSON.parse(issued.stdout) as { token: string }).token;
+    const replacementId = replacement.split(".")[1]!;
+    const replacementFile = `saved-box.${replacementId}.token`;
+    /** What that other enrollment leaves on commit: its own generation file, the record naming it, the old file gone. */
+    const replacedMeanwhile = () => {
+      writeFileSync(join(remotesDir(), replacementFile), `${replacement}\n`, { mode: 0o600 });
+      const current = JSON.parse(readFileSync(record, "utf8")) as Record<string, unknown>;
+      writeFileSync(
+        record,
+        JSON.stringify(
+          { ...current, credentialId: replacementId, principalId: "app-parent-2", tokenFile: replacementFile },
+          null,
+          2,
+        ),
+      );
+      rmSync(join(remotesDir(), stale!), { force: true });
+    };
+    // The same model the daemon serves, in this process, against the same workspace and lock. Its
+    // second fence check falls after it decided to use the stored credential and before
+    // enrollment takes the lock: exactly where a replacement can finish first.
+    const config = JSON.parse(readFileSync(join(parent.dir, "orca.config.yaml"), "utf8")) as {
+      remotes: unknown[];
+      agents: unknown[];
+    };
+    let checks = 0;
+    const model = remotesModel({
+      configDir: parent.dir,
+      config: () => ({
+        remotes: config.remotes.map((r) => RemoteDaemonSpecSchema.parse(r)),
+        agents: config.agents as never,
+      }),
+      receiptsDir: join(parent.dir, ".orca", "delegations"),
+      principal: async () => "unused",
+      admitted: () => {
+        if (++checks === 2) replacedMeanwhile();
+        return true;
+      },
+    });
+    const enrolled = await model.enroll({ id: "saved-box", hostKeys: [], jumpHostKeys: [] });
+    expect(checks).toBeGreaterThanOrEqual(2);
+    expect(enrolled.remote.enrollment).toMatchObject({ state: "enrolled", issued: false });
+    // The record names the generation it proved, whose file holds it; nothing points at the gone one.
+    const after = JSON.parse(readFileSync(record, "utf8")) as { credentialId: string; tokenFile?: string };
+    expect(after).toMatchObject({ credentialId: replacementId, tokenFile: replacementFile });
+    expect(savedTokenFiles()).toEqual([replacementFile]);
+    expect(existsSync(join(remotesDir(), "saved-box.token"))).toBe(false);
+
+    // And delegation works straight after, on that credential.
+    const runId = await admit(parent, "delegate-saved", { target: "after a replacement raced the enrollment" });
+    expect(await finished(parent, runId)).toMatchObject({ status: "succeeded" });
+    const runs = (await call(remote, "runs.list", {})).runs as { workflowId: string }[];
+    expect(runs.filter((r) => r.workflowId === "build-saved")).toHaveLength(3);
   }, 120_000);
 
   it("refuses a remote the active configuration does not name", async (ctx) => {

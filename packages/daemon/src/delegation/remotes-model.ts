@@ -159,15 +159,16 @@ export function remotesModel(source: RemotesSource): RemotesModel {
         saveToken = true;
       }
       const rotate = params.rotate === true;
-      if (token === undefined && !rotate) {
-        // As the CLI decides: a credential on file is used as given (one pasted here before, in
-        // its generation file, or one saved by hand at the configured path); without one the
-        // remote issues it.
-        const pasted = pastedToken(files.enrollmentFile);
-        if (pasted !== undefined) token = pasted;
-        else if (existsSync(files.credentialFile)) token = readRemoteCredential(remote, files.credentialFile);
-      }
-      const issue = token === undefined;
+      // As the CLI decides: a credential on file is used as given (one pasted here before, in
+      // its generation file, or one saved by hand at the configured path); without one the
+      // remote issues it. Which one is on file is only looked at here to choose between using it
+      // and issuing; the credential itself is read by enrollment under its lock, so another
+      // enrollment that finishes first cannot leave this one proving a generation it replaced.
+      const onFile =
+        token === undefined &&
+        !rotate &&
+        (pastedToken(files.enrollmentFile) !== undefined || existsSync(files.credentialFile));
+      const issue = token === undefined && !onFile;
       const warnings: string[] = [];
       if (!source.admitted()) throw fenced();
       await enrollRemote({
@@ -177,7 +178,16 @@ export function remotesModel(source: RemotesSource): RemotesModel {
         file: files.enrollmentFile,
         workflows,
         receiptsDir: source.receiptsDir,
-        ...(issue ? { issue: { principal: await source.principal(), rotate } } : { token: token!, saveToken }),
+        ...(issue
+          ? { issue: { principal: await source.principal(), rotate } }
+          : token !== undefined
+            ? { token, saveToken }
+            : {
+                stored: {
+                  configured: () =>
+                    existsSync(files.credentialFile) ? readRemoteCredential(remote, files.credentialFile) : undefined,
+                },
+              }),
         hostKeys: params.hostKeys ?? [],
         jumpHostKeys: params.jumpHostKeys ?? [],
         warn: (message) => warnings.push(message),

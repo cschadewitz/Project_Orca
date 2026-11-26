@@ -272,6 +272,13 @@ export interface EnrollOptions {
    * record names; nothing the current record uses is touched unless this enrollment commits.
    */
   saveToken?: boolean;
+  /**
+   * In place of `token` (#1206): the credential already on file, chosen here, under the
+   * enrollment lock, never by the caller before it: the one an earlier pasted enrollment saved in
+   * its own generation file (what the current record names), else what `configured` reads from
+   * the remote's configured credential file. With neither, enrollment refuses and changes nothing.
+   */
+  stored?: { configured: () => string | undefined };
   issue?: IssueRequest;
   /** Told about anything left to tidy by hand (a stale credential that could not be revoked). */
   warn?: (message: string) => void;
@@ -490,8 +497,11 @@ export async function enrollRemote(options: EnrollOptions): Promise<Enrollment> 
   const id = options.remote.id;
   const refuse = (message: string, details: Record<string, unknown> = {}) =>
     new OrcaError("DELEGATION_REFUSED", message, { reason: "not-enrolled", profile: id, ...details });
-  if ((options.token === undefined) === (options.issue === undefined))
-    throw new OrcaError("INTERNAL", "enrollRemote needs a token or an issue request, not both");
+  if ([options.token, options.stored, options.issue].filter((o) => o !== undefined).length !== 1)
+    throw new OrcaError(
+      "INTERNAL",
+      "enrollRemote needs exactly one of a token, the stored credential or an issue request",
+    );
   if (options.issue && !options.workflows.length)
     throw refuse(`No agent delegates to remote ${id}, so there is no workflow to issue a credential for.`);
   if (options.issue && !durableEnrollment())
@@ -548,6 +558,17 @@ async function enrollLocked(
   // this is how a run cut off just before or after its commit is reconciled.
   let pending = readPendingRevokes(options.file).filter((p) => p.credentialId !== previous?.credentialId);
   const previousToken = readIssuedToken(options.file, previous);
+  // The stored credential, resolved only now that this process holds the lock: another
+  // enrollment that finished while this one waited has already replaced what was on file then.
+  let storedToken: string | undefined;
+  if (options.stored) {
+    storedToken = previous?.tokenFile && !previous.issued ? previousToken : undefined;
+    storedToken ??= options.stored.configured();
+    if (storedToken === undefined)
+      throw refuse(
+        `No credential for remote ${id} is on file now: a pasted one or one saved at its configured credential path. Nothing was changed. Paste the credential, or have the remote issue one, and enroll again.`,
+      );
+  }
   // A re-enrollment is a new binding: delegations still running under the current one would be
   // stranded (and lose their credential on a rotation). They finish first.
   if (previous) {
@@ -744,7 +765,7 @@ async function enrollLocked(
       writeAtomic(join(dir, tokenFile), `${token}\n`, true);
     }
     if (!proven) {
-      token = options.token!;
+      token = storedToken ?? options.token!;
       const saved = await prove(token, undefined);
       if (saved.problem)
         throw new OrcaError(
