@@ -61,3 +61,17 @@ it("is run end to end on Windows by the Windows server bundle check, in Windows 
   expect(step.shell).toBe("powershell");
   expect(step.run).toContain("powershell -NoProfile");
 });
+
+it("gives the client's Windows setup session longer than every download deadline the setup can spend", () => {
+  const seconds = (name) => Number(setup.match(new RegExp(`^\\$${name} = (\\d+)$`, "m"))?.[1]);
+  const client = read("packages/protocol/src/server-setup.ts");
+  const minutes = Number(client.match(/^export const WINDOWS_SETUP_TIMEOUT_MS = (\d+) \* 60_000;$/m)?.[1]);
+  // Three small downloads: the release record (one use), then the manifest and the signature
+  // (the other); then the archive, and cosign when it is fetched. Its definition and two uses:
+  expect(setup.match(/\$DownloadSmallSeconds\b/g)).toHaveLength(3);
+  const downloads =
+    3 * seconds("DownloadSmallSeconds") + seconds("DownloadArchiveSeconds") + seconds("DownloadCosignSeconds");
+  expect(downloads).toBeGreaterThan(0);
+  // With room left for unpacking, verifying, the task and the daemon's health check.
+  expect(minutes * 60).toBeGreaterThanOrEqual(downloads + 15 * 60);
+});

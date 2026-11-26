@@ -97,6 +97,8 @@ export interface ServerSetupView {
     step?: string;
     detail?: string;
     version?: string;
+    /** A Windows server whose account may not register a boot task: started at its logon (#1238). */
+    startsAt?: "logon";
   };
   signIn?: { ok: true } | { ok: false; message: string };
 }

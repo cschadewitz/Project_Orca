@@ -112,6 +112,10 @@ const TAILNET_STATE: Record<Exclude<TailnetMachinesView["state"], "running" | "o
   error: "Tailscale's list of machines could not be read on this computer.",
 };
 
+/** A Windows server whose account may not register a boot task (#1238): what that means for it. */
+const LOGON_ONLY =
+  " Its daemon starts when its account logs on there, not at boot, because that account may not register a task that starts at boot. To start it at boot, set it up again while that account is an administrator there (an administrator's SSH sessions on Windows are elevated).";
+
 /** What a setup run came to, in a sentence; `alert` when the person has something to fix. */
 export function setupSummary(
   profile: Pick<RemoteProfileView, "name" | "destination">,
@@ -126,7 +130,7 @@ export function setupSummary(
             alert: true,
           }
         : {
-            text: `${profile.name} is an ORCA server (v${setup.version ?? "?"}), and this computer is signed in.`,
+            text: `${profile.name} is an ORCA server (v${setup.version ?? "?"}), and this computer is signed in.${setup.startsAt === "logon" ? LOGON_ONLY : ""}`,
             alert: false,
           };
     case "refused":
@@ -797,7 +801,7 @@ function ServerConfirmation({
           ? `verify and repair ORCA ${inspection.current} in ${inspection.root}`
           : `install ORCA ${inspection.version} from its signed server bundle in ${inspection.root}`}
         {inspection.os === "windows"
-          ? ", register and start its scheduled task (\\ORCA\\orca-server, so it runs without a login), then sign this computer in."
+          ? ", register and start its scheduled task (\\ORCA\\orca-server: at boot, so it runs without a login, where the account may register that; otherwise at the account's logon, and the setup says so), then sign this computer in."
           : ", enable and start its systemd user service (with lingering, so it runs without a login), then sign this computer in."}
       </Text>
       {carries && (

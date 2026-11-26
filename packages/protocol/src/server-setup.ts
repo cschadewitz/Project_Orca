@@ -53,6 +53,13 @@ export type ServerOs = "linux" | "windows";
 
 /** Setup downloads and verifies a bundle and runs its checks: minutes, not seconds. */
 export const SETUP_TIMEOUT_MS = 30 * 60_000;
+/**
+ * The Windows setup's own download deadlines alone come to 51 minutes (the release record, the
+ * manifest and the signature at 2 each, the archive at 30, cosign at 15), before it unpacks,
+ * verifies and starts anything: its session gets longer than that, so a slow but valid install
+ * still reports how it ended (tools/test/windows-server-setup.test.js checks the sum).
+ */
+export const WINDOWS_SETUP_TIMEOUT_MS = 75 * 60_000;
 
 const VERSION = /^\d+\.\d+\.\d+(?:-(?:rc|beta|alpha)\.\d+)?$/;
 
@@ -140,10 +147,14 @@ export function inspectCommand(version: string, port: number): string[] {
   return ["python3", "-", "--version", version, "--port", String(port), "--inspect"];
 }
 
-/** What one run of a setup sends: its command words, and the program on its standard input. */
+/**
+ * What one run of a setup sends: its command words and the program on its standard input, and
+ * how long its session may take.
+ */
 export interface SetupInvocation {
   command: string[];
   input: string;
+  timeoutMs: number;
 }
 
 /**
@@ -189,9 +200,14 @@ export function windowsProgram(dir: string, options: Record<string, string | num
 
 /** The read-only inspection on a server running `os`. */
 export function inspectInvocation(os: ServerOs, dir: string, version: string, port: number): SetupInvocation {
-  if (os === "linux") return { command: inspectCommand(version, port), input: setupProgram(dir) };
+  if (os === "linux")
+    return { command: inspectCommand(version, port), input: setupProgram(dir), timeoutMs: INSPECT_TIMEOUT_MS };
   if (!VERSION.test(version)) throw new Error(`Not a release version: ${version}`);
-  return { command: WINDOWS_COMMAND, input: windowsProgram(dir, { Version: version, Port: port, Inspect: true }) };
+  return {
+    command: WINDOWS_COMMAND,
+    input: windowsProgram(dir, { Version: version, Port: port, Inspect: true }),
+    timeoutMs: INSPECT_TIMEOUT_MS,
+  };
 }
 
 /** The confirmed setup on a server running `os` (`setupCommand`, for Windows too). */
@@ -203,7 +219,12 @@ export function setupInvocation(
   confirmed: ConfirmedServer,
   bundleDir?: string,
 ): SetupInvocation {
-  if (os === "linux") return { command: setupCommand(version, port, confirmed, bundleDir), input: setupProgram(dir) };
+  if (os === "linux")
+    return {
+      command: setupCommand(version, port, confirmed, bundleDir),
+      input: setupProgram(dir),
+      timeoutMs: SETUP_TIMEOUT_MS,
+    };
   if (bundleDir !== undefined) throw new Error("Carrying the server bundle to a Windows server is not available yet.");
   if (!VERSION.test(version)) throw new Error(`Not a release version: ${version}`);
   if (!WINDOWS_ACCOUNT.test(confirmed.account)) throw new Error(`Not an account name: ${confirmed.account}`);
@@ -219,6 +240,7 @@ export function setupInvocation(
       ExpectRoot: confirmed.root,
       ExpectCurrent: confirmed.current ?? "none",
     }),
+    timeoutMs: WINDOWS_SETUP_TIMEOUT_MS,
   };
 }
 
@@ -249,6 +271,8 @@ const DoneSchema = z.object({
   account: z.string().max(80),
   version: z.string().regex(VERSION),
   port: z.number().int().min(1024).max(65535),
+  /** Windows: when its scheduled task starts the daemon (absent from the Linux setup: boot). */
+  start: z.enum(["boot", "logon"]).optional(),
 });
 
 /** What one run of the setup made of the server. */
@@ -261,6 +285,11 @@ export type SetupOutcome =
       port: number;
       account: string;
       root: string;
+      /**
+       * A Windows setup whose account may not register a boot task: its daemon starts when the
+       * account logs on, not at boot (its `boot` warning says how to move it). Absent: at boot.
+       */
+      startsAt?: "logon";
     }
   /**
    * The server reported something other than what was confirmed (another version, port,
@@ -345,6 +374,7 @@ export function readSetup(result: RemoteResult): SetupOutcome {
       port: done.port,
       account: done.account,
       root: done.root,
+      ...(done.start === "logon" ? { startsAt: "logon" as const } : {}),
     };
   return notReady(result, steps);
 }
@@ -577,7 +607,7 @@ export async function discoverServer(options: {
     if (keys === undefined) throw new TunnelRefusal("host-key-missing");
     const os = await serverOs(tunnel);
     const inspect = inspectInvocation(os, options.scripts, options.version, base.profile.remotePort);
-    const outcome = readInspection(await tunnel.exec(inspect.command, INSPECT_TIMEOUT_MS, inspect.input), os);
+    const outcome = readInspection(await tunnel.exec(inspect.command, inspect.timeoutMs, inspect.input), os);
     return {
       outcome,
       keys,

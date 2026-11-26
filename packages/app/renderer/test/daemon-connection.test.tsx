@@ -337,6 +337,87 @@ it("adds a machine: saves the profile, sets its server up, and says what each st
   h.dispose();
 });
 
+it("sets up a Windows machine, and says when its daemon starts at logon rather than at boot (#1238)", async () => {
+  stubMatchMedia(1200);
+  const h = harness();
+  const r = rig();
+  const saved = {
+    id: "desk",
+    name: "Desk",
+    destination: "casey@desk",
+    remotePort: 6722,
+    hasCredential: false,
+    hostKeyPinned: false,
+  };
+  let views: (typeof saved)[] = [];
+  let finish!: (value: unknown) => void;
+  const profiles = {
+    list: vi.fn(async () => views),
+    save: vi.fn(async () => {
+      views = [saved];
+      return { ok: true as const, value: saved };
+    }),
+    remove: vi.fn(),
+    importCredential: vi.fn(),
+    forgetHostKey: vi.fn(),
+    useAutomaticSignIn: vi.fn(),
+    inspectServer: vi.fn(async () => ({
+      ok: true as const,
+      value: {
+        inspection: {
+          confirmation: "abcd-ef01-2345",
+          destination: "casey@desk",
+          account: "DESK\\casey",
+          fingerprints: { server: ["ssh-ed25519 SHA256:Q2FzZXlzTGFiS2V5"] },
+          firstUse: true,
+          version: "0.9.0",
+          root: "C:\\Users\\casey\\AppData\\Local\\orca-server",
+          current: null,
+          scope: "install-and-sign-in" as const,
+          os: "windows" as const,
+        },
+      },
+    })),
+    setUpServer: vi.fn(() => new Promise((resolve) => (finish = resolve))),
+  };
+  render(
+    <h.Providers>
+      <ConnectionDialog bridge={{ ...r.bridge, profiles } as never} target={r.target} close={() => {}} />
+    </h.Providers>,
+  );
+  fireEvent.click(await screen.findByText("Add a machine…"));
+  const inputs = [...screen.getByRole("group", { name: "New profile" }).querySelectorAll("input")];
+  fireEvent.change(inputs[0]!, { target: { value: "Desk" } });
+  fireEvent.change(inputs[1]!, { target: { value: "casey@desk" } });
+  fireEvent.click(screen.getByText("Save profile"));
+  const confirm = await screen.findByRole("group", { name: "Confirm server setup" });
+  // Not promised to run without a login: that holds only where the account may register it.
+  expect(confirm.textContent).toContain("scheduled task (\\ORCA\\orca-server: at boot, so it runs without a login");
+  expect(confirm.textContent).toContain("otherwise at the account's logon, and the setup says so");
+  fireEvent.click(within(confirm).getByText("Set up"));
+  await waitFor(() => expect(profiles.setUpServer).toHaveBeenCalledWith("desk", "abcd-ef01-2345"));
+  finish({
+    ok: true,
+    value: {
+      setup: {
+        kind: "ready",
+        version: "0.9.0",
+        startsAt: "logon",
+        steps: [
+          { step: "task", result: "changed", detail: "\\ORCA\\orca-server" },
+          { step: "boot", result: "warning", detail: "could not register a task that starts at boot" },
+        ],
+      },
+      signIn: { ok: true },
+    },
+  });
+  const summary = await screen.findByText(/Desk is an ORCA server \(v0\.9\.0\), and this computer is signed in\./);
+  expect(summary.textContent).toContain("starts when its account logs on there, not at boot");
+  expect(summary.textContent).toContain("set it up again while that account is an administrator there");
+  await screen.findByText("boot: warning (could not register a task that starts at boot)");
+  h.dispose();
+});
+
 it("shows a profile connection by name in the Config header (#874)", () => {
   const r = rig();
   const bridge = {

@@ -43,7 +43,9 @@ orca-release.py, so this script verifies and stages the bundle itself:
 5. select      `current.txt` names `vVERSION`, only when nothing is selected yet.
 6. task        The scheduled task \ORCA\orca-server, run as this account whether or not it is
                logged on (S4U: no password is stored), started at boot. An account that may not
-               register a boot task gets one started at its logon instead, with a warning.
+               register a boot task gets one started at its logon instead, with a warning, and
+               every later run tries the boot task again, so a run from an elevated session
+               moves it to boot. The last line says which (`"start": "boot"` or `"logon"`).
 7. start       The task started, and the daemon's hello checked against the release.
 
 Each run holds the deployment's admission lock exclusively from before its first change to its
@@ -374,7 +376,7 @@ function New-OrcaSetup([string]$version, [string]$root, [int]$port, [string]$bun
     Root = [IO.Path]::GetFullPath($root).TrimEnd('\')
     ExpectAccount = $expectAccount; ExpectRoot = $expectRoot; ExpectCurrent = $expectCurrent
     Before = $null; Staging = $null; Fence = @()
-    CreatedCurrent = $false; RegisteredTask = $false
+    CreatedCurrent = $false; RegisteredTask = $false; StartsAt = $null
   }
 }
 
@@ -1289,29 +1291,59 @@ function Test-TaskCurrent($s, $task) {
   [string]$task.Description -eq [string]$wanted.Description
 }
 
+function Register-OrcaTask($s, [bool]$atStartup) {
+  # The one place a definition is registered (tests make the boot one fail here).
+  $null = Register-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -InputObject (New-OrcaTaskDefinition $s $atStartup) -Force
+}
+
+function Test-TaskAtBoot($task) {
+  return @($task.Triggers)[0].CimClass.CimClassName -eq "MSFT_TaskBootTrigger" -and [string]$task.Principal.LogonType -eq "S4U"
+}
+
+function Send-BootWarning($s, [string]$reason) {
+  Send-Step "boot" "warning" ("could not register a task that starts at boot ($($reason.Trim())), so the daemon starts when " +
+    "$(Get-Account) logs on. Run this setup again as this account from an elevated session to start it at boot.")
+}
+
 function Install-OrcaTask($s) {
   $task = Get-OurTask
   if (Test-TaskCurrent $s $task) {
-    if ([string]$task.State -eq "Disabled") {
-      $null = Enable-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName
-      Send-Step "task" "repaired" "$TaskPath$TaskName enabled"
-    } else {
-      Send-Step "task" "ok" "$TaskPath$TaskName"
+    $enabled = [string]$task.State -eq "Disabled"
+    if ($enabled) { $null = Enable-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName }
+    if (Test-TaskAtBoot $task) {
+      $s.StartsAt = "boot"
+      if ($enabled) { Send-Step "task" "repaired" "$TaskPath$TaskName enabled" } else { Send-Step "task" "ok" "$TaskPath$TaskName" }
+      return
+    }
+    # Started at logon since a run that could not register a boot task: every run tries again.
+    try {
+      Register-OrcaTask $s $true
+      $s.RegisteredTask = $true
+      $s.StartsAt = "boot"
+      Send-Step "task" "changed" "$TaskPath$TaskName, now started at boot whether or not $(Get-Account) is logged on"
+    } catch {
+      $reason = $_.Exception.Message
+      # Still the logon task it was, or registered as that again.
+      if (-not (Test-TaskCurrent $s (Get-OurTask))) { Register-OrcaTask $s $false; $s.RegisteredTask = $true }
+      $s.StartsAt = "logon"
+      if ($enabled) { Send-Step "task" "repaired" "$TaskPath$TaskName enabled" } else { Send-Step "task" "ok" "$TaskPath$TaskName" }
+      Send-BootWarning $s $reason
     }
     return
   }
   try {
-    $null = Register-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -InputObject (New-OrcaTaskDefinition $s $true) -Force
+    Register-OrcaTask $s $true
     $s.RegisteredTask = $true
+    $s.StartsAt = "boot"
     Send-Step "task" "changed" "$TaskPath$TaskName, started at boot whether or not $(Get-Account) is logged on"
   } catch {
     # An account that may not register a boot task: started at its logon instead.
     $reason = $_.Exception.Message
-    $null = Register-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -InputObject (New-OrcaTaskDefinition $s $false) -Force
+    Register-OrcaTask $s $false
     $s.RegisteredTask = $true
+    $s.StartsAt = "logon"
     Send-Step "task" "changed" "$TaskPath$TaskName"
-    Send-Step "boot" "warning" ("could not register a task that starts at boot ($($reason.Trim())), so the daemon starts when " +
-      "$(Get-Account) logs on. An administrator can run this setup once as this account from an elevated session to start it at boot.")
+    Send-BootWarning $s $reason
   }
 }
 
@@ -1375,7 +1407,7 @@ function Invoke-OrcaRun($s) {
     }
     $step = "finish"
     $done = [ordered]@{ done = $true; root = $s.Root; command = (Get-RootPath $s "orca.cmd"); account = (Get-Account)
-      version = $s.Version; port = $s.Port; platform = $BundlePlatform
+      version = $s.Version; port = $s.Port; platform = $BundlePlatform; start = $s.StartsAt
     }
     [IO.File]::Delete((Get-Journal $s))
   } catch [OrcaRefused] {

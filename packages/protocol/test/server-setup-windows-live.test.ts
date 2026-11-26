@@ -19,7 +19,6 @@ import {
   readSetup,
   serverOs,
   setupInvocation,
-  SETUP_TIMEOUT_MS,
   type Inspected,
 } from "../src/server-setup.js";
 
@@ -91,7 +90,7 @@ describe.skipIf(!live || process.platform !== "win32")("a Windows server's setup
     let outcome;
     try {
       await tunnel.open();
-      outcome = readSetup(await tunnel.exec(run.command, SETUP_TIMEOUT_MS, run.input));
+      outcome = readSetup(await tunnel.exec(run.command, run.timeoutMs, run.input));
     } finally {
       await tunnel.close();
     }

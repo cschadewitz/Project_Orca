@@ -74,7 +74,6 @@ import {
   launcherCommand,
   readSetup,
   setupInvocation,
-  SETUP_TIMEOUT_MS,
   type Discovery,
   type InspectOutcome,
   type SetupOutcome,
@@ -951,7 +950,7 @@ export class RemoteProfiles {
           const run = setupInvocation(os, options.scripts, options.version, profile.remotePort, pending, scratch?.path);
           // Only the setup that was confirmed counts: what the server reports must match it.
           setup = confirmedResult(
-            readSetup(await tunnel.exec(run.command, SETUP_TIMEOUT_MS, run.input)),
+            readSetup(await tunnel.exec(run.command, run.timeoutMs, run.input)),
             { version: options.version, port: profile.remotePort, account: pending.account, root: pending.root },
             os,
           );

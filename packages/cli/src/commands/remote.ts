@@ -45,7 +45,6 @@ import {
   readSetup,
   setupInvocation,
   SETUP_SCRIPT,
-  SETUP_TIMEOUT_MS,
   type InspectOutcome,
   type ServerOs,
   type SetupOutcome,
@@ -215,7 +214,7 @@ export async function remoteCommand(
         current
           ? `Would verify and repair ORCA ${current} in ${root}, and ${service}.`
           : os === "windows"
-            ? `Would install ORCA ${version} from its signed server bundle in ${root}, and register and start ${service}.`
+            ? `Would install ORCA ${version} from its signed server bundle in ${root}, and register and start ${service} (at boot where ${account} may register that, otherwise at its logon, and the setup says so).`
             : `Would install ORCA ${version} from its signed server bundle in ${root}, and enable and start ${service} with lingering.`,
       );
     }
@@ -265,7 +264,7 @@ export async function remoteCommand(
       // Only the setup that was confirmed counts: what the server reports must match it.
       const run = setupInvocation(os, scripts, version, profile.remotePort, { account, root, current }, scratch?.path);
       outcome = confirmedResult(
-        readSetup(await tunnel.exec(run.command, SETUP_TIMEOUT_MS, run.input)),
+        readSetup(await tunnel.exec(run.command, run.timeoutMs, run.input)),
         { version, port: profile.remotePort, account, root },
         os,
       );
@@ -554,6 +553,10 @@ function finish(
       if (!ctx.flags.json)
         ctx.out(
           `${destination} is a managed ORCA server (v${outcome.version}). To connect and sign in, add an SSH profile for it in the desktop app with server command ${launcherCommand(outcome.root, os)}, or use Add a machine there.`,
+        );
+      if (!ctx.flags.json && outcome.startsAt === "logon")
+        ctx.out(
+          `Its daemon starts when ${outcome.account} logs on, not at boot: that account may not register a task that starts at boot. To start it at boot, run this again while ${outcome.account} is an administrator there (an administrator's SSH sessions on Windows are elevated).`,
         );
       return 0;
     case "refused":

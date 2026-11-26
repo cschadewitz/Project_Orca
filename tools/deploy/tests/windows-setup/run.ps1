@@ -193,6 +193,7 @@ try {
   Assert-Step $run "start" "changed" "healthy"
   Assert ($null -eq (Get-Step $run "boot")) "the task does not start at boot"
   Assert ($run.done.version -eq $Version -and $run.done.root -eq $root) "done $(ConvertTo-Json -Compress $run.done)"
+  Assert ($run.done.start -eq "boot") "a first install as this runner account says start $($run.done.start), not boot"
   Assert (-not (Test-Path (Join-Path $root ".setup-journal.json"))) "the journal was not retired"
   $task = Get-Task
   Assert ($task.Principal.LogonType -eq "S4U") "the task logs on as $($task.Principal.LogonType)"
@@ -233,6 +234,34 @@ try {
   Assert-Step $run "task" "changed"
   Assert ((Get-Step $run "start").detail -match "healthy") "the repaired task's daemon is not healthy"
   Assert ((Get-Task).Actions[0].Execute -ne "cmd.exe") "the repair did not register the task again"
+
+  Case "an account that may not register a boot task gets a logon task, told so, and a later elevated run moves it to boot"
+  Stop-Daemon
+  $xml = [string](Export-ScheduledTask -TaskPath "\ORCA\" -TaskName "orca-server")
+  $null = Register-ScheduledTask -TaskPath "\ORCA\" -TaskName "orca-server" -Force `
+    -Xml ($xml -replace '<Command>[^<]*</Command>', '<Command>cmd.exe</Command>')
+  $run = Invoke-Setup "no-boot"
+  Assert ($run.code -eq 0) "exit $($run.code)"
+  Assert-Step $run "task" "changed"
+  Assert-Step $run "boot" "warning" "elevated session to start it at boot"
+  Assert ($run.done.start -eq "logon") "the done line says start $($run.done.start), not logon"
+  $task = Get-Task
+  Assert (@($task.Triggers)[0].CimClass.CimClassName -eq "MSFT_TaskLogonTrigger") "the fallback task starts on $(@($task.Triggers)[0].CimClass.CimClassName)"
+  Assert ([string]$task.Principal.LogonType -eq "Interactive") "the fallback task logs on as $($task.Principal.LogonType)"
+  $run = Invoke-Setup "no-boot"
+  Assert ($run.code -eq 0) "exit $($run.code)"
+  Assert-Step $run "task" "ok"
+  Assert-Step $run "boot" "warning"
+  Assert ($run.done.start -eq "logon") "a second run says start $($run.done.start), not logon"
+  $run = Invoke-Setup "trust"
+  Assert ($run.code -eq 0) "exit $($run.code)"
+  Assert-Step $run "task" "changed" "now started at boot"
+  Assert ($null -eq (Get-Step $run "boot")) "the run that registered the boot task still warns"
+  Assert ($run.done.start -eq "boot") "the elevated run says start $($run.done.start), not boot"
+  $task = Get-Task
+  Assert (@($task.Triggers)[0].CimClass.CimClassName -eq "MSFT_TaskBootTrigger") "the moved task starts on $(@($task.Triggers)[0].CimClass.CimClassName)"
+  Assert ([string]$task.Principal.LogonType -eq "S4U") "the moved task logs on as $($task.Principal.LogonType)"
+  Assert ((Get-Step $run "start").detail -match "healthy") "the moved task's daemon is not healthy"
 
   Case "a managed task whose privilege changed is refused, not reused, with the same action and description"
   $xml = [string](Export-ScheduledTask -TaskPath "\ORCA\" -TaskName "orca-server")

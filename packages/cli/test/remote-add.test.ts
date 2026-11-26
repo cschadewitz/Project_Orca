@@ -15,6 +15,7 @@ import {
   type RemoteResult,
   type SshTunnelOptions,
 } from "@orca/protocol/remote-access";
+import { INSPECT_TIMEOUT_MS, SETUP_TIMEOUT_MS, WINDOWS_SETUP_TIMEOUT_MS } from "@orca/protocol/server-setup";
 import { remoteCommand, setupScripts } from "../src/commands/remote.js";
 import type { CommandContext } from "../src/commands/index.js";
 
@@ -41,6 +42,7 @@ function scripts(): string {
   const dir = temp();
   writeFileSync(join(dir, "orca-server-setup.py"), "print('setup')\n");
   writeFileSync(join(dir, "orca-release.py"), "print('adapter')\n");
+  writeFileSync(join(dir, "orca-server-setup.ps1"), "Write-Output 'setup'\n");
   return dir;
 }
 
@@ -88,10 +90,15 @@ const READY: RemoteResult = {
 };
 
 /** A server presenting `key`, answering an inspection and a setup. */
-function fakeServer(opts: { key?: string; inspect?: RemoteResult; setup?: RemoteResult } = {}) {
+function fakeServer(opts: { key?: string; inspect?: RemoteResult; setup?: RemoteResult; windows?: true } = {}) {
   const server = {
     key: opts.key ?? KEY,
-    commands: [] as { command: string[]; input?: string | undefined; options: SshTunnelOptions }[],
+    commands: [] as {
+      command: string[];
+      input?: string | undefined;
+      options: SshTunnelOptions;
+      timeout?: number | undefined;
+    }[],
   };
   const make = (options: SshTunnelOptions) => {
     let sealed: string | undefined;
@@ -112,11 +119,18 @@ function fakeServer(opts: { key?: string; inspect?: RemoteResult; setup?: Remote
           throw new TunnelRefusal("host-key-changed");
         return "http://127.0.0.1:1";
       },
-      exec: async (command: readonly string[], _timeout?: number, input?: string) => {
-        // Which system this is (`serverOs`): a Linux one, here.
-        if (command.join(" ") === "ver") return { code: 127, stdout: "", serverLines: [] };
-        server.commands.push({ command: [...command], input, options });
-        return command.includes("--inspect") ? (opts.inspect ?? INSPECTED) : (opts.setup ?? READY);
+      exec: async (command: readonly string[], timeout?: number, input?: string) => {
+        // Which system this is (`serverOs`): a Linux one, unless `windows`.
+        if (command.join(" ") === "ver")
+          return opts.windows
+            ? { code: 0, stdout: "\r\nMicrosoft Windows [Version 10.0.26100.4349]\r\n", serverLines: [] }
+            : { code: 127, stdout: "", serverLines: [] };
+        server.commands.push({ command: [...command], input, options, timeout });
+        // The Windows setup's options are the first line of its standard input.
+        const inspecting = opts.windows
+          ? input!.split("\n")[0]!.includes("Inspect=$true")
+          : command.includes("--inspect");
+        return inspecting ? (opts.inspect ?? INSPECTED) : (opts.setup ?? READY);
       },
       close: async () => {},
     };
@@ -186,6 +200,58 @@ describe("orca remote add (#881)", () => {
     ]);
     // It issues no credential and prints none.
     expect([...lines, ...errs].join("\n")).not.toMatch(/orca1\./);
+  });
+
+  it("runs a Windows setup with the Windows budget, and says when its daemon starts at logon (#1238)", async () => {
+    const root = "C:\\Users\\dev\\AppData\\Local\\orca-server";
+    const { server, make } = fakeServer({
+      windows: true,
+      inspect: {
+        code: 0,
+        serverLines: [],
+        stdout: line({ inspected: true, account: "LAB\\dev", root, current: null }),
+      },
+      setup: {
+        code: 0,
+        serverLines: [],
+        stdout: [
+          line({ step: "boot", result: "warning", detail: "could not register a task that starts at boot" }),
+          line({
+            done: true,
+            account: "LAB\\dev",
+            root,
+            command: `${root}\\orca.cmd`,
+            version: "0.9.0",
+            port: 6722,
+            start: "logon",
+          }),
+        ].join("\n"),
+      },
+    });
+    const dir = scripts();
+    const first = ctx(["add", "dev@lab"]);
+    expect(await remoteCommand(first.context, { tunnel: make, scripts: dir, version: "0.9.0" })).toBe(3);
+    expect(first.lines.join("\n")).toContain(
+      "register and start its scheduled task \\ORCA\\orca-server (at boot where LAB\\dev may register that, otherwise at its logon",
+    );
+    const { context, lines } = ctx(["add", "dev@lab"], { confirm: codeOf(first.errs) });
+    expect(await remoteCommand(context, { tunnel: make, scripts: dir, version: "0.9.0" })).toBe(0);
+    expect(server.commands.map((c) => [c.command[0], c.timeout])).toEqual([
+      ["powershell", INSPECT_TIMEOUT_MS],
+      ["powershell", INSPECT_TIMEOUT_MS],
+      ["powershell", WINDOWS_SETUP_TIMEOUT_MS],
+    ]);
+    expect(lines.at(-1)).toContain("Its daemon starts when LAB\\dev logs on, not at boot");
+  });
+
+  it("runs a Linux setup with the Linux budget, and says nothing of a logon start", async () => {
+    const { server, make } = fakeServer();
+    const first = ctx(["add", "dev@lab"]);
+    await remoteCommand(first.context, { tunnel: make, scripts: scripts(), version: "0.8.0" });
+    const { context, lines } = ctx(["add", "dev@lab"], { confirm: codeOf(first.errs) });
+    expect(await remoteCommand(context, { tunnel: make, scripts: scripts(), version: "0.8.0" })).toBe(0);
+    expect(server.commands.at(-1)!.timeout).toBe(SETUP_TIMEOUT_MS);
+    expect(lines.join("\n")).not.toContain("logs on");
   });
 
   it("refuses a code that no longer matches what the server presents, and pins nothing", async () => {

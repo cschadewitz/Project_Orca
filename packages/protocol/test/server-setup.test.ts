@@ -13,6 +13,7 @@ import {
   confirmedResult,
   discoverServer,
   readSetup,
+  INSPECT_TIMEOUT_MS,
   inspectCommand,
   inspectInvocation,
   keyFingerprints,
@@ -22,8 +23,10 @@ import {
   serverOs,
   setupCommand,
   setupInvocation,
+  SETUP_TIMEOUT_MS,
   WINDOWS_COMMAND,
   WINDOWS_SETUP_SCRIPT,
+  WINDOWS_SETUP_TIMEOUT_MS,
 } from "../src/server-setup.js";
 
 /** The shipped setup files. */
@@ -228,6 +231,30 @@ describe("a Windows server (#1238)", () => {
     );
     // Linux is unchanged.
     expect(inspectInvocation("linux", DEPLOY, "0.9.0", 6722).command).toEqual(inspectCommand("0.9.0", 6722));
+  });
+
+  it("gives a Windows setup's session longer than its own download deadlines, and Linux its own budget", () => {
+    const confirmed = { account, root, current: null };
+    expect(setupInvocation("windows", DEPLOY, "0.9.0", 6722, confirmed).timeoutMs).toBe(WINDOWS_SETUP_TIMEOUT_MS);
+    expect(inspectInvocation("windows", DEPLOY, "0.9.0", 6722).timeoutMs).toBe(INSPECT_TIMEOUT_MS);
+    const linux = { account: "casey", root: "/home/casey/.local/share/orca-server", current: null };
+    expect(setupInvocation("linux", DEPLOY, "0.9.0", 6722, linux).timeoutMs).toBe(SETUP_TIMEOUT_MS);
+    expect(inspectInvocation("linux", DEPLOY, "0.9.0", 6722).timeoutMs).toBe(INSPECT_TIMEOUT_MS);
+    expect(SETUP_TIMEOUT_MS).toBe(30 * 60_000);
+    expect(WINDOWS_SETUP_TIMEOUT_MS).toBeGreaterThan(SETUP_TIMEOUT_MS);
+  });
+
+  it("reports a Windows daemon started at its account's logon, not at boot", () => {
+    const done = (start?: string) => ({
+      code: 0,
+      serverLines: [],
+      stdout: `orca-setup: ${JSON.stringify({ done: true, root, command: `${root}\\orca.cmd`, account, version: "0.9.0", port: 6722, ...(start ? { start } : {}) })}`,
+    });
+    expect(readSetup(done("logon"))).toMatchObject({ kind: "ready", startsAt: "logon" });
+    expect(readSetup(done("boot"))).not.toHaveProperty("startsAt");
+    // The Linux setup says nothing of it.
+    expect(readSetup(done())).not.toHaveProperty("startsAt");
+    expect(readSetup(done("sometimes")).kind).toBe("unknown");
   });
 
   it("refuses anything that is not a Windows account, setup directory or release, and a carried bundle", () => {
