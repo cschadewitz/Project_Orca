@@ -1382,32 +1382,6 @@ describe("asks through ORCA's policy (#1159)", () => {
     }
   });
 
-  it("grants a permissions ask only what it asked for, for this turn", async () => {
-    const c = asking(() => [
-      {
-        method: "item/permissions/requestApproval",
-        params: PERMISSIONS({
-          permissions: { network: { enabled: true }, fileSystem: { read: null, write: [`${CWD}/out`] } },
-        }),
-      },
-    ]);
-    const asked: acp.RequestPermissionRequest[] = [];
-    const s = scriptedHost(c.table);
-    const session = await open(s.host, {
-      agent: withPolicy({ default: "ask" }),
-      askPermission: async (req) => (asked.push(req), "accept"),
-    });
-    await session.prompt("go");
-    expect(c.answers).toEqual([
-      { permissions: { network: { enabled: true }, fileSystem: { read: [], write: [`${CWD}/out`] } }, scope: "turn" },
-    ]);
-    expect(asked[0]!.toolCall).toMatchObject({
-      title: `Codex asks for network access and write access to ${CWD}/out for this turn`,
-      locations: [{ path: `${CWD}/out` }],
-    });
-    await session.close();
-  });
-
   it("decides a file change by the files of the item Codex started for it", async () => {
     const c = asking((n) =>
       n === 1
@@ -1525,14 +1499,22 @@ describe("asks through ORCA's policy (#1159)", () => {
     const policy = {
       rules: [
         { match: { kind: "delete" }, decision: "deny" },
+        { match: { kind: "edit", pathPrefix: "src/locked/" }, decision: "deny" },
         { match: { pathPrefix: "src/" }, decision: "allow" },
       ],
       default: "allow",
+    };
+    // a move the rules allow, onto a destination an edit rule denies
+    const moveToDenied = {
+      path: `${CWD}/src/d.ts`,
+      kind: { type: "update", move_path: `${CWD}/src/locked/d.ts` },
+      diff: "",
     };
     for (const [changes, want] of [
       [[edit], "accept"],
       [[edit, del], "decline"],
       [[edit, moveOut], "decline"],
+      [[moveToDenied], "decline"],
     ] as const) {
       const c = asking(() => [patchOf([...changes])]);
       const s = scriptedHost(c.table);
@@ -1546,23 +1528,22 @@ describe("asks through ORCA's policy (#1159)", () => {
     }
   });
 
-  it("declines unasked a permissions grant whose extent holds ORCA's own files", async () => {
+  it("declines a permissions grant unasked, whatever the policy", async () => {
     const asked = vi.fn(async () => "accept");
     const c = asking(() => [
+      { method: "item/permissions/requestApproval", params: PERMISSIONS() },
       {
         method: "item/permissions/requestApproval",
-        // the workspace itself, which holds the sidecar
-        params: PERMISSIONS({ permissions: { network: null, fileSystem: { read: null, write: [CWD] } } }),
+        params: PERMISSIONS({ permissions: { network: null, fileSystem: { read: null, write: [`${CWD}/out`] } } }),
       },
     ]);
     const s = scriptedHost(c.table);
-    const session = await open(s.host, {
-      agent: withPolicy({ default: "allow" }),
-      askPermission: asked,
-      policyProtectedPaths: { readOnly: [`${CWD}/orca.permissions.json`], noAccess: [] },
-    });
+    const session = await open(s.host, { agent: withPolicy({ default: "allow" }), askPermission: asked });
     await session.prompt("go");
-    expect(c.answers).toEqual([{ permissions: {}, scope: "turn" }]);
+    expect(c.answers).toEqual([
+      { permissions: {}, scope: "turn" },
+      { permissions: {}, scope: "turn" },
+    ]);
     expect(asked).not.toHaveBeenCalled();
     await session.close();
   });

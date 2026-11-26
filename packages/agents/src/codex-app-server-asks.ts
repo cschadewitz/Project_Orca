@@ -4,7 +4,7 @@
  * today; the route-neutral call shape (#1155, after #1119) replaces this mapping, not the rules.
  *
  * Only one-time answers leave ORCA: `accept`, `decline` or `cancel`, and for a permissions ask
- * the requested profile for this turn (`scope: "turn"`) or nothing. Never `acceptForSession`, an
+ * nothing (`permissions: {}`, `scope: "turn"`). Never `acceptForSession`, an
  * exec-policy or network-policy amendment, a session-scoped grant or `strictAutoReview`: Codex
  * would remember those, and later calls would skip ORCA's policy (a rule removed, expired or
  * narrowed would never be consulted again). ORCA's own "always" answers go to its sidecar.
@@ -57,11 +57,6 @@ export type CodexAskMapping =
 export interface CodexAskContext {
   /** The changes of the file change item Codex started for the ask, in the same turn. */
   changes?: readonly FileUpdateChange[] | undefined;
-  /**
-   * Whether a directory grant's extent overlaps one of ORCA's protected paths, either way, or
-   * cannot be established (`codexWritableRootsProblem`): a reason to decline, or undefined.
-   */
-  extentProblem?: ((paths: readonly string[], access: "read" | "write") => string | undefined) | undefined;
 }
 
 const text = (lines: (string | undefined)[]): acp.ToolCallContent[] => {
@@ -192,30 +187,40 @@ function commandAsk(sessionId: string, p: Record<string, unknown>, target: Codex
   ]);
 }
 
-/** One change of a patch as the call it is: its own kind, on every path it touches. */
-function changeEffect(sessionId: string, target: CodexAskTarget, c: FileUpdateChange, i: number) {
+/**
+ * One change of a patch as the calls it makes, each with its own semantics: an edit or a
+ * deletion; a move is the move itself (its rule, and the removal of both entries) and the write
+ * of its destination (edit rules and write protection), each of which must hold.
+ */
+function changeEffects(sessionId: string, target: CodexAskTarget, c: FileUpdateChange, i: number) {
   const id = `${target.itemId}:${i}`;
   if (c.kind.type === "delete")
-    return request(sessionId, {
-      toolCallId: id,
-      title: `Delete ${c.path}`,
-      kind: "delete",
-      locations: [{ path: c.path }],
-    });
+    return [
+      request(sessionId, { toolCallId: id, title: `Delete ${c.path}`, kind: "delete", locations: [{ path: c.path }] }),
+    ];
   if (c.kind.type === "update" && c.kind.move_path)
-    return request(sessionId, {
+    return [
+      request(sessionId, {
+        toolCallId: id,
+        title: `Move ${c.path} to ${c.kind.move_path}`,
+        kind: "move",
+        locations: [{ path: c.path }, { path: c.kind.move_path }],
+      }),
+      request(sessionId, {
+        toolCallId: `${id}:destination`,
+        title: `Write ${c.kind.move_path}`,
+        kind: "edit",
+        locations: [{ path: c.kind.move_path }],
+      }),
+    ];
+  return [
+    request(sessionId, {
       toolCallId: id,
-      title: `Move ${c.path} to ${c.kind.move_path}`,
-      // Both sides: the file leaves one path and is written at the other.
-      kind: "move",
-      locations: [{ path: c.path }, { path: c.kind.move_path }],
-    });
-  return request(sessionId, {
-    toolCallId: id,
-    title: `${c.kind.type === "add" ? "Add" : "Edit"} ${c.path}`,
-    kind: "edit",
-    locations: [{ path: c.path }],
-  });
+      title: `${c.kind.type === "add" ? "Add" : "Edit"} ${c.path}`,
+      kind: "edit",
+      locations: [{ path: c.path }],
+    }),
+  ];
 }
 
 const changeShape = (c: unknown) =>
@@ -238,86 +243,19 @@ function fileChangeAsk(
   // The ask itself names no file: the change it is about is the item Codex started for it.
   if (!changes || changes.length === 0) return { target, refused: "a file change ask for no change ORCA was shown" };
   if (!changes.every(changeShape)) return { target, refused: "a file change ORCA cannot show" };
-  const effects = changes.map((c, i) => changeEffect(sessionId, target, c, i));
+  const effects = changes.flatMap((c, i) => changeEffects(sessionId, target, c, i));
   return mapped(sessionId, target, effects, `Change ${changes.length} files`, [str(p.reason)]);
 }
 
-const pathList = (v: unknown): string[] | undefined =>
-  v === undefined || v === null ? [] : Array.isArray(v) && v.every((x) => typeof x === "string") ? v : undefined;
-
-const optionalBoolean = (v: unknown) => v === undefined || v === null || typeof v === "boolean";
-
-function permissionsAsk(
-  sessionId: string,
-  p: Record<string, unknown>,
-  target: CodexAskTarget,
-  extentProblem: CodexAskContext["extentProblem"],
-): CodexAskMapping {
-  if (!optionalString(p.reason) || !optionalString(p.cwd))
-    return { target, refused: "a permissions ask whose reason or directory is not a string" };
-  const profile = p.permissions;
-  if (!isObject(profile)) return { target, refused: "a permissions ask without the permissions it asks for" };
-  const network = profile.network;
-  const fs = profile.fileSystem;
-  if (network !== undefined && network !== null && !(isObject(network) && optionalBoolean(network.enabled)))
-    return { target, refused: "a permissions ask whose network permission ORCA does not know" };
-  let read: string[] = [];
-  let write: string[] = [];
-  if (fs !== undefined && fs !== null) {
-    if (!isObject(fs)) return { target, refused: "a permissions ask whose file permissions ORCA does not know" };
-    // Entries are a richer form ORCA does not decide yet: a grant it cannot show is not made.
-    if (fs.entries !== undefined && !(Array.isArray(fs.entries) && fs.entries.length === 0))
-      return { target, refused: "a permissions ask with file system entries ORCA cannot show" };
-    const r = pathList(fs.read);
-    const w = pathList(fs.write);
-    if (!r || !w || [...r, ...w].some((x) => x === ""))
-      return { target, refused: "a permissions ask whose paths are not strings" };
-    read = r;
-    write = w;
-  }
-  const wantsNetwork = isObject(network) && network.enabled === true;
-  if (!wantsNetwork && read.length === 0 && write.length === 0)
-    return { target, refused: "a permissions ask for nothing ORCA can show" };
-  // A grant covers everything under each path: no part of it may reach ORCA's own files, and a
-  // path whose extent ORCA cannot establish is not granted.
-  const extent = extentProblem?.(write, "write") ?? extentProblem?.(read, "read");
-  if (extent) return { target, refused: `a permissions ask whose extent ${extent}` };
-  const effects: acp.RequestPermissionRequest[] = [
-    ...(wantsNetwork
-      ? [
-          request(sessionId, {
-            toolCallId: `${target.itemId}:network`,
-            title: "Network access for this turn",
-            kind: "fetch",
-          }),
-        ]
-      : []),
-    ...write.map((path, i) =>
-      request(sessionId, {
-        toolCallId: `${target.itemId}:write:${i}`,
-        title: `Write anything under ${path} for this turn`,
-        kind: "edit",
-        locations: [{ path }],
-      }),
-    ),
-    ...read.map((path, i) =>
-      request(sessionId, {
-        toolCallId: `${target.itemId}:read:${i}`,
-        title: `Read anything under ${path} for this turn`,
-        kind: "read",
-        locations: [{ path }],
-      }),
-    ),
-  ];
-  const parts = [
-    wantsNetwork ? "network access" : undefined,
-    write.length ? `write access to ${write.join(", ")}` : undefined,
-    read.length ? `read access to ${read.join(", ")}` : undefined,
-  ].filter((x): x is string => !!x);
-  return mapped(sessionId, target, effects, `Codex asks for ${parts.join(" and ")} for this turn`, [
-    str(p.reason),
-    str(p.cwd) ? `in ${p.cwd as string}` : undefined,
-  ]);
+/**
+ * A permissions ask grants network access, or access to whole directories, for the rest of the
+ * turn. ORCA's policy decides one call at a time: an allow for one call does not authorize every
+ * call such a grant covers, and checking a few paths does not show every descendant is allowed.
+ * So it is declined until ORCA has policy for grants with an extent (#1159 review); the calls
+ * Codex then makes one by one are each asked about as usual.
+ */
+function permissionsAsk(target: CodexAskTarget): CodexAskMapping {
+  return { target, refused: "a grant for the rest of the turn, which ORCA's one-call policy cannot decide" };
 }
 
 /**
@@ -339,23 +277,15 @@ export function codexAskRequest(
     case "item/fileChange/requestApproval":
       return fileChangeAsk(sessionId, params, target, ctx.changes);
     case "item/permissions/requestApproval":
-      return permissionsAsk(sessionId, params, target, ctx.extentProblem);
+      return permissionsAsk(target);
   }
 }
 
 /**
- * The response to `method` for `outcome`. Only ever a one-time decision: a permissions ask is
- * granted what it asked for, for this turn, or nothing.
+ * The response to `method` for `outcome`: only ever a one-time decision. A permissions ask is
+ * never granted (see `permissionsAsk`): it gets nothing, for this turn.
  */
-export function codexAskResponse(method: CodexPolicyAsk, outcome: CodexAskOutcome, params?: unknown): unknown {
-  if (method !== "item/permissions/requestApproval") return { decision: outcome };
-  if (outcome !== "accept") return { permissions: {}, scope: "turn" };
-  const profile = isObject(params) && isObject(params.permissions) ? params.permissions : {};
-  const granted: Record<string, unknown> = {};
-  if (isObject(profile.network) && profile.network.enabled === true) granted.network = { enabled: true };
-  if (isObject(profile.fileSystem)) {
-    const fs = profile.fileSystem;
-    granted.fileSystem = { read: pathList(fs.read) ?? [], write: pathList(fs.write) ?? [] };
-  }
-  return { permissions: granted, scope: "turn" };
+export function codexAskResponse(method: CodexPolicyAsk, outcome: CodexAskOutcome): unknown {
+  if (method === "item/permissions/requestApproval") return { permissions: {}, scope: "turn" };
+  return { decision: outcome };
 }

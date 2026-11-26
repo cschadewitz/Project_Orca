@@ -992,18 +992,6 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
         })
       : undefined;
   /**
-   * Whether a directory grant reaches ORCA's own files, under it or enclosing it, or its extent
-   * cannot be established: a write may touch no protected path, a read no credential.
-   */
-  const extentProblem = (paths: readonly string[], access: "read" | "write") => {
-    const guarded = opts.policyProtectedPaths;
-    if (!guarded || paths.length === 0) return undefined;
-    return codexWritableRootsProblem(
-      paths,
-      access === "write" ? [...guarded.readOnly, ...guarded.noAccess] : guarded.noAccess,
-    );
-  };
-  /**
    * Codex's command, file change or permission ask on `c`, decided by ORCA's policy (#1159) and
    * answered once: `accept`, `decline` or `cancel`, never anything Codex would remember. Only an
    * ask about the live turn is decided; any other, and one after the turn is cancelled, is
@@ -1013,7 +1001,7 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
     const respond = (outcome: CodexAskOutcome, why: string, title = "") => {
       opts.onPermission?.({ title, decision: `codex:${outcome}:${why}` });
       logger.debug("Codex ask answered", { method, outcome, why });
-      return codexAskResponse(method, outcome, params);
+      return codexAskResponse(method, outcome);
     };
     const turn = active;
     if (conn !== c || !turn || turn.cancelReason || turn.asks.signal.aborted || closing || isBroken())
@@ -1027,7 +1015,6 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
     const itemId = isObject(params) && typeof params.itemId === "string" ? params.itemId : undefined;
     const mapping = codexAskRequest(threadId, method, params, {
       changes: itemId ? turn.fileChanges.get(`${turn.turnId}\0${itemId}`) : undefined,
-      extentProblem,
     });
     if (mapping.target && (mapping.target.threadId !== threadId || mapping.target.turnId !== turn.turnId))
       return respond("decline", "not-the-live-turn");
@@ -1131,7 +1118,7 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
     // A person stopped the turn while it was asked: cancel. Otherwise only a live turn is allowed.
     if (turn.cancelReason) return respond("cancel", "turn-cancelled", title);
     if (!live()) return respond("decline", "turn-ended", title);
-    return codexAskResponse(method, accepted ? "accept" : "decline", params);
+    return codexAskResponse(method, accepted ? "accept" : "decline");
   };
 
   const onNotification = (method: string, params: unknown) => {

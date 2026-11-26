@@ -582,26 +582,26 @@ login, not that it is the same account, and says so in its log rather than claim
 running app-server does not notice a `codex logout` run elsewhere (Codex keeps the login it
 started with), so this covers what Codex itself reports.
 
-Codex's command, file change and permission asks (`item/commandExecution/requestApproval`,
-`item/fileChange/requestApproval`, `item/permissions/requestApproval`) are decided by ORCA's
-permission policy, as on the ACP route: the agent's rules and sidecars, ORCA's protected paths,
-the run's answerer and, when configured, a judge's command advice. An ask with several effects
-is decided effect by effect, and one refused effect declines the whole ask: a command and the
-network access it asks for, each change of a patch with its own kind (an edit, a deletion, both
-sides of a move), and each network, write or read grant of a permissions ask. A person is asked
-once, shown every effect with Codex's reason, working directory and parsed command actions. A
-file change is decided by the files of the change Codex started for it in that turn, and a
-permissions grant whose directory holds or lies inside one of ORCA's protected paths, or whose
-extent ORCA cannot establish, is declined. ORCA answers each ask once, with `accept`, `decline`
-or `cancel`, and a permissions ask with what it asked for, for that turn only: never
-`acceptForSession`, an exec-policy or network-policy amendment, a session-scoped grant or
-`strictAutoReview`, so Codex stores nothing that would let a later call skip ORCA, and the same
-command asks again on its next call and in a new thread. ORCA's own "always" answers go to its
-sidecar as today. An ask that is not about the live turn, comes once Codex reported the turn
-complete or after it was cancelled, writes to a running terminal (whose input the ask does not
-show), asks for a write root for the rest of the session, or carries something ORCA cannot show
-is declined without asking anybody; an ask still open when a person stops the turn is answered
-`cancel`. Codex's legacy v1 approvals are declined, and questions and MCP elicitations are
+Codex's command and file change asks (`item/commandExecution/requestApproval`,
+`item/fileChange/requestApproval`) are decided by ORCA's permission policy, as on the ACP
+route: the agent's rules and sidecars, ORCA's protected paths, the run's answerer and, when
+configured, a judge's command advice. An ask with several effects is decided effect by effect,
+and one refused effect declines the whole ask: a command and the network access it asks for,
+and each change of a patch with its own kind (an edit, an addition, a deletion, and a move
+checked both as the move and as a write of its destination). A person is asked once, shown
+every effect with Codex's reason, working directory and parsed command actions. A file change
+is decided by the files of the change Codex started for it in that turn. A permissions ask
+(`item/permissions/requestApproval`) is a grant for the rest of the turn that ORCA's one-call
+policy cannot decide, so it is declined without asking anybody and granted nothing. ORCA
+answers each other ask once, with `accept`, `decline` or `cancel`: never `acceptForSession`, an
+exec-policy or network-policy amendment, a session-scoped grant or `strictAutoReview`, so Codex
+stores nothing that would let a later call skip ORCA, and the same command asks again on its
+next call and in a new thread. ORCA's own "always" answers go to its sidecar as today. An ask
+that is not about the live turn, comes once Codex reported the turn complete or after it was
+cancelled, writes to a running terminal (whose input the ask does not show), asks for a write
+root for the rest of the session, or carries something ORCA cannot show is declined without
+asking anybody; an ask still open when a person stops the turn is answered `cancel`. Codex's
+legacy v1 approvals are declined, and questions and MCP elicitations are
 refused (#1170).
 
 When the app-server exits under a session, the running turn fails, an ask it raised is never
