@@ -64,12 +64,24 @@ const BASE: Record<string, Responder> = {
 };
 
 /** A host whose every spawn is a new scripted app-server; `answers` sees which process (0, 1, ...) asks. */
-function scriptedHost(answers: (procIndex: number) => Record<string, Responder>) {
+/** How a scripted process behaves beyond its answers. */
+interface ProcOptions {
+  /** Its stdout can end while the process stays alive, and no signal stops it. */
+  hang?: boolean;
+  stderr?: string;
+  secret?: string;
+}
+
+function scriptedHost(
+  answers: (procIndex: number) => Record<string, Responder>,
+  procOptions: (procIndex: number) => ProcOptions = () => ({}),
+) {
   const procs: Proc[] = [];
   let turns = 0;
   const spawnAgent = vi.fn(async (_spec: unknown): Promise<AgentProcessHandle> => {
     const index = procs.length;
     const table = answers(index);
+    const po = procOptions(index);
     const stdin = new PassThrough();
     const stdout = new PassThrough();
     let exit!: (e: { code: number | null; signal: NodeJS.Signals | null }) => void;
@@ -81,9 +93,10 @@ function scriptedHost(answers: (procIndex: number) => Record<string, Responder>)
       },
       crash: () => {
         stdout.end();
-        exit({ code: 1, signal: null });
+        if (!po.hang) exit({ code: 1, signal: null });
       },
       kill: vi.fn((_signal?: NodeJS.Signals) => {
+        if (po.hang) return;
         if (!stdout.writableEnded) stdout.end();
         exit({ code: null, signal: "SIGTERM" });
       }),
@@ -113,8 +126,9 @@ function scriptedHost(answers: (procIndex: number) => Record<string, Responder>)
       stdio: () => ({ stdin, stdout }),
       pid: 4000 + index,
       exited,
-      stderrTail: () => "",
+      stderrTail: () => po.stderr ?? "",
       kill: proc.kill,
+      ...(po.secret ? { secretValues: new Map([["CODEX_TOKEN", po.secret]]) } : {}),
     };
   });
   const host = new LocalHost({ id: "local", type: "local" }) as AgentHost;
@@ -211,6 +225,88 @@ describe("an app-server that exits", () => {
     wake();
     await expect(pending).rejects.toMatchObject({ code: "RUN_STATE" });
     expect(t.spawnAgent).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not start a second app-server while the one whose stdout closed cannot be seen gone", async () => {
+    const s = scriptedHost(
+      () => BASE,
+      (i) => ({ hang: i === 0 }),
+    );
+    const session = await open(s.host, { exitGraceMs: 10 });
+    s.procs[0]!.crash();
+    await settle();
+    const error = (await session.prompt("go").catch((e: unknown) => e)) as OrcaError;
+    expect(error.message).toMatch(/could not be confirmed gone, so ORCA does not start another on its thread/);
+    expect(s.procs[0]!.kill.mock.calls.map((c) => c[0])).toEqual(["SIGTERM", "SIGKILL"]);
+    await expect(session.prompt("again")).rejects.toBe(error);
+    expect(s.spawnAgent).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops a replacement stalled in its handshake when the session closes, and terminates once both are gone", async () => {
+    const s = scriptedHost((i) => (i === 1 ? { ...BASE, initialize: () => NO_ANSWER } : BASE));
+    const session = await open(s.host, { requestTimeoutMs: 60_000 });
+    s.procs[0]!.crash();
+    await settle();
+    const turn = session.prompt("go");
+    await vi.waitFor(() => expect(s.procs[1]?.received.some((m) => m.method === "initialize")).toBe(true));
+    const at = Date.now();
+    await session.close();
+    expect(Date.now() - at).toBeLessThan(2_000);
+    await expect(turn).rejects.toMatchObject({ code: "RUN_STATE" });
+    expect(s.procs[1]!.kill).toHaveBeenCalled();
+    await expect(session.terminated).resolves.toBeUndefined();
+    expect(s.spawnAgent).toHaveBeenCalledTimes(2);
+  });
+
+  it("stops a replacement stalled in its resume when the prompt is cancelled, ends it cancelled, and counts no crash", async () => {
+    const s = scriptedHost((i) => (i === 1 ? { ...BASE, "thread/resume": () => NO_ANSWER } : BASE));
+    const session = await open(s.host, { requestTimeoutMs: 60_000, recovery: { crashLimit: 2 } });
+    s.procs[0]!.crash();
+    await settle();
+    const turn = session.prompt("go");
+    await vi.waitFor(() => expect(s.procs[1]?.received.some((m) => m.method === "thread/resume")).toBe(true));
+    const at = Date.now();
+    await session.cancel();
+    await expect(turn).resolves.toMatchObject({ stopReason: "cancelled" });
+    expect(Date.now() - at).toBeLessThan(2_000);
+    expect(s.procs[1]!.kill).toHaveBeenCalled();
+    expect(s.procs[1]!.received.some((m) => m.method === "turn/start")).toBe(false);
+    // one exit so far against a budget of two: the next prompt restarts and runs
+    await expect(session.prompt("again")).resolves.toMatchObject({ stopReason: "end_turn" });
+    expect(s.spawnAgent).toHaveBeenCalledTimes(3);
+    await session.close();
+  });
+
+  it("keeps the session's secrets out of what it logs about an exit or a refused resume", async () => {
+    const SENTINEL = "sk-orca-1158-sentinel";
+    const records: unknown[] = [];
+    const logger = {
+      log: (...a: unknown[]) => void records.push(a),
+      debug: (...a: unknown[]) => void records.push(a),
+      info: (...a: unknown[]) => void records.push(a),
+      warn: (...a: unknown[]) => void records.push(a),
+      error: (...a: unknown[]) => void records.push(a),
+      child: () => logger,
+    };
+    const s = scriptedHost(
+      () => ({
+        ...BASE,
+        "thread/resume": (msg, proc) => {
+          proc.say({ id: msg.id, error: { code: -32600, message: `no rollout for ${SENTINEL}` } });
+          return NO_ANSWER;
+        },
+      }),
+      () => ({ secret: SENTINEL, stderr: `panicked with token ${SENTINEL}` }),
+    );
+    const session = await open(s.host, { logger: logger, resumeThreadId: "thr_old" });
+    s.procs[0]!.crash();
+    await settle();
+    await session.close();
+    const logged = JSON.stringify(records);
+    expect(logged).toContain("Codex could not resume the thread");
+    expect(logged).toContain("Codex app-server exited");
+    expect(logged).toContain("panicked with token");
+    expect(logged).not.toContain(SENTINEL);
   });
 
   it("never answers an ask once its process is gone", async () => {

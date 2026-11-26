@@ -65,6 +65,7 @@ import {
   ENV_SECRET_DELIVERY,
   planSessionSecrets,
   redactError,
+  redactingLogger,
   type AuthorizeSecretUse,
 } from "./secrets.js";
 import {
@@ -119,6 +120,8 @@ export interface OpenCodexAppServerSessionOptions {
   recovery?: Partial<CodexRecoveryLimits>;
   /** For tests: how the restart backoff waits. */
   sleep?: (ms: number) => Promise<void>;
+  /** For tests: how long each stop signal waits for the process to exit (default 2 s). */
+  exitGraceMs?: number;
 }
 
 /** As `SessionContinuity` on the ACP route: the thread was resumed, or a new one started. */
@@ -591,7 +594,12 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
 
   const launch = await codexAppServerLaunch(agent, { cwd: opts.cwd, env: { ...process.env, ...(opts.env ?? {}) } });
   const spec: AgentSpec = { ...secretPlan.agent, command: launch.command, args: launch.args };
-  const logger = (opts.logger ?? silentLogger).child({ agent: agent.id, host: opts.host.id });
+  // Everything logged passes the session's secret values through redaction first: a stderr
+  // tail or a provider message can carry them.
+  const logger = redactingLogger(
+    (opts.logger ?? silentLogger).child({ agent: agent.id, host: opts.host.id }),
+    () => values,
+  );
   const clock = opts.clock ?? systemClock;
   const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const limits = { ...CODEX_RECOVERY_LIMITS, ...(opts.recovery ?? {}) };
@@ -606,6 +614,14 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
   let conn: Connection | undefined;
   /** The connection that exited last, whose process the restart waits on. */
   let lost: Connection | undefined;
+  /** Every app-server this session started; `terminated` waits on all of their exits. */
+  const owned = new Set<Connection>();
+  /** The replacement being started, until it is installed or given up. */
+  let starting: Connection | undefined;
+  /** The restart in progress, which close waits out. */
+  let restarting: Promise<unknown> | undefined;
+  /** Ends a restart's backoff early, when the prompt is cancelled or the session stops. */
+  let wakeRestart: (() => void) | undefined;
   /** When each exit or failed restart happened, for the crash-loop budget. */
   const crashes: number[] = [];
   let closing = false;
@@ -614,7 +630,12 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
   let closedResolve!: () => void;
   const closed = new Promise<void>((r) => (closedResolve = r));
   let terminatedResolve!: () => void;
-  const terminated = new Promise<void>((r) => (terminatedResolve = r));
+  let terminatedReject!: (error: unknown) => void;
+  const terminated = new Promise<void>((resolve, reject) => {
+    terminatedResolve = resolve;
+    terminatedReject = reject;
+  });
+  void terminated.catch(() => undefined);
 
   const event = (update: acp.SessionUpdate): SessionUpdateEvent => ({
     sessionId: threadId,
@@ -733,23 +754,31 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
     });
   };
 
-  /** Start `codex app-server`, handshake and check the login. The process is stopped on any failure. */
-  const connect = async (): Promise<Connection> => {
+  /**
+   * Start `codex app-server`, handshake and check the login. The session owns the process from
+   * its spawn (`owned`, and `starting` for a replacement), so a close or cancel can stop it at
+   * any step; `stopped` says why it must not go on. The process is stopped on any failure.
+   */
+  const connect = async (replacement: boolean, stopped: () => Error | undefined): Promise<Connection> => {
     const proc = await opts.host.spawnAgent(spec, {
       cwd: opts.cwd,
       ...(opts.env ? { env: opts.env } : {}),
       ...ENV_SECRET_DELIVERY.spawnOptions(secretPlan),
     });
     values.push(...(proc.secretValues?.values() ?? []));
-    const cleanup = processCleanup(proc);
+    const cleanup = processCleanup(proc, opts.exitGraceMs);
+    const c = { proc, cleanup } as Connection;
+    owned.add(c);
+    if (replacement) starting = c;
     const fail = async (error: unknown): Promise<never> => {
       await cleanup().catch(() => undefined);
       const failure = redactError(error instanceof Error ? error : new Error(String(error)), values);
       throw withStartupTermination(failure, proc.exited);
     };
+    const why = stopped();
+    if (why) return fail(why);
     if (!proc.stdio)
       return fail(new OrcaError("NOT_SUPPORTED", `host ${opts.host.id} cannot give an agent's raw stdio`));
-    const c = { proc, cleanup } as Connection;
     const client: CodexAppServerClient = new CodexAppServerClient(stdioLineTransport(proc.stdio()), {
       requestTimeoutMs: opts.requestTimeoutMs ?? 30_000,
       onNotification: (method, params) => {
@@ -833,7 +862,7 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
   let model: string | undefined;
   let effort: string | null = null;
   let continuity: CodexSessionContinuity = { mode: "fresh", reason: "new" };
-  conn = await connect();
+  conn = await connect(false, () => undefined);
   try {
     let opened: ReturnType<typeof acceptThread> | undefined;
     if (opts.resumeThreadId) {
@@ -847,8 +876,9 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
         // A closed connection is the open's own failure, never a failed resume to fall back from.
         if (conn.client.closed) throw conn.client.closed;
         if (opts.requireContextRecovery) throw codexRecoveryFailure("load-failed");
+        // The provider's own words stay out of the log, as out of the recovery failure.
         logger.warn("Codex could not resume the thread; ORCA starts a new one", {
-          error: (error as Error).message,
+          code: error instanceof OrcaError ? error.code : error instanceof CodexRpcError ? error.code : "unknown",
         });
         opened = undefined;
         threadId = "";
@@ -880,30 +910,39 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
 
   const cancelGraceMs = opts.cancelGraceMs ?? agent.cancelGraceMs;
   let terminating: Promise<void> | undefined;
-  /** Close: unsubscribe from the thread while the connection is up, then stop the process. */
+  /**
+   * Close: unsubscribe from the thread while the live connection is up, stop a replacement
+   * still starting, wait out the restart, then stop every process the session started.
+   * `terminated` resolves once each of them has exited.
+   */
   const terminate = () =>
     (terminating ??= (async () => {
       closing = true;
-      const c = conn ?? lost;
+      wakeRestart?.();
+      starting?.client?.close("closed by ORCA: the session closed during a restart");
+      const c = conn;
       if (c && !c.client.closed) {
         await c.client.request("thread/unsubscribe", { threadId }, { timeoutMs: 5_000 }).catch(() => undefined);
         c.client.close();
       }
+      for (const o of owned) if (o.client && !o.client.closed) o.client.close();
       closedResolve();
-      if (c) {
-        await c.cleanup();
-        await c.proc.exited.catch(() => undefined);
-      }
-      terminatedResolve();
+      await restarting?.catch(() => undefined);
+      const results = await Promise.allSettled([...owned].map((o) => o.cleanup()));
+      void Promise.all([...owned].map((o) => o.proc.exited)).then(
+        () => terminatedResolve(),
+        (error: unknown) => terminatedReject(error),
+      );
+      const failed = results.find((r): r is PromiseRejectedResult => r.status === "rejected");
+      if (failed) throw failed.reason;
     })());
   /**
-   * Stop now, waiting on no reply: the connection is closed first, so a pending unsubscribe
-   * fails at once, and the process is stopped.
+   * Stop now, waiting on no reply: every connection is closed first, so a pending unsubscribe
+   * or handshake fails at once, and the processes are stopped.
    */
   const stopNow = () => {
     closing = true;
-    const c = conn ?? lost;
-    if (c && !c.client.closed) c.client.close("closed by ORCA: the session stopped");
+    for (const o of owned) if (o.client && !o.client.closed) o.client.close("closed by ORCA: the session stopped");
     return terminate();
   };
   /** The session takes no further prompt, and stops. */
@@ -922,20 +961,41 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
    */
   /** The session's failure, read fresh (TypeScript narrows `broken` across awaits). */
   const isBroken = (): OrcaError | undefined => broken;
-  const restart = async (): Promise<Connection> => {
+  /** A restart given up because its prompt was cancelled: not a crash, and the prompt ends cancelled. */
+  class RestartCancelled extends Error {}
+  const restart = async (turn: ActiveTurn): Promise<Connection> => {
+    const stopped = () =>
+      isBroken() ??
+      (closing ? new OrcaError("RUN_STATE", "the session closed during the restart") : undefined) ??
+      (turn.cancelReason ? new RestartCancelled(turn.cancelReason) : undefined);
     const n = recentCrashes();
     const wait = n === 0 ? 0 : limits.backoffMs[Math.min(n, limits.backoffMs.length) - 1]!;
-    if (wait > 0) await sleep(wait);
-    if (closing) throw isBroken() ?? new OrcaError("RUN_STATE", "the session closed during the restart");
-    if (lost) await lost.cleanup().catch(() => undefined);
-    const before = isBroken();
-    if (before) throw before;
+    if (wait > 0) await Promise.race([sleep(wait), new Promise<void>((r) => (wakeRestart = r))]);
+    wakeRestart = undefined;
+    const early = stopped();
+    if (early) throw early;
+    // Two app-servers never own the thread: the last one has to be seen gone first.
+    if (lost) {
+      try {
+        await lost.cleanup();
+      } catch {
+        breakSession(
+          new OrcaError(
+            "AGENT_TRANSPORT",
+            `agent ${agent.id}: the Codex app-server that exited could not be confirmed gone, so ORCA does not ` +
+              `start another on its thread and stops the session`,
+            { agentId: agent.id, stderr: lost.proc.stderrTail() },
+          ),
+        );
+        throw isBroken()!;
+      }
+    }
     let c: Connection | undefined;
     try {
-      c = await connect();
+      c = await connect(true, stopped);
       const resumed = await resumeOn(c, threadId);
-      if (closing || isBroken())
-        throw isBroken() ?? new OrcaError("RUN_STATE", "the session closed during the restart");
+      const late = stopped();
+      if (late) throw late;
       conn = c;
       lost = undefined;
       model = resumed.model ?? model;
@@ -945,9 +1005,11 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
       if (c) {
         c.client.close("closed after a failed restart");
         await c.cleanup().catch(() => undefined);
+      } else if (starting) {
+        await starting.cleanup().catch(() => undefined);
       }
-      const before = isBroken();
-      if (before) throw before;
+      const why = stopped();
+      if (why) throw why;
       crashes.push(clock.now());
       const failure = new OrcaError(
         "AGENT_TRANSPORT",
@@ -959,6 +1021,8 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
         throw isBroken() ?? failure;
       }
       throw failure;
+    } finally {
+      starting = undefined;
     }
   };
 
@@ -966,9 +1030,14 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
     const turn = active;
     if (!turn || turn.cancelReason) return;
     turn.cancelReason = reason;
-    // While the app-server restarts there is no turn yet: the prompt ends cancelled after it.
+    // While the app-server restarts there is no turn yet: the replacement is stopped where it
+    // is, and the prompt ends cancelled.
     const c = conn;
-    if (!c) return;
+    if (!c) {
+      wakeRestart?.();
+      starting?.client?.close("closed by ORCA: the prompt was cancelled during a restart");
+      return;
+    }
     const interrupt = () => {
       if (turn.turnId)
         void c.client.request("turn/interrupt", { threadId, turnId: turn.turnId }).catch(() => undefined);
@@ -1044,9 +1113,21 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
           : undefined;
         try {
           // The last app-server exited: a new one on the same thread first.
-          const c = conn ?? (await restart());
-          // Cancelled while it restarted: no turn was started.
-          if (turn.cancelReason) return { stopReason: "cancelled", durationMs: clock.now() - started };
+          let c = conn;
+          if (!c) {
+            const r = restart(turn);
+            restarting = r;
+            try {
+              c = await r;
+            } catch (error) {
+              // Cancelled while it restarted: no turn was started.
+              if (error instanceof RestartCancelled)
+                return { stopReason: "cancelled", durationMs: clock.now() - started };
+              throw error;
+            } finally {
+              if (restarting === r) restarting = undefined;
+            }
+          }
           const start = c.client.request("turn/start", {
             threadId,
             clientUserMessageId: randomUUID(),
