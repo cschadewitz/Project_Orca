@@ -2,9 +2,9 @@
 // pull request rides in, and the weekly report of workstreams that went quiet.
 //
 // Usage (offline; the workflows fetch the inputs with `gh` and pass them as JSON files):
-//   node tools/workstreams.js milestone <milestones.json>
+//   node tools/workstreams.js milestone <milestones.json> <lines.json>
 //     -> the number of the milestone a pull request merged into main without one rides in:
-//        the earliest open minor (`X.Y.0`), or nothing when there is none
+//        the earliest open minor (`X.Y.0`) whose `release/X.Y` line is not cut yet, or nothing
 //   node tools/workstreams.js report <inputs.json>
 //     -> the weekly report's Markdown body
 import { readFileSync } from "node:fs";
@@ -17,10 +17,17 @@ export const QUIET_BRANCH_DAYS = 14;
 export const QUIET_FLAG_DAYS = 30;
 
 /**
- * The open milestone a merge into main ships in: the earliest open minor (`0.9.0` before
- * `0.10.0`). Patch milestones (`0.8.1`) ship from their line, not from main, so never.
+ * The open milestone a merge into main ships in, or undefined when that cannot be established.
+ * Main feeds a minor only until its line is cut: once `release/X.Y` exists (cut at rc.1), `X.Y.0`
+ * builds from the line and a new main merge rides the next minor instead. So: the earliest open
+ * `X.Y.0` whose `release/X.Y` does not exist, and only if every earlier uncut minor is accounted
+ * for (an earlier open minor with no line wins). `lines` is the list of existing `release/X.Y`
+ * branch names, or undefined when it could not be read, which leaves the milestone unset. Patch
+ * milestones (`0.8.1`) ship from their line, not from main, so never.
  */
-export function ridingMilestone(milestones) {
+export function ridingMilestone(milestones, lines) {
+  if (!Array.isArray(lines)) return undefined;
+  const cut = new Set(lines.map((l) => String(l).replace(/^refs\/heads\//, "")));
   const minors = (milestones ?? [])
     .filter((m) => m.state === "open" && MINOR.test(String(m.title ?? "").trim()))
     .map((m) => {
@@ -28,8 +35,11 @@ export function ridingMilestone(milestones) {
       return { number: m.number, major, minor };
     })
     .sort((a, b) => a.major - b.major || a.minor - b.minor);
-  return minors[0]?.number;
+  return minors.find((m) => !cut.has(`release/${m.major}.${m.minor}`))?.number;
 }
+
+/** Marks the one issue the report workflow manages, so it never edits another. */
+export const REPORT_MARKER = "<!-- orca:workstream-report -->";
 
 const age = (now, at) => Math.floor((now - Date.parse(at)) / DAY);
 
@@ -44,6 +54,7 @@ export function workstreamReport({ now, branches = [], flags = [], conflicts = [
   const quietBranches = branches.filter((b) => age(t, b.committedAt) >= QUIET_BRANCH_DAYS);
   const quietFlags = flags.filter((f) => age(t, f.updatedAt) >= QUIET_FLAG_DAYS);
   const lines = [
+    REPORT_MARKER,
     `Workstream report for ${now.slice(0, 10)}, written weekly by the Workstream report workflow (docs/WORKSTREAMS.md). Nothing here needs an answer; it is where quiet work shows up.`,
     "",
     `**Feature branches:** ${branches.length}. **Incubating flags:** ${flags.length}.`,
@@ -71,12 +82,13 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   const [command, file] = process.argv.slice(2);
   const input = JSON.parse(readFileSync(file, "utf8"));
   if (command === "milestone") {
-    const n = ridingMilestone(input);
+    const lines = process.argv[4] ? JSON.parse(readFileSync(process.argv[4], "utf8")) : undefined;
+    const n = ridingMilestone(input, lines);
     if (n !== undefined) console.log(n);
   } else if (command === "report") {
     console.log(workstreamReport(input));
   } else {
-    console.error("usage: node tools/workstreams.js milestone <milestones.json> | report <inputs.json>");
+    console.error("usage: node tools/workstreams.js milestone <milestones.json> <lines.json> | report <inputs.json>");
     process.exit(1);
   }
 }

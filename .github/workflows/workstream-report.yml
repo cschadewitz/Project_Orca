@@ -1,7 +1,7 @@
 # The weekly workstream report (docs/WORKSTREAMS.md, #1239): feature branches with no commit for
 # 14 days, incubating flags whose tracking issue was quiet for 30 days, and open sync conflicts,
-# written into one issue labelled `workstream-report` (created the first time, then edited in
-# place, so it never piles up comments). Read-only apart from that issue.
+# written into one issue labelled `workstream-report` and marked as the managed report (created
+# the first time, then edited in place, so it never piles up comments; no other issue is edited). Read-only apart from that issue.
 name: Workstream report
 
 on:
@@ -56,9 +56,13 @@ jobs:
             '{now: $now, branches: $b, flags: $f, conflicts: $c}' > "$RUNNER_TEMP/inputs.json"
           node tools/workstreams.js report "$RUNNER_TEMP/inputs.json" > "$RUNNER_TEMP/report.md"
           cat "$RUNNER_TEMP/report.md" >> "$GITHUB_STEP_SUMMARY"
-          gh label create workstream-report --repo "$REPO" --force --color 0e8a16 \
-            --description "The weekly workstream report" >/dev/null || true
-          issue=$(gh issue list --repo "$REPO" --state open --label workstream-report --json number --jq '.[0].number // ""')
+          # Create the label only if it is missing; never rewrite its metadata.
+          gh label create workstream-report --repo "$REPO" --color 0e8a16 \
+            --description "The weekly workstream report" >/dev/null 2>&1 || true
+          # The managed report: open, labelled, opened by this workflow's bot, carrying the marker.
+          issue=$(gh issue list --repo "$REPO" --state open --label workstream-report --limit 100 \
+            --json number,author,body \
+            --jq '[.[] | select(.author.is_bot and (.body | contains("<!-- orca:workstream-report -->")))] | sort_by(.number) | .[0].number // ""')
           if [ -n "$issue" ]; then
             gh issue edit "$issue" --repo "$REPO" --body-file "$RUNNER_TEMP/report.md" >/dev/null
           else

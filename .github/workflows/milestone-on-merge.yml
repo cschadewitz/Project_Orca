@@ -1,7 +1,9 @@
 # Every pull request that ships carries a milestone (Casey, 2026-11-25), including the small,
 # dark ones workstreams merge to main behind an incubating flag (docs/WORKSTREAMS.md, #1239).
 # Nobody has to remember: a pull request merged into main without a milestone gets the one it
-# ships in, the earliest open minor (`X.Y.0`; tools/workstreams.js). A milestone someone set is
+# ships in: the earliest open minor (`X.Y.0`) whose `release/X.Y` line is not cut yet, since a
+# cut line no longer takes main's merges (tools/workstreams.js). When that cannot be
+# established, the pull request is left without one. A milestone someone set is
 # never changed, and line releases' record pull requests (`release-sync/*`) are left alone.
 #
 # `pull_request_target`, so it runs main's copy and none of the pull request's code; it only
@@ -48,9 +50,13 @@ jobs:
         run: |
           set -euo pipefail
           gh api --paginate "repos/$REPO/milestones?state=open&per_page=100" --jq '.[]' | jq -s '.' > "$RUNNER_TEMP/milestones.json"
-          milestone=$(node tools/workstreams.js milestone "$RUNNER_TEMP/milestones.json")
+          # Which minors main no longer feeds: their release/X.Y line is cut. If this cannot be
+          # read, pass nothing, and the pull request is left without a milestone.
+          lines="$RUNNER_TEMP/lines.json"
+          gh api --paginate "repos/$REPO/git/matching-refs/heads/release/" --jq '.[].ref' | jq -R -s 'split("\n") | map(select(length > 0))' > "$lines" || lines=""
+          milestone=$(node tools/workstreams.js milestone "$RUNNER_TEMP/milestones.json" ${lines:+"$lines"})
           if [ -z "$milestone" ]; then
-            echo "No open minor milestone; #$NUMBER left without one." | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "No open minor that main still feeds (or the release lines could not be read); #$NUMBER left without a milestone." | tee -a "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
           # Read again: a person may have set one while this ran.
