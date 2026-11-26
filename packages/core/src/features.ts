@@ -5,7 +5,7 @@
  * release that wants it. One list, so what is dark in a build is answered in one place.
  *
  * Stages:
- * - `incubating`: off in every build. Only a developer or a test turns it on, through the
+ * - `incubating`: off by default. Only a developer or a test turns it on, through the
  *   `ORCA_INCUBATING` environment variable (`all`, or flag names separated by commas). Never
  *   settable from app configuration, so it is off for anyone who does not launch the process
  *   with that override. That is a default, not an authorization boundary: whoever controls the

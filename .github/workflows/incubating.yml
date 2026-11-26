@@ -1,5 +1,5 @@
 # Dark code stays tested (#1239, docs/WORKSTREAMS.md). Unfinished work lands on main behind an
-# `incubating` flag (packages/core/src/features.ts) that is off in every build, so the ordinary
+# `incubating` flag (packages/core/src/features.ts) that is off by default, so the ordinary
 # CI run never exercises it. This runs the test suite again with every incubating flag on
 # (`ORCA_INCUBATING=all`), after a typecheck and build (which the flag does not change), so a dark
 # feature cannot rot until its promotion.

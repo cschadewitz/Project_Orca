@@ -2,8 +2,9 @@
 import { describe, expect, it } from "vitest";
 import { FEATURES, featureRegistry, type FeatureFlag } from "../src/features.js";
 
+const planner: FeatureFlag = { name: "planner-v2", stage: "incubating", issue: 1, summary: "the new planner" };
 const flags: FeatureFlag[] = [
-  { name: "planner-v2", stage: "incubating", issue: 1, summary: "the new planner" },
+  planner,
   { name: "remote-judge", stage: "experimental", issue: 2, summary: "a remote judge" },
   { name: "live-counts", stage: "stable", issue: 3, summary: "live counts" },
 ];
@@ -43,10 +44,10 @@ describe("the feature flag registry", () => {
   });
 
   it.each([
-    ["a name that is not kebab-case", [{ ...flags[0], name: "PlannerV2" }], /not kebab-case/],
-    ["a name listed twice", [flags[0], flags[0]], /listed twice/],
-    ["no tracking issue", [{ ...flags[0], issue: 0 }], /no tracking issue/],
-  ])("refuses %s", (_, list, message) => {
+    ["a name that is not kebab-case", [{ ...planner, name: "PlannerV2" }], /not kebab-case/],
+    ["a name listed twice", [planner, planner], /listed twice/],
+    ["no tracking issue", [{ ...planner, issue: 0 }], /no tracking issue/],
+  ] satisfies [string, FeatureFlag[], RegExp][])("refuses %s", (_, list, message) => {
     expect(() => featureRegistry(list)).toThrow(message);
   });
 
