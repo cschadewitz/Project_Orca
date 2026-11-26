@@ -30,6 +30,12 @@ export interface MenuMeasurement {
   readonly trigger: Rect;
   readonly menu: Box;
   readonly viewport: Box;
+  /**
+   * The area is a scrolling pane, not the window (#1112). A pane can scroll down to a menu
+   * hanging below its trigger, but never up to one sticking out above its own top, so there
+   * the menu goes above only when it fits there whole.
+   */
+  readonly scrolls?: boolean;
 }
 
 /**
@@ -48,10 +54,11 @@ export const DEFAULT_PLACEMENT: MenuPlacement = { block: "below", inline: "start
  * a menu taller than the window is clipped either way, and flipping it then would move it
  * for no gain and lose the connection to its trigger.
  */
-export function placeMenu({ trigger, menu, viewport }: MenuMeasurement): MenuPlacement {
+export function placeMenu({ trigger, menu, viewport, scrolls = false }: MenuMeasurement): MenuPlacement {
   const roomBelow = viewport.height - (trigger.top + trigger.height);
   const roomAbove = trigger.top;
-  const block = menu.height > roomBelow && roomAbove > roomBelow ? "above" : "below";
+  const block =
+    menu.height > roomBelow && roomAbove > roomBelow && (!scrolls || menu.height <= roomAbove) ? "above" : "below";
 
   // Aligned to the trigger's leading edge; the flipped form aligns its trailing edge, so
   // what matters is whether the menu's right edge clears the window when it starts there.

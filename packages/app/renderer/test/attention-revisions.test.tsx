@@ -1095,7 +1095,7 @@ it("retains known metadata on discovery failure and retries only when explicitly
   fireEvent.change(screen.getByLabelText("Correction"), { target: { value: "Keep through list failure" } });
   fake.fail("inputs.list", { code: "RUN_STATE", message: "Boundary temporarily unavailable" });
   push();
-  await screen.findByText(/Their absence is not confirmed\.$/);
+  await screen.findByText(/Their absence is not confirmed\. Choose Refresh corrections to try again\.$/);
   expect(feed.revisions?.items).toHaveLength(1);
   expect(screen.getByLabelText<HTMLTextAreaElement>("Correction").value).toBe("Keep through list failure");
   expect(screen.getByRole("button", { name: "Replace pending correction" }).getAttribute("aria-disabled")).toBe("true");

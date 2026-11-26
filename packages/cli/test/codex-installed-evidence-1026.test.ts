@@ -329,7 +329,12 @@ describe.skipIf(ADAPTER === undefined)("installed-session evidence for Codex's h
     nativeToolHook: string | null;
     /** The `hooks` table of the `CODEX_CONFIG` Codex is started with (null when it has none). */
     codexHooks: unknown;
-    /** Whether the opener was given the hook's admission (`sessionMeta`), which checks it is in force. */
+    /**
+     * Whether the opener was given the hook's admission, the gate that holds the session's
+     * requests until the hook is checked in force. Read from `admission`, not `sessionMeta`:
+     * every session now has a `sessionMeta` observer (the Claude mode pin, #1190), which adds
+     * no admission of its own.
+     */
     hookAdmission: boolean;
   }
   const launches = new Map<string, Launch[]>();
@@ -343,7 +348,7 @@ describe.skipIf(ADAPTER === undefined)("installed-session evidence for Codex's h
       launches.get(id)!.push({
         nativeToolHook: options.agent.nativeToolHook ?? null,
         codexHooks: parsed["hooks"] ?? null,
-        hookAdmission: options.sessionMeta !== undefined,
+        hookAdmission: options.admission !== undefined,
       });
       return openAcpSession(options);
     };

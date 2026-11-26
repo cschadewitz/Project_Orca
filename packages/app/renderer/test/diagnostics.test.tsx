@@ -738,3 +738,37 @@ describe("unknown Save, cleanup and explicit acknowledgement", () => {
     expect(f.bridge.save).not.toHaveBeenCalled();
   });
 });
+
+describe("cleanup prompt only when cleanup is really pending (#1205)", () => {
+  it("shows no cleanup prompt on a fresh install with diagnostics off, before and after a reopen", async () => {
+    // What main reports on a platform without diagnostics storage, and on a clean default-off profile.
+    for (const code of ["unavailable", "off"] as const) {
+      for (const session of [1, 2]) {
+        const f = fakeBridge({ code, cleanupPending: false });
+        mount(f.bridge);
+        await screen.findByText("Local diagnostics: Off");
+        expect(screen.queryByText(/Cleanup is pending/), `${code} session ${session}`).toBeNull();
+        expect(screen.queryByRole("button", { name: "Retry cleanup" })).toBeNull();
+        expect(screen.getByRole("button", { name: "Enable local diagnostics" }).getAttribute("title")).not.toBe(
+          "Owned cleanup must finish before enabling again.",
+        );
+        cleanup();
+      }
+    }
+  });
+
+  it("names what a real pending cleanup is waiting on", async () => {
+    const history = fakeBridge({ code: "cleanup_pending", cleanupPending: true });
+    mount(history.bridge);
+    expect(
+      await screen.findByText(/ORCA could not yet verify that its retained diagnostic history and key material/),
+    ).toBeTruthy();
+    expect(screen.queryByText(/plaintext temporary/)).toBeNull();
+    cleanup();
+
+    const exported = fakeBridge({ code: "unknown_blocked", cleanupPending: true, unknownOperation: "old" });
+    mount(exported.bridge);
+    expect(await screen.findByText(/The earlier export's private plaintext temporary may remain/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Retry cleanup" })).toBeTruthy();
+  });
+});

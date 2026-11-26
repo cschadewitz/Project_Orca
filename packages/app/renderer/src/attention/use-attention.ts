@@ -18,6 +18,15 @@
  * app, and the two would disagree the moment a push arrived for a run this surface has
  * filtered or has not resolved yet.
  *
+ * **And it is reconciled (#1213).** A fold can miss: a scoped read that came back empty
+ * before its ask was readable and no readiness event after it, or a run that ended with an
+ * ask open and no `input.answered`. Then this surface and the Machines surface, which
+ * re-reads `inputs.list` after every change, showed different counts for one store (8 and
+ * 9). So once a change that can move the list has arrived, one full `inputs.list` follows
+ * `RECONCILE_MS` later (never more than one in flight or pending, and never on a timer of
+ * its own), and its answer replaces the list and the count. Both surfaces then show the
+ * daemon's number from the same read, a moment after the same push.
+ *
  * Failures are the tier table's third row and are read from `runs.list({ status: failed })`.
  * They are deliberately best-effort: a store whose run list will not answer still has gates
  * in it, and hiding the gates behind that failure would be the app withholding the thing a
@@ -37,6 +46,9 @@ import { useNotifications } from "../notifications-context.js";
 import { applyRunChanged, mergeRun, orderRuns } from "../runs/run-rows.js";
 import { useRevisions, type RevisionsFeed } from "./use-revisions.js";
 import { alertItems, invalidateLiveInput, liveInputKey, mergeInput, orderWaits } from "./items.js";
+
+/** How long after a change that can move the list the full `inputs.list` reconcile runs. */
+export const RECONCILE_MS = 750;
 
 export type AttentionState =
   | { phase: "loading" }
@@ -141,6 +153,46 @@ export function useAttention(): AttentionFeed {
         waiting: Math.max(0, waiting),
       });
     };
+    /* The reconcile (#1213). `inputs` entries resolved before the full read began are
+       superseded by it; one resolved while it was in flight is newer and stays. */
+    let reconcileTimer: ReturnType<typeof setTimeout> | undefined;
+    let reconciling = false;
+    let reconcileAgain = false;
+    const fullRead = () => {
+      if (!live || !snapshot) return;
+      if (reconciling) {
+        reconcileAgain = true;
+        return;
+      }
+      reconciling = true;
+      const superseded = new Set(inputs.keys());
+      void window.orca.inputs.list().then((result) => {
+        reconciling = false;
+        if (!live) return;
+        if (result.ok && snapshot) {
+          observeRevisions(result.result.inputs);
+          for (const id of superseded) inputs.delete(id);
+          snapshot = {
+            ...snapshot,
+            waits: result.result.inputs,
+            waiting: result.result.waiting,
+            asOf: result.result.asOf,
+          };
+          publish();
+        }
+        if (reconcileAgain) {
+          reconcileAgain = false;
+          reconcile();
+        }
+      });
+    };
+    const reconcile = () => {
+      if (!live || reconcileTimer !== undefined) return;
+      reconcileTimer = setTimeout(() => {
+        reconcileTimer = undefined;
+        fullRead();
+      }, RECONCILE_MS);
+    };
     const unresolved = (runId: string, stepRunId?: string) =>
       [...(opened.get(runId) ?? [])].some(
         ([id, step]) =>
@@ -195,6 +247,7 @@ export function useAttention(): AttentionFeed {
         ids.set(params.requestId, params.stepRunId);
         opened.set(params.runId, ids);
         if (unresolved(params.runId, params.stepRunId)) refreshInputs(params.runId);
+        reconcile();
       }),
       stream.on("step.changed", (params) => {
         if (params.event !== "step.waiting" || params.waitingOn !== "human-input") return;
@@ -202,20 +255,25 @@ export function useAttention(): AttentionFeed {
         if (params.seq <= (waitingCursors.get(key) ?? -1)) return;
         waitingCursors.set(key, params.seq);
         if (unresolved(params.runId, params.stepRunId)) refreshInputs(params.runId);
+        reconcile();
       }),
       stream.on("input.answered", (params) => {
         answered(params.requestId);
         publish();
+        reconcile();
       }),
       stream.on("input.invalidated", (params) => {
         invalidated.add(liveInputKey(params.target));
         publish();
+        reconcile();
       }),
       stream.on("run.changed", (params) => {
         const previous = changes.get(params.runId);
         if (previous && previous.seq >= params.seq) return;
         changes.set(params.runId, params);
         if (params.event === "run.paused" && unresolved(params.runId)) refreshInputs(params.runId);
+        // A run that pauses can open an ask; one that ends can close one with no `input.answered`.
+        if (params.event === "run.paused" || TERMINAL_RUN_EVENTS.has(params.event)) reconcile();
         if (
           (params.status === "failed" || params.status === "running") &&
           !snapshot?.failures.some((r) => r.id === params.runId) &&
@@ -249,6 +307,7 @@ export function useAttention(): AttentionFeed {
     });
     return () => {
       live = false;
+      if (reconcileTimer !== undefined) clearTimeout(reconcileTimer);
       off.forEach((remove) => remove());
     };
   }, [stream, answered, attempt, generation, authority, observeRevisions, revisions.scope]);
@@ -266,6 +325,8 @@ export function useAttention(): AttentionFeed {
 
   return { state, reload, answered, revisions };
 }
+
+const TERMINAL_RUN_EVENTS = new Set(["run.completed", "run.failed", "run.cancelled"]);
 
 /** The two lists of runs this surface holds. Neither is a tier; the failures are one. */
 type RunList = "failed" | "running";

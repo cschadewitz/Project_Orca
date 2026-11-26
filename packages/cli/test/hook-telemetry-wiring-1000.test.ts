@@ -44,7 +44,20 @@ async function setup() {
       await runClaudeRuntimeAttestation(attest.slice(1), JSON.stringify({ hook_event_name: "SessionStart" }), {
         pid: RUNTIME_PID,
       });
-      return { closed: new Promise<void>(() => undefined), close: async () => undefined } as unknown as AgentSession;
+      return {
+        closed: new Promise<void>(() => undefined),
+        close: async () => undefined,
+        // In Manual mode already, as ORCA runs Claude (claude-mode.ts).
+        configOptions: [
+          {
+            id: "mode",
+            name: "Mode",
+            type: "select",
+            currentValue: "default",
+            options: [{ value: "default", name: "Manual" }],
+          },
+        ],
+      } as unknown as AgentSession;
     },
     {
       runtime: "/usr/bin/node",

@@ -1,0 +1,16 @@
+#!/bin/sh
+# ORCA's command line from a Linux desktop install (#1207): the same bundled CLI the app runs
+# as its daemon, run by the app's own Electron binary as a plain Node. Not called `orca`,
+# because on Ubuntu Desktop that is the GNOME screen reader (/usr/bin/orca).
+#
+# This file sits at <app>/resources/bin/orca-cli. The .deb's /usr/bin/orca-cli execs it by
+# its absolute path, and the archive's copy can be run or linked from anywhere: the app's
+# directory is resolved from this file's own real location, never from PATH.
+set -e
+self=$(readlink -f -- "$0")
+app=${self%/resources/bin/orca-cli}
+if [ "$app" = "$self" ]; then
+    echo "orca-cli: $self is not <app>/resources/bin/orca-cli, so the app it belongs to is unknown." >&2
+    exit 127
+fi
+ELECTRON_RUN_AS_NODE=1 exec "$app/orca-desktop" "$app/resources/daemon/orca-daemon.mjs" "$@"
