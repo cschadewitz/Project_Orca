@@ -5,6 +5,7 @@
  * "server" is a temporary home on this machine where each command runs as its words.
  */
 import { execFileSync, spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -65,18 +66,27 @@ async function push(local: string, transport: CourierTransport) {
   }
 }
 
-/** Provision a work item's worktree from the workspace the server's listing offers. */
-async function provision(transport: CourierTransport, slug: string) {
+/** A provider for the workspace the server's listing offers. */
+async function provider(transport: CourierTransport, isolateRoots = false) {
   const [repository] = await hostRepositories(transport);
   const workspace = repository!.workspace!;
-  const provider = new GitWorktreeProvider({
+  return new GitWorktreeProvider({
     host: new LocalHost({ id: "local", type: "local" }),
     repo: workspace.repo,
     baseBranch: workspace.baseBranch,
     fetchRemote: workspace.fetchRemote,
     allowedRefs: workspace.allowedRefs ?? [],
+    ...(isolateRoots ? { isolateRoots, worktreeRoot: join(tmp(), "roots") } : {}),
   });
-  return provider.provision({ runId: `run_${slug}`, workflowId: "test", workItem: { slug } as WorkItem });
+}
+
+/** Provision a work item's worktree from the workspace the server's listing offers. */
+async function provision(transport: CourierTransport, slug: string) {
+  return (await provider(transport)).provision({
+    runId: `run_${slug}`,
+    workflowId: "test",
+    workItem: { slug } as WorkItem,
+  });
 }
 
 // Real git on a POSIX home standing in for the server, as in the protocol's push tests.
@@ -101,5 +111,36 @@ it.skipIf(process.platform === "win32")(
     expect(pushed.checkoutState).toMatchObject({ kind: "kept", usable: true });
     const second = await provision(transport, "second");
     expect(git(second.cwd, "rev-parse", "HEAD")).toBe(git(local, "rev-parse", "main"));
+  },
+);
+
+it.skipIf(process.platform === "win32")(
+  "starts from the checkout's branch, never a tag of the same short name at another commit",
+  async () => {
+    const local = tmp();
+    git(local, "init", "-q", "-b", "main");
+    writeFileSync(join(local, "README.md"), "one\n");
+    git(local, "add", ".");
+    git(local, "commit", "-q", "-m", "one");
+    const { transport } = server();
+    const pushed = await push(local, transport);
+    const main = git(pushed.checkout, "rev-parse", "refs/heads/main");
+    // A tag called `main` at another commit, in the checkout itself.
+    writeFileSync(join(pushed.checkout, "OTHER.md"), "other\n");
+    git(pushed.checkout, "add", ".");
+    git(pushed.checkout, "commit", "-q", "-m", "other");
+    git(pushed.checkout, "tag", "main");
+    git(pushed.checkout, "reset", "-q", "--hard", main);
+    expect(git(pushed.checkout, "rev-parse", "refs/tags/main")).not.toBe(main);
+
+    const [listed] = await hostRepositories(transport);
+    expect(listed!.workspace!.baseBranch).toBe("refs/heads/main");
+    // A work item's worktree, and an owned root run's checkout, both start at the branch.
+    const item = await provision(transport, "item");
+    expect(git(item.cwd, "rev-parse", "HEAD")).toBe(main);
+    const root = await (
+      await provider(transport, true)
+    ).provision({ runId: `run_${randomUUID()}`, workflowId: "test" });
+    expect(git(root.cwd, "rev-parse", "HEAD")).toBe(main);
   },
 );

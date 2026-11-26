@@ -257,7 +257,7 @@ describe("hostRepositories", () => {
         workspace: {
           provider: "git-worktree",
           repo: `${host.root}/checkouts/app`,
-          baseBranch: "main",
+          baseBranch: "refs/heads/main",
           fetchRemote: "origin",
           allowedRefs: ["refs/heads/main", "refs/heads/release/1.2"],
         },
@@ -269,7 +269,7 @@ describe("hostRepositories", () => {
         workspace: {
           provider: "git-worktree",
           repo: `${host.root}/checkouts/tools`,
-          baseBranch: "main",
+          baseBranch: "refs/heads/main",
           fetchRemote: "origin",
           allowedRefs: ["refs/heads/main"],
         },
@@ -313,7 +313,7 @@ describe("hostRepositories", () => {
     expect(git(`${host.root}/repos/app.git`, "symbolic-ref", "HEAD")).toBe("refs/heads/feature");
     const [listed] = await hostRepositories(host.transport);
     expect(listed!.workspace).toMatchObject({
-      baseBranch: "main",
+      baseBranch: "refs/heads/main",
       allowedRefs: ["refs/heads/feature", "refs/heads/main"],
     });
 

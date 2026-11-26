@@ -309,7 +309,10 @@ export interface HostRepository {
 export interface HostWorkspace {
   provider: "git-worktree";
   repo: string;
-  /** A branch the checkout itself has, so a work item's worktree can start from it. */
+  /**
+   * A branch the checkout itself has, so a work item's worktree can start from it: in full
+   * (`refs/heads/…`), so a tag or other ref of the same short name can never stand in for it.
+   */
   baseBranch: string;
   /** The checkout's `origin`: the bare repository the pushes went to. */
   fetchRemote: "origin";
@@ -373,7 +376,7 @@ export async function hostRepositories(transport: CourierTransport): Promise<Hos
           LIST_TIMEOUT_MS,
         )
       ).code === 0
-        ? current.slice("refs/heads/".length)
+        ? current
         : undefined;
     found.push({
       name,

@@ -168,7 +168,7 @@ describe("repositories on a profile's server", () => {
           workspace: {
             provider: "git-worktree",
             repo: join(root, "checkouts/app"),
-            baseBranch: "main",
+            baseBranch: "refs/heads/main",
             fetchRemote: "origin",
             allowedRefs: ["refs/heads/main"],
           },

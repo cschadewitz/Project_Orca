@@ -31,7 +31,7 @@ const app: HostRepositoryView = {
   workspace: {
     provider: "git-worktree",
     repo: checkout,
-    baseBranch: "main",
+    baseBranch: "refs/heads/main",
     fetchRemote: "origin",
     allowedRefs: ["refs/heads/main", "refs/heads/release/1.2"],
   },
@@ -91,7 +91,7 @@ describe("the workspace for a pushed repository", () => {
           value: {
             provider: "git-worktree",
             repo: checkout,
-            baseBranch: "main",
+            baseBranch: "refs/heads/main",
             fetchRemote: "origin",
             allowedRefs: ["refs/heads/main", "refs/heads/release/1.2"],
           },
