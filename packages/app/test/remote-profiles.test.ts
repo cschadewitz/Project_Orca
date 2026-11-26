@@ -2000,6 +2000,8 @@ describe("watching only (#882)", () => {
 });
 
 describe("the server command across the orca-cli default (#1207)", () => {
+  // What an omitted server command means, before the rename and after it (LEGACY_SERVER_COMMAND).
+  const before = "orca"; // rename-keep: the CLI an omitted server command names
   const pin = (dir: string, id = "lab") => {
     mkdirSync(join(dir, "known_hosts"), { recursive: true });
     writeFileSync(join(dir, "known_hosts", id), `orca-${id} ssh-ed25519 AAAA\n`);
@@ -2034,7 +2036,7 @@ describe("the server command across the orca-cli default (#1207)", () => {
     );
     expect(profiles.list()[0]!.hasCredential).toBe(true);
     await expect(profiles.remove("lab")).resolves.toBe("revoked");
-    expect(verbs(server.commands)).toEqual(["orca auth issue", "orca auth revoke"]);
+    expect(verbs(server.commands)).toEqual([`${before} auth issue`, `${before} auth revoke`]);
     expect(server.live()).toEqual([]);
   });
 
@@ -2044,11 +2046,11 @@ describe("the server command across the orca-cli default (#1207)", () => {
     pin(dir);
     await (await profiles.open("lab")).release();
     const record = JSON.parse(readFileSync(join(dir, "credentials", "lab.json"), "utf8"));
-    expect(record.current.target.serverCommand).toBe("orca");
+    expect(record.current.target.serverCommand).toBe(before);
     // Pointing the profile at another CLI retires the credential, revoked where it was issued.
     profiles.save({ id: "lab", name: "Lab", destination: "casey@lab", serverCommand: "orca-cli" });
     await (await profiles.open("lab")).release();
-    expect(verbs(server.commands)).toEqual(["orca auth issue", "orca-cli auth issue", "orca auth revoke"]);
+    expect(verbs(server.commands)).toEqual([`${before} auth issue`, "orca-cli auth issue", `${before} auth revoke`]);
   });
 
   it("revokes a credential recorded before 0.8.1, which named no command, through orca", async () => {
@@ -2061,6 +2063,6 @@ describe("the server command across the orca-cli default (#1207)", () => {
     delete record.current.target.serverCommand;
     writeFileSync(file, JSON.stringify(record));
     await expect(profiles.remove("lab")).resolves.toBe("revoked");
-    expect(verbs(server.commands)).toEqual(["orca-cli auth issue", "orca auth revoke"]);
+    expect(verbs(server.commands)).toEqual(["orca-cli auth issue", `${before} auth revoke`]);
   });
 });

@@ -92,6 +92,11 @@
     { "from": "Project Orca", "to": "Orrery" },
     { "from": "ORCA - Orchestration Runtime for Coding Agents", "to": "Orrery - orchestration for coding agents" },
     { "from": "@orca/", "to": "@orrery/" },
+    {
+      "from": "@orcaapp",
+      "to": "@orreryapp",
+      "note": "electron-builder's updaterCacheDirName: package.json's name, sanitized (packages/app/build/installer.nsh)"
+    },
     { "from": "X-Orca-", "to": "X-Orrery-" },
     {
       "from": "(?:(?<![A-Za-z])|(?<=-D)|(?<=\\\\[nrtb]))ORCA(?=[0-9]*_)",

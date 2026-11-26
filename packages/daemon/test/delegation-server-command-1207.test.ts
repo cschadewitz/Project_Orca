@@ -14,9 +14,9 @@ const remote = (fields: Record<string, unknown> = {}) =>
 
 describe("a configured remote's server command", () => {
   it("is orca when the config omits it, as an older remote's config does", () => {
-    expect(LEGACY_SERVER_COMMAND).toBe("orca");
-    expect(remoteCliCommand(remote(), "auth", "list", "--json")).toEqual(["orca", "auth", "list", "--json"]);
-    expect(remoteCliCommand(remote(), "auth", "revoke", "--json")).toEqual(["orca", "auth", "revoke", "--json"]);
+    expect(LEGACY_SERVER_COMMAND).toBe("orca"); // rename-keep: an omitted command keeps naming the old CLI
+    expect(remoteCliCommand(remote(), "auth", "list", "--json")).toEqual(["orca", "auth", "list", "--json"]); // rename-keep: an omitted command keeps naming the old CLI
+    expect(remoteCliCommand(remote(), "auth", "revoke", "--json")).toEqual(["orca", "auth", "revoke", "--json"]); // rename-keep: an omitted command keeps naming the old CLI
   });
 
   it("is exactly what the config names, orca-cli or a full path, with its workspace config", () => {

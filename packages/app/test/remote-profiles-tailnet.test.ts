@@ -146,7 +146,7 @@ describe("tailnet profiles", () => {
       tailnet: { node: "nPlain", name: "plain.example-tailnet.ts.net" },
     });
     await expect(profiles.pinFromTailnet("build-1")).resolves.toBe(true);
-    expect(readFileSync(join(dir, "known_hosts", "build-1"), "utf8")).toBe(`orca-build-1 ${hostKey}\n`);
+    expect(readFileSync(join(dir, "known_hosts", "build-1"), "utf8")).toBe(`orca-build-1 ${hostKey}\n`); // rename-keep: the HostKeyAlias tunnelHops pins under
     expect(profiles.describe("build-1")).toMatchObject({ hostKeyPinned: true });
     await expect(profiles.pinFromTailnet("build-1")).rejects.toThrow(/already has a pinned host key/);
     await expect(profiles.pinFromTailnet("plain")).resolves.toBe(false);
