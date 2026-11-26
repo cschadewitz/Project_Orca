@@ -1575,9 +1575,15 @@ ipcMain.handle("orca:profiles.signInHostAgent", (event, id: unknown, agent: unkn
     return null;
   }),
 );
-ipcMain.handle("orca:profiles.openAgentSignIn", (event, id: unknown, agent: unknown) =>
+ipcMain.handle("orca:profiles.openAgentSignIn", (event, id: unknown, agent: unknown, attempt: unknown) =>
   profileResult(async () => {
-    await shell.openExternal(agentSignIns.url(event.sender, ProfileIdSchema.parse(id), AgentIdSchema.parse(agent)));
+    const url = agentSignIns.url(
+      event.sender,
+      ProfileIdSchema.parse(id),
+      AgentIdSchema.parse(agent),
+      z.uuid().parse(attempt),
+    );
+    await shell.openExternal(url);
     return null;
   }),
 );

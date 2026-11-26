@@ -57,14 +57,16 @@ it("signs an agent in, showing the code and the page's host, and opens the page 
   const rig = bridge([{ ...codex, installed: true }]);
   render(<HostAgents profiles={rig.profiles} profileId="lab" name="Lab" />);
   fireEvent.click(await screen.findByRole("button", { name: "Sign in" }));
-  act(() => rig.prompt({ profileId: "lab", agent: "codex", host: "auth.openai.com", code: "WXYZ-12345" }));
+  act(() =>
+    rig.prompt({ profileId: "lab", agent: "codex", attempt: "a1", host: "auth.openai.com", code: "WXYZ-12345" }),
+  );
   expect(screen.getByRole("alert").textContent).toContain("WXYZ-12345");
   expect(screen.getByRole("alert").textContent).toContain("auth.openai.com");
   // A prompt for another profile is not shown here.
-  act(() => rig.prompt({ profileId: "other", agent: "codex", host: "evil.example", code: "AAAA-BBBB" }));
+  act(() => rig.prompt({ profileId: "other", agent: "codex", attempt: "a2", host: "evil.example", code: "AAAA-BBBB" }));
   expect(screen.getByRole("alert").textContent).not.toContain("AAAA-BBBB");
   fireEvent.click(screen.getByRole("button", { name: "Open sign-in page" }));
-  expect(rig.profiles.openAgentSignIn).toHaveBeenCalledWith("lab", "codex");
+  expect(rig.profiles.openAgentSignIn).toHaveBeenCalledWith("lab", "codex", "a1");
   act(() => rig.finish());
   await waitFor(() => expect(screen.getByText(/Codex 0\.171\.0: signed in/)).toBeTruthy());
   expect(screen.queryByRole("alert")).toBeNull();

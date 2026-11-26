@@ -300,8 +300,8 @@ const bridge: OrcaBridge = {
                 ipcRenderer.off("orca:profiles.agentSignIn", forward);
               };
             },
-            openAgentSignIn: (id: string, agent: string) =>
-              ipcRenderer.invoke("orca:profiles.openAgentSignIn", id, agent) as Promise<ProfileResult<null>>,
+            openAgentSignIn: (id: string, agent: string, attempt: string) =>
+              ipcRenderer.invoke("orca:profiles.openAgentSignIn", id, agent, attempt) as Promise<ProfileResult<null>>,
           }
         : {}),
     },

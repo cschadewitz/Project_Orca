@@ -172,6 +172,8 @@ export interface HostAgentView {
 export interface AgentSignInView {
   profileId: string;
   agent: string;
+  /** Which sign-in this prompt is for: opening its page names it. */
+  attempt: string;
   /** The sign-in page's host, to name it; main opens the page itself. */
   host?: string;
   code?: string;
@@ -221,7 +223,7 @@ export interface RemoteProfilesBridge {
   /** An agent's sign-in waits for the person: the page to open and the code to enter. */
   onAgentSignIn?(this: void, listener: (prompt: AgentSignInView) => void): () => void;
   /** Open the sign-in page main last received for this profile and agent, in the browser. */
-  openAgentSignIn?(this: void, id: string, agent: string): Promise<ProfileResult<null>>;
+  openAgentSignIn?(this: void, id: string, agent: string, attempt: string): Promise<ProfileResult<null>>;
 }
 export interface DaemonConnectionBridge {
   read(this: void): DaemonTargetSnapshot;

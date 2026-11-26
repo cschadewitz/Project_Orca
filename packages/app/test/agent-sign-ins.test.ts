@@ -1,7 +1,7 @@
 /**
  * Agent sign-ins bound to the window that started them (#1236): the prompt reaches only that
- * window, only it can open the page, a second sign-in for the same agent is refused, and the
- * window going away ends the sign-in.
+ * window, only it can open the page and only for the attempt its prompt named, a second
+ * sign-in for the same agent is refused, and the window leaving its page ends the sign-in.
  */
 import { EventEmitter } from "node:events";
 import { describe, expect, it } from "vitest";
@@ -12,17 +12,18 @@ function window() {
   const events = new EventEmitter();
   const received: AgentSignInPrompt[] = [];
   let destroyed = false;
-  const sender: SignInSender = {
+  const sender = {
     id: ++ids,
     isDestroyed: () => destroyed,
-    send: (_channel, view) => received.push(view),
-    once: (event, listener) => events.once(event, listener),
-    removeListener: (event, listener) => events.removeListener(event, listener),
-  };
+    send: (_channel: string, view: AgentSignInPrompt) => received.push(view),
+    on: (event: string, listener: (details?: unknown) => void) => events.on(event, listener),
+    removeListener: (event: string, listener: (details?: unknown) => void) => events.removeListener(event, listener),
+  } as SignInSender;
   return {
     sender,
     received,
     events,
+    last: () => received.at(-1)!.attempt,
     destroy: () => {
       destroyed = true;
       events.emit("destroyed");
@@ -45,6 +46,8 @@ function pending() {
   return { signIn, shown, finish: () => finish() };
 }
 
+const PAGE = "https://auth.openai.com/codex/device";
+
 describe("agent sign-ins", () => {
   it("shows the prompt only to the window that asked, and opens the page only for it", async () => {
     const broker = new AgentSignIns();
@@ -53,14 +56,36 @@ describe("agent sign-ins", () => {
     const attempt = pending();
     const running = broker.run(mine.sender, "lab", "codex", attempt.signIn);
     await attempt.shown;
-    expect(mine.received).toEqual([{ profileId: "lab", agent: "codex", host: "auth.openai.com", code: "WXYZ-12345" }]);
+    expect(mine.received).toEqual([
+      { profileId: "lab", agent: "codex", attempt: expect.any(String), host: "auth.openai.com", code: "WXYZ-12345" },
+    ]);
     expect(JSON.stringify(mine.received)).not.toContain("https://");
     expect(other.received).toEqual([]);
-    expect(broker.url(mine.sender, "lab", "codex")).toBe("https://auth.openai.com/codex/device");
-    expect(() => broker.url(other.sender, "lab", "codex")).toThrow(/not waiting for you/);
+    expect(broker.url(mine.sender, "lab", "codex", mine.last())).toBe(PAGE);
+    expect(() => broker.url(other.sender, "lab", "codex", mine.last())).toThrow(/not waiting for you/);
     attempt.finish();
     await running;
-    expect(() => broker.url(mine.sender, "lab", "codex")).toThrow(/not waiting for you/);
+    expect(() => broker.url(mine.sender, "lab", "codex", mine.last())).toThrow(/not waiting for you/);
+  });
+
+  it("opens a page only for the attempt the prompt named, never a later one", async () => {
+    const broker = new AgentSignIns();
+    const mine = window();
+    const first = pending();
+    const one = broker.run(mine.sender, "lab", "codex", first.signIn);
+    await first.shown;
+    const stale = mine.last();
+    first.finish();
+    await one;
+    const second = pending();
+    const two = broker.run(mine.sender, "lab", "codex", second.signIn);
+    await second.shown;
+    expect(mine.last()).not.toBe(stale);
+    // A click on the first prompt, from the same window, does not open the second sign-in.
+    expect(() => broker.url(mine.sender, "lab", "codex", stale)).toThrow(/not waiting for you/);
+    expect(broker.url(mine.sender, "lab", "codex", mine.last())).toBe(PAGE);
+    second.finish();
+    await two;
   });
 
   it("refuses a second sign-in for the same agent while one waits, without touching the first", async () => {
@@ -79,29 +104,43 @@ describe("agent sign-ins", () => {
     expect(started).toBe(false);
     expect(second.received).toEqual([]);
     // The refused attempt cleaned up nothing of the first.
-    expect(broker.url(first.sender, "lab", "codex")).toBe("https://auth.openai.com/codex/device");
+    expect(broker.url(first.sender, "lab", "codex", first.last())).toBe(PAGE);
     attempt.finish();
     await running;
-    // Once it ended, another may start; a different agent or machine never waited on it.
-    const next = pending();
-    const again = broker.run(second.sender, "lab", "codex", next.signIn);
-    await next.shown;
-    next.finish();
-    await again;
   });
 
-  it("ends the sign-in when the window that asked closes or navigates", async () => {
+  it("ends the sign-in when the window that asked closes, crashes or leaves its page", async () => {
     const broker = new AgentSignIns();
-    for (const end of ["destroyed", "did-navigate", "render-process-gone"] as const) {
+    const ends: [string, unknown?][] = [
+      ["destroyed"],
+      ["render-process-gone"],
+      ["did-navigate"],
+      ["did-start-navigation", { isMainFrame: true, isSameDocument: false }],
+    ];
+    for (const [end, details] of ends) {
       const mine = window();
       const attempt = pending();
       const running = broker.run(mine.sender, "lab", "codex", attempt.signIn);
       await attempt.shown;
-      mine.events.emit(end);
+      mine.events.emit(end, details);
       await expect(running).rejects.toThrow(/cancelled/);
-      expect(() => broker.url(mine.sender, "lab", "codex")).toThrow(/not waiting for you/);
-      expect(mine.events.listenerCount(end)).toBe(0);
+      expect(() => broker.url(mine.sender, "lab", "codex", mine.last())).toThrow(/not waiting for you/);
+      for (const event of ["destroyed", "render-process-gone", "did-navigate", "did-start-navigation"])
+        expect(mine.events.listenerCount(event)).toBe(0);
     }
+  });
+
+  it("keeps the sign-in through a navigation within the page or in a subframe", async () => {
+    const broker = new AgentSignIns();
+    const mine = window();
+    const attempt = pending();
+    const running = broker.run(mine.sender, "lab", "codex", attempt.signIn);
+    await attempt.shown;
+    mine.events.emit("did-start-navigation", { isMainFrame: true, isSameDocument: true });
+    mine.events.emit("did-start-navigation", { isMainFrame: false, isSameDocument: false });
+    expect(broker.url(mine.sender, "lab", "codex", mine.last())).toBe(PAGE);
+    attempt.finish();
+    await running;
   });
 
   it("refuses a window that has already closed, and ends every sign-in on quit", async () => {

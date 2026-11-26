@@ -693,7 +693,7 @@ export function HostAgents({
               <Button
                 size="sm"
                 tone="primary"
-                onClick={() => void profiles.openAgentSignIn?.(prompt.profileId, prompt.agent)}
+                onClick={() => void profiles.openAgentSignIn?.(prompt.profileId, prompt.agent, prompt.attempt)}
               >
                 Open sign-in page
               </Button>

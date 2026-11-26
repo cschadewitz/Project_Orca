@@ -912,6 +912,9 @@ export class RemoteProfiles {
       if (pending) dropDiscovery(pending.discovery);
       throw new ConnectionRefusal("That confirmation is not current. Check the server again, then confirm.");
     }
+    // Held from here, before anything is awaited, so no agent action (or anything else
+    // `assertIdle` guards) starts while the bundle is fetched; released on every way out.
+    this.serverSetups.add(id);
     let program: string;
     let courier: CourierPackage | undefined;
     try {
@@ -926,17 +929,17 @@ export class RemoteProfiles {
           ...(this.deps.courierFetch ? { fetch: this.deps.courierFetch } : {}),
         });
     } catch (error) {
+      this.serverSetups.delete(id);
       dropDiscovery(pending.discovery);
       throw error;
     }
-    if (this.revision(id) !== revision || this.closed) {
-      dropDiscovery(pending.discovery);
-      throw new ConnectionRefusal("The profile changed while the server bundle was fetched. Check it again.");
-    }
-    enrollDiscovered(pending.discovery, this.pins(id), profile.jump !== undefined);
-    this.serverSetups.add(id);
     let setup: SetupOutcome;
     try {
+      if (this.revision(id) !== revision || this.closed) {
+        dropDiscovery(pending.discovery);
+        throw new ConnectionRefusal("The profile changed while the server bundle was fetched. Check it again.");
+      }
+      enrollDiscovered(pending.discovery, this.pins(id), profile.jump !== undefined);
       const tunnel = this.newTunnel(profile, true, pending.discovery.keys);
       try {
         await tunnel.open();

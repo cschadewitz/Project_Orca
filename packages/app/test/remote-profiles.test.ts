@@ -1643,6 +1643,34 @@ describe("setting a machine up as a managed server (#881)", () => {
     return profiles.setUpServer("lab", { version, scripts, confirmation: inspection!.confirmation });
   };
 
+  it("holds the profile from before it fetches the bundle: no agent action starts meanwhile (#1236)", async () => {
+    let fail: (error: Error) => void = () => {};
+    let fetching: () => void = () => {};
+    const begun = new Promise<void>((resolve) => (fetching = resolve));
+    const { profiles } = store(undefined, undefined, {
+      tailnet: { features: { env: { ORCA_INCUBATING: "tailnet-hosts" } } },
+      courierFetch: () => {
+        fetching();
+        return new Promise((_resolve, reject) => (fail = reject));
+      },
+    });
+    profiles.save({ name: "Lab", destination: "casey@lab" });
+    const { inspection } = await profiles.inspectServer("lab", { version: "0.8.0", scripts });
+    const setup = profiles.setUpServer("lab", {
+      version: "0.8.0",
+      scripts,
+      confirmation: inspection!.confirmation,
+      pushBundle: true,
+    });
+    await begun;
+    await expect(profiles.hostAgents("lab", scripts)).rejects.toThrow(/being set up/);
+    expect(() => profiles.save({ id: "lab", name: "Lab", destination: "casey@other" })).toThrow(/being set up/);
+    fail(new Error("offline"));
+    await expect(setup).rejects.toThrow();
+    // Released when the setup ends, however it ends.
+    expect(profiles.save({ id: "lab", name: "Lab", destination: "casey@lab" })).toMatchObject({ id: "lab" });
+  });
+
   it("first inspects read only: shows keys and account, and pins and installs nothing", async () => {
     const { profiles, server, dir } = store();
     profiles.save({ name: "Lab", destination: "casey@lab" });
