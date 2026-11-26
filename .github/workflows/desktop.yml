@@ -276,6 +276,14 @@ jobs:
             pnpm --filter @orca/app exec electron-builder --publish never -c.extraMetadata.version="$VERSION"
           fi
 
+      # The PATH edit itself (#1207), case by case against the real HKCU\Environment\Path:
+      # absent, empty and REG_SZ values, unexpanded entries, trailing empty segments, an entry
+      # the user already had, edits after install, a moved install. Same fresh-VM rule as below.
+      - name: The installer's PATH edit round-trips the user PATH exactly
+        if: matrix.name == 'windows' && runner.environment == 'github-hosted'
+        shell: pwsh
+        run: pwsh -NoLogo -NoProfile -NonInteractive -File packages/app/test/windows/orca-cli-path.cases.ps1 -Script packages/app/build/win/orca-cli-path.ps1
+
       # The CLI (#1207). A fresh GitHub-hosted VM only: this installs the app for the runner's
       # account and edits that account's PATH, which no persistent host should have done to
       # it. The x64 installer, silently and per user, as a person's default install is. A
@@ -290,7 +298,12 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $installers = @(Get-ChildItem "packages/app/dist/release/x64/ORCA-*-win-x64.exe")
           if ($installers.Count -ne 1) { throw "expected one x64 installer, found $($installers.Count)" }
-          $userPath = { [Environment]::GetEnvironmentVariable('Path', 'User') }
+          # The raw value, unexpanded, and its registry type.
+          $userPath = {
+            $k = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment')
+            if ($null -eq $k -or $k.GetValueNames() -notcontains 'Path') { '' }
+            else { "$($k.GetValueKind('Path')):" + $k.GetValue('Path', '', 'DoNotExpandEnvironmentNames') }
+          }
           $before = & $userPath
           $p = Start-Process -FilePath $installers[0].FullName -ArgumentList '/S', '/currentuser' -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "the installer exited $($p.ExitCode)" }
@@ -301,12 +314,12 @@ jobs:
           Write-Output "installed at $app"
           # Exactly one entry added, at the end, and nothing else changed.
           $after = & $userPath
-          $expected = if ([string]::IsNullOrEmpty($before)) { $bin } elseif ($before.EndsWith(';')) { $before + $bin } else { "$before;$bin" }
-          if ($after -ne $expected) { throw "user PATH after install: '$after', expected '$expected'" }
+          $expected = if ($before -eq '') { "ExpandString:$bin" } elseif ($before.EndsWith(';') -or $before.EndsWith(':')) { $before + $bin } else { "$before;$bin" }
+          if ($after -cne $expected) { throw "user PATH after install: '$after', expected '$expected'" }
           if (@(Get-ChildItem $bin).Name -join ',' -ne 'orca-cli.cmd') { throw "resources\bin holds more than orca-cli.cmd" }
           # As a new terminal would find it: the machine PATH, then the user's, as Windows
           # composes them, and PATHEXT resolving `orca-cli` to the .cmd.
-          $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + $after
+          $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
           if ((Get-Command orca-cli).Source -ne (Join-Path $bin 'orca-cli.cmd')) { throw "orca-cli resolved to $((Get-Command orca-cli).Source)" }
           $out = orca-cli --version
           if ($LASTEXITCODE -ne 0) { throw "orca-cli --version exited $LASTEXITCODE" }
@@ -322,7 +335,7 @@ jobs:
           while ((Test-Path (Join-Path $bin 'orca-cli.cmd')) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 2 }
           if (Test-Path (Join-Path $bin 'orca-cli.cmd')) { throw "the uninstaller did not remove the app" }
           $final = & $userPath
-          if ($final -ne $before) { throw "user PATH after uninstall: '$final', expected '$before'" }
+          if ($final -cne $before) { throw "user PATH after uninstall: '$final', expected '$before'" }
           Write-Output "uninstalled; user PATH restored"
 
       # GitHub-hosted fallback only; never runs on a self-hosted runner. Ubuntu 24.04 keeps

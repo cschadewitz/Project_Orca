@@ -51,7 +51,7 @@ import {
   OperatorDiscoverySchema,
 } from "@orca/protocol";
 import {
-  DEFAULT_SERVER_COMMAND,
+  LEGACY_SERVER_COMMAND,
   markPinEnrolled,
   pinState,
   SshTunnel,
@@ -841,7 +841,7 @@ async function settlePending(
   const list = async () => {
     if (listed !== undefined) return listed;
     try {
-      const result = await tunnel.exec(cliOf(options.remote, "auth", "list", "--json"), 60_000);
+      const result = await tunnel.exec(remoteCliCommand(options.remote, "auth", "list", "--json"), 60_000);
       listed = result.code === 0 ? RemoteCredentialsSchema.parse(JSON.parse(result.stdout)) : null;
     } catch {
       listed = null;
@@ -926,9 +926,15 @@ const IssuedSchema = z.object({
   }),
 });
 
-function cliOf(remote: RemoteDaemonSpec, ...args: string[]): string[] {
+/**
+ * A configured remote's CLI on its server. An omitted `serverCommand` keeps its meaning from
+ * before 0.8.1, `orca` (#1207): the config is the user's file, enrollments and bindings record
+ * the field as written, and the server need not have been upgraded with this machine. The docs
+ * name `orca-cli` explicitly; nothing falls back from one name to the other.
+ */
+export function remoteCliCommand(remote: RemoteDaemonSpec, ...args: string[]): string[] {
   return [
-    remote.serverCommand ?? DEFAULT_SERVER_COMMAND,
+    remote.serverCommand ?? LEGACY_SERVER_COMMAND,
     ...args,
     ...(remote.serverConfig ? ["--config", remote.serverConfig] : []),
   ];
@@ -952,7 +958,7 @@ async function issueOver(
       reason: "credential-missing",
       profile: remote.id,
     });
-  const command = cliOf(
+  const command = remoteCliCommand(
     remote,
     "auth",
     "issue",
@@ -989,6 +995,9 @@ async function issueOver(
 
 async function revokeOver(tunnel: SshTunnel, remote: RemoteDaemonSpec, credentialId: string): Promise<void> {
   // After `--`, an id starting with `-` is never read as an option.
-  const result = await tunnel.exec([...cliOf(remote, "auth", "revoke", "--json"), "--", credentialId], 60_000);
+  const result = await tunnel.exec(
+    [...remoteCliCommand(remote, "auth", "revoke", "--json"), "--", credentialId],
+    60_000,
+  );
   if (result.code !== 0) throw new Error("revoke failed");
 }

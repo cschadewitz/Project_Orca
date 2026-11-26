@@ -38,3 +38,4 @@ packages/app/build/cli/orca-cli.cmd text eol=crlf
 packages/app/build/cli/orca-cli text eol=lf
 packages/app/build/linux/orca-cli text eol=lf
 packages/app/build/win/*.ps1 text eol=crlf
+packages/app/test/windows/*.ps1 text eol=crlf

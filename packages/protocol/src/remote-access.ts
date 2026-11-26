@@ -43,11 +43,20 @@ import { z } from "zod";
 export const DEFAULT_REMOTE_DAEMON_PORT = 6722;
 
 /**
- * The server's ORCA CLI when a profile or remote names none (#1207): the command desktop installs
- * put on PATH and the CLI package also installs. Not `orca`, which on Ubuntu Desktop is the GNOME
- * screen reader (/usr/bin/orca).
+ * The server command the app gives a profile it creates without one (#1207): the CLI desktop
+ * installs put on PATH, which the CLI package also installs. Saved explicitly, so the profile
+ * means the same thing to every version that reads it, an older one included.
  */
 export const DEFAULT_SERVER_COMMAND = "orca-cli";
+
+/**
+ * What an omitted server command has always meant, and still means wherever one is omitted: a
+ * profile or credential saved before 0.8.1, or a workspace config's `remotes[]` entry. Those
+ * were set up against a server whose CLI answers to `orca`, and that server need not have been
+ * upgraded with the desktop. Nothing ever falls back from one name to the other: on Ubuntu
+ * Desktop, `orca` is the GNOME screen reader (/usr/bin/orca).
+ */
+export const LEGACY_SERVER_COMMAND = "orca";
 
 const PROFILE_ID = /^[a-z0-9][a-z0-9-]{0,62}$/;
 const USER = "[A-Za-z0-9._][A-Za-z0-9._-]{0,63}";
@@ -94,7 +103,8 @@ export const ConnectionProfileSchema = z
     /**
      * The server's ORCA CLI, which issues and renews this profile's credential (#875): a
      * command on the server's PATH or an absolute path, such as a managed install's wrapper.
-     * Default {@link DEFAULT_SERVER_COMMAND}, `orca-cli`.
+     * A profile the app creates gets {@link DEFAULT_SERVER_COMMAND} (`orca-cli`) when none is
+     * entered; an omitted one, saved before 0.8.1, means {@link LEGACY_SERVER_COMMAND} (`orca`).
      */
     serverCommand: z.string().regex(SERVER_COMMAND, "Enter a command name or a full path without spaces").optional(),
     /** The daemon's workspace config on the server, passed as `--config`. Absent: the CLI's own default. */

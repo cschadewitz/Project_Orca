@@ -1,5 +1,6 @@
-- **remote:** a remote's or app profile's `serverCommand` now defaults to `orca-cli` instead
-  of `orca` (#1207), so it never reaches the screen reader on an Ubuntu Desktop server.
-  Profiles made by the app's server setup already name their launcher's full path and are
-  unchanged. A server running ORCA from a source checkout gets `orca-cli` beside `orca` once
-  the CLI package is linked again; or set `serverCommand: orca` to keep the old name.
+- **app:** a remote daemon profile created with the server command left empty now saves
+  `orca-cli` (#1207), the command desktop installs provide. Profiles saved before 0.8.1 that
+  left it empty keep using `orca`, and each issued credential records the command it was
+  issued through, so it is revoked through the same one. A workspace config's
+  `remotes[].serverCommand` still means `orca` when omitted; write `orca-cli` for a server
+  with a desktop install, where on Ubuntu Desktop `orca` is the screen reader.

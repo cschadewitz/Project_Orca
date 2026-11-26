@@ -26,7 +26,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
-import { DEFAULT_SERVER_COMMAND, type ConnectionProfile, type RemoteResult } from "@orca/protocol/remote-access";
+import { LEGACY_SERVER_COMMAND, type ConnectionProfile, type RemoteResult } from "@orca/protocol/remote-access";
 import { ConnectionRefusal } from "./connection-target.js";
 
 /** How long issued credentials live, and when they are renewed. */
@@ -69,8 +69,12 @@ export class CredentialSetupRefusal extends ConnectionRefusal {
   }
 }
 
+/**
+ * The CLI a profile's credentials are issued through. Omitted only on a profile saved before
+ * 0.8.1 (the app now saves `orca-cli` explicitly), which keeps meaning `orca` (#1207).
+ */
 export function serverCommand(profile: ConnectionProfile): string {
-  return profile.serverCommand ?? DEFAULT_SERVER_COMMAND;
+  return profile.serverCommand ?? LEGACY_SERVER_COMMAND;
 }
 
 function refusalMessage(code: CredentialSetupCode, profile: ConnectionProfile): string {
@@ -172,7 +176,9 @@ export function targetOf(profile: ConnectionProfile, hostKeys: string): Credenti
   return {
     server: serverKey(profile),
     hostKeys,
-    ...(profile.serverCommand ? { serverCommand: profile.serverCommand } : {}),
+    // Always the command it was issued through, so it is revoked through the same one whatever
+    // the profile later says. A target saved before 0.8.1 may omit it: then it was `orca`.
+    serverCommand: serverCommand(profile),
     ...(profile.serverConfig ? { serverConfig: profile.serverConfig } : {}),
   };
 }
@@ -202,7 +208,7 @@ export function issueCommand(profile: ConnectionProfile, principal: string, expi
 export function revokeCommand(target: CredentialTarget, credentialId: string): string[] {
   // A credential id may start with `-`: after `--`, so it is never read as an option.
   return [
-    target.serverCommand ?? DEFAULT_SERVER_COMMAND,
+    target.serverCommand ?? LEGACY_SERVER_COMMAND,
     "auth",
     "revoke",
     ...configArgs(target),

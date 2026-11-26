@@ -640,7 +640,8 @@ runs it started. Enrollment checks it like any other and saves it in its own fil
 `auth/remotes/<id>.<credential id>.token`, readable only by this user; the enrollment record
 names that file. Enrolling again reuses it while the route and host keys are unchanged.
 `orca-cli remote enroll <id> --issue` replaces it. The ssh login must be able to run that CLI
-(`remotes[].serverCommand`, default `orca-cli`).
+(`remotes[].serverCommand`: `orca-cli` for a desktop install; omitted, it is `orca`, as before
+0.8.1, which on Ubuntu Desktop is the screen reader).
 
 Enroll from a workspace the CLI owns. A workspace the desktop app set up refuses enrollment
 for now ([#1206](https://github.com/cschadewitz/Project_Orca/issues/1206)).

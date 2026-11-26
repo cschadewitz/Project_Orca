@@ -16,9 +16,14 @@ Commands below are written as `orca-cli …`, the command line the Windows and U
 installs put on `PATH` (#1207): on Windows the installer adds `resources\bin` under the install
 directory to your user `PATH` (open a new terminal after installing), and on Ubuntu the
 package installs `/usr/bin/orca-cli`. Plain `orca` is not used because on Ubuntu Desktop it
-is the GNOME screen reader. A remote's `serverCommand` defaults to `orca-cli` on the server's
-`PATH`; a server made by the app's server setup uses its own launcher's full path instead. In a
-source checkout, `pnpm run orca …` runs the same CLI.
+is the GNOME screen reader. In a source checkout, `pnpm run orca …` runs the same CLI.
+
+The server's CLI is a remote's `serverCommand`. A profile you create in the app uses `orca-cli`
+when you leave it empty; a server made by the app's server setup uses its own launcher's full
+path. Where it is left out, in a workspace config's `remotes[]` or on a profile saved before
+0.8.1, it means `orca`, as it always has, so a remote set up earlier keeps working while its
+server still runs an older ORCA. Write `serverCommand: orca-cli` for a server with a desktop
+install: on Ubuntu Desktop, `orca` there is the screen reader.
 
 ## 1. Local only
 
@@ -124,7 +129,7 @@ remotes:
   - id: build-box
     destination: ci@build-box.example
     identityFile: /home/me/.ssh/id_ed25519
-    # serverCommand: orca-cli            # the worker's CLI on the ssh login's PATH
+    serverCommand: orca-cli             # the worker's CLI on the ssh login's PATH (omitted: orca)
     # serverConfig: /srv/orca/orca.config.yaml
 agents:
   - { id: remote-builder, type: orca-daemon, profile: build-box, workflow: build }

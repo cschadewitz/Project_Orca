@@ -168,7 +168,11 @@ describe("the Windows launcher and PATH edit", () => {
     const ps1 = read("packages/app/build/win/orca-cli-path.ps1");
     expect(ps1).toContain("[Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Environment')");
     expect(ps1).toContain("[Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames");
-    expect(ps1).toContain("$key.SetValue('Path', $next, $kind)");
+    expect(ps1).toContain("$key.SetValue('Path', $value + $appended, $path.Kind)");
+    // Ownership: remove does nothing without the record add made, and cuts off exactly its text.
+    expect(ps1).toContain("$recordPath = 'Software\\ORCA\\orca-cli-path'");
+    expect(ps1).toContain("$value.EndsWith($appended, [StringComparison]::Ordinal)");
+    expect(ps1).toContain("This install added nothing to the user PATH, so it was left unchanged.");
     expect(ps1).toContain("[ValidateSet('add', 'remove')]");
     expect(ps1).not.toMatch(/SetEnvironmentVariable|setx|Invoke-Expression|\biex\b/i);
   });
@@ -180,14 +184,26 @@ describe("the Windows launcher and PATH edit", () => {
     expect(step.if).toBe("matrix.name == 'windows' && runner.environment == 'github-hosted'");
     expect(step.run).toContain("'/S', '/currentuser'");
     expect(step.run).toContain("$out = orca-cli --version");
-    expect(step.run).toContain("if ($final -ne $before)");
+    expect(step.run).toContain("if ($final -cne $before)");
+    const cases = workflow.jobs.package.steps.find(
+      (candidate) => candidate.name === "The installer's PATH edit round-trips the user PATH exactly",
+    );
+    expect(cases.if).toBe(step.if);
+    expect(cases.run).toContain(
+      "packages/app/test/windows/orca-cli-path.cases.ps1 -Script packages/app/build/win/orca-cli-path.ps1",
+    );
   });
 });
 
-it("defaults a remote's server command to orca-cli, and the CLI package installs that name too", () => {
-  expect(read("packages/protocol/src/remote-access.ts")).toContain('export const DEFAULT_SERVER_COMMAND = "orca-cli";');
+it("gives new app profiles orca-cli, keeps an omitted command meaning orca, and installs both names", () => {
+  const protocol = read("packages/protocol/src/remote-access.ts");
+  expect(protocol).toContain('export const DEFAULT_SERVER_COMMAND = "orca-cli";');
+  expect(protocol).toContain('export const LEGACY_SERVER_COMMAND = "orca";');
   const cli = JSON.parse(read("packages/cli/package.json"));
   expect(cli.bin).toEqual({ orca: "./dist/main.js", "orca-cli": "./dist/main.js" });
-  for (const file of ["packages/app/src/main/remote-credentials.ts", "packages/daemon/src/delegation/enrollment.ts"])
-    expect(read(file)).not.toMatch(/serverCommand \?\? "orca"/);
+  // An omitted command resolves to the legacy name only, through the one constant, never a literal.
+  for (const file of ["packages/app/src/main/remote-credentials.ts", "packages/daemon/src/delegation/enrollment.ts"]) {
+    expect(read(file)).not.toMatch(/serverCommand \?\? "orca/);
+    expect(read(file)).not.toMatch(/serverCommand \?\? DEFAULT_SERVER_COMMAND/);
+  }
 });
