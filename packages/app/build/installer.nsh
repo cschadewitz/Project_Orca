@@ -43,5 +43,11 @@
     !insertmacro orcaCliPath "remove"
     SetShellVarContext current
     RMDir /r "$LOCALAPPDATA\@orcaapp-updater"
+    ; An install from before the rename left its cache under the old name; the renamed app's
+    ; first launch removes it, and this covers an uninstall before that launch. Best-effort,
+    ; like the line above: a folder that is not there is not an error to the uninstall.
+    ; rename-keep-start: the updater cache a pre-rename install left
+    RMDir /r "$LOCALAPPDATA\@orcaapp-updater"
+    ; rename-keep-end
   ${endIf}
 !macroend
