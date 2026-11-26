@@ -321,9 +321,7 @@ async function deepViews(page: Page, prefix: string) {
     await page.getByRole("treeitem").first().click({ timeout: 5000 });
     await click(/^Filter by status/, false);
     await page.getByRole("menuitem", { name: "All statuses" }).click({ timeout: 5000 });
-    await timeUntil(`${prefix}-Runs rows after clearing the filter`, () =>
-      page.getByRole("treeitem").first().waitFor({ timeout: 30_000 }),
-    );
+    await whenReady(page, `${prefix}-runs-rows-after-clearing-the-filter`, runsReady(page));
   });
   await step("runs-expand-program", "Runs", async () => {
     const row = page.getByRole("treeitem").filter({ hasText: "Platform upgrade" }).first();
@@ -332,9 +330,11 @@ async function deepViews(page: Page, prefix: string) {
   });
   await step("runs-board", "Runs", async () => {
     await click("Board");
-    await timeUntil(`${prefix}-Board cards loaded`, () =>
-      expect(page.locator("main").getByText("Loading", { exact: true })).toHaveCount(0, { timeout: 30_000 }),
-    );
+    // Ready: the board shows the followed runs, and none of their cards is still loading.
+    await whenReady(page, `${prefix}-board-cards`, async () => {
+      await expect(page.locator("article.orca-board__card").first()).toBeVisible({ timeout: 30_000 });
+      await expect(page.locator("article.orca-board__card--loading")).toHaveCount(0, { timeout: 30_000 });
+    });
   });
   await step("runs-search", "Runs", async () => {
     await click("Search");
@@ -356,9 +356,13 @@ async function deepViews(page: Page, prefix: string) {
         .first()
         .getByRole("button", { name: "Open" })
         .click({ timeout: 5000 });
-      await timeUntil(`${prefix}-workflow ${name} loaded`, () =>
-        expect(page.getByText("Loading the workflow")).toHaveCount(0, { timeout: 30_000 }),
-      );
+      // Ready: the workflow view itself (it renders only once the definition loaded), live
+      // rather than the last-known copy, on the page for this workflow.
+      await whenReady(page, `${prefix}-workflow-${name}`, async () => {
+        await expect(page.locator(".orca-wf").first()).toBeVisible({ timeout: 30_000 });
+        await expect(page.locator(".orca-wf .orca-banner--stale")).toHaveCount(0);
+        await expect(page.locator("main").first()).toContainText(name);
+      });
     });
   await step("workflow-edit-wide", "Workflows", () =>
     page
@@ -395,28 +399,38 @@ async function deepViews(page: Page, prefix: string) {
 }
 
 /**
- * How long a loading state lasts: from now until `ready` holds, written to load-times.json.
- * A loading screen in a capture is only a finding if it lasts; this says whether it does.
+ * Waits until the view shows its data (`ready` asserts it positively) and records how long that
+ * took in load-times.json. A view that never got there is a failed step, not a capture: a
+ * diagnostic screenshot is saved as `not-ready-<label>` and the error is rethrown, so the sweep
+ * fails rather than passing on a loading or error view.
  */
-async function timeUntil(label: string, ready: () => Promise<unknown>) {
+async function whenReady(page: Page, label: string, ready: () => Promise<unknown>) {
   const started = Date.now();
-  let ms: number | string;
   try {
     await ready();
-    ms = Date.now() - started;
-  } catch {
-    ms = `>${Date.now() - started}`;
+  } catch (error) {
+    await appendFile(
+      join(OUT, "load-times.json"),
+      `${JSON.stringify({ label, ready: false, ms: Date.now() - started })}\n`,
+    );
+    await capture(page, `not-ready-${label}`);
+    throw error;
   }
-  await appendFile(join(OUT, "load-times.json"), `${JSON.stringify({ label, ms })}\n`);
+  await appendFile(
+    join(OUT, "load-times.json"),
+    `${JSON.stringify({ label, ready: true, ms: Date.now() - started })}\n`,
+  );
 }
+
+/** Runs has rows. */
+const runsReady = (page: Page) => () => expect(page.getByRole("treeitem").first()).toBeVisible({ timeout: 30_000 });
 
 async function everySurface(page: Page, prefix: string) {
   for (const surface of SURFACES)
     await attempt(`${prefix}-${surface}`, async () => {
       await openSurface(page, surface);
       // Runs shows a loading state first; the capture is of its data, so wait for a row.
-      if (surface === "Runs")
-        await timeUntil(`${prefix}-Runs rows`, () => page.getByRole("treeitem").first().waitFor({ timeout: 30_000 }));
+      if (surface === "Runs") await whenReady(page, `${prefix}-runs-rows`, runsReady(page));
       await capture(page, `${prefix}-${surface}`);
     });
 }
@@ -425,8 +439,10 @@ async function everySurface(page: Page, prefix: string) {
 async function chooseTheme(page: Page, theme: "light" | "dark") {
   const current = () => page.evaluate(() => document.documentElement.getAttribute("data-theme"));
   for (let press = 0; press < 3 && (await current()) !== theme; press++) {
+    const before = await current();
     await page.keyboard.press("Control+Shift+KeyL");
-    await expect.poll(current).not.toBeNull();
+    // Each press must visibly change the theme, or the shortcut did not take effect.
+    await expect.poll(current).not.toBe(before);
   }
   expect(await current()).toBe(theme);
 }
