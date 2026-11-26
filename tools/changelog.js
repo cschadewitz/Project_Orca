@@ -12,10 +12,17 @@
 // area prefix and renders as `#### app`. A wave-sized release is fifty bullets under four
 // headings otherwise, and the question someone upgrading actually asks — "what moved in
 // the part I use?" — has no heading to answer it.
-import { readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, renameSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
 export const FRAGMENT_DIR = "changelog.d";
+/**
+ * Fragments of dark work (docs/WORKSTREAMS.md): `changelog.d/incubating/<flag>/`, one folder per
+ * incubating feature flag. A release never renders or deletes them, because only the top level
+ * of changelog.d/ is read; the flag's promotion pull request moves them up
+ * (`node tools/release.js promote <flag>`), and the next release ships them.
+ */
+export const INCUBATING_DIR = join(FRAGMENT_DIR, "incubating");
 
 /**
  * The sections a release renders, in order. The key is the filename suffix; the heading is
@@ -82,7 +89,8 @@ export function splitEntries(body) {
  * Reads the fragments, in the order they render: by filename, numerically, so `#99` comes
  * before `#101` rather than after it. A name that does not end in a known section is a
  * typo worth failing on — silently dropping an entry is exactly the bookkeeping loss this
- * scheme exists to prevent. `README.md` documents the directory and is not a fragment.
+ * scheme exists to prevent. `README.md` documents the directory and is not a fragment, and
+ * folders (such as `incubating/`, dark work's notes) are not read.
  */
 export function readFragments(dir = FRAGMENT_DIR) {
   let names;
@@ -163,6 +171,23 @@ export function renderEntries(fragments) {
     out.push(`### ${heading}`, "", ...(inSection.length ? renderSection(inSection) : [NO_STORE_CHANGE]));
   }
   return out;
+}
+
+/**
+ * Moves an incubating flag's fragments up into changelog.d/, for its promotion pull request, and
+ * removes its folder. Refuses a flag with no fragments, a misnamed fragment, or a name already
+ * taken at the top level, before moving anything.
+ */
+export function promoteFragments(flag, dir = FRAGMENT_DIR) {
+  if (!/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(flag ?? "")) throw new Error(`"${flag}" is not a feature flag name`);
+  const from = join(dir, "incubating", flag);
+  const fragments = readFragments(from);
+  if (!fragments.length) throw new Error(`${from}/ has no fragments to promote`);
+  for (const { name } of fragments)
+    if (existsSync(join(dir, name))) throw new Error(`${join(dir, name)} already exists; rename one of them first`);
+  for (const { name } of fragments) renameSync(join(from, name), join(dir, name));
+  if (!readdirSync(from).length) rmSync(from, { recursive: true });
+  return fragments.map(({ name }) => name);
 }
 
 /** Removes the rendered fragments; the release commit carries the deletions. */

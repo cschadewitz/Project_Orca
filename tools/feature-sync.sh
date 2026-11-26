@@ -61,6 +61,40 @@ candidate_problem() {
   fi
 }
 
+# The open sync pull request's fields, space separated, with explicit booleans kept (jq's `//`
+# would turn `false` into the fallback): number, head, cross-repository, author is a bot, labels.
+PR_FIELDS='if length == 0 then "" else .[0] | [(.number | tostring), .headRefOid, (.isCrossRepository | tostring), (.author.is_bot | tostring), ([.labels[]?.name] | join(",") | if . == "" then "-" else . end)] | join(" ") end'
+
+# GitHub Actions' app id: the required check must come from it, not from any app that can post
+# a check run of the same name.
+ACTIONS_APP_ID=15368
+
+# ruleset_problem BRANCH: prints why BRANCH is not protected the way unattended merging relies
+# on, and fails; succeeds silently when it is. It needs one active ruleset on BRANCH that
+# requires a pull request and `check (node 24)` from GitHub Actions under the strict (up to
+# date with the base) policy, with no bypass actors at all, so no credential, the merging one
+# included, can merge past it. A ruleset whose bypass list cannot be read counts as unverified.
+ruleset_problem() {
+  local rules id ruleset
+  if ! rules=$(gh api "repos/$REPO/rules/branches/$1" 2>/dev/null); then
+    echo "its rules could not be read"; return 1
+  fi
+  for id in $(jq -r --arg c "$REQUIRED_CHECK" --argjson app "$ACTIONS_APP_ID" '
+      .[] | select(.type == "required_status_checks"
+        and .parameters.strict_required_status_checks_policy == true
+        and any(.parameters.required_status_checks[]; .context == $c and .integration_id == $app))
+      | .ruleset_id // empty' <<<"$rules" | sort -u); do
+    ruleset=$(gh api "repos/$REPO/rulesets/$id" 2>/dev/null) || continue
+    if jq -e '.enforcement == "active"
+        and (.bypass_actors | type == "array" and length == 0)
+        and any(.rules[]; .type == "pull_request")' <<<"$ruleset" >/dev/null; then
+      return 0
+    fi
+  done
+  echo "no active ruleset with no bypass actors requires a pull request and an up-to-date \`$REQUIRED_CHECK\` from GitHub Actions (or its bypass list could not be read)"
+  return 1
+}
+
 # conflict_issue NAME: the open sync-conflict issue for feature/NAME, or empty.
 conflict_issue() {
   gh issue list --repo "$REPO" --state open --label sync-conflict --search "\"feature/$1\" in:title" \
@@ -83,7 +117,7 @@ for name in "${branches[@]}"; do
   # exactly that head and the head is exactly the bot's merge of the feature head and main.
   read -r pr pr_head cross is_bot labels < <(gh pr list --repo "$REPO" --state open --base "$feature" --head "$sync" \
     --json number,headRefOid,isCrossRepository,author,labels \
-    --jq '.[0] | "\(.number // "") \(.headRefOid // "") \(.isCrossRepository // "") \(.author.is_bot // "") \([.labels[]?.name] | join(",") | if . == "" then "-" else . end)"') || true
+    --jq "$PR_FIELDS") || true
   if [ -n "${pr:-}" ] && git cat-file -e "$pr_head^{commit}" 2>/dev/null &&
     git merge-base --is-ancestor "$head" "$pr_head" && git merge-base --is-ancestor "$main" "$pr_head"; then
     if ! problem=$(candidate_problem "$pr_head" "$head" "$main" "$cross" "$is_bot"); then
@@ -100,6 +134,12 @@ for name in "${branches[@]}"; do
       green)
         if [ "${AUTO_MERGE:-}" != "true" ]; then
           summary "$feature: sync #$pr passed CI; unattended merging is off (FEATURE_SYNC_AUTO_MERGE), so it waits for a person."
+        elif ! problem=$(ruleset_problem "$feature"); then
+          summary "$feature: sync #$pr passed CI, but $problem, so it is not merged unattended."
+          echo "::warning::$feature: $problem"
+        elif [ "$(gh api "repos/$REPO/git/ref/heads/$feature" --jq .object.sha)" != "$head" ]; then
+          # The CI above proves the tree of this head on top of the feature head it was built on.
+          summary "$feature: moved since sync #$pr was checked; the next run rebuilds it."
         else
           gh pr merge "$pr" --repo "$REPO" --merge --match-head-commit "$pr_head" >/dev/null
           summary "$feature: merged sync #$pr."

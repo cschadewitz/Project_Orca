@@ -31,9 +31,11 @@ cannot disturb it; a short promotion pull request turns it on in the release tha
 - **Register the flag** with the workstream's first pull request: kebab-case `name`, `stage:
   "incubating"`, the tracking `issue`, and a one-line `summary`. Check it with
   `featureEnabled("<name>")`; an unknown name throws, so a typo fails loudly.
-- **Stages.** `incubating` is off in every build; only a developer or a test turns it on, with
-  `ORCA_INCUBATING=<name>` (or `all`), never from configuration. `experimental` is off unless
-  the owner opts in (a config switch the caller passes) or `ORCA_EXPERIMENTAL` names it.
+- **Stages.** `incubating` is off by default; only a developer or a test turns it on, with
+  `ORCA_INCUBATING=<name>` (or `all`), never from app configuration. That is a default, not an
+  access control: whoever sets a process's environment can reach it. `experimental` is off
+  unless the owner opts in (a config switch the caller passes) or `ORCA_EXPERIMENTAL` names it
+  (by name only; `all` there turns nothing on).
   `stable` is on, and the flag and its checks are removed in the next minor.
 - **Both paths are tested.** CI's normal run covers the flag off. **Incubating**
   (`incubating.yml`) runs the tests again with `ORCA_INCUBATING=all` whenever the registry holds
@@ -63,8 +65,9 @@ A long-lived branch is the exception, for work that cannot ship dark: an outside
 even dark code, or the change breaks the store format or protocol and cannot be hidden.
 
 - **Pull requests only.** Work reaches `feature/<name>` through reviewed pull requests, as on
-  `main`. The `feature/*` ruleset requires a pull request and the `check (node 24)` check, and
-  blocks force pushes and deletion.
+  `main`. The `feature/*` ruleset requires a pull request and the `check (node 24)` check from
+  GitHub Actions with the strict policy (the head must be up to date with the feature branch),
+  and blocks force pushes and deletion.
 - **CI.** `ci.yml` runs on pushes to `feature/**` and on pull requests into it. Its runner
   choice is the same as for `main`: same-repository branches and pull requests may use the
   self-hosted runners, since only collaborators with write access can push a `feature/*` or
@@ -79,11 +82,18 @@ even dark code, or the change breaks the store format or protocol and cannot be 
   request at that exact head succeeded. Unrelated green checks, a missing, queued, skipped or
   neutral `check (node 24)`, or any failed check do not count. A current head that is not that
   merge gets a comment and the `sync-conflict` label and is never merged.
-- **Unattended merging is off until the ruleset exists.** The workflow merges only when the
-  repository variable `FEATURE_SYNC_AUTO_MERGE` is `true`. Set it only after the `feature/*`
-  ruleset below is in place, so the merge gate and the ruleset are two layers, not one. A conflict opens no pull request: one issue per branch, `Sync conflict:
-  feature/<name>` with the `sync-conflict` label, lists the files for the workstream's owner,
-  and the next clean sync closes it.
+  A conflict opens no pull request: one issue per branch, `Sync conflict: feature/<name>` with
+  the `sync-conflict` label, lists the files for the workstream's owner, and the next clean sync
+  closes it.
+- **Unattended merging needs the ruleset.** The workflow merges only when the repository
+  variable `FEATURE_SYNC_AUTO_MERGE` is `true` and, read before every merge, one active ruleset
+  on the feature branch requires a pull request and `check (node 24)` from GitHub Actions
+  (app 15368) under the strict policy, with no bypass actors. The bypass list is visible only to
+  a token that can administer rulesets; if the release App's token cannot read it, the ruleset
+  counts as unverified and sync pull requests wait for a person. Right before merging it also
+  reads the feature branch again and skips the merge if it moved since the check; between that
+  read and the merge, the strict, unbypassable rule is what makes GitHub refuse a merge onto a
+  moved branch. Set the variable only after that ruleset exists.
 - **Landing.** One pull request from `feature/<name>` into `main` when the gate opens. Its
   changelog fragments live in `changelog.d/` on the branch and arrive with it; the landing pull
   request takes the target release's milestone.

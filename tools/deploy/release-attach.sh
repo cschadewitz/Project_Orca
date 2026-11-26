@@ -59,7 +59,8 @@
 #
 #   release-attach.sh server-target VERSION SHA
 #                                       print id= and kind= (final|prerelease) for the one
-#                                       release vVERSION the bundle belongs to: SHA on main, a
+#                                       release vVERSION the bundle belongs to: SHA on its
+#                                       protected line release/X.Y, a
 #                                       final still a draft or a prerelease already published,
 #                                       targeting SHA; fail otherwise
 #   release-attach.sh server-attach ID SHA VERSION RUN_ID DIR
@@ -338,8 +339,9 @@ case "${1:-}" in
       fail "usage: release-attach.sh server-target VERSION SHA"
     version=$2 sha=$3
     server_applies "$version" || fail "v$version is before the server bundle's $SERVER_FROM line; nothing built"
-    status=$(gh api "repos/$REPO/compare/$sha...main" --jq .status) || fail "cannot compare $sha with main"
-    [[ "$status" == ahead || "$status" == identical ]] || fail "$sha is not on main ($status); nothing built"
+    # On its version's protected line (main's tools/release-lane.js, through the API only).
+    GITHUB_REPOSITORY=$REPO node "$HERE/../release-lane.js" on-lane "$sha" "$version" >&2 ||
+      fail "$sha is not on v$version's protected release line; nothing built"
     ids=$(gh api --paginate "repos/$REPO/releases" --jq ".[] | select(.name == \"v$version\") | .id")
     count=$(grep -c . <<<"$ids" || true)
     [[ "$count" -eq 1 ]] || fail "$count releases are named v$version, not one; nothing built"
