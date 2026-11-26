@@ -6,6 +6,9 @@
  * Startup: `STAND_IN_STARTUP` = `ok` (default), `silent` (never answers initialize), `exit`
  * (exits at once) or `old` (answers without hook `onFailure` support).
  * Turns: the first word of the prompt picks the script (see `turn` below).
+ * `STAND_IN_REFUSE_CONFIG` refuses every model and effort change, `STAND_IN_REFUSE_SET_MODEL`
+ * every model change, `STAND_IN_FLAGS_OK=n` every effort change after the first n;
+ * `STAND_IN_CONFIG_DELAY_MS` answers changes that late.
  * `STAND_IN_STUBBORN`, when set, keeps it running after its input ends and through SIGTERM.
  * `STAND_IN_LOG`, when set, gets one JSON line per input line and the argv.
  */
@@ -24,6 +27,30 @@ if (process.env.STAND_IN_STUBBORN) {
   setInterval(() => undefined, 1000);
   process.on("SIGTERM", () => undefined);
 }
+
+/** What `set_model` and `apply_flag_settings` changed, reported by the `config` turn. */
+const state = { model: null, effort: null };
+const MODELS = [
+  {
+    value: "default",
+    displayName: "Default (recommended)",
+    description: "the stand-in's default",
+    supportsEffort: true,
+    supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
+  },
+  {
+    value: "sonnet",
+    displayName: "Sonnet\u0007 stand-in",
+    supportsEffort: true,
+    supportedEffortLevels: ["low", "high"],
+  },
+  { value: "old-model", displayName: "Old", description: "x".repeat(500) },
+  { value: "bad id with spaces", displayName: "refused row" },
+  { value: "sonnet", displayName: "duplicate" },
+];
+
+/** How many `apply_flag_settings` succeed before the rest are refused (STAND_IN_FLAGS_OK). */
+let flagsOk = process.env.STAND_IN_FLAGS_OK === undefined ? Infinity : Number(process.env.STAND_IN_FLAGS_OK);
 
 let hookId;
 let nextRequest = 0;
@@ -127,6 +154,9 @@ async function turn(text) {
     permissionMode: "default",
   });
   switch (word) {
+    case "config":
+      assistant([{ type: "text", text: JSON.stringify(state) }]);
+      return result();
     case "hello":
       assistant([{ type: "thinking", thinking: "thinking about it", signature: "" }]);
       assistant([{ type: "text", text: `you said: ${text}` }]);
@@ -217,7 +247,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
             agents: [],
             output_style: "default",
             available_output_styles: [],
-            models: [],
+            models: MODELS,
             account: {},
             hooks_applied: true,
             hook_on_failure_supported: startup !== "old",
@@ -227,6 +257,32 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       });
     }
     if (req.subtype === "interrupt") interrupted?.();
+    if (req.subtype === "set_model" || req.subtype === "apply_flag_settings") {
+      const refuse =
+        process.env.STAND_IN_REFUSE_CONFIG ||
+        (req.subtype === "set_model" && process.env.STAND_IN_REFUSE_SET_MODEL) ||
+        (req.subtype === "apply_flag_settings" && flagsOk-- <= 0);
+      if (process.env.STAND_IN_CONFIG_DELAY_MS && !refuse) {
+        const id = m.request_id;
+        const apply = () => {
+          if (req.subtype === "set_model") state.model = req.model;
+          else if ("effortLevel" in req.settings) state.effort = req.settings.effortLevel;
+          out({ type: "control_response", response: { subtype: "success", request_id: id, response: {} } });
+        };
+        return void setTimeout(apply, Number(process.env.STAND_IN_CONFIG_DELAY_MS));
+      }
+      if (refuse)
+        return out({
+          type: "control_response",
+          response: {
+            subtype: "error",
+            request_id: m.request_id,
+            error: `${process.env.STAND_IN_REFUSE_CONFIG ?? "SENTINEL-7c1e-cli-text"} refused`,
+          },
+        });
+      if (req.subtype === "set_model") state.model = req.model;
+      else if ("effortLevel" in req.settings) state.effort = req.settings.effortLevel;
+    }
     return out({ type: "control_response", response: { subtype: "success", request_id: m.request_id, response: {} } });
   }
   if (m.type === "user") {
