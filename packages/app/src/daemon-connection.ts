@@ -39,6 +39,8 @@ export interface RemoteProfileView extends RemoteProfileHop {
   serverConfig?: string;
   /** Credentials are issued with the read-only `viewer` preset. */
   readOnly?: true;
+  /** Picked from the tailnet (#1226): bound to this node's stable ID; `name` is its MagicDNS name then. */
+  tailnet?: { node: string; name: string };
   hasCredential: boolean;
   /** When the automatically issued credential expires; it is renewed well before. */
   credentialExpiresAt?: string;
@@ -60,6 +62,8 @@ export interface RemoteProfileInput extends RemoteProfileHop {
   serverCommand?: string;
   serverConfig?: string;
   readOnly?: boolean;
+  /** Bind to a tailnet node (#1226). Left out on an edit: the profile keeps the node it had. */
+  tailnet?: { node: string; name: string };
 }
 
 /**
@@ -107,6 +111,8 @@ export interface ServerInspectionView {
   account: string;
   fingerprints: { server: string[]; jump?: string[] };
   firstUse: boolean;
+  /** The keys are the ones the machine's tailnet advertises (#1227): shown as such, still confirmed. */
+  advertised?: true;
   version: string;
   root: string;
   current: string | null;
@@ -116,6 +122,37 @@ export interface ServerInspectionView {
 export interface ServerInspectionResultView {
   inspection?: ServerInspectionView;
   setup?: ServerSetupView["setup"];
+}
+
+/** A machine on this computer's tailnet (#1226), as Add a machine lists it. */
+export interface TailnetMachineView {
+  /** The stable node ID a profile is bound to. */
+  node: string;
+  /** Its MagicDNS name, without the trailing dot. */
+  name: string;
+  hostName: string;
+  os: string;
+  online: boolean;
+  /** Runs Tailscale SSH, so it advertises its host keys (#1227). */
+  tailscaleSsh: boolean;
+  /** Shared in from another tailnet: its host keys are confirmed by hand. */
+  sharedIn: boolean;
+  /** ORCA can set up a server there (Linux today, #1238). */
+  hostSupported: boolean;
+}
+/**
+ * The tailnet as Add a machine sees it: `off` (the `tailnet-hosts` flag is off: nothing is
+ * shown), Tailscale missing, stopped or unreadable here, or running with its machines.
+ */
+export type TailnetMachinesView =
+  | { state: "running"; tailnetName?: string; machines: TailnetMachineView[] }
+  | { state: "off" | "absent" | "stopped" | "signed-out" | "error"; detail?: string };
+
+/** Tailscale SSH asks the person to approve a connection (check mode, #1228). */
+export interface LoginApprovalView {
+  profileId: string;
+  /** The approval page's host, to name it; main opens the page itself. */
+  host: string;
 }
 
 /** Profile management. Every call is main-process work; secrets never cross this bridge. */
@@ -138,6 +175,12 @@ export interface RemoteProfilesBridge {
    * in, exactly as confirmed (`inspectServer`'s confirmation, used once). Runs for minutes.
    */
   setUpServer?(this: void, id: string, confirmation: string): Promise<ProfileResult<ServerSetupView>>;
+  /** The machines on this computer's tailnet (#1226). `off` unless the `tailnet-hosts` flag is on. */
+  tailnetMachines?(this: void): Promise<ProfileResult<TailnetMachinesView>>;
+  /** Tailscale SSH waits for the person to approve a connection (#1228). */
+  onLoginApproval?(this: void, listener: (approval: LoginApprovalView) => void): () => void;
+  /** Open the approval page main last received for this profile, in the browser. */
+  openLoginApproval?(this: void, id: string): Promise<ProfileResult<null>>;
 }
 export interface DaemonConnectionBridge {
   read(this: void): DaemonTargetSnapshot;

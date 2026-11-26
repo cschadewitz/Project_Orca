@@ -60,6 +60,24 @@ import {
   type SetupOutcome,
 } from "@orca/protocol/server-setup";
 import {
+  AdvertisedPinRefused,
+  readTailnet,
+  resolveTailnetBinding,
+  tailnetEnabled,
+  tailnetHostResolver,
+  tailnetLoginOrigins,
+  writeAdvertisedPin,
+  type ReadTailnetOptions,
+  type TailnetRead,
+} from "@orca/protocol/tailnet";
+import {
+  dropCourier,
+  prepareCourier,
+  pushCourier,
+  type CourierFetch,
+  type CourierPackage,
+} from "@orca/protocol/server-courier";
+import {
   CredentialRecords,
   CredentialSetupRefusal,
   DEFAULT_CREDENTIAL_POLICY,
@@ -193,6 +211,8 @@ export interface ServerInspection {
   fingerprints: { server: string[]; jump?: string[] };
   /** The keys are not pinned for this profile yet: confirming enrolls them. */
   firstUse: boolean;
+  /** The keys are the ones the machine's tailnet advertises (#1227): ssh refused any other. */
+  advertised?: true;
   version: string;
   root: string;
   /** The version already set up there, if any (then this verifies and repairs it). */
@@ -233,6 +253,15 @@ export interface RemoteProfilesDeps {
   installationId?: string;
   credentialPolicy?: CredentialPolicy;
   now?: () => number;
+  /**
+   * A login is waiting for the person to approve it in a browser (Tailscale SSH check mode,
+   * #1228): show them `url`. The login waits for the approval, up to the tunnel's limit.
+   */
+  onLoginApproval?: (profileId: string, url: string) => void;
+  /** Test seam: how the courier downloads (#1234). Default: HTTPS from this computer. */
+  courierFetch?: CourierFetch;
+  /** Test seam over how the local tailnet is read (`@orca/protocol/tailnet`, #1226). */
+  tailnet?: ReadTailnetOptions;
   /** Test seam: ask the daemon, over the tunnel's streams, whether it accepts `token`. */
   verify?: (connect: () => Duplex, url: string, token: string, principal?: string) => Promise<HelloAnswer>;
 }
@@ -418,6 +447,16 @@ export class RemoteProfiles {
       ...(expectKeys !== undefined ? { expectKeys } : {}),
       ...(this.deps.sshBinary ? { sshBinary: this.deps.sshBinary } : {}),
       onState: (state) => this.deps.onTunnelState?.(profile.id, state),
+      // A tailnet profile dials its node's current address, read on every connect (#1226).
+      ...(profile.tailnet ? { resolveHost: tailnetHostResolver(profile.tailnet, this.deps.tailnet) } : {}),
+      // Only a connection to a machine on the tailnet passes an approval page on, and only
+      // from the tailnet's control plane (#1228): any other banner stays the server's text.
+      ...(profile.tailnet && this.deps.onLoginApproval
+        ? {
+            onLoginApproval: (url: string) => this.deps.onLoginApproval?.(profile.id, url),
+            approvalOrigins: tailnetLoginOrigins(),
+          }
+        : {}),
     };
   }
   /**
@@ -542,6 +581,7 @@ export class RemoteProfiles {
       ...(profile.serverCommand ? { serverCommand: profile.serverCommand } : {}),
       ...(profile.serverConfig ? { serverConfig: profile.serverConfig } : {}),
       ...(profile.readOnly ? { readOnly: true as const } : {}),
+      ...(profile.tailnet ? { tailnet: { node: profile.tailnet.node, name: profile.tailnet.name } } : {}),
       hasCredential: this.activeSlot(this.record(profile.id)) !== undefined,
       ...this.credentialView(profile.id),
       ...this.pinView(profile),
@@ -597,6 +637,12 @@ export class RemoteProfiles {
     if (!parsed.success) throw new ConnectionRefusal(parsed.error.issues[0]?.message ?? "Invalid profile");
     const profiles = this.read();
     const { id: requested, ...fields } = parsed.data;
+    if (fields.tailnet) {
+      if (!tailnetEnabled(this.deps.tailnet?.features))
+        throw new ConnectionRefusal("Machines from your tailnet are not available in this build.");
+      if (fields.jump)
+        throw new ConnectionRefusal("A machine on your tailnet is reached directly, without a jump host.");
+    }
     const id = requested ?? profileIdFor(fields.name, new Set(profiles.map((p) => p.id)));
     const existing = profiles.find((p) => p.id === id);
     if (requested && !existing) throw new ConnectionRefusal("That profile no longer exists.");
@@ -605,8 +651,14 @@ export class RemoteProfiles {
     // that already omits it: one saved before 0.8.1, whose server answers to `orca` and keeps
     // doing so until someone enters another command.
     const keepsLegacy = existing !== undefined && existing.serverCommand === undefined;
+    // An edit from a form that does not show the binding keeps it: a tailnet profile never
+    // turns into a typed one by accident (#1226).
+    const tailnet = fields.tailnet ?? existing?.tailnet;
+    if (tailnet && fields.jump)
+      throw new ConnectionRefusal("A machine on your tailnet is reached directly, without a jump host.");
     const profile = ConnectionProfileSchema.parse({
       ...fields,
+      ...(tailnet ? { tailnet } : {}),
       ...(fields.serverCommand === undefined && !keepsLegacy ? { serverCommand: DEFAULT_SERVER_COMMAND } : {}),
       id,
     });
@@ -727,11 +779,13 @@ export class RemoteProfiles {
     this.serverSetups.add(id);
     let discovery: Discovery;
     try {
+      const advertised = await this.advertisedKeys(profile);
       discovery = await discoverServer({
         base: this.tunnelOptions(profile),
         tunnel: (tunnelOptions) => (this.deps.tunnel ?? ((o) => new SshTunnel(o)))(tunnelOptions),
         version: options.version,
         program: setupProgram(options.scripts),
+        ...(advertised ? { advertised: { alias: `orca-${profile.id}`, keys: advertised } } : {}),
       });
     } finally {
       this.serverSetups.delete(id);
@@ -772,6 +826,7 @@ export class RemoteProfiles {
         account,
         fingerprints: keyFingerprints(discovery.keys),
         firstUse: discovery.firstUse,
+        ...(discovery.advertised ? { advertised: true as const } : {}),
         version: options.version,
         root,
         current,
@@ -799,9 +854,21 @@ export class RemoteProfiles {
    */
   async setUpServer(
     id: string,
-    options: { version: string; scripts: string; confirmation: string },
+    options: {
+      version: string;
+      scripts: string;
+      confirmation: string;
+      /**
+       * Carry the signed bundle, cosign and Sigstore's trusted root from this computer instead of
+       * having the server download them (#1234): for a host with no internet access. The server
+       * still verifies the signature. Only with the `tailnet-hosts` flag on.
+       */
+      pushBundle?: boolean;
+    },
   ): Promise<ServerSetupResult> {
     if (this.closed) throw new ConnectionRefusal("The app is closing.");
+    if (options.pushBundle && !tailnetEnabled(this.deps.tailnet?.features))
+      throw new ConnectionRefusal("Setting up a server from this computer's copy is not available in this build.");
     this.assertIdle(id, "editing");
     const profile = this.get(id);
     if (!profile) throw new ConnectionRefusal("That profile no longer exists.");
@@ -819,14 +886,26 @@ export class RemoteProfiles {
       if (pending) dropDiscovery(pending.discovery);
       throw new ConnectionRefusal("That confirmation is not current. Check the server again, then confirm.");
     }
-    let command: string[];
     let program: string;
+    let courier: CourierPackage | undefined;
     try {
-      command = setupCommand(options.version, profile.remotePort, pending);
+      // Checked before anything is gathered: the command is built again with the scratch directory.
+      setupCommand(options.version, profile.remotePort, pending);
       program = setupProgram(options.scripts);
+      // Everything the server would download, fetched and checked here before it is enrolled.
+      if (options.pushBundle)
+        courier = await prepareCourier({
+          version: options.version,
+          cacheDir: join(this.deps.dir, "courier"),
+          ...(this.deps.courierFetch ? { fetch: this.deps.courierFetch } : {}),
+        });
     } catch (error) {
       dropDiscovery(pending.discovery);
       throw error;
+    }
+    if (this.revision(id) !== revision || this.closed) {
+      dropDiscovery(pending.discovery);
+      throw new ConnectionRefusal("The profile changed while the server bundle was fetched. Check it again.");
     }
     enrollDiscovered(pending.discovery, this.pins(id), profile.jump !== undefined);
     this.serverSetups.add(id);
@@ -835,13 +914,19 @@ export class RemoteProfiles {
       const tunnel = this.newTunnel(profile, true, pending.discovery.keys);
       try {
         await tunnel.open();
-        // Only the setup that was confirmed counts: what the server reports must match it.
-        setup = confirmedResult(readSetup(await tunnel.exec(command, SETUP_TIMEOUT_MS, program)), {
-          version: options.version,
-          port: profile.remotePort,
-          account: pending.account,
-          root: pending.root,
-        });
+        const scratch = courier ? await pushCourier(tunnel, courier) : undefined;
+        try {
+          const command = setupCommand(options.version, profile.remotePort, pending, scratch?.path);
+          // Only the setup that was confirmed counts: what the server reports must match it.
+          setup = confirmedResult(readSetup(await tunnel.exec(command, SETUP_TIMEOUT_MS, program)), {
+            version: options.version,
+            port: profile.remotePort,
+            account: pending.account,
+            root: pending.root,
+          });
+        } finally {
+          if (scratch) await dropCourier(tunnel, scratch);
+        }
       } finally {
         await tunnel.close();
       }
@@ -953,6 +1038,59 @@ export class RemoteProfiles {
     this.forgetPins(id);
     // Another key may be another server: what was approved on the old one is not carried over.
     this.forgetServerUpdater(id);
+  }
+
+  /**
+   * The machines on this computer's tailnet (#1226), for Add a machine and Add profile. Hidden
+   * (`off`, `absent`, …) unless the `tailnet-hosts` flag is on and Tailscale is running here.
+   */
+  tailnetMachines(): Promise<TailnetRead> {
+    return readTailnet(this.deps.tailnet);
+  }
+
+  /**
+   * Pin a tailnet profile's host keys from what its node advertises (#1227), instead of a
+   * fingerprint the person checks by hand. Only into a profile with no pin yet; a node that
+   * advertises none (no Tailscale SSH, a Windows machine) keeps the ordinary confirm flow.
+   * Returns whether it pinned.
+   */
+  async pinFromTailnet(id: string): Promise<boolean> {
+    const profile = this.get(id);
+    if (!profile?.tailnet) throw new ConnectionRefusal("That profile is not a machine on your tailnet.");
+    this.assertIdle(id, "resetting");
+    const read = await this.tailnetMachines();
+    if (read.state !== "running") throw new ConnectionRefusal("Tailscale is not running on this computer.");
+    const resolved = resolveTailnetBinding(read.snapshot, profile.tailnet);
+    if (!resolved.ok) throw new ConnectionRefusal(resolved.message);
+    if (!resolved.peer.sshHostKeys.length) return false;
+    // The profile may have changed or connected while the tailnet was read.
+    this.assertIdle(id, "resetting");
+    if (JSON.stringify(this.get(id)?.tailnet) !== JSON.stringify(profile.tailnet))
+      throw new ConnectionRefusal("That profile changed; try again.");
+    try {
+      // The person asked for this profile to be pinned from the tailnet (Add a machine, #1227).
+      writeAdvertisedPin(this.pins(id), `orca-${id}`, resolved.peer, { source: "tailnet-advertised" });
+    } catch (error) {
+      if (error instanceof AdvertisedPinRefused) throw new ConnectionRefusal(error.message);
+      throw error;
+    }
+    this.bump(id);
+    return true;
+  }
+
+  /**
+   * The host keys a tailnet profile's node advertises (#1227), for an inspection to check the
+   * server against strictly. None for any other profile, or a node that advertises none.
+   */
+  private async advertisedKeys(profile: ConnectionProfile): Promise<string[] | undefined> {
+    if (!profile.tailnet) return undefined;
+    const read = await this.tailnetMachines();
+    if (read.state !== "running") return undefined;
+    const resolved = resolveTailnetBinding(read.snapshot, profile.tailnet);
+    // A machine shared in from another tailnet is vouched for by that tailnet, not yours.
+    return resolved.ok && resolved.peer.sshHostKeys.length && !resolved.peer.sharedIn
+      ? resolved.peer.sshHostKeys
+      : undefined;
   }
 
   /** The host keys the profile's pins vouch for now (server, and jump host). */

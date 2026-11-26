@@ -194,6 +194,76 @@ fetch. Windows parents do not issue credentials during enrollment, so save one b
 | work that survives a dropped connection, a worker that enforces its own caps for every parent, and history on the worker | daemon delegation (setup 4) |
 | to see several machines' own work side by side | the app's Machines surface (setup 3) |
 
+## Using your own tailnet (incubating, #1225)
+
+> **Not in a release yet.** This is built behind the incubating `tailnet-hosts` flag
+> (docs/WORKSTREAMS.md): it is off unless the process is started with
+> `ORCA_INCUBATING=tailnet-hosts`. What follows describes the command line and the app as they stand on `main`.
+
+If you use [Tailscale](https://tailscale.com) (or a Headscale server), you can grow your pool of
+daemon hosts over your own tailnet. ORCA hosts nothing for this: it **reads** the Tailscale
+client you are already signed in to, by its fixed install path, and never changes it, your
+tailnet or its policy. It runs no relay or coordination server, holds no Tailscale auth key, and
+never treats tailnet membership as permission: every connection is still ORCA's own pinned SSH
+tunnel, and every daemon call still needs an ORCA credential.
+
+**On the new host** (Linux x64): install Tailscale and join your tailnet with Tailscale SSH on.
+
+```sh
+sudo tailscale up --ssh
+```
+
+That is all. No sshd setup, no SSH keys, no GitHub access.
+
+**From your own machine:**
+
+```sh
+orca-cli remote add you@build-1 --tailnet                 # inspect: prints the host key and a code
+orca-cli remote add you@build-1 --tailnet --confirm CODE  # set it up
+orca-cli remote add you@build-1 --tailnet --push-bundle --confirm CODE   # host with no internet access
+orca-cli remote enroll build-1 --tailnet                  # a remotes[] entry whose host is build-1 (setup 4)
+```
+
+**In the desktop app:** Connect to a daemon → **Add a machine…** lists the machines on your
+tailnet. Pick one, enter the account to log in as (`you@`), and save: the app checks the machine,
+shows the host keys your tailnet advertises for it, and sets it up once you confirm, carrying the
+signed bundle over the tunnel. When Tailscale asks you to approve the login, the dialog says so
+and **Open approval page** opens it in your browser. Offline machines, and machines that are not
+Linux, cannot be picked for setup. **Add profile…** offers the same list for a machine that
+already runs a daemon.
+
+- `build-1` is the machine's name on your tailnet (its short or full MagicDNS name, or its node
+  ID). The profile is bound to that machine's stable node ID: ssh dials its current Tailscale
+  address on every connect, and a name that now belongs to a different machine is refused.
+- **Login approval.** Tailscale's default rule for your own devices asks you to approve an SSH
+  login in your browser (check mode). ORCA shows the approval link and waits for you. Only for a
+  machine on your tailnet, and only a page on Tailscale's coordination server
+  (`https://login.tailscale.com`): any server can print a login banner, so a link anywhere else is
+  never offered. With a self-hosted control plane such as Headscale, name its https origin in
+  `ORCA_TAILNET_LOGIN_ORIGIN`.
+- **Host keys.** A machine running Tailscale SSH advertises its SSH host keys to your tailnet.
+  ORCA checks the server against exactly those keys, so you do not compare a fingerprint by
+  hand; you still confirm the setup. These keys are vouched for by your tailnet's coordination
+  server. Tailnet Lock does **not** sign them (it signs node keys only), so they are as
+  trustworthy as that server. A machine without Tailscale SSH, or one shared in from another
+  tailnet, uses the ordinary confirm-the-fingerprint flow; ORCA prints `sudo tailscale set --ssh`
+  for the first case.
+- **No internet on the host.** `--push-bundle` makes your machine fetch the signed server bundle,
+  the pinned cosign and Sigstore's trusted root, and copy them over the pinned SSH connection
+  into a new directory under `~/.cache/orca-courier/` on the host, removed afterwards. The host
+  takes the carried trusted root only if this ORCA release pins its digest. When Sigstore
+  publishes a new root, an offline setup refuses until you update ORCA; one with internet access
+  is unaffected.
+  The host still checks the bundle's signature itself. Such a host is updated from the app, not
+  by its own timer.
+
+**Policy notes.** The default tailnet policy lets you SSH to machines you own. If you tag a host
+(for example `tag:orca-server`), it leaves `autogroup:self`, so add a narrow SSH rule for your
+own devices and the account ORCA logs in as. Avoid broad `autogroup:member` rules.
+
+Windows hosts cannot be set up this way yet: Tailscale SSH has no Windows server (#1238). Without
+Tailscale, typed SSH profiles keep working over any VPN or LAN.
+
 ## How this is tested
 
 The **Two daemons** workflow (`.github/workflows/two-daemons.yml`) runs on every pull

@@ -19,7 +19,7 @@
  * unless its pins vouch for exactly the confirmed keys, as exactly the confirmed account.
  */
 import { createHash } from "node:crypto";
-import { constants, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { constants, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { z } from "zod";
@@ -31,6 +31,7 @@ import {
   type RemoteResult,
   type SshTunnelOptions,
 } from "./remote-access.js";
+import { parseAdvertisedHostKey } from "./tailnet.js";
 
 /** The two files, as shipped: `server-setup/` in a packaged app, `tools/deploy/` in a checkout. */
 export const SETUP_SCRIPT = "orca-server-setup.py";
@@ -69,7 +70,18 @@ export interface ConfirmedServer {
  * as confirmed: the setup refuses, before it changes anything, unless it runs as that
  * effective account, in that canonical directory, as that kind of run (install or repair).
  */
-export function setupCommand(version: string, port: number, confirmed: ConfirmedServer): string[] {
+export function setupCommand(
+  version: string,
+  port: number,
+  confirmed: ConfirmedServer,
+  /**
+   * A directory on the server holding the bundle the client carried (#1234), with the pinned
+   * cosign and trusted root, for a host with no internet access: an offline stage.
+   */
+  bundleDir?: string,
+): string[] {
+  if (bundleDir !== undefined && (!SERVER_DIR.test(bundleDir) || bundleDir.split("/").includes("..")))
+    throw new Error(`Not a bundle directory: ${bundleDir}`);
   if (!VERSION.test(version)) throw new Error(`Not a release version: ${version}`);
   if (!ACCOUNT.test(confirmed.account)) throw new Error(`Not an account name: ${confirmed.account}`);
   if (!SERVER_DIR.test(confirmed.root) || confirmed.root.split("/").includes(".."))
@@ -89,6 +101,8 @@ export function setupCommand(version: string, port: number, confirmed: Confirmed
     confirmed.root,
     "--expect-current",
     confirmed.current ?? "none",
+    // Only the courier passes a directory, and it carries cosign and the pinned trusted root too.
+    ...(bundleDir !== undefined ? ["--bundle", bundleDir, "--offline-bundle"] : []),
   ];
 }
 
@@ -319,6 +333,8 @@ export function confirmationCode(confirmation: Confirmation): string {
 export interface SetupTunnel {
   open(): Promise<string>;
   exec(command: readonly string[], timeoutMs?: number, input?: string): Promise<RemoteResult>;
+  /** Copy a local file to the server (`SshTunnel.upload`, #1234); needed only to push a bundle. */
+  upload?(localPath: string, remotePath: string, timeoutMs?: number): Promise<void>;
   close(): Promise<void>;
   readonly pinnedKeys: string | undefined;
 }
@@ -331,6 +347,11 @@ export interface Discovery {
   firstUse: boolean;
   /** The scratch pin file, when `firstUse`: enrolled by `enrollDiscovered`, or dropped. */
   scratch?: string;
+  /**
+   * The server's keys were the ones its tailnet advertises (#1227): the scratch pin held exactly
+   * those before ssh connected, so ssh refused any other key. Still confirmed by the person.
+   */
+  advertised?: true;
 }
 
 /**
@@ -344,6 +365,13 @@ export async function discoverServer(options: {
   tunnel: (options: SshTunnelOptions) => SetupTunnel;
   version: string;
   program: string;
+  /**
+   * Host keys the server's tailnet advertises (#1227), each `<type> <base64>`, with the alias the
+   * tunnel checks them under (`orca-<profile id>`). For a server not pinned yet they are written
+   * into the scratch pin before ssh connects, so ssh checks the server against them strictly
+   * instead of learning a first-seen key. Ignored for a server already pinned.
+   */
+  advertised?: { alias: string; keys: readonly string[] };
 }): Promise<Discovery> {
   const { base } = options;
   const real = base.knownHostsFile;
@@ -361,6 +389,21 @@ export async function discoverServer(options: {
       if (states[i] === "pinned") copyFileSync(file, i === 0 ? knownHostsFile : `${knownHostsFile}.jump`);
     });
   }
+  const advertised =
+    firstUse && states[0] === "none" && options.advertised?.keys.length ? options.advertised : undefined;
+  if (advertised) {
+    if (
+      !/^[A-Za-z0-9._-]{1,128}$/.test(advertised.alias) ||
+      advertised.keys.some((key) => parseAdvertisedHostKey(key) !== key)
+    ) {
+      rmSync(scratch!, { recursive: true, force: true });
+      throw new Error("Unusable advertised host keys");
+    }
+    writeFileSync(knownHostsFile, advertised.keys.map((key) => `${advertised.alias} ${key}\n`).join(""), {
+      mode: 0o600,
+      flag: "wx",
+    });
+  }
   const tunnel = options.tunnel({
     ...base,
     knownHostsFile,
@@ -374,7 +417,13 @@ export async function discoverServer(options: {
     const outcome = readInspection(
       await tunnel.exec(inspectCommand(options.version, base.profile.remotePort), INSPECT_TIMEOUT_MS, options.program),
     );
-    return { outcome, keys, firstUse, ...(knownHostsFile !== real ? { scratch: knownHostsFile } : {}) };
+    return {
+      outcome,
+      keys,
+      firstUse,
+      ...(knownHostsFile !== real ? { scratch: knownHostsFile } : {}),
+      ...(advertised ? { advertised: true as const } : {}),
+    };
   } catch (error) {
     if (scratch) rmSync(scratch, { recursive: true, force: true });
     throw error;

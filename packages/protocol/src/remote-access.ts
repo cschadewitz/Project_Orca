@@ -21,6 +21,7 @@
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import {
+  createReadStream,
   closeSync,
   existsSync,
   fsyncSync,
@@ -79,6 +80,20 @@ const SERVER_PATH = /^(?:\/|[A-Za-z]:\/)[A-Za-z0-9._/-]{0,1023}$/;
 const SERVER_COMMAND = /^(?:[A-Za-z0-9._-]{1,64}|(?:\/|[A-Za-z]:\/)[A-Za-z0-9._/-]{0,1023})$/;
 
 const Port = z.number().int().min(1).max(65535);
+
+/**
+ * A profile picked from the user's own tailnet (#1226): the peer's stable node ID, which is what
+ * the person picked and what the tunnel dials (its current address, looked up at connect time),
+ * and the MagicDNS name it had then, kept to explain a refusal. Only written while the incubating
+ * `tailnet-hosts` flag is on (`@orca/protocol/tailnet`).
+ */
+export const TailnetBindingSchema = z
+  .object({
+    node: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/),
+    name: z.string().regex(/^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,62})?(?:\.[a-z0-9](?:[a-z0-9-]{0,62})?)*$/),
+  })
+  .strict();
+export type TailnetBinding = z.infer<typeof TailnetBindingSchema>;
 /**
  * One SSH hop, as typed fields only. There is no free-form ssh argument and no ssh config
  * file: everything else about the connection is ORCA's (see `hopArgs`).
@@ -111,6 +126,12 @@ export const ConnectionProfileSchema = z
     serverConfig: z.string().regex(SERVER_PATH, "Enter the config file's full path, without spaces").optional(),
     /** Observe only: the profile's credential is issued with the read-only `viewer` preset. */
     readOnly: z.boolean().optional(),
+    /**
+     * Bound to a node on the user's tailnet (#1226): ssh dials that node's current Tailscale
+     * address instead of the destination's host, and a node that is gone fails closed. Never
+     * with a jump host. Absent on every profile saved without the `tailnet-hosts` flag.
+     */
+    tailnet: TailnetBindingSchema.optional(),
   })
   .strict();
 export type ConnectionProfile = z.infer<typeof ConnectionProfileSchema>;
@@ -147,7 +168,11 @@ export type TunnelRefusalCode =
   | "forward-failed"
   | "timeout"
   | "closed"
-  | "ssh-failed";
+  | "ssh-failed"
+  | "tailnet-unavailable"
+  | "tailnet-moved"
+  | "tailnet-offline"
+  | "approval-timeout";
 
 const REFUSAL_MESSAGES: Record<TunnelRefusalCode, string> = {
   "ssh-missing":
@@ -166,6 +191,12 @@ const REFUSAL_MESSAGES: Record<TunnelRefusalCode, string> = {
   timeout: "The SSH connection did not finish opening in time.",
   closed: "The tunnel was closed.",
   "ssh-failed": "ssh exited before the tunnel opened.",
+  "tailnet-unavailable":
+    "This profile connects through your tailnet, and Tailscale is not running or not signed in on this computer. Start Tailscale and connect again.",
+  "tailnet-moved":
+    "The machine this profile was set up for is no longer on your tailnet, or its name now belongs to a different machine. ORCA will not connect to another machine in its place: pick the machine from your tailnet again.",
+  "tailnet-offline": "The machine this profile connects to is offline on your tailnet.",
+  "approval-timeout": "The login was not approved in time. Connect again and approve it in your browser when asked.",
 };
 
 export class TunnelRefusal extends Error {
@@ -252,7 +283,31 @@ export interface SshTunnelOptions {
    * revoking a credential, that must reach the server the credential came from or nothing.
    */
   pinnedOnly?: boolean;
+  /**
+   * For a profile bound to a tailnet node (`profile.tailnet`, #1226): the host to dial now,
+   * looked up from the node's stable ID. Rejects with a `TunnelRefusal` (`tailnet-*`), which the
+   * tunnel passes on before any ssh starts. A tailnet profile without it refuses
+   * `tailnet-unavailable`.
+   */
+  resolveHost?: () => Promise<string>;
+  /**
+   * Called when a hop's login waits for the person's approval in a browser (Tailscale SSH check
+   * mode, #1228), with the link to show them. That hop then waits up to `approvalTimeoutMs`
+   * instead of its ordinary timeout. Without it, such a login times out as before.
+   */
+  onLoginApproval?: (url: string) => void;
+  /**
+   * The control planes whose approval pages are passed on, as https origins: the default is
+   * Tailscale's own (`TAILSCALE_LOGIN_ORIGINS`). A banner naming any other origin is the
+   * server's untrusted text, never an approval link. Only with `onLoginApproval`.
+   */
+  approvalOrigins?: readonly string[];
+  /** How long a login may wait for approval once its link was shown. Default 10 minutes. */
+  approvalTimeoutMs?: number;
 }
+
+/** Tailscale's coordination server, where its SSH check mode sends the person to approve. */
+export const TAILSCALE_LOGIN_ORIGINS: readonly string[] = ["https://login.tailscale.com"];
 
 /** A failure that a restart cannot fix: it needs the person. */
 const PERMANENT: ReadonlySet<TunnelRefusalCode> = new Set([
@@ -261,7 +316,36 @@ const PERMANENT: ReadonlySet<TunnelRefusalCode> = new Set([
   "host-key-missing",
   "pin-write-failed",
   "auth-failed",
+  "tailnet-moved",
+  "approval-timeout",
 ]);
+
+/** How long a login may wait for the person to approve it in a browser (Tailscale SSH check mode). */
+const APPROVAL_TIMEOUT_MS = 10 * 60_000;
+
+/**
+ * The approval link in a Tailscale SSH check-mode banner (#1228), or `undefined` for any other
+ * line. The server holds a login under a `check` rule and sends, before authentication:
+ * `# Tailscale SSH requires an additional check.` then `# To authenticate, visit: <url>`. ssh
+ * prints banners on stderr, and any server can print one, so the banner proves nothing: only an
+ * https URL with no credentials whose origin is one of `origins` (the tailnet's control plane,
+ * an explicit policy) is taken. It is offered to the person to open, never opened or fetched by
+ * ORCA on its own.
+ */
+export function loginApprovalUrl(
+  line: string,
+  origins: readonly string[] = TAILSCALE_LOGIN_ORIGINS,
+): string | undefined {
+  const match = /^#?\s*To authenticate, visit:\s*(https:\/\/\S{1,2000})\s*$/.exec(line);
+  if (!match) return undefined;
+  try {
+    const url = new URL(match[1]!);
+    if (url.protocol !== "https:" || url.username || url.password || !origins.includes(url.origin)) return undefined;
+    return url.href;
+  } catch {
+    return undefined;
+  }
+}
 const STDERR_TAIL = 16 * 1024;
 /** The most a remote command may print: ORCA's CLI prints one small JSON record. */
 const REMOTE_OUTPUT_LIMIT = 64 * 1024;
@@ -668,7 +752,7 @@ export class SshTunnel {
    * `input`, when given, is the command's standard input (a program for `python3 -`, say),
    * written once and closed; otherwise the command reads an empty standard input.
    */
-  async exec(command: readonly string[], timeoutMs = 60_000, input?: string): Promise<RemoteResult> {
+  async exec(command: readonly string[], timeoutMs = 60_000, input?: string | Readable): Promise<RemoteResult> {
     if (this.closed || !this.hops) throw new TunnelRefusal("closed");
     if (!this.jumpUp()) throw new TunnelRefusal("unreachable");
     const hop = this.hops.daemon;
@@ -693,11 +777,18 @@ export class SshTunnel {
       const serverLines: string[] = [];
       const stdout: Buffer[] = [];
       let size = 0;
-      const timer = setTimeout(() => {
+      let waitingApproval = false;
+      const expire = () => {
         failed = true;
-        reject(new TunnelRefusal("timeout"));
+        reject(new TunnelRefusal(waitingApproval ? "approval-timeout" : "timeout"));
         child.kill();
-      }, timeoutMs);
+      };
+      let timer = setTimeout(expire, timeoutMs);
+      const approval = this.approvalWatch((ms) => {
+        waitingApproval = true;
+        clearTimeout(timer);
+        timer = setTimeout(expire, Math.max(ms, timeoutMs));
+      });
       child.stdout?.on("data", (chunk: Buffer) => {
         size += chunk.length;
         if (size <= REMOTE_OUTPUT_LIMIT) stdout.push(chunk);
@@ -709,6 +800,7 @@ export class SshTunnel {
           if (!/^debug\d:/.test(line) && serverLines.length < 64) serverLines.push(line.slice(0, 512));
           return;
         }
+        if (approval(line)) return;
         if (/^debug1: Entering interactive session/.test(line)) authenticated = true;
       });
       child.once("error", (error: NodeJS.ErrnoException) => {
@@ -749,8 +841,27 @@ export class SshTunnel {
       });
       // A command that exits before reading all of it closes the pipe: that is its result, not ours.
       child.stdin?.on("error", () => {});
-      child.stdin?.end(input);
+      if (input !== undefined && typeof input !== "string") {
+        input.once("error", () => child.kill());
+        if (child.stdin) input.pipe(child.stdin);
+      } else child.stdin?.end(input);
     });
+  }
+
+  /**
+   * Copy a local file to `remotePath` on the server of an open tunnel (#1234): `cp /dev/stdin
+   * <path>`, fed from the file, through the same sealed pins as `exec`. The path is one remote
+   * word, so nothing in it is read by a shell. Rejects unless the copy exited 0; the caller checks
+   * what arrived (by digest), since a copy that ran is not proof of what it wrote.
+   */
+  async upload(localPath: string, remotePath: string, timeoutMs = 30 * 60_000): Promise<void> {
+    const source = createReadStream(localPath);
+    try {
+      const result = await this.exec(["cp", "/dev/stdin", remotePath], timeoutMs, source);
+      if (result.code !== 0) throw new TunnelRefusal("ssh-failed");
+    } finally {
+      source.destroy();
+    }
   }
 
   /**
@@ -819,13 +930,54 @@ export class SshTunnel {
   /** Work out the hops and start the jump host, if any: what every stream and command needs. */
   private async prepare(): Promise<void> {
     if (this.closed) throw new TunnelRefusal("closed");
-    const { profile, knownHostsFile } = this.options;
+    const { knownHostsFile } = this.options;
+    const profile = await this.dialProfile();
+    if (this.closed) throw new TunnelRefusal("closed");
     mkdirSync(dirname(knownHostsFile), { recursive: true });
     this.hops = tunnelHops(profile, knownHostsFile, profile.jump ? await ephemeralLoopbackPort() : undefined);
     // Already pinned: sealed before any ssh starts, so even the first one checks the copies.
     if (this.pinsComplete()) this.seal();
     else if (this.options.expectKeys !== undefined) throw new TunnelRefusal("host-key-missing");
     if (this.hops.jump) await this.launchJump();
+  }
+
+  /**
+   * The profile as ssh dials it: unchanged, or for a tailnet profile, with the host replaced by
+   * the node's current address. The pin is recorded under the profile's alias, so it is checked
+   * the same whichever address is dialled.
+   */
+  private async dialProfile(): Promise<ConnectionProfile> {
+    const { profile } = this.options;
+    if (!profile.tailnet) return profile;
+    if (profile.jump) throw new TunnelRefusal("tailnet-unavailable");
+    if (!this.options.resolveHost) throw new TunnelRefusal("tailnet-unavailable");
+    let host: string;
+    try {
+      host = await this.options.resolveHost();
+    } catch (error) {
+      throw error instanceof TunnelRefusal ? error : new TunnelRefusal("tailnet-unavailable");
+    }
+    const user = userOf(profile.destination);
+    const destination = user ? `${user}@${host}` : host;
+    if (!DESTINATION.test(destination)) throw new TunnelRefusal("tailnet-unavailable");
+    return { ...profile, destination };
+  }
+
+  /**
+   * Watch one hop's ssh for a login approval link (#1228). On the first one: tell the caller,
+   * and give the hop `approvalTimeoutMs` from now instead of what was left of its timeout.
+   */
+  private approvalWatch(rearm: (ms: number) => void): (line: string) => boolean {
+    let shown = false;
+    return (line) => {
+      if (shown || !this.options.onLoginApproval) return false;
+      const url = loginApprovalUrl(line, this.options.approvalOrigins ?? TAILSCALE_LOGIN_ORIGINS);
+      if (!url) return false;
+      shown = true;
+      rearm(this.options.approvalTimeoutMs ?? APPROVAL_TIMEOUT_MS);
+      this.options.onLoginApproval(url);
+      return true;
+    };
   }
 
   private pinsComplete(): boolean {
@@ -988,14 +1140,22 @@ export class SshTunnel {
         };
       }),
     };
-    const timer = setTimeout(() => {
-      settle(new TunnelRefusal("timeout"));
+    let waitingApproval = false;
+    const expire = () => {
+      settle(new TunnelRefusal(waitingApproval ? "approval-timeout" : "timeout"));
       child.kill();
-    }, this.options.readyTimeoutMs ?? 30_000);
+    };
+    let timer = setTimeout(expire, this.options.readyTimeoutMs ?? 30_000);
+    const approval = this.approvalWatch((ms) => {
+      waitingApproval = true;
+      clearTimeout(timer);
+      timer = setTimeout(expire, ms);
+    });
     this.streams.add(stream);
     let tail = "";
     watchLines(child, (line) => {
       tail = (tail + line + "\n").slice(-STDERR_TAIL);
+      if (!stream.authenticated && approval(line)) return;
       const key = /Server host key: \S+ (SHA256:[A-Za-z0-9+/=]+)/.exec(line);
       if (key) this.fingerprint = key[1];
       if (/channel \d+: open failed:|^stdio forwarding failed/.test(line)) this.channelRefusedAt = Date.now();
@@ -1100,12 +1260,20 @@ export class SshTunnel {
         if (error) reject(error);
         else resolve();
       };
-      const timer = setTimeout(() => {
-        settle(new TunnelRefusal("timeout"));
+      let waitingApproval = false;
+      const expire = () => {
+        settle(new TunnelRefusal(waitingApproval ? "approval-timeout" : "timeout"));
         child.kill();
-      }, this.options.readyTimeoutMs ?? 30_000);
+      };
+      let timer = setTimeout(expire, this.options.readyTimeoutMs ?? 30_000);
+      const approval = this.approvalWatch((ms) => {
+        waitingApproval = true;
+        clearTimeout(timer);
+        timer = setTimeout(expire, ms);
+      });
       watchLines(child, (line) => {
         tail = (tail + line + "\n").slice(-STDERR_TAIL);
+        if (!settled && approval(line)) return;
         // Printed once the forward is bound: with ExitOnForwardFailure a forward that could
         // not bind is fatal before this line (the "listening on" line comes before the bind).
         if (/^debug1: Entering interactive session/.test(line)) settle();

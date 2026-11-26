@@ -11,6 +11,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { pinState, pinnedKeyIdentity } from "../src/remote-access.js";
 import {
   AdvertisedPinRefused,
+  advertisedEnrollmentKeys,
   checkAdvertisedHostKey,
   hostKeyFingerprint,
   parseAdvertisedHostKey,
@@ -18,9 +19,11 @@ import {
   readTailnet,
   resolveTailnetBinding,
   TAILSCALE_CLI,
+  tailnetHostResolver,
   writeAdvertisedPin,
   type TailnetPeer,
   type TailnetSnapshot,
+  tailnetLoginOrigins,
 } from "../src/tailnet.js";
 
 const ON = { env: { ORCA_INCUBATING: "tailnet-hosts" } };
@@ -409,5 +412,70 @@ describe("pinning advertised host keys", () => {
     expect(existsSync(file)).toBe(false);
     expect(existsSync(`${file}.enrolled`)).toBe(false);
     expect(pinState(file)).toBe("none");
+  });
+});
+
+describe("tailnetHostResolver", () => {
+  const options = (json: string, env: Record<string, string> = ON.env) => ({
+    features: { env },
+    cliPath: "/fake/tailscale",
+    exists: () => true,
+    run: () => Promise.resolve({ kind: "exited" as const, code: 0, stdout: json }),
+  });
+  const binding = { node: "nBuild1", name: "build-1.example-tailnet.ts.net" };
+
+  it("answers the node's address on each connect", async () => {
+    await expect(tailnetHostResolver(binding, options(status([peer({ ID: "nBuild1" })])))()).resolves.toBe(
+      "100.101.102.103",
+    );
+  });
+
+  it.each([
+    ["the flag is off", status([peer({ ID: "nBuild1" })]), {}, "tailnet-unavailable"],
+    ["Tailscale is stopped", JSON.stringify({ BackendState: "Stopped" }), ON.env, "tailnet-unavailable"],
+    ["the node is gone", status([]), ON.env, "tailnet-moved"],
+    ["the name moved", status([peer({ ID: "nOther" })]), ON.env, "tailnet-moved"],
+    ["the node is offline", status([peer({ ID: "nBuild1", Online: false })]), ON.env, "tailnet-offline"],
+  ])("refuses when %s", async (_, json, env, code) => {
+    await expect(tailnetHostResolver(binding, options(json, env))()).rejects.toMatchObject({ code });
+  });
+});
+
+describe("advertisedEnrollmentKeys (#1229)", () => {
+  const snapshot = running(
+    status([
+      peer({ ID: "nBuild1", DNSName: "build-1.example-tailnet.ts.net.", sshHostKeys: [buildKey, otherKey] }),
+      peer({ ID: "nPlain", DNSName: "plain.example-tailnet.ts.net." }),
+      peer({ ID: "nShared", DNSName: "gpu.other.ts.net.", AltSharerUserID: 4, sshHostKeys: [buildKey] }),
+    ]),
+  );
+
+  it("gives the fingerprints of every key the remote's host advertises", () => {
+    for (const destination of ["dev@build-1", "build-1.example-tailnet.ts.net", "dev@build-1.example-tailnet.ts.net"])
+      expect(advertisedEnrollmentKeys(snapshot, destination)).toMatchObject({
+        ok: true,
+        fingerprints: [hostKeyFingerprint(buildKey), hostKeyFingerprint(otherKey)],
+      });
+  });
+
+  it.each([
+    ["an unknown host", "dev@nope", /No single machine named nope/],
+    ["a host without Tailscale SSH", "plain", /advertises no SSH host keys/],
+    ["a shared-in host", "gpu.other.ts.net", /shared from another tailnet/],
+  ])("refuses %s, leaving --host-key as the route", (_, destination, message) => {
+    const found = advertisedEnrollmentKeys(snapshot, destination);
+    expect(found.ok).toBe(false);
+    expect(found.ok ? "" : found.message).toMatch(message);
+  });
+});
+
+describe("tailnetLoginOrigins", () => {
+  it("is Tailscale's own, or exactly one https origin named explicitly", () => {
+    expect(tailnetLoginOrigins({})).toEqual(["https://login.tailscale.com"]);
+    expect(tailnetLoginOrigins({ ORCA_TAILNET_LOGIN_ORIGIN: "https://hs.example.org" })).toEqual([
+      "https://hs.example.org",
+    ]);
+    for (const value of ["http://hs.example.org", "https://hs.example.org/path", "https://u:p@hs.example.org", "nope"])
+      expect(tailnetLoginOrigins({ ORCA_TAILNET_LOGIN_ORIGIN: value })).toEqual(["https://login.tailscale.com"]);
   });
 });

@@ -70,6 +70,8 @@ const OPTIONS = {
   "ssh-port": { type: "string" },
   identity: { type: "string" },
   confirm: { type: "string" },
+  tailnet: { type: "boolean" },
+  "push-bundle": { type: "boolean" },
   json: { type: "boolean" },
   force: { type: "boolean" },
   quiet: { type: "boolean" },

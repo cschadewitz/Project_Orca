@@ -33,10 +33,23 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { isIP } from "node:net";
 import { dirname } from "node:path";
 import { featureEnabled, type FeatureContext } from "@orca/core";
-import { markPinEnrolled, pinState } from "./remote-access.js";
+import {
+  markPinEnrolled,
+  pinState,
+  TAILSCALE_LOGIN_ORIGINS,
+  TunnelRefusal,
+  type TailnetBinding,
+} from "./remote-access.js";
+
+export type { TailnetBinding } from "./remote-access.js";
 
 /** The workstream's flag (packages/core/src/features.ts). */
 export const TAILNET_FLAG = "tailnet-hosts";
+
+/** Whether the `tailnet-hosts` flag is on here (off by default: incubating). */
+export function tailnetEnabled(features?: FeatureContext): boolean {
+  return featureEnabled(TAILNET_FLAG, features);
+}
 
 /**
  * Where the Tailscale CLI is installed, by platform. A fixed path, never a `PATH` lookup, so
@@ -314,7 +327,7 @@ export interface ReadTailnetOptions {
  * or broken Tailscale client hides the list and changes nothing else.
  */
 export async function readTailnet(options: ReadTailnetOptions = {}): Promise<TailnetRead> {
-  if (!featureEnabled(TAILNET_FLAG, options.features)) return { state: "off" };
+  if (!tailnetEnabled(options.features)) return { state: "off" };
   const cli = options.cliPath ?? TAILSCALE_CLI[options.platform ?? process.platform];
   if (!cli || !(options.exists ?? existsSync)(cli)) return { state: "absent" };
   let run: TailscaleRun;
@@ -342,12 +355,6 @@ export async function readTailnet(options: ReadTailnetOptions = {}): Promise<Tai
 // ---------------------------------------------------------------------------------------
 // Binding
 // ---------------------------------------------------------------------------------------
-
-/** What a profile picked from the tailnet stores: the stable node ID, and the name it had then. */
-export interface TailnetBinding {
-  node: string;
-  name: string;
-}
 
 export type TailnetResolution =
   | {
@@ -394,6 +401,92 @@ export function resolveTailnetBinding(snapshot: TailnetSnapshot, binding: Tailne
     host: isIP(address) === 6 ? `[${address}]` : address,
     renamed: peer.dnsName !== binding.name.toLowerCase(),
   };
+}
+
+/**
+ * Whose approval pages a tailnet connection passes on (#1228): Tailscale's coordination server,
+ * or, for a self-hosted control plane such as Headscale, the one https origin named explicitly in
+ * `ORCA_TAILNET_LOGIN_ORIGIN`. Nothing is taken from a server's own banner.
+ */
+export function tailnetLoginOrigins(env: Record<string, string | undefined> = process.env): string[] {
+  const named = env.ORCA_TAILNET_LOGIN_ORIGIN?.trim();
+  if (!named) return [...TAILSCALE_LOGIN_ORIGINS];
+  try {
+    const url = new URL(named);
+    if (url.protocol === "https:" && !url.username && !url.password && url.origin === named.replace(/\/$/, ""))
+      return [url.origin];
+  } catch {
+    // Not an origin: fall back to Tailscale's own.
+  }
+  return [...TAILSCALE_LOGIN_ORIGINS];
+}
+
+/**
+ * The tunnel's `resolveHost` for a profile bound to `binding`: reads the tailnet on every
+ * connect and answers the node's current address, or refuses. A client that is off, absent or
+ * signed out is `tailnet-unavailable`; a node that is gone or replaced is `tailnet-moved`, which
+ * needs the person; an offline node is `tailnet-offline`.
+ */
+export function tailnetHostResolver(binding: TailnetBinding, options: ReadTailnetOptions = {}): () => Promise<string> {
+  return async () => {
+    const read = await readTailnet(options);
+    if (read.state !== "running") throw new TunnelRefusal("tailnet-unavailable");
+    const resolved = resolveTailnetBinding(read.snapshot, binding);
+    if (resolved.ok) return resolved.host;
+    switch (resolved.code) {
+      case "node-gone":
+      case "different-machine":
+        throw new TunnelRefusal("tailnet-moved");
+      case "offline":
+        throw new TunnelRefusal("tailnet-offline");
+      case "no-address":
+        throw new TunnelRefusal("tailnet-unavailable");
+    }
+  };
+}
+
+/**
+ * The peer a person named on a command line: its stable node ID, its full MagicDNS name, or the
+ * first label of it (`build-1`). Only an exact, unique match; anything ambiguous is no match.
+ */
+export function findTailnetPeer(snapshot: TailnetSnapshot, name: string): TailnetPeer | undefined {
+  const wanted = name.toLowerCase().replace(/\.$/, "");
+  const byId = snapshot.peers.filter((peer) => peer.nodeId === name);
+  if (byId.length === 1) return byId[0];
+  const matches = snapshot.peers.filter((peer) => peer.dnsName === wanted || peer.dnsName.split(".")[0] === wanted);
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
+/**
+ * The host-key fingerprints to enroll a delegation remote with (#1229), from what the tailnet
+ * advertises for the machine its `destination` names: in place of fingerprints read off the
+ * worker's console. Refuses a machine that is unknown, shared in from another tailnet, or
+ * advertises no keys (no Tailscale SSH): those keep the `--host-key` route.
+ */
+export function advertisedEnrollmentKeys(
+  snapshot: TailnetSnapshot,
+  destination: string,
+): { ok: true; peer: TailnetPeer; fingerprints: string[] } | { ok: false; message: string } {
+  const host = destination.slice(destination.lastIndexOf("@") + 1);
+  const peer = findTailnetPeer(snapshot, host);
+  if (!peer) return { ok: false, message: `No single machine named ${host} on your tailnet.` };
+  if (peer.sharedIn)
+    return {
+      ok: false,
+      message: `${peer.dnsName} is shared from another tailnet; pass its fingerprint with --host-key instead.`,
+    };
+  const keys = peer.sshHostKeys.filter((key) => parseAdvertisedHostKey(key) === key);
+  if (!keys.length)
+    return {
+      ok: false,
+      message: `${peer.dnsName} advertises no SSH host keys (it does not run Tailscale SSH); pass its fingerprint with --host-key instead.`,
+    };
+  return { ok: true, peer, fingerprints: keys.map(hostKeyFingerprint) };
+}
+
+/** The binding to save for a peer picked from the list. */
+export function bindingFor(peer: TailnetPeer): TailnetBinding {
+  return { node: peer.nodeId, name: peer.dnsName };
 }
 
 // ---------------------------------------------------------------------------------------

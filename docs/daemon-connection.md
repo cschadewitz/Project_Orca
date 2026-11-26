@@ -253,6 +253,10 @@ logged.
 - **Overlay network plus a TLS reverse proxy.** For clients that cannot use SSH:
   terminate HTTPS at a proxy you run, list it in `trustedProxies`, and connect with a
   URL and `ORCA_DAEMON_TOKEN_FILE` (see [daemon security](daemon-security.md)).
+- **Your own tailnet (incubating).** The same app-managed SSH profile, with the machine
+  picked from your Tailscale tailnet and bound to its node, Tailscale SSH as the login, and
+  the host keys the tailnet advertises as the pin source
+  ([Running ORCA across machines](MULTI-MACHINE.md#using-your-own-tailnet-incubating-1225)).
 - **Plain `SshHost`.** When a machine only runs agents and has no daemon of its own,
   configure it as an SSH host in the workflow config instead
   ([integrations](INTEGRATIONS.md)).
