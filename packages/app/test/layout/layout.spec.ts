@@ -455,6 +455,18 @@ async function expectFittedOrCentred(measured: { view: Box; nodes: (Box & { id: 
     bottom: Math.max(...measured.nodes.map((n) => n.bottom)),
   };
   const v = measured.view;
+  // Only a graph that cannot fit gets this allowance: at 25%, the nodes alone (no margin) must
+  // be wider or taller than the canvas. On an axis where they do fit, every node is in view.
+  const wide = box.right - box.left > v.right - v.left;
+  const tall = box.bottom - box.top > v.bottom - v.top;
+  expect(wide || tall, `the graph at 25% (${JSON.stringify(box)}) cannot fit the canvas (${JSON.stringify(v)})`).toBe(
+    true,
+  );
+  for (const node of measured.nodes) {
+    if (!wide) expect(node.left >= v.left - 0.5 && node.right <= v.right + 0.5, `${node.id} across`).toBe(true);
+    if (!tall) expect(node.top >= v.top - 0.5 && node.bottom <= v.bottom + 0.5, `${node.id} down`).toBe(true);
+  }
+  // Where it does not fit, it is centred on the graph, not on its first nodes.
   expect(Math.abs((box.left + box.right) / 2 - (v.left + v.right) / 2), "centred across").toBeLessThan(24);
   expect(Math.abs((box.top + box.bottom) / 2 - (v.top + v.bottom) / 2), "centred down").toBeLessThan(24);
 }
