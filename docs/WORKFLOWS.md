@@ -639,6 +639,9 @@ names that file. Enrolling again reuses it while the route and host keys are unc
 `orca remote enroll <id> --issue` replaces it. The ssh login must be able to run that CLI
 (`remotes[].serverCommand`, default `orca`).
 
+Enroll from a workspace the CLI owns. A workspace the desktop app set up refuses enrollment
+for now ([#1206](https://github.com/cschadewitz/Project_Orca/issues/1206)).
+
 Before anything is saved, enrollment checks what the credential may actually do there: the
 remote must take delegated runs, and the credential must be able to start every workflow this
 config delegates to it. An issued one must be scoped to exactly those workflows and to its own

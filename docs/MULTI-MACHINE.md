@@ -134,6 +134,11 @@ ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
 orca remote enroll build-box --host-key SHA256:...
 ```
 
+The parent must be a workspace the CLI owns (one you run with `orca serve`). A workspace the
+desktop app set up in first-run refuses `orca remote enroll` ("First-run mutation requires owned
+daemon admission"), and the app has no enrollment screen yet
+([#1206](https://github.com/cschadewitz/Project_Orca/issues/1206)).
+
 Enrollment pins exactly that host key and has the worker issue the parent a credential over
 ssh. The credential is scoped to the workflows this config delegates and to the runs the
 parent itself starts. After that, delegation needs nobody.
