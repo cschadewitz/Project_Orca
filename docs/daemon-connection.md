@@ -253,6 +253,10 @@ logged.
 - **Overlay network plus a TLS reverse proxy.** For clients that cannot use SSH:
   terminate HTTPS at a proxy you run, list it in `trustedProxies`, and connect with a
   URL and `ORCA_DAEMON_TOKEN_FILE` (see [daemon security](daemon-security.md)).
+- **Your own tailnet (incubating).** The same app-managed SSH profile, with the machine
+  picked from your Tailscale tailnet and bound to its node, Tailscale SSH as the login, and
+  the host keys the tailnet advertises as the pin source
+  ([Running ORCA across machines](MULTI-MACHINE.md#using-your-own-tailnet-incubating-1225)).
 - **Plain `SshHost`.** When a machine only runs agents and has no daemon of its own,
   configure it as an SSH host in the workflow config instead
   ([integrations](INTEGRATIONS.md)).
@@ -331,6 +335,12 @@ its lock. A failed first setup leaves no link and no enabled unit.
   confirmed directory, not taken from the server. Anything else is a mismatch: nothing is
   saved, the profile's port and pins stay as they were, and nothing signs in.
 
+A new server's `orca.config.yaml` (in that directory) lists **no workflows**, so the daemon
+starts before any agent is configured there; the release's templates are listed. Declare the
+agents this server runs and the workflows other machines delegate to
+([setup 4](MULTI-MACHINE.md#4-a-parent-daemon-delegating-to-remote-daemons)) before delegating work to it. The file is yours: a re-run of the
+setup never rewrites it.
+
 The update timer (#878) is not enabled here.
 
 ## Watching several daemons (#882)
@@ -375,6 +385,14 @@ each other:
   "Last heard …"; one that has never answered says "Not read yet", and the summary's
   counts leave it out, so a missing machine never reads as zero work. A tunnel that
   will not open is retried with backoff up to once a minute.
+- **A machine that goes silent (#1198).** A server that loses power sends no close, and the
+  SSH tunnel's own keepalive takes 45 s to give up. So every push stream, the focused one
+  and each watched one, asks a peer that has sent nothing for 3 s whether it is still there
+  (an `unsubscribe` of a subscription id the daemon never issued, which every daemon
+  answers with `stopped: false`), and drops and reopens a stream that answers nothing
+  within 3 more seconds. With the five quiet seconds above, a machine that stops answering
+  shows as reconnecting within 11 s. A `subscribe` left unanswered for 10 s counts as a
+  failed connection, so the retry count still moves while the tunnel leads nowhere.
 - **Slots.** When a daemon reports `hello.sessionSlots` (#873), its section shows
   sessions in use against the cap and the queue depth.
 - **Notifications.** Waiting gates, permission asks and failures it saw happen on a

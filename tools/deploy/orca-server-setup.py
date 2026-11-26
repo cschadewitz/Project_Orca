@@ -108,6 +108,19 @@ LEGACY_LAYOUT = Layout("orca-server", ".orca-setup.json", "orca-server-setup", "
 LAYOUTS = (LAYOUT, LEGACY_LAYOUT)
 SETUP_MARKER = LAYOUT.setup
 SERVICE = LAYOUT.service
+
+# A new server's operator config, after the marker line. The daemon refuses to start while a
+# listed workflow names an agent it cannot resolve, and a new server has no agents yet, so it
+# lists no workflows: the release's own (ai-sdlc, program) need agents for their roles. The
+# operator adds agents and the workflows parents delegate to (docs/MULTI-MACHINE.md).
+SERVER_CONFIG = (
+    "# Add the agents this server runs, and the workflows other machines delegate to\n"
+    "# (docs/MULTI-MACHINE.md). The release's own workflows need agents for their roles;\n"
+    "# once those agents are declared, they can be listed with:\n"
+    "#   workflows: ['${ORCA_RELEASE}/workflows/**/*.yaml']\n"
+    "workflows: []\n"
+    "templates: ['${ORCA_RELEASE}/templates/**/*.md']\n"
+)
 HEALTH_SECONDS = 60
 VERSION_RE = r"\d+\.\d+\.\d+(?:-(?:rc|beta|alpha)\.\d+)?"
 RECONCILE = ("Reconcile it separately with orca-release.py (docs/UPDATING.md): this setup starts only a "
@@ -185,7 +198,7 @@ def snapshot(path):
 
 class Setup:
     def __init__(self, root, version, port, adapter_source, bundle=None, home=None, systemctl=None,
-                 expect_account=None, expect_root=None, expect_current=None):
+                 expect_account=None, expect_root=None, expect_current=None, offline=False):
         # The effective account's own home, not $HOME: what the confirmation names is canonical.
         self.home = Path(home or pwd.getpwuid(os.geteuid()).pw_dir)
         if not root:
@@ -203,6 +216,7 @@ class Setup:
         self.port = port
         self.adapter_source = adapter_source
         self.bundle = bundle
+        self.offline = offline
         self.unit_dir = self.home / ".config" / "systemd" / "user"
         self.unit = self.unit_dir / self.layout.service
         self.systemctl_bin = systemctl or "systemctl"
@@ -655,9 +669,7 @@ class Setup:
         else:
             write_file(self.manifest, json.dumps(manifest, indent=2) + "\n", 0o600)
             changed.append("deployment.json")
-        config = (f"# Written by {self.layout.setup} (#881). Yours to edit: setup never rewrites it.\n"
-                  "workflows: ['${ORCA_RELEASE}/workflows/**/*.yaml']\n"
-                  "templates: ['${ORCA_RELEASE}/templates/**/*.md']\n")
+        config = f"# Written by {self.layout.setup} (#881). Yours to edit: setup never rewrites it.\n" + SERVER_CONFIG
         for name in (self.layout.config, self.layout.acp_config):
             if not (root / name).exists():
                 write_file(root / name, config, 0o600)
@@ -716,7 +728,8 @@ class Setup:
         manifest = scratch / "deployment.json"
         write_file(manifest, json.dumps({**json.loads(self.manifest.read_text()), "root": str(scratch)}) + "\n", 0o600)
         return subprocess.run([sys.executable, str(self.adapter), "--deployment", str(manifest),
-                               "stage", "--bundle", source], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                               "stage", "--bundle", *(["--offline"] if self.bundle and self.offline else []), source],
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
     def owned_scratch(self, staging):
         """A journal's staging scratch, only if it is one this setup makes: a direct child of
@@ -866,6 +879,8 @@ def main(argv, embedded=None):
     parser.add_argument("--root")
     parser.add_argument("--port", type=int, default=6722)
     parser.add_argument("--bundle", help="a directory holding the three server bundle files")
+    parser.add_argument("--offline-bundle", action="store_true",
+                        help="the --bundle directory also carries the pinned cosign and Sigstore trusted root (#1234)")
     parser.add_argument("--adapter", help="orca-release.py to install (default: the embedded one)")
     parser.add_argument("--inspect", action="store_true", help="check only, change nothing")
     parser.add_argument("--expect-account", help="refuse to run as any other account")
@@ -884,7 +899,10 @@ def main(argv, embedded=None):
         source = base64.b64decode(embedded).decode()
     else:
         parser.error("no adapter: pass --adapter orca-release.py")
+    if options.offline_bundle and not options.bundle:
+        parser.error("--offline-bundle needs --bundle")
     setup = Setup(options.root, options.version, options.port, source, options.bundle,
+                  offline=options.offline_bundle,
                   expect_account=options.expect_account, expect_root=options.expect_root,
                   expect_current=options.expect_current)
     return setup.inspect() if options.inspect else setup.run()

@@ -26,6 +26,12 @@ export interface NativeStorageBackend {
 export interface NativeDiagnosticsStorage {
   native: RecoveryNativeAdapter;
   files: RecoveryFileSystem;
+  /**
+   * `false` only where the platform has no diagnostics storage backend at all, never for a
+   * backend that failed to load: on macOS and Windows a missing addon can still leave earlier
+   * files behind that this build cannot inspect (#1205).
+   */
+  platform?: false;
   close(): Promise<void>;
 }
 const unavailable = () => new Error("unavailable");
@@ -49,7 +55,12 @@ export function loadNativeDiagnosticsStorage(root: string): NativeDiagnosticsSto
       /* Missing/incompatible addon stays unavailable. */
     }
   }
-  return { native: createProductionNativeAdapter(), files: refusedFiles, close: () => Promise.resolve() };
+  return {
+    native: createProductionNativeAdapter(),
+    files: refusedFiles,
+    ...(process.platform === "darwin" || process.platform === "win32" ? {} : { platform: false as const }),
+    close: () => Promise.resolve(),
+  };
 }
 
 /** Explicit injection seam for native conformance; not production consent/acceptance. */

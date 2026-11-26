@@ -29,6 +29,58 @@ Pending entries live in [`changelog.d/`](changelog.d/), one file per entry; prep
 release renders them into a dated section below. Run `node tools/release.js notes --unreleased`
 to read them as they stand.
 
+## 0.8.0 - 2026-11-26
+
+### Store format
+
+No change.
+
+### Changed
+
+#### release
+
+- 0.8.0 is the final of the 0.8.0 release candidates and changes no code
+  since 0.8.0-rc.3; the 0.8.0-rc.1, rc.2 and rc.3 sections below list what 0.8 brings.
+  Until #1206 is fixed, delegating work to another machine needs a parent workspace set up
+  with the `orca` command line (`docs/MULTI-MACHINE.md`).
+
+## 0.8.0-rc.3 - 2026-11-26
+
+### Store format
+
+No change.
+
+### Fixed
+
+#### agents
+
+- Claude ACP sessions no longer start in the adapter's `auto` mode. In it Claude Code settled calls itself, so a session without ORCA's hook ran a command ORCA's policy denied without asking ORCA. ORCA now switches a recognized Claude session to `default` (Manual) when it opens, new or loaded, and again before each prompt, and refuses its own requests to switch it away. Manual means Claude Code asks about what its own rules do not settle; it is not a guarantee that every call reaches ORCA (Claude's native rules still apply, and the mode is not watched during a turn). The native hook provides separate assurance for the calls it covers; see `docs/agent-hook-coverage.md`.
+
+#### app
+
+- A change saved in Config, such as a new agent, no longer stops the workspace from reopening. Saving now binds the saved configuration for reopening, and if a workspace does not reopen, the first screen says why and opens Config instead of telling you to run `orca serve`.
+
+## 0.8.0-rc.2 - 2026-11-25
+
+### Store format
+
+No change.
+
+### Fixed
+
+#### app
+
+- setting up or checking a server over SSH from Windows no longer times out. The
+  setup program is now sent to the server; before, ssh was given no input at all.
+- the SSH profile editor in the connection dialog lays out at normal window sizes,
+  and the dialog scrolls instead of hiding Save.
+
+#### deploy
+
+- a server set up with "Set up as ORCA server" now starts. Its new config lists
+  no workflows until you declare agents for them: the release's own workflows need agents
+  for their roles, and the daemon refused to start without them.
+
 ## 0.8.0-rc.1 - 2026-11-25
 
 ### Store format

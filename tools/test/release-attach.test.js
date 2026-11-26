@@ -48,8 +48,15 @@ if (method === "GET" && args.includes("Accept: application/octet-stream") && (m 
   process.stdout.write(asset.content);
   process.exit(0);
 }
-if ((m = path.match(/^compare\/([0-9a-f]+)\.\.\.main$/))) {
-  out = { status: (state.onMain || []).includes(m[1]) ? "ahead" : "diverged" };
+if ((m = path.match(/^compare\/([0-9a-f]+)\.\.\.release\/\d+\.\d+$/))) {
+  out = { status: (state.onLine || []).includes(m[1]) ? "ahead" : "diverged" };
+} else if ((m = path.match(/^rules\/branches\/release\/\d+\.\d+$/))) {
+  const check = (context) => ({ context, integration_id: 15368 });
+  out = state.unprotectedLine ? [] : [
+    { type: "pull_request" }, { type: "non_fast_forward" }, { type: "deletion" },
+    { type: "required_status_checks", parameters: { strict_required_status_checks_policy: true,
+      required_status_checks: [check("check (node 24)"), check("release line check")] } },
+  ];
 } else
 if (method === "DELETE" && (m = path.match(/^releases\/assets\/(\d+)$/))) {
   for (const r of state.releases) r.assets = r.assets.filter((a) => String(a.id) !== m[1]);
@@ -1058,10 +1065,10 @@ describe.skipIf(process.platform === "win32")("release-attach.sh", () => {
       expect(result.stdout).toBe(`digests=${b.digests.join(" ")}\nreceipt=${receipt}\n`);
     });
 
-    it("targets the one final draft or published prerelease at a commit on main", () => {
+    it("targets the one final draft or published prerelease at a commit on its protected line", () => {
       const f = setup({ releases: [bare(), prerelease()] });
       f.edit((st) => {
-        st.onMain = [SHA];
+        st.onLine = [SHA];
         st.tags[`v${RC}`] = SHA;
       });
       const final = f.run(ATTACH, ["server-target", "0.8.0", SHA]);
@@ -1073,14 +1080,15 @@ describe.skipIf(process.platform === "win32")("release-attach.sh", () => {
     });
 
     it.each([
-      ["a commit not on main", () => {}, "is not on main"],
+      ["a commit not on its line", () => {}, "is not on release/0.8"],
+      ["an unprotected line", (st) => (st.unprotectedLine = true), "not protected as a release line"],
       ["no release of that name", (st) => (st.releases = []), "0 releases are named"],
       ["a release at another commit", (st) => (st.releases[0].target_commitish = OTHER), "no longer targets"],
       ["a published final", (st) => (st.releases[0].draft = false), "no longer a final draft"],
     ])("refuses to build for %s", (_label, change, message) => {
       const f = setup({ releases: [bare()] });
       f.edit((st) => {
-        if (!message.includes("on main")) st.onMain = [SHA];
+        if (!message.includes("on release/")) st.onLine = [SHA];
         change(st);
       });
       const result = f.run(ATTACH, ["server-target", "0.8.0", SHA]);
@@ -1270,7 +1278,7 @@ describe.skipIf(process.platform === "win32")("release-attach.sh", () => {
 
       it("treats server files on it as unexpected, and never builds, attaches or reconciles one", () => {
         const f = setup({ releases: [final({ assets: [deb, exe, ...serverFiles(V)] })] });
-        f.edit((st) => (st.onMain = [SHA]));
+        f.edit((st) => (st.onLine = [SHA]));
         const result = f.run(ATTACH, ["publish", "71", V, SHA, deb.digest, exe.digest]);
         expect(result.status).not.toBe(0);
         expect(result.stderr).toContain("unexpected assets");

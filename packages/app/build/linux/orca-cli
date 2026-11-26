@@ -1,0 +1,4 @@
+#!/bin/sh
+# /usr/bin/orca-cli, owned by the orca-desktop package (#1207). The .deb always installs the
+# app at /opt/ORCA; the launcher there does the work.
+exec /opt/ORCA/resources/bin/orca-cli "$@"

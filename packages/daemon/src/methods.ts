@@ -92,6 +92,13 @@ import type { LiveAnswerAuthority, ExecutionResumeAuthority } from "@orca/engine
 import type { Maintenance } from "./maintenance.js";
 import { OrcaError, type MutationActor } from "@orca/core";
 import {
+  REMOTES_ENROLL_METHOD,
+  REMOTES_LIST_METHOD,
+  RemotesEnrollParamsSchema,
+  RemotesListParamsSchema,
+} from "@orca/protocol";
+import type { RemotesModel } from "./delegation/remotes-model.js";
+import {
   SECRETS_CHECK_METHOD,
   JUDGE_STATUS_METHOD,
   JudgeStatusParamsSchema,
@@ -283,6 +290,11 @@ export interface MethodContext {
   };
   /** `judge.status` (#701), answered for the caller's current principal. */
   judgeStatus?: (invocation: MethodContext) => Promise<JudgeStatusResult>;
+  /**
+   * `remotes.list` and `remotes.enroll` (#1206): delegation remotes enrolled by this daemon, the
+   * route a first-run app workspace admits. Absent on a `--read-only` daemon.
+   */
+  remotes?: RemotesModel;
   operatorMutations?: OperatorMutationComposition | undefined;
   /** Internal exact decision guard; never parsed from legacy RPC params. */
   operatorDecisionTarget?:
@@ -1005,6 +1017,14 @@ export function methodsFor(ctx: MethodContext): MethodTable {
   if (ctx.judgeStatus) {
     const status = ctx.judgeStatus;
     table[JUDGE_STATUS_METHOD] = { params: JudgeStatusParamsSchema, handle: (_p, call) => status(call) };
+  }
+  if (ctx.remotes) {
+    const remotes = ctx.remotes;
+    table[REMOTES_LIST_METHOD] = { params: RemotesListParamsSchema, handle: async () => remotes.list() };
+    table[REMOTES_ENROLL_METHOD] = {
+      params: RemotesEnrollParamsSchema,
+      handle: (p: z.infer<typeof RemotesEnrollParamsSchema>) => remotes.enroll(p),
+    };
   }
   if (ctx.hostResourceRead) {
     table["operator.hostResources"] = {

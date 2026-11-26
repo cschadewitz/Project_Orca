@@ -112,8 +112,9 @@ recovery**. Don't choose them.
 ## F3: choose the two folders (nothing is written yet)
 
 Choose **Choose project and empty workspace**. A folder dialog opens. Select the folder
-and choose **Review selection**. If ORCA accepts the project, a second dialog opens for
-the workspace. If ORCA refuses the project, the second dialog doesn't open.
+and choose **Choose folder** (on Linux the dialog may say **Open**). If ORCA accepts the
+project, a second dialog opens for the workspace. If ORCA refuses the project, the second
+dialog doesn't open.
 
 | Dialog title | Linux: select | Windows: select |
 | --- | --- | --- |

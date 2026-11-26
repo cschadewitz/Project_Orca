@@ -39,6 +39,7 @@ import type { LaunchReview, PreflightParams } from "../configuration-launch-cont
 import { RunsAdmitResultSchema, ServerPathSchema } from "@orca/protocol";
 import { ConnectionTarget, ConnectionRefusal, connectionFailure, callInConnection } from "./connection-target.js";
 import { RemoteProfiles } from "./remote-profiles.js";
+import { AgentSignIns } from "./agent-sign-ins.js";
 import { ServerUpdater } from "./server-update.js";
 import { isUpdateAction, prepareDrafts } from "./update-ipc.js";
 import { Updates, type UpdateGuards } from "./updates.js";
@@ -81,12 +82,20 @@ import { callTemplate } from "../client/template-client.js";
 import type { TemplateMethod } from "../template-bridge.js";
 import type { WorkflowDraftMethodName } from "../workflow-draft-bridge.js";
 import { callWorkflowDraft } from "../client/workflow-draft-client.js";
-import { daemonEndpoint, type DaemonConnectionRequest, type ProfileResult } from "../daemon-connection.js";
+import {
+  daemonEndpoint,
+  type DaemonConnectionRequest,
+  type LoginApprovalView,
+  type ProfileResult,
+  type TailnetMachinesView,
+} from "../daemon-connection.js";
+import { tailnetEnabled } from "@orca/protocol/tailnet";
 import { isLoopbackDaemon, LocalDaemonToken } from "../client/auth.js";
 import { PreferencesFile } from "../preferences/preferences-file.js";
 import type { Preferences, ThemePreference } from "../preferences/schema.js";
 import { appMenuTemplate } from "./app-menu.js";
 import { hasTitleBarOverlay, titleBarOverlay, windowChrome } from "./window-chrome.js";
+import { gtkThemeFor } from "./linux-gtk-theme.js";
 import { createAlerts, type AlertTier } from "./alerts.js";
 import { ConnectionMachine } from "./connection-state.js";
 import { DeepLinkQueue, SCHEMES, protocolClientArgs, urlFromArgv } from "./deep-link.js";
@@ -215,7 +224,16 @@ async function offerUpdateProtectionReset(startup: NonNullable<typeof macReplace
 }
 
 const preferences = new PreferencesFile(join(app.getPath("userData"), "preferences.json"));
+{
+  // Before the app is ready, while GTK can still take it: the menu bar's theme (#1109).
+  const gtkTheme = gtkThemeFor(process.platform, preferences.read().theme, process.env);
+  if (gtkTheme) process.env.GTK_THEME = gtkTheme;
+}
 /** Saved SSH profiles, their pinned host keys and sealed credentials (#874). Main only. */
+/** The last Tailscale SSH approval page each profile was sent to (#1228), already checked. */
+const loginApprovals = new Map<string, string>();
+/** Agent sign-ins on managed servers (#1236), each bound to the window that started it. */
+const agentSignIns = new AgentSignIns();
 const remoteProfiles = new RemoteProfiles({
   dir: join(app.getPath("userData"), "remote-daemons"),
   cipher: safeStorage,
@@ -223,6 +241,14 @@ const remoteProfiles = new RemoteProfiles({
   onTunnelState: (id, state) => {
     if (state.phase === "reconnecting" || state.phase === "failed")
       console.error(`ssh tunnel for profile ${id}: ${state.phase} (${state.refusal})`);
+  },
+  // Tailscale SSH check mode (#1228): the page is kept here and opened only on the person's
+  // click; the renderer learns which profile waits and the page's host, never the URL.
+  onLoginApproval: (profileId, url) => {
+    loginApprovals.set(profileId, url);
+    const approval: LoginApprovalView = { profileId, host: new URL(url).host };
+    for (const win of BrowserWindow.getAllWindows())
+      if (!win.isDestroyed()) win.webContents.send("orca:profiles.loginApproval", approval);
   },
 });
 
@@ -643,6 +669,9 @@ handle("orca:permissions.saveJudgedRule", (params: Parameters<DaemonClient["perm
 );
 // Protocol 2.12 (#701): where the judge's setup stands, read-only.
 handle("orca:judge.status", () => client().judgeStatus());
+// Protocol 2.13 (#1206): delegation remotes, and enrollment by the daemon that owns the workspace.
+handle("orca:remotes.list", () => client().remotesList());
+handle("orca:remotes.enroll", (params: Parameters<DaemonClient["remotesEnroll"]>[0]) => client().remotesEnroll(params));
 
 // The plan writes and `claims.release` (#169, #88). `--read-only` omits them exactly as it
 // omits the three above, so the same `useWritability()` answer covers all of them.
@@ -1076,7 +1105,9 @@ const firstRun = new FirstRunSetup({
             ? "Choose a parent for a new private app workspace"
             : "Choose a separate empty app workspace",
       properties: ["openDirectory" as const],
-      buttonLabel: "Review selection",
+      // Neutral, because the Linux portal (GTK on Ubuntu 24.04) ignores the label and says "Open",
+      // and "Choose folder" and "Open" both read right there (#1200). The setup guide names both.
+      buttonLabel: "Choose folder",
     };
     const window = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
     const result = await (window ? dialog.showOpenDialog(window, options) : dialog.showOpenDialog(options));
@@ -1491,7 +1522,7 @@ ipcMain.handle("orca:profiles.inspectServer", (_event, id: unknown) =>
     return inspection ? { inspection } : { setup: outcome as Exclude<typeof outcome, { kind: "inspected" }> };
   }),
 );
-ipcMain.handle("orca:profiles.setUpServer", (_event, id: unknown, confirmation: unknown) =>
+ipcMain.handle("orca:profiles.setUpServer", (_event, id: unknown, confirmation: unknown, options: unknown) =>
   profileResult(async () => {
     const valid = ProfileIdSchema.parse(id);
     if (typeof confirmation !== "string" || confirmation.length > 64)
@@ -1501,7 +1532,83 @@ ipcMain.handle("orca:profiles.setUpServer", (_event, id: unknown, confirmation: 
       version: app.getVersion(),
       scripts: serverSetupScripts(),
       confirmation,
+      // A machine on the tailnet needs nothing but Tailscale (#1225): this computer carries the
+      // signed bundle to it, and the host still verifies the signature (#1234).
+      // The person can choose the machine's own internet access instead (a root this ORCA does
+      // not pin yet, say): only an explicit `carryBundle: false` turns carrying off.
+      ...(tailnetEnabled() &&
+      remoteProfiles.get(valid)?.tailnet &&
+      !(typeof options === "object" && options !== null && "carryBundle" in options && options.carryBundle === false)
+        ? { pushBundle: true }
+        : {}),
     });
+  }),
+);
+ipcMain.handle("orca:profiles.tailnetMachines", () =>
+  profileResult(async (): Promise<TailnetMachinesView> => {
+    const read = await remoteProfiles.tailnetMachines();
+    if (read.state !== "running") return { state: read.state, ...(read.detail ? { detail: read.detail } : {}) };
+    const { snapshot } = read;
+    return {
+      state: "running",
+      ...(snapshot.tailnetName ? { tailnetName: snapshot.tailnetName } : {}),
+      machines: snapshot.peers.map((peer) => ({
+        node: peer.nodeId,
+        name: peer.dnsName,
+        hostName: peer.hostName,
+        os: peer.os,
+        online: peer.online,
+        tailscaleSsh: peer.tailscaleSsh,
+        sharedIn: peer.sharedIn,
+        hostSupported: peer.hostSupported,
+      })),
+    };
+  }),
+);
+ipcMain.on("orca:profiles.tailnetHosts", (event) => {
+  event.returnValue = tailnetEnabled();
+});
+const AgentIdSchema = z.string().regex(/^[a-z][a-z0-9-]{0,31}$/);
+ipcMain.handle("orca:profiles.hostAgents", (_event, id: unknown) =>
+  profileResult(() => remoteProfiles.hostAgents(ProfileIdSchema.parse(id), serverSetupScripts())),
+);
+ipcMain.handle("orca:profiles.installHostAgent", (_event, id: unknown, agent: unknown) =>
+  profileResult(() =>
+    remoteProfiles.installHostAgent(ProfileIdSchema.parse(id), AgentIdSchema.parse(agent), serverSetupScripts()),
+  ),
+);
+ipcMain.handle("orca:profiles.signInHostAgent", (event, id: unknown, agent: unknown) =>
+  profileResult(async () => {
+    const profileId = ProfileIdSchema.parse(id);
+    const agentId = AgentIdSchema.parse(agent);
+    // Refused before any sign-in attempt or connection for an agent the person signs in themselves.
+    remoteProfiles.signInOffered(agentId);
+    // The page is kept in main and opened only on a click in the window that asked; that window
+    // learns its host and the code to enter, never the URL, and no other window learns anything.
+    await agentSignIns.run(event.sender, profileId, agentId, (onPrompt, signal) =>
+      remoteProfiles.signInHostAgent(profileId, agentId, serverSetupScripts(), onPrompt, signal),
+    );
+    return null;
+  }),
+);
+ipcMain.handle("orca:profiles.openAgentSignIn", (event, id: unknown, agent: unknown, attempt: unknown) =>
+  profileResult(async () => {
+    const url = agentSignIns.url(
+      event.sender,
+      ProfileIdSchema.parse(id),
+      AgentIdSchema.parse(agent),
+      z.uuid().parse(attempt),
+    );
+    await shell.openExternal(url);
+    return null;
+  }),
+);
+ipcMain.handle("orca:profiles.openLoginApproval", (_event, id: unknown) =>
+  profileResult(async () => {
+    const url = loginApprovals.get(ProfileIdSchema.parse(id));
+    if (!url) throw new ConnectionRefusal("Tailscale has not asked to approve a connection for this profile.");
+    await shell.openExternal(url);
+    return null;
   }),
 );
 /** Main reads the file the person picks; the token goes from disk to the keychain slot only. */
@@ -2098,6 +2205,7 @@ app.on("will-quit", (event) => {
     () => false,
   );
   // Tunnels close after the workspace has let go of its client; nothing waits on them.
+  agentSignIns.close();
   void Promise.allSettled([workspaceClosed, fleet.close()]).finally(() =>
     remoteProfiles.close().catch(() => undefined),
   );

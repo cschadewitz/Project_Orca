@@ -72,6 +72,7 @@ the [archive](archive/README.md).
 | [Installing on Linux](INSTALL-LINUX.md) | install the desktop app on Ubuntu 24.04 or later |
 | [Updating](UPDATING.md) | understand how installs update, and operate the update feed |
 | [Releasing](RELEASING.md) | cut, sign and publish a release |
+| [Workstreams](WORKSTREAMS.md) | land a large feature with no target release without holding or disrupting a release: feature branches, their CI and nightly sync with `main` |
 | [Windows signing runbook](windows-signing-runbook.md) | sign the Windows installer |
 | [CI runners](ci-runners.md) | see how CI picks self-hosted or hosted runners |
 | [CI shadow selection](ci-shadow-selection.md) | understand advisory test selection |

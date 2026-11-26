@@ -10,12 +10,17 @@
 # or from a `Release: vX.Y.Z` line in the milestone description, which overrides them —
 # that is how a release candidate or a deliberate 1.0.0 is expressed. See docs/RELEASING.md.
 #
-# Where it is cut from (docs/RELEASING.md, "Release lines"): a new minor or major (`X.Y.0`
-# and its candidates) from `main`; a patch (`X.Y.Z`, Z > 0) from its release line branch
-# `release/X.Y`, so work merged to `main` for the next minor never ships in it. The line is
-# named by the pin, else by a milestone title that is a version (`0.7.1`), else by the next
-# version of `main`. A missing line is created from the newest `vX.Y.*` final tag. A patch
-# milestone holding a `release:minor` or `release:major` issue is refused.
+# Where it is cut from (docs/RELEASING.md, "Release lines"): every release of `X.Y` from its
+# release line branch `release/X.Y`, so work merged to `main` for the next minor never ships in
+# it. The line is named by the pin, else by a milestone title that is a version (`0.9.0`,
+# `0.8.1`), else by the next version of `main`. A missing line is created: for a new minor or
+# major (`X.Y.0` or its candidate) from `main`'s head, which is the cut that lets `main` take the
+# next minor's work at once; for a patch from the newest `vX.Y.*` final tag. A patch milestone
+# holding a `release:minor` or `release:major` issue is refused.
+#
+# A dispatch with `dry_run` rehearses exactly that decision (tools/release-plan.js) for any
+# milestone, open or closed, and reports it in the job summary: no branch is cut or pushed and
+# no pull request is opened.
 #
 # With the variable ORCA_RELEASE_APP_ID and the secret ORCA_RELEASE_APP_PRIVATE_KEY set in the
 # main-only `release-bot` environment (a GitHub App with contents and pull-requests write), the
@@ -33,6 +38,11 @@ on:
         description: "Milestone number to release"
         required: true
         type: string
+      dry_run:
+        description: "Rehearse: resolve the version, its line and any cut, and write nothing"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -76,6 +86,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           NUMBER: ${{ github.event.milestone.number || inputs.milestone }}
+          DRY_RUN: ${{ inputs.dry_run || false }}
         run: |
           set -euo pipefail
           milestone=$(gh api "repos/$REPO/milestones/$NUMBER")
@@ -84,8 +95,12 @@ jobs:
           description=$(jq -r '.description // ""' <<<"$milestone")
 
           if [ "$open" != "0" ]; then
-            echo "::error::milestone #$NUMBER ($title) still has $open open issue(s); close or move them first"
-            exit 1
+            if [ "$DRY_RUN" = true ]; then
+              echo "::warning::milestone #$NUMBER ($title) still has $open open issue(s); a real run refuses until they are closed or moved"
+            else
+              echo "::error::milestone #$NUMBER ($title) still has $open open issue(s); close or move them first"
+              exit 1
+            fi
           fi
 
           # Pull requests come back from this endpoint too; only issues carry the labels.
@@ -103,25 +118,23 @@ jobs:
           pin=$(grep -oiE 'release:[[:space:]]*v?[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?' <<<"$description" \
             | head -1 | sed -E 's/.*:[[:space:]]*v?//' || true)
 
-          if [ -z "$pin" ] && [ "$bump" = none ]; then
-            echo "::error::milestone #$NUMBER ($title) has no release:major/minor/patch label and no pinned version; nothing to release"
-            exit 1
-          fi
-
-          # The version names the branch it is cut from; main's tooling decides both, and runs
-          # against the chosen branch's package.json, CHANGELOG.md and changelog.d/.
+          # The whole decision first, from main's tooling and the repository's refs, with nothing
+          # written: the version, its line, and whether the line is cut (tools/release-plan.js).
+          # A candidate is finalized by its own bump (0.9.0-rc.1 + minor is 0.9.0), and a new
+          # minor is never cut while an older minor's line is still stabilizing its .0.
           tools="$RUNNER_TEMP/release-tools"
           mkdir -p "$tools"
-          cp tools/release.js tools/release-lane.js tools/changelog.js tools/release-pr-body.js "$tools/"
-          target="$pin"
-          if [ -z "$target" ]; then
-            target=$(grep -oE '^v?[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$' <<<"$title" | sed 's/^v//' || true)
+          cp tools/release.js tools/release-lane.js tools/release-plan.js tools/changelog.js tools/release-pr-body.js "$tools/"
+          if ! node "$tools/release-plan.js" plan --bump "$bump" --pin "$pin" --title "$title" > "$RUNNER_TEMP/plan"; then
+            cat "$RUNNER_TEMP/plan"
+            exit 1
           fi
-          if [ -z "$target" ]; then
-            target=$(node "$tools/release.js" version --bump "$bump")
-          fi
-          base=$(node "$tools/release.js" line "$target")
-          if [ "$base" != main ]; then
+          version=$(sed -n 's/^version=//p' "$RUNNER_TEMP/plan")
+          base=$(sed -n 's/^base=//p' "$RUNNER_TEMP/plan")
+          cut=$(sed -n 's/^cut=//p' "$RUNNER_TEMP/plan")
+          from=$(sed -n 's/^from=//p' "$RUNNER_TEMP/plan")
+
+          if [ "$(node -p 'Number(process.argv[1].split(/[.-]/)[2])' "$version")" != 0 ]; then
             # Patch content is the line's: no issue meant for the next minor or major.
             bumps=$(jq -r '[.[] | select(.labels | any(. == "release:minor" or . == "release:major"))
               | "#\(.number) \(.title)"] | join(", ")' <<<"$issues")
@@ -129,29 +142,28 @@ jobs:
               echo "::error::milestone #$NUMBER ($title) is a $base patch but holds minor/major work: $bumps; move it to the next minor's milestone"
               exit 1
             fi
-            if ! git rev-parse -q --verify "refs/remotes/origin/$base" >/dev/null; then
-              line="${base#release/}"
-              from=$(git tag -l "v$line.*" --sort=-v:refname | grep -E "^v$line\.[0-9]+$" | head -n 1 || true)
-              if [ -z "$from" ]; then
-                echo "::error::$base does not exist and no v$line.* final is tagged to start it from"
-                exit 1
-              fi
-              git push origin "$(git rev-parse "$from^{commit}"):refs/heads/$base"
-              git fetch -q origin "$base"
-              echo "Created \`$base\` from \`$from\`." >> "$GITHUB_STEP_SUMMARY"
-            fi
-            # Only a protected line is a release source (tools/release-lane.js).
-            node "$tools/release-lane.js" verify "$(git rev-parse "refs/remotes/origin/$base")" "$target" >/dev/null
-            git checkout -q --detach "refs/remotes/origin/$base"
           fi
-          version=$(node "$tools/release.js" version --bump "$bump" ${pin:+--pin "$pin"})
-          if [ "$(node "$tools/release.js" line "$version")" != "$base" ] ||
-            { [ "$base" != main ] && [ "$version" != "$target" ]; }; then
-            echo "::error::milestone #$NUMBER ($title) names $target but its labels give v$version from $base; fix the labels or pin the version"
-            exit 1
+          {
+            echo "### Release plan"
+            echo "- milestone #$NUMBER ($title): v$version from \`$base\` (bump=$bump${pin:+, pinned $pin})"
+            if [ -n "$cut" ]; then echo "- \`$base\` does not exist yet: it is cut from \`$cut\` at \`$from\`"; fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$DRY_RUN" = true ]; then
+            echo "Dry run: nothing pushed, no line cut, no pull request opened." >> "$GITHUB_STEP_SUMMARY"
+            echo "dry_run=true" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
-          if git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
-            echo "::error::tag v$version already exists"
+
+          if [ -n "$cut" ]; then
+            git push origin "$from:refs/heads/$base"
+            git fetch -q origin "$base"
+            echo "::notice title=release line cut::$base created from $cut at $from"
+          fi
+          # Only a protected line is a release source (tools/release-lane.js).
+          node "$tools/release-lane.js" verify "$(git rev-parse "refs/remotes/origin/$base")" "$version" >/dev/null
+          git checkout -q --detach "refs/remotes/origin/$base"
+          if [ "$(node "$tools/release.js" version --bump "$bump" ${pin:+--pin "$pin"})" != "$version" ]; then
+            echo "::error::$base moved while this ran: its package.json no longer gives v$version"
             exit 1
           fi
           unlabelled=$(jq -r '[.[] | select([.labels[] | select(startswith("release:"))] | length == 0)
@@ -171,12 +183,14 @@ jobs:
           echo "milestone #$NUMBER ($title) -> v$version from $base (bump=$bump${pin:+, pinned})" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Bump the version and render the changelog fragments
+        if: steps.resolve.outputs.dry_run != 'true'
         env:
           VERSION: ${{ steps.resolve.outputs.version }}
           TOOLS: ${{ steps.resolve.outputs.tools }}
         run: node "$TOOLS/release.js" prepare "$VERSION"
 
       - name: Open the release pull request
+        if: steps.resolve.outputs.dry_run != 'true'
         env:
           GH_TOKEN: ${{ steps.app.outputs.token || github.token }}
           BASE: ${{ steps.resolve.outputs.base }}

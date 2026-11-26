@@ -3,7 +3,7 @@
  * The CLI, the ACP facade and embedders all go through here.
  */
 import type { StoreStatus } from "@orca/protocol";
-import { enterFirstRunWriter } from "@orca/protocol/first-run-fence";
+import { enterFirstRunWriter, type FirstRunWriterHold } from "@orca/protocol/first-run-fence";
 import { assertNoUnownedTypedWorkspace } from "./typed-workspace-gate.js";
 import {
   enterConfiguredUpdateBootstrap,
@@ -42,6 +42,7 @@ import {
   hostIpcCaveat,
   hostIpcInventory,
   CLAUDE_ADAPTER_NAMES,
+  claudeModePin,
   nativeToolHookNotQualified,
   nativeToolHookRequested,
   nativeToolHookSession,
@@ -203,6 +204,12 @@ export interface OrcaApp {
   storeSwitch?: DesktopSqliteSwitchOutcome | undefined;
   /** The store's backend and whether the app may switch it to SQLite (#339), for `hello`. */
   storeStatus?: StoreStatus | undefined;
+  /**
+   * This process's hold on a first-run workspace's writer fence, when the desktop app launched it
+   * for one (checks only, no release). Writes the daemon makes to such a workspace on a client's
+   * behalf, such as enrolling a remote (#1206), require it to be still held.
+   */
+  firstRunWriter?: FirstRunWriterHold | undefined;
 }
 
 export async function findConfig(
@@ -408,7 +415,10 @@ export function makeSessionFactory(
     }
     // ORCA's pre-tool hook (#704, #705): prepared before the agent starts, decided once it
     // says who it is, and the session refused wherever it cannot be put in force.
-    if (!nativeToolHookRequested(options.agent)) return guarded(bound);
+    // Claude runs in Manual mode, where its calls reach ORCA's policy (see claude-mode.ts).
+    const modePin = claudeModePin();
+    if (!nativeToolHookRequested(options.agent))
+      return modePin.guard(await guarded({ ...bound, sessionMeta: modePin.sessionMeta(bound.sessionMeta) }));
     // `on` waits for a guard-qualified hook; only the explicit `experimental` installs this one.
     const unqualified = nativeToolHookNotQualified(options.agent);
     if (unqualified) throw unqualified;
@@ -469,7 +479,7 @@ export function makeSessionFactory(
       session = await guarded({
         ...bound,
         env: { ...(options.env ?? {}), ...hookEnv },
-        sessionMeta: installed.sessionMeta,
+        sessionMeta: modePin.sessionMeta(installed.sessionMeta),
         admission,
         // Claude Code would start its MCP servers itself, before ORCA has admitted the runtime
         // it runs, and would hold their secrets; ORCA runs them instead and serves them over
@@ -532,7 +542,7 @@ export function makeSessionFactory(
     // The engine drains it while the session runs (#1000); `cleanup` reads it a last time.
     const telemetry = installed.telemetry();
     if (telemetry !== undefined) Object.defineProperty(session, "hookTelemetry", { value: telemetry });
-    return session;
+    return modePin.guard(session);
   };
 }
 
@@ -1050,6 +1060,7 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
     ...(configFile ? { configFile } : {}),
     ...(storeSwitchOutcome ? { storeSwitch: storeSwitchOutcome } : {}),
     ...(storeStatus ? { storeStatus } : {}),
+    ...(writer ? { firstRunWriter: writer } : {}),
     orchestrator,
     program,
     plan,

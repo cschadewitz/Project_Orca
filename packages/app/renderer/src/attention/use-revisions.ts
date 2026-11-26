@@ -352,7 +352,7 @@ export function useRevisions(onAnswered: (requestId: string) => void): Revisions
             if (!projection) {
               const notice = result.ok
                 ? "Pending correction discovery is unavailable on this daemon."
-                : "Pending corrections could not be refreshed. Their absence is not confirmed.";
+                : "Pending corrections could not be refreshed. Their absence is not confirmed. Choose Refresh corrections to try again.";
               for (const runId of runs) runNotices.set(runId, notice);
               for (const [key, entry] of entries)
                 if (runs.includes(entry.summary.target.runId))
@@ -387,7 +387,8 @@ export function useRevisions(onAnswered: (requestId: string) => void): Revisions
           })
           .catch(() => {
             if (!active()) return;
-            const notice = "Pending corrections could not be refreshed. Their absence is not confirmed.";
+            const notice =
+              "Pending corrections could not be refreshed. Their absence is not confirmed. Choose Refresh corrections to try again.";
             for (const runId of batch)
               if (discoveryVersions.get(runId) === versions.get(runId)) runNotices.set(runId, notice);
             for (const [key, entry] of entries)

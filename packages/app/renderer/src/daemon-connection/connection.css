@@ -2,3 +2,27 @@
 .orca-connection-root {
   display: contents;
 }
+
+/* A group of rows stacked one under the next: the SSH profiles, one profile, its editor,
+   the setup confirmation, the connected server. `.orca-field` is a single label-and-value
+   row, a two-column grid; used as a container it put each nested field into the narrow
+   label column, so the profile editor's inputs were a few pixels wide and overlapped
+   (#881 internal testing). */
+.orca-connection-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: var(--space-3) 0;
+  border-bottom: var(--stroke-hairline) solid var(--border-hairline);
+}
+.orca-connection-stack .orca-dialog__actions {
+  flex-wrap: wrap;
+}
+
+/* The connection dialog grows with its profiles and an open editor: it scrolls inside the
+   window rather than pushing its actions (Save, Connect) off screen. */
+.orca-connection-dialog {
+  max-height: 100%;
+  overflow-y: auto;
+}

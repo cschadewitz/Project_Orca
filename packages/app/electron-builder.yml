@@ -63,11 +63,11 @@ extraResources:
     to: daemon
     filter:
       - "**/*.mjs"
-  # Server setup (#881): the app sends these two to a machine it makes an ORCA server, so
-  # they are this build's own, never fetched.
+  # Server setup (#881): the app sends these to a machine it makes an ORCA server (and, for
+  # agents there, #1236), so they are this build's own, never fetched.
   - from: ../../tools/deploy
     to: server-setup
-    filter: ["orca-server-setup.py", "orca-release.py"]
+    filter: ["orca-server-setup.py", "orca-release.py", "orca-host-agents.py", "host-agents.lock.json"]
 
 # Both architectures on every platform that has two. A desktop artifact that only runs on
 # the architecture the runner happened to have is the bug this spells out to avoid: GitHub's
@@ -79,6 +79,11 @@ linux:
   extraResources:
     - from: build/icon.png
       to: icon.png
+    # The CLI (#1207): `orca-cli`, the bundled daemon script run by this app's own binary as a
+    # plain Node. The .deb links it from /usr/bin (deb.fpm below); from the archive it runs
+    # where it is. Not `orca`, for the same reason as executableName.
+    - from: build/cli/orca-cli
+      to: bin/orca-cli
   category: Development
   synopsis: Orchestration Runtime for Coding Agents
   # Named rather than derived: the package is `@orca/app`, and a scoped name is not a
@@ -91,6 +96,12 @@ linux:
   # Every Linux identity derived from this (the .deb's /usr/bin link, AppArmor profile and
   # desktop entry) is therefore `orca-desktop` too.
   executableName: orca-desktop
+  # The dock matches a window to its launcher by WM_CLASS (X11) or app_id (Wayland), and
+  # Electron takes both from package.json's `desktopName`. Without it the window's class was
+  # "ORCA" and the launcher's file `orca-desktop.desktop`, so GNOME showed a generic gear
+  # for the running app (#1109). `desktopName` is `orca-desktop.desktop`, and this keeps the
+  # entry's name and StartupWMClass in step with it.
+  syncDesktopName: true
   target:
     # AppImage for x64 only. Building an arm64 AppImage on an x64 runner needs an arm64
     # appimagetool to run there, which is the one cross-build in this file that does not
@@ -131,6 +142,11 @@ deb:
   # no redundant cache refreshes, and a clear refusal when the AppArmor exception cannot load
   # (the file says why). The postrm and the profile itself remain electron-builder's.
   afterInstall: build/linux/after-install.tpl
+  # /usr/bin/orca-cli (#1207) as a file the package owns, so dpkg installs, upgrades and removes
+  # it with the app and `dpkg -S` names orca-desktop. It execs /opt/ORCA/resources/bin/orca-cli.
+  # The path is relative to this directory, which electron-builder always runs from (it finds
+  # this file by name there).
+  fpm: ["build/linux/orca-cli=/usr/bin/orca-cli"]
 
 mac:
   extraResources:
@@ -157,6 +173,12 @@ mac:
 
 win:
   extraResources:
+    # The CLI (#1207): orca-cli.cmd, alone in resources\bin, which the installer puts on the
+    # user PATH (build/installer.nsh) with the script beside it under resources\installer.
+    - from: build/cli/orca-cli.cmd
+      to: bin/orca-cli.cmd
+    - from: build/win/orca-cli-path.ps1
+      to: installer/orca-cli-path.ps1
     - from: "dist/diagnostics-native/win32-${arch}"
       to: "native/diagnostics/win32-${arch}"
       filter: ["diagnostics_clock.node", "diagnostics_storage.node", "first_run_windows.node", "manifest.json"]
@@ -176,6 +198,8 @@ nsis:
   perMachine: false
   oneClick: false
   allowToChangeInstallationDirectory: true
+  # Puts orca-cli on the user PATH and takes it off at uninstall (#1207).
+  include: build/installer.nsh
 
 # Nothing is published from here. `release-publish.yml` attaches the files to the GitHub
 # release itself, after the same commit's checks have passed; letting electron-builder

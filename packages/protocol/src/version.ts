@@ -240,14 +240,21 @@ export type ProtocolVersion = z.infer<typeof ProtocolVersionSchema>;
  * free `context` record, `context.judge` (`JudgeAskNoteSchema`); an older client ignores it.
  */
 /**
- * 2.13 is the rename to Orrery (0.9). `hello` and `operator.discover` add `orcaVersion`, the
+ * 2.13 (#1206) adds `remotes.list` (a read under `config.read`) and `remotes.enroll` (a
+ * `config.write` mutation): enrollment of a delegation remote by the daemon that owns the
+ * workspace, which is the route a workspace the desktop app set up in first-run admits. New
+ * method names in `hello.methods`: a 2.12 client never calls them, and the app offers its Remote
+ * daemons section only to a daemon that lists them.
+ */
+/**
+ * 2.14 is the rename to Orrery (0.9). `hello` and `operator.discover` add `orcaVersion`, the
  * daemon's release under the product's new name, and keep sending it under the name before the
- * rename (legacy-wire.ts); readers take either, so a 2.12 peer still finds the field it requires.
+ * rename (legacy-wire.ts); readers take either, so a 2.13 peer still finds the field it requires.
  * The daemon also selects the socket subprotocol and reads the bearer prefix under their names
  * from before the rename. Additions by this file's rule; nothing sent before stops being sent.
  * 0.10 drops the old names, which is a major.
  */
-export const PROTOCOL_VERSION: ProtocolVersion = { major: 2, minor: 13 };
+export const PROTOCOL_VERSION: ProtocolVersion = { major: 2, minor: 14 };
 
 /**
  * The previous major this build still speaks, as its last minor, or `undefined` when there is

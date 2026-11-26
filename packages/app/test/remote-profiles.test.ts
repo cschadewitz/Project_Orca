@@ -971,7 +971,7 @@ describe("automatic sign-in (#875)", () => {
     const lease = await profiles.open("lab");
     expect(server.commands).toHaveLength(1);
     const [command] = server.commands;
-    expect(command!.slice(0, 3)).toEqual(["orca", "auth", "issue"]);
+    expect(command!.slice(0, 3)).toEqual(["orca-cli", "auth", "issue"]);
     expect(command![3]).toMatch(/^desktop-casey-s-pc-[a-z2-7]{16}$/);
     expect(command![4]).toBe("--preset");
     expect(command).toContain("client");
@@ -1094,8 +1094,8 @@ describe("automatic sign-in (#875)", () => {
     const { profiles, server, tunnels } = store();
     profiles.save({ name: "Lab", destination: "lab" });
     const cases: [number, string[], string, string][] = [
-      [127, ["bash: line 1: orca: command not found"], "cli-missing", "Install ORCA there"],
-      [1, ["'orca' is not recognized as an internal or external command"], "cli-missing", "full path"],
+      [127, ["bash: line 1: orca-cli: command not found"], "cli-missing", "Install ORCA there"],
+      [1, ["'orca-cli' is not recognized as an internal or external command"], "cli-missing", "full path"],
       [126, ["bash: line 1: /opt/orca: Permission denied"], "cli-permission", "may run"],
       [1, ["error [CONFIG_INVALID]: /srv/x.yaml: bad"], "server-not-set-up", "workspace config"],
       [1, ["error: ENOENT: no such file or directory, open '/srv/x.yaml'"], "server-not-set-up", "Set up the daemon"],
@@ -1124,7 +1124,7 @@ describe("automatic sign-in (#875)", () => {
     await (await profiles.open("lab")).release();
     await expect(profiles.remove("lab")).resolves.toBe("revoked");
     expect(server.live()).toEqual([]);
-    expect(server.commands.at(-1)!.slice(0, 3)).toEqual(["orca", "auth", "revoke"]);
+    expect(server.commands.at(-1)!.slice(0, 3)).toEqual(["orca-cli", "auth", "revoke"]);
     expect(existsSync(join(dir, "credentials", "lab.json"))).toBe(false);
 
     profiles.save({ name: "Lab", destination: "lab" });
@@ -1643,6 +1643,34 @@ describe("setting a machine up as a managed server (#881)", () => {
     return profiles.setUpServer("lab", { version, scripts, confirmation: inspection!.confirmation });
   };
 
+  it("holds the profile from before it fetches the bundle: no agent action starts meanwhile (#1236)", async () => {
+    let fail: (error: Error) => void = () => {};
+    let fetching: () => void = () => {};
+    const begun = new Promise<void>((resolve) => (fetching = resolve));
+    const { profiles } = store(undefined, undefined, {
+      tailnet: { features: { env: { ORCA_INCUBATING: "tailnet-hosts" } } },
+      courierFetch: () => {
+        fetching();
+        return new Promise((_resolve, reject) => (fail = reject));
+      },
+    });
+    profiles.save({ name: "Lab", destination: "casey@lab" });
+    const { inspection } = await profiles.inspectServer("lab", { version: "0.8.0", scripts });
+    const setup = profiles.setUpServer("lab", {
+      version: "0.8.0",
+      scripts,
+      confirmation: inspection!.confirmation,
+      pushBundle: true,
+    });
+    await begun;
+    await expect(profiles.hostAgents("lab", scripts)).rejects.toThrow(/being set up/);
+    expect(() => profiles.save({ id: "lab", name: "Lab", destination: "casey@other" })).toThrow(/being set up/);
+    fail(new Error("offline"));
+    await expect(setup).rejects.toThrow();
+    // Released when the setup ends, however it ends.
+    expect(profiles.save({ id: "lab", name: "Lab", destination: "casey@lab" })).toMatchObject({ id: "lab" });
+  });
+
   it("first inspects read only: shows keys and account, and pins and installs nothing", async () => {
     const { profiles, server, dir } = store();
     profiles.save({ name: "Lab", destination: "casey@lab" });
@@ -1827,7 +1855,7 @@ describe("setting a machine up as a managed server (#881)", () => {
       const result = await inspectAndSetUp(profiles);
       expect(result.setup.kind).toBe(kind);
       expect(result).not.toHaveProperty("signIn");
-      expect(profiles.list()[0]).not.toHaveProperty("serverCommand");
+      expect(profiles.list()[0]).toMatchObject({ serverCommand: "orca-cli" });
       expect(server.commands.filter((command) => command[2] === "issue")).toEqual([]);
     }
   });
@@ -1857,7 +1885,7 @@ describe("setting a machine up as a managed server (#881)", () => {
       expect(result.setup).toMatchObject({ kind: "mismatch", detail: expect.stringContaining(words) });
       expect(result).not.toHaveProperty("signIn");
       expect(profiles.list()[0]).toMatchObject({ remotePort: 6722, serverConfig: "/srv/old/orca.config.yaml" });
-      expect(profiles.list()[0]).not.toHaveProperty("serverCommand");
+      expect(profiles.list()[0]).toMatchObject({ serverCommand: "orca-cli" });
       expect(pinState(join(dir, "known_hosts", "lab"))).toBe("pinned");
       expect(server.commands.filter((command) => command[2] === "issue")).toEqual([]);
     }
@@ -1968,5 +1996,71 @@ describe("watching only (#882)", () => {
     await new Promise((resolve) => setTimeout(resolve, 80));
     expect(server.commands).toHaveLength(commands);
     await watched.release();
+  });
+});
+
+describe("the server command across the orca-cli default (#1207)", () => {
+  const pin = (dir: string, id = "lab") => {
+    mkdirSync(join(dir, "known_hosts"), { recursive: true });
+    writeFileSync(join(dir, "known_hosts", id), `orca-${id} ssh-ed25519 AAAA\n`);
+  };
+  // A profiles file as 0.8.0 wrote it: the server command left out, meaning `orca`.
+  const legacy = (dir: string) =>
+    writeFileSync(
+      join(dir, "profiles.json"),
+      `${JSON.stringify({ version: 1, profiles: [{ id: "lab", name: "Lab", destination: "casey@lab", remotePort: 6722 }] })}\n`,
+    );
+  const verbs = (commands: string[][]) => commands.map((command) => command.slice(0, 3).join(" "));
+
+  it("saves orca-cli explicitly on a new profile, and on an edit that clears an explicit command", () => {
+    const { dir, profiles } = store();
+    profiles.save({ name: "Lab", destination: "casey@lab" });
+    const saved = () => JSON.parse(readFileSync(join(dir, "profiles.json"), "utf8")).profiles[0];
+    expect(saved().serverCommand).toBe("orca-cli");
+    profiles.save({ id: "lab", name: "Lab", destination: "casey@lab", serverCommand: "/opt/orca/bin/orca" });
+    profiles.save({ id: "lab", name: "Lab", destination: "casey@lab" });
+    expect(saved().serverCommand).toBe("orca-cli");
+  });
+
+  it("keeps a profile saved before 0.8.1 on orca: issue, renew and revoke, through an edit", async () => {
+    const { dir, profiles, server } = store();
+    legacy(dir);
+    pin(dir);
+    await (await profiles.open("lab")).release();
+    // An edit that leaves the command empty keeps the old meaning and the issued credential.
+    profiles.save({ id: "lab", name: "Lab renamed", destination: "casey@lab" });
+    expect(JSON.parse(readFileSync(join(dir, "profiles.json"), "utf8")).profiles[0]).not.toHaveProperty(
+      "serverCommand",
+    );
+    expect(profiles.list()[0]!.hasCredential).toBe(true);
+    await expect(profiles.remove("lab")).resolves.toBe("revoked");
+    expect(verbs(server.commands)).toEqual(["orca auth issue", "orca auth revoke"]);
+    expect(server.live()).toEqual([]);
+  });
+
+  it("records the issuing command on the credential, and revokes through it after the profile changes", async () => {
+    const { dir, profiles, server } = store();
+    legacy(dir);
+    pin(dir);
+    await (await profiles.open("lab")).release();
+    const record = JSON.parse(readFileSync(join(dir, "credentials", "lab.json"), "utf8"));
+    expect(record.current.target.serverCommand).toBe("orca");
+    // Pointing the profile at another CLI retires the credential, revoked where it was issued.
+    profiles.save({ id: "lab", name: "Lab", destination: "casey@lab", serverCommand: "orca-cli" });
+    await (await profiles.open("lab")).release();
+    expect(verbs(server.commands)).toEqual(["orca auth issue", "orca-cli auth issue", "orca auth revoke"]);
+  });
+
+  it("revokes a credential recorded before 0.8.1, which named no command, through orca", async () => {
+    const { dir, profiles, server } = store();
+    profiles.save({ name: "Lab", destination: "casey@lab" });
+    pin(dir);
+    await (await profiles.open("lab")).release();
+    const file = join(dir, "credentials", "lab.json");
+    const record = JSON.parse(readFileSync(file, "utf8"));
+    delete record.current.target.serverCommand;
+    writeFileSync(file, JSON.stringify(record));
+    await expect(profiles.remove("lab")).resolves.toBe("revoked");
+    expect(verbs(server.commands)).toEqual(["orca-cli auth issue", "orca auth revoke"]);
   });
 });

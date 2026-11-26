@@ -148,8 +148,8 @@ entries naming the catalog MCP servers and skills its principal's runs may be gi
 | `plan.write`         | Waive dependencies, decide and reopen decisions, update risks.             |
 | `agents.read`        | Agent health; `agent.changed`.                                             |
 | `agents.ping`        | Spawn an agent to perform a handshake.                                     |
-| `config.read`        | `config.get`, which returns the configuration **unredacted**; `config.changed`; `judge.status`. |
-| `config.write`       | `config.set` (also requires `config.read`), `config.apply`.                                 |
+| `config.read`        | `config.get`, which returns the configuration **unredacted**; `config.changed`; `judge.status`; `remotes.list`. |
+| `config.write`       | `config.set` (also requires `config.read`), `config.apply`, `remotes.enroll` (#1206).                               |
 | `daemon.maintenance` | The update coordinator's admission control.                                |
 | `secrets.use`        | The principal's runs may receive values for the references its `secrets` grant names (#336). |
 | `capabilities.use`   | The principal's runs may be given the catalog MCP servers and skills its `capabilities` grant names (#337). |
@@ -304,6 +304,8 @@ that the two match. A method that is missing from the table is refused with
 | `secrets.list` | `secrets.read` | workspace-wide; filtered to the caller's grant | — |
 | `secrets.check` | `secrets.read` | workspace-wide; filtered to the caller's grant | — |
 | `judge.status` | `config.read` | workspace-wide; the caller's own grants; never a key or value | — |
+| `remotes.list` | `config.read` | workspace-wide; the active configuration's delegation remotes with their pinned fingerprints and enrollment record (credential id only, never a token) (#1206) | — |
+| `remotes.enroll` | `config.write` | additionally config.read; workspace-wide; absent on `--read-only`; refused unless the daemon still holds a first-run workspace's writer fence; pins the host keys the caller gave and saves (pasted) or has the remote issue the credential under the enrollment lock, as `orca remote enroll` (#1206); the audit target is the remote `id` only | mutation |
 | `subscribe` | any authenticated principal | a run-scoped stream needs `runs.read` and the run; each notification is checked separately | — |
 | `unsubscribe` | any authenticated principal | only the caller's own connection's subscriptions | — |
 | `maintenance` | `daemon.maintenance` | workspace-wide | mutation |

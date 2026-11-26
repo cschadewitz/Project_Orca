@@ -28,6 +28,10 @@ work.
 5. Keep existing metadata and history unless asked to change them. Leave milestones to
    explicit release planning.
 6. Read published issues back to verify them.
+7. Treat a large feature with no target release as a workstream ([docs/WORKSTREAMS.md](docs/WORKSTREAMS.md)).
+   By default, land it on `main` in small pull requests behind an incubating flag. Use a
+   `feature/<name>` branch only when the work cannot safely ship dark: an outside sign-off gates
+   even dark code, or a store or protocol break cannot be hidden. Say which in the tracking issue.
 
 ## Before you touch the UI
 

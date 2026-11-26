@@ -8,6 +8,7 @@ export * from "./schemas.js";
 
 export * from "./ids.js";
 export * from "./config.js";
+export * from "./features.js";
 
 export * from "./expr/index.js";
 export * from "./template/index.js";

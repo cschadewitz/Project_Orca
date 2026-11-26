@@ -5,6 +5,7 @@
   "description": "ORCA desktop app (Electron): monitoring, configuration and later orchestration over the daemon protocol.",
   "type": "module",
   "main": "./dist/main/index.js",
+  "desktopName": "orca-desktop.desktop",
   "author": "ORCA",
   "homepage": "https://github.com/cschadewitz/Project_Orca",
   "scripts": {

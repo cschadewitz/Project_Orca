@@ -36,9 +36,25 @@ the token and takes the lock only when **all** of these are true:
 - its `host` is this machine's hostname;
 - its `pid` is not a live process here.
 
+A holder from **an earlier boot of this machine** is dead whatever its pid now names, so
+after a power loss (#1197) a contender also takes the lock when the token names this host and
+records a different kernel boot than this one, even if its pid has been reused by another
+process or by the restarted daemon itself. The boot is the Linux boot id, recorded in the
+token's liveness domain. Since #1197 the token's name also records it, with a tag for this
+machine (a digest of `/etc/machine-id` and the hostname):
+`owner.<pid>.<boot id>-<machine tag>-<uuid>.json`. The name survives a power loss that leaves
+the token's contents empty, so a torn token is cleared when its name records **this machine**
+in another boot. One whose name names another machine, or no machine, is not: a different boot
+id alone says only that the holder was not this boot. Only positive boot identity
+counts: wall-clock timestamps are never compared with the boot time, because a clock corrected
+forward would make a live holder look older than the boot. So an empty lock directory, a torn
+token whose name does not record this machine and another boot, and any lock on a platform without boot ids still fail
+closed. Locks taken with `recovery: "provable"` (the config file's lock) keep the stricter rule
+and are never cleared this way.
+
 Anything else fails closed. That covers a token recording a different hostname, whatever its pid
 and however old it is; a token with no `host` (written before hosts were recorded); an
-empty directory; a malformed token; and an older lock file. The contender keeps waiting
+empty directory; a malformed token whose name records no earlier boot; and an older lock file. The contender keeps waiting
 with backoff and, at its deadline (60 s unless the caller sets `timeoutMs`), fails with
 `STORE_LOCK_TIMEOUT`. The holder's token is left exactly as it was. The age of a lock
 never breaks it: `staleMs` is still accepted but has no effect.

@@ -35,6 +35,7 @@ import {
   sshOptionPath,
   SshTunnel,
   TunnelRefusal,
+  loginApprovalUrl,
   tunnelHops,
   tunnelKeyIdentity,
   hopArgs,
@@ -197,6 +198,8 @@ class FakeSsh extends EventEmitter {
   received = "";
   /** Output that keeps flowing after exit: `close` never comes. */
   holdOutput = false;
+  /** What the real spawn would have given ssh as its standard input. */
+  stdinMode: "pipe" | "ignore" | undefined;
   constructor() {
     super();
     this.stdin.on("data", (chunk: Buffer) => (this.received += chunk.toString()));
@@ -232,8 +235,9 @@ function fakeTunnel(script: (ssh: FakeSsh, n: number, args: readonly string[]) =
     backoff: { initialMs: 5, maxMs: 20 },
     readyTimeoutMs: 1_000,
     onState: (state) => states.push(state),
-    spawn: (_command, args) => {
+    spawn: (_command, args, stdin) => {
       const ssh = new FakeSsh();
+      ssh.stdinMode = stdin;
       spawned.push(ssh);
       setImmediate(() => script(ssh, spawned.length, args));
       return ssh as unknown as ChildProcess;
@@ -578,6 +582,8 @@ describe("SshTunnel with a fake ssh", () => {
     );
     await expect(tunnel.open()).rejects.toMatchObject({ code: "host-key-changed" });
     expect(spawned[0]!.killed).toBe(true);
+    // The jump host's ssh only forwards: it reads nothing. The server hop carries a stream.
+    expect(spawned.map((ssh) => ssh.stdinMode)).toEqual(["ignore", "pipe"]);
   });
 
   it("is single-use once closed", async () => {
@@ -668,6 +674,33 @@ describe("commands on the server (#875)", () => {
     expect(sessions()).toEqual([]);
   });
 
+  it("uploads a file as cp /dev/stdin <path>, fed from the file, and refuses a failed copy (#1234)", async () => {
+    const pins = pinned();
+    const source = join(dir(), "bundle.tar.xz");
+    writeFileSync(source, Buffer.alloc(200_000, 7));
+    let code = 0;
+    const commands: (readonly string[])[] = [];
+    const { tunnel, spawned } = fakeTunnel(
+      (ssh, _n, args) => {
+        ssh.say(authed);
+        if (args.includes("-W")) return;
+        commands.push(args.slice(args.indexOf("--") + 2));
+        const done = () => setImmediate(() => ssh.exit(code));
+        if (ssh.stdin.writableFinished) done();
+        else ssh.stdin.on("finish", done);
+      },
+      { knownHostsFile: pins },
+    );
+    await tunnel.open();
+    await tunnel.upload(source, "/tmp/tmp.Ab12Cd/bundle.tar.xz", 5_000);
+    expect(commands[0]).toEqual(["cp", "/dev/stdin", "/tmp/tmp.Ab12Cd/bundle.tar.xz"]);
+    expect(spawned[1]!.received.length).toBe(200_000);
+    code = 1;
+    await expect(tunnel.upload(source, "/tmp/tmp.Ab12Cd/again", 5_000)).rejects.toMatchObject({ code: "ssh-failed" });
+    await expect(tunnel.upload(source, "/tmp/a b", 5_000)).rejects.toThrow();
+    await tunnel.close();
+  });
+
   it("hands a command its standard input when given one, and an empty one otherwise (#881)", async () => {
     const pins = pinned();
     const { tunnel, spawned } = fakeTunnel(
@@ -686,6 +719,9 @@ describe("commands on the server (#875)", () => {
     );
     await expect(tunnel.exec(["orca", "auth", "list"], 1_000)).resolves.toMatchObject({ code: 0 });
     expect(spawned.slice(1).map((ssh) => ssh.received)).toEqual(["print('setup')\n", ""]);
+    // Every one of them on a real pipe that ORCA closes, never on "nothing": on Windows that
+    // is an input that never ends, so `python3 -` waited for its program forever.
+    expect(spawned.map((ssh) => ssh.stdinMode)).toEqual(["pipe", "pipe", "pipe"]);
     await tunnel.close();
   });
 
@@ -1114,6 +1150,16 @@ describe.skipIf(!live)("SshTunnel against a real sshd", () => {
     expect(await (await fetch(await open(remote, pins).open())).text()).toBe("orca");
   }, 60_000);
 
+  it("hands a command its whole standard input through the real ssh (#881)", async () => {
+    // Server setup sends its program to `python3 -` this way: well over 100 KB. ssh must get
+    // a pipe that ends, not "nothing", which never ends on Windows (the program never arrived).
+    const tunnel = open(await daemon(), join(dir(), "live.known_hosts"));
+    await tunnel.open();
+    const program = `// ${"x".repeat(200_000)}\nprocess.stdout.write("whole program ran");\n`;
+    const result = await tunnel.exec(["node", "-"], 60_000, program);
+    expect(result).toMatchObject({ code: 0, stdout: "whole program ran" });
+  }, 90_000);
+
   it("refuses failed auth, a missing ssh, and a forward that cannot bind", async () => {
     const remote = await daemon();
     const pins = join(dir(), "live.known_hosts");
@@ -1280,5 +1326,119 @@ describe("the server CLI across the Orrery rename", () => {
     expect(none.calls).toHaveLength(1);
     const failing = withLegacyServerCommand(async () => ({ code: 1, stdout: "", serverLines: ["error"] }), names);
     expect((await failing(["new-cli", "auth", "issue"])).code).toBe(1);
+  });
+});
+
+describe("tailnet profiles and login approval (#1226, #1228)", () => {
+  const tailnet = { node: "nBuild1", name: "build-1.example-tailnet.ts.net" };
+
+  it("binds a profile to a node by stable ID, never with junk", () => {
+    expect(profile({ tailnet }).tailnet).toEqual(tailnet);
+    expect(() => profile({ tailnet: { node: "a b", name: tailnet.name } })).toThrow();
+    expect(() => profile({ tailnet: { node: "n1", name: "Build-1.example" } })).toThrow();
+    expect(() => profile({ tailnet: { ...tailnet, extra: 1 } })).toThrow();
+  });
+
+  it("dials the node's current address, under the profile's own alias", async () => {
+    const seen: (readonly string[])[] = [];
+    let lookups = 0;
+    const { tunnel } = fakeTunnel(
+      (ssh, _n, args) => {
+        seen.push(args);
+        ssh.say(authed);
+      },
+      {
+        profile: profile({ destination: "casey@build-1.example-tailnet.ts.net", tailnet }),
+        resolveHost: () => {
+          lookups += 1;
+          return Promise.resolve("100.101.102.103");
+        },
+      },
+    );
+    await tunnel.open();
+    expect(lookups).toBe(1);
+    expect(seen[0]!.at(-1)).toBe("casey@100.101.102.103");
+    expect(seen[0]).toContain("HostKeyAlias=orca-lab"); // rename-keep: tunnelHops keeps the alias
+    await tunnel.close();
+  });
+
+  it("refuses a tailnet profile without a resolver, or when the node moved, before ssh starts", async () => {
+    const bare = fakeTunnel((ssh) => ssh.say(authed), { profile: profile({ tailnet }) });
+    await expect(bare.tunnel.open()).rejects.toMatchObject({ code: "tailnet-unavailable" });
+    const moved = fakeTunnel((ssh) => ssh.say(authed), {
+      profile: profile({ tailnet }),
+      resolveHost: () => Promise.reject(new TunnelRefusal("tailnet-moved")),
+    });
+    await expect(moved.tunnel.open()).rejects.toMatchObject({ code: "tailnet-moved" });
+    const odd = fakeTunnel((ssh) => ssh.say(authed), {
+      profile: profile({ tailnet }),
+      resolveHost: () => Promise.resolve("100.64.0.1 -oProxyCommand=x"),
+    });
+    await expect(odd.tunnel.open()).rejects.toMatchObject({ code: "tailnet-unavailable" });
+    const broken = fakeTunnel((ssh) => ssh.say(authed), {
+      profile: profile({ tailnet }),
+      resolveHost: () => Promise.reject(new Error("boom")),
+    });
+    await expect(broken.tunnel.open()).rejects.toMatchObject({ code: "tailnet-unavailable" });
+    expect([...bare.spawned, ...moved.spawned, ...odd.spawned, ...broken.spawned]).toEqual([]);
+  });
+
+  it.each([
+    ["# To authenticate, visit: https://login.tailscale.com/a/l1a2b3c4", "https://login.tailscale.com/a/l1a2b3c4"],
+    // Any server can print a banner: a page anywhere but the control plane is not an approval link.
+    ["To authenticate, visit: https://headscale.example.org/check/abc\r", undefined],
+    ["# To authenticate, visit: https://login.tailscale.com.evil.example/a/x", undefined],
+    ["# To authenticate, visit: http://login.tailscale.com/a/x", undefined],
+    ["# To authenticate, visit: https://user:pw@login.tailscale.com/a/x", undefined],
+    ["# To authenticate, visit: javascript:alert(1)", undefined],
+    ["debug1: To authenticate, visit: https://login.tailscale.com/a/x", undefined],
+    ["# Tailscale SSH requires an additional check.", undefined],
+  ])("reads the approval link in %j", (line, url) => {
+    expect(loginApprovalUrl(line.replace(/\r$/, ""))).toBe(url);
+  });
+
+  it("takes another control plane's page only by explicit policy", () => {
+    const line = "# To authenticate, visit: https://headscale.example.org/check/abc";
+    expect(loginApprovalUrl(line, ["https://headscale.example.org"])).toBe("https://headscale.example.org/check/abc");
+    expect(loginApprovalUrl(line, ["https://headscale.example.org:8443"])).toBeUndefined();
+  });
+
+  it("shows a check-mode approval link and waits for it past the ordinary timeout", async () => {
+    const links: string[] = [];
+    const { tunnel } = fakeTunnel(
+      (ssh) => {
+        ssh.say("# Tailscale SSH requires an additional check.");
+        ssh.say("# To authenticate, visit: https://login.tailscale.com/a/l1a2b3c4");
+        setTimeout(() => ssh.say(authed), 80);
+      },
+      { readyTimeoutMs: 30, approvalTimeoutMs: 1_000, onLoginApproval: (url: string) => links.push(url) },
+    );
+    await tunnel.open();
+    expect(links).toEqual(["https://login.tailscale.com/a/l1a2b3c4"]);
+    await tunnel.close();
+  });
+
+  it("refuses an approval nobody gave as approval-timeout, and ignores links nobody asked to see", async () => {
+    const waiting = fakeTunnel((ssh) => ssh.say("# To authenticate, visit: https://login.tailscale.com/a/l1a2b3c4"), {
+      readyTimeoutMs: 1_000,
+      approvalTimeoutMs: 20,
+      onLoginApproval: () => {},
+    });
+    await expect(waiting.tunnel.open()).rejects.toMatchObject({ code: "approval-timeout" });
+    const unasked = fakeTunnel((ssh) => ssh.say("# To authenticate, visit: https://login.tailscale.com/a/l1a2b3c4"), {
+      readyTimeoutMs: 20,
+    });
+    await expect(unasked.tunnel.open()).rejects.toMatchObject({ code: "timeout" });
+  });
+
+  it("passes on no link from a server whose banner names another origin, and keeps the ordinary timeout", async () => {
+    const links: string[] = [];
+    const spoof = fakeTunnel((ssh) => ssh.say("# To authenticate, visit: https://phish.example/a/l1a2b3c4"), {
+      readyTimeoutMs: 20,
+      approvalTimeoutMs: 1_000,
+      onLoginApproval: (url: string) => links.push(url),
+    });
+    await expect(spoof.tunnel.open()).rejects.toMatchObject({ code: "timeout" });
+    expect(links).toEqual([]);
   });
 });

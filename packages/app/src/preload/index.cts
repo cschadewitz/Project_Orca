@@ -17,13 +17,17 @@
  * is written in the form the emit actually has; the type imports are erased either way.
  */
 import type {
+  AgentSignInView,
   DaemonTargetSnapshot,
   FleetSnapshot,
+  HostAgentView,
+  LoginApprovalView,
   ProfileRemoval,
   ProfileResult,
   RemoteProfileView,
   ServerInspectionResultView,
   ServerSetupView,
+  TailnetMachinesView,
 } from "../daemon-connection.js";
 // A CommonJS file under `verbatimModuleSyntax` has no other way to spell a value import,
 // and emitting CommonJS is the whole point of this file — see the header.
@@ -54,6 +58,8 @@ const { contextBridge, ipcRenderer } = electron;
  * rules that make a bare `<T>` on an arrow ambiguous, and the comma is the disambiguator.
  */
 let targetEpoch = (ipcRenderer.sendSync("orca:daemon.read") as DaemonTargetSnapshot).epoch;
+/** The incubating `tailnet-hosts` flag (#1225), as main reads it: agents on a server are offered only with it on. */
+const tailnetHosts = ipcRenderer.sendSync("orca:profiles.tailnetHosts") === true;
 
 const call = <T,>(channel: string, params?: unknown): Promise<BridgeResult<T>> =>
   ipcRenderer.invoke(channel, params, targetEpoch) as Promise<BridgeResult<T>>;
@@ -262,8 +268,42 @@ const bridge: OrcaBridge = {
         ipcRenderer.invoke("orca:profiles.useAutomaticSignIn", id) as Promise<ProfileResult<RemoteProfileView>>,
       inspectServer: (id) =>
         ipcRenderer.invoke("orca:profiles.inspectServer", id) as Promise<ProfileResult<ServerInspectionResultView>>,
-      setUpServer: (id, confirmation) =>
-        ipcRenderer.invoke("orca:profiles.setUpServer", id, confirmation) as Promise<ProfileResult<ServerSetupView>>,
+      setUpServer: (id, confirmation, options) =>
+        ipcRenderer.invoke("orca:profiles.setUpServer", id, confirmation, options) as Promise<
+          ProfileResult<ServerSetupView>
+        >,
+      tailnetMachines: () =>
+        ipcRenderer.invoke("orca:profiles.tailnetMachines") as Promise<ProfileResult<TailnetMachinesView>>,
+      onLoginApproval: (listener) => {
+        const forward = (_event: unknown, approval: LoginApprovalView) => listener(approval);
+        ipcRenderer.on("orca:profiles.loginApproval", forward);
+        return () => {
+          ipcRenderer.off("orca:profiles.loginApproval", forward);
+        };
+      },
+      openLoginApproval: (id) =>
+        ipcRenderer.invoke("orca:profiles.openLoginApproval", id) as Promise<ProfileResult<null>>,
+      ...(tailnetHosts
+        ? {
+            hostAgents: (id: string) =>
+              ipcRenderer.invoke("orca:profiles.hostAgents", id) as Promise<ProfileResult<HostAgentView[]>>,
+            installHostAgent: (id: string, agent: string) =>
+              ipcRenderer.invoke("orca:profiles.installHostAgent", id, agent) as Promise<
+                ProfileResult<{ settings: string }>
+              >,
+            signInHostAgent: (id: string, agent: string) =>
+              ipcRenderer.invoke("orca:profiles.signInHostAgent", id, agent) as Promise<ProfileResult<null>>,
+            onAgentSignIn: (listener: (prompt: AgentSignInView) => void) => {
+              const forward = (_event: unknown, prompt: AgentSignInView) => listener(prompt);
+              ipcRenderer.on("orca:profiles.agentSignIn", forward);
+              return () => {
+                ipcRenderer.off("orca:profiles.agentSignIn", forward);
+              };
+            },
+            openAgentSignIn: (id: string, agent: string, attempt: string) =>
+              ipcRenderer.invoke("orca:profiles.openAgentSignIn", id, agent, attempt) as Promise<ProfileResult<null>>,
+          }
+        : {}),
     },
     fleet: {
       read: () => ipcRenderer.sendSync("orca:fleet.read") as FleetSnapshot,
@@ -381,6 +421,10 @@ const bridge: OrcaBridge = {
     apply: (params) => call("orca:config.apply", params),
     saveJudgedRule: (params) => call("orca:permissions.saveJudgedRule", params),
     judgeStatus: () => call("orca:judge.status", {}),
+  },
+  remotes: {
+    list: () => call("orca:remotes.list", {}),
+    enroll: (params) => call("orca:remotes.enroll", params),
   },
   notifications: {
     // The one channel the main process pushes on rather than answers on. Each renderer

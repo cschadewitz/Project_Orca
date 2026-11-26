@@ -58,7 +58,9 @@ describe("the matrix", () => {
       // The key in mono and the title in sans, on the pin itself rather than in a tooltip.
       expect(within(pin).getByText(risk.key).className).toContain("orca-text-mono-id");
       expect(pin.textContent).toContain(risk.title);
-      expect(pin.getAttribute("title")).toBeNull();
+      // A pin is as wide as its cell and cut at its end (#1112), so its whole text is in its
+      // title as well (rule 15).
+      expect(pin.getAttribute("title")).toBe(`${risk.key} ${risk.title}`);
       // And its level in words, so the cell's colour is never the only thing saying it.
       expect(pin.getAttribute("aria-label")).toContain(risk.level);
       // Placed by likelihood (row, highest first) and impact (column).
