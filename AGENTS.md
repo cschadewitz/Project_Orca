@@ -19,6 +19,9 @@ template for substantial planned work. In particular:
   parallel work, and validate the hard-dependency graph is acyclic.
 - Preserve existing metadata and history unless asked to change them. Leave milestone
   assignment for explicit release planning, and read published issues back to verify.
+- A large feature with no target release is a workstream: land it on `main` behind an
+  incubating flag, per [docs/WORKSTREAMS.md](docs/WORKSTREAMS.md), rather than opening a
+  long-lived branch.
 
 ## Before you touch the UI
 

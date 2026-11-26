@@ -561,6 +561,10 @@ The point is that a pull request creates a file instead of editing a shared list
 pull requests in flight cannot conflict over the changelog — and a dropped fragment is a
 missing file rather than a lost merge. `changelog.d/README.md` is the reference.
 
+Fragments for work behind an incubating flag live in `changelog.d/incubating/<flag>/`, which
+`prepare` does not read; `node tools/release.js promote <flag>` moves them up when the flag is
+promoted (docs/WORKSTREAMS.md).
+
 `prepare` renders the fragments into the dated section and deletes them, so the deletions
 land in the `release: vX.Y.Z` pull request beside the section they became. Nothing else
 reads `changelog.d/`: `notes <version>` quotes the committed `CHANGELOG.md`, which is what
