@@ -106,6 +106,8 @@ jobs:
           node -e '
             const e = require(process.argv[1]);
             console.log(JSON.stringify({ complete: e.complete, missing: e.missing, ...e.summary }, null, 2));
+            // Each case that did not verify, in full, so the log alone says why.
+            for (const c of e.cases.filter((c) => c.status !== "verified")) console.log(JSON.stringify(c, null, 2));
           ' "$f"
 
       - name: Upload the evidence (unsigned)
