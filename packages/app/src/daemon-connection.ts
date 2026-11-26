@@ -39,6 +39,8 @@ export interface RemoteProfileView extends RemoteProfileHop {
   serverConfig?: string;
   /** Credentials are issued with the read-only `viewer` preset. */
   readOnly?: true;
+  /** Picked from the tailnet (#1226): bound to this node's stable ID; `name` is its MagicDNS name then. */
+  tailnet?: { node: string; name: string };
   hasCredential: boolean;
   /** When the automatically issued credential expires; it is renewed well before. */
   credentialExpiresAt?: string;
@@ -60,6 +62,8 @@ export interface RemoteProfileInput extends RemoteProfileHop {
   serverCommand?: string;
   serverConfig?: string;
   readOnly?: boolean;
+  /** Bind to a tailnet node (#1226). Left out on an edit: the profile keeps the node it had. */
+  tailnet?: { node: string; name: string };
 }
 
 /**

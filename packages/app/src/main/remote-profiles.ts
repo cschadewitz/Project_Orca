@@ -60,6 +60,16 @@ import {
   type SetupOutcome,
 } from "@orca/protocol/server-setup";
 import {
+  AdvertisedPinRefused,
+  readTailnet,
+  resolveTailnetBinding,
+  tailnetEnabled,
+  tailnetHostResolver,
+  writeAdvertisedPin,
+  type ReadTailnetOptions,
+  type TailnetRead,
+} from "@orca/protocol/tailnet";
+import {
   CredentialRecords,
   CredentialSetupRefusal,
   DEFAULT_CREDENTIAL_POLICY,
@@ -233,6 +243,13 @@ export interface RemoteProfilesDeps {
   installationId?: string;
   credentialPolicy?: CredentialPolicy;
   now?: () => number;
+  /**
+   * A login is waiting for the person to approve it in a browser (Tailscale SSH check mode,
+   * #1228): show them `url`. The login waits for the approval, up to the tunnel's limit.
+   */
+  onLoginApproval?: (profileId: string, url: string) => void;
+  /** Test seam over how the local tailnet is read (`@orca/protocol/tailnet`, #1226). */
+  tailnet?: ReadTailnetOptions;
   /** Test seam: ask the daemon, over the tunnel's streams, whether it accepts `token`. */
   verify?: (connect: () => Duplex, url: string, token: string, principal?: string) => Promise<HelloAnswer>;
 }
@@ -418,6 +435,11 @@ export class RemoteProfiles {
       ...(expectKeys !== undefined ? { expectKeys } : {}),
       ...(this.deps.sshBinary ? { sshBinary: this.deps.sshBinary } : {}),
       onState: (state) => this.deps.onTunnelState?.(profile.id, state),
+      // A tailnet profile dials its node's current address, read on every connect (#1226).
+      ...(profile.tailnet ? { resolveHost: tailnetHostResolver(profile.tailnet, this.deps.tailnet) } : {}),
+      ...(this.deps.onLoginApproval
+        ? { onLoginApproval: (url: string) => this.deps.onLoginApproval?.(profile.id, url) }
+        : {}),
     };
   }
   /**
@@ -542,6 +564,7 @@ export class RemoteProfiles {
       ...(profile.serverCommand ? { serverCommand: profile.serverCommand } : {}),
       ...(profile.serverConfig ? { serverConfig: profile.serverConfig } : {}),
       ...(profile.readOnly ? { readOnly: true as const } : {}),
+      ...(profile.tailnet ? { tailnet: { node: profile.tailnet.node, name: profile.tailnet.name } } : {}),
       hasCredential: this.activeSlot(this.record(profile.id)) !== undefined,
       ...this.credentialView(profile.id),
       ...this.pinView(profile),
@@ -597,6 +620,12 @@ export class RemoteProfiles {
     if (!parsed.success) throw new ConnectionRefusal(parsed.error.issues[0]?.message ?? "Invalid profile");
     const profiles = this.read();
     const { id: requested, ...fields } = parsed.data;
+    if (fields.tailnet) {
+      if (!tailnetEnabled(this.deps.tailnet?.features))
+        throw new ConnectionRefusal("Machines from your tailnet are not available in this build.");
+      if (fields.jump)
+        throw new ConnectionRefusal("A machine on your tailnet is reached directly, without a jump host.");
+    }
     const id = requested ?? profileIdFor(fields.name, new Set(profiles.map((p) => p.id)));
     const existing = profiles.find((p) => p.id === id);
     if (requested && !existing) throw new ConnectionRefusal("That profile no longer exists.");
@@ -605,8 +634,14 @@ export class RemoteProfiles {
     // that already omits it: one saved before 0.8.1, whose server answers to `orca` and keeps
     // doing so until someone enters another command.
     const keepsLegacy = existing !== undefined && existing.serverCommand === undefined;
+    // An edit from a form that does not show the binding keeps it: a tailnet profile never
+    // turns into a typed one by accident (#1226).
+    const tailnet = fields.tailnet ?? existing?.tailnet;
+    if (tailnet && fields.jump)
+      throw new ConnectionRefusal("A machine on your tailnet is reached directly, without a jump host.");
     const profile = ConnectionProfileSchema.parse({
       ...fields,
+      ...(tailnet ? { tailnet } : {}),
       ...(fields.serverCommand === undefined && !keepsLegacy ? { serverCommand: DEFAULT_SERVER_COMMAND } : {}),
       id,
     });
@@ -953,6 +988,43 @@ export class RemoteProfiles {
     this.forgetPins(id);
     // Another key may be another server: what was approved on the old one is not carried over.
     this.forgetServerUpdater(id);
+  }
+
+  /**
+   * The machines on this computer's tailnet (#1226), for Add a machine and Add profile. Hidden
+   * (`off`, `absent`, …) unless the `tailnet-hosts` flag is on and Tailscale is running here.
+   */
+  tailnetMachines(): Promise<TailnetRead> {
+    return readTailnet(this.deps.tailnet);
+  }
+
+  /**
+   * Pin a tailnet profile's host keys from what its node advertises (#1227), instead of a
+   * fingerprint the person checks by hand. Only into a profile with no pin yet; a node that
+   * advertises none (no Tailscale SSH, a Windows machine) keeps the ordinary confirm flow.
+   * Returns whether it pinned.
+   */
+  async pinFromTailnet(id: string): Promise<boolean> {
+    const profile = this.get(id);
+    if (!profile?.tailnet) throw new ConnectionRefusal("That profile is not a machine on your tailnet.");
+    this.assertIdle(id, "resetting");
+    const read = await this.tailnetMachines();
+    if (read.state !== "running") throw new ConnectionRefusal("Tailscale is not running on this computer.");
+    const resolved = resolveTailnetBinding(read.snapshot, profile.tailnet);
+    if (!resolved.ok) throw new ConnectionRefusal(resolved.message);
+    if (!resolved.peer.sshHostKeys.length) return false;
+    // The profile may have changed or connected while the tailnet was read.
+    this.assertIdle(id, "resetting");
+    if (JSON.stringify(this.get(id)?.tailnet) !== JSON.stringify(profile.tailnet))
+      throw new ConnectionRefusal("That profile changed; try again.");
+    try {
+      writeAdvertisedPin(this.pins(id), `orca-${id}`, resolved.peer);
+    } catch (error) {
+      if (error instanceof AdvertisedPinRefused) throw new ConnectionRefusal(error.message);
+      throw error;
+    }
+    this.bump(id);
+    return true;
   }
 
   /** The host keys the profile's pins vouch for now (server, and jump host). */

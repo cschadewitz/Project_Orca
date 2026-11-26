@@ -169,6 +169,8 @@ export function serverKey(profile: ConnectionProfile): string {
     profile.sshPort ?? 22,
     profile.jump?.destination ?? null,
     profile.jump ? (profile.jump.sshPort ?? 22) : null,
+    // A tailnet profile is its node (#1226): another node under the same name is another server.
+    ...(profile.tailnet ? [profile.tailnet.node] : []),
   ]);
 }
 

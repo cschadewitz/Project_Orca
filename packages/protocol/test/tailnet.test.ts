@@ -18,6 +18,7 @@ import {
   readTailnet,
   resolveTailnetBinding,
   TAILSCALE_CLI,
+  tailnetHostResolver,
   writeAdvertisedPin,
   type TailnetPeer,
   type TailnetSnapshot,
@@ -409,5 +410,31 @@ describe("pinning advertised host keys", () => {
     expect(existsSync(file)).toBe(false);
     expect(existsSync(`${file}.enrolled`)).toBe(false);
     expect(pinState(file)).toBe("none");
+  });
+});
+
+describe("tailnetHostResolver", () => {
+  const options = (json: string, env: Record<string, string> = ON.env) => ({
+    features: { env },
+    cliPath: "/fake/tailscale",
+    exists: () => true,
+    run: () => Promise.resolve(json),
+  });
+  const binding = { node: "nBuild1", name: "build-1.example-tailnet.ts.net" };
+
+  it("answers the node's address on each connect", async () => {
+    await expect(tailnetHostResolver(binding, options(status([peer({ ID: "nBuild1" })])))()).resolves.toBe(
+      "100.101.102.103",
+    );
+  });
+
+  it.each([
+    ["the flag is off", status([peer({ ID: "nBuild1" })]), {}, "tailnet-unavailable"],
+    ["Tailscale is stopped", JSON.stringify({ BackendState: "Stopped" }), ON.env, "tailnet-unavailable"],
+    ["the node is gone", status([]), ON.env, "tailnet-moved"],
+    ["the name moved", status([peer({ ID: "nOther" })]), ON.env, "tailnet-moved"],
+    ["the node is offline", status([peer({ ID: "nBuild1", Online: false })]), ON.env, "tailnet-offline"],
+  ])("refuses when %s", async (_, json, env, code) => {
+    await expect(tailnetHostResolver(binding, options(json, env))()).rejects.toMatchObject({ code });
   });
 });

@@ -33,10 +33,17 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { isIP } from "node:net";
 import { dirname } from "node:path";
 import { featureEnabled, type FeatureContext } from "@orca/core";
-import { markPinEnrolled, pinState } from "./remote-access.js";
+import { markPinEnrolled, pinState, TunnelRefusal, type TailnetBinding } from "./remote-access.js";
+
+export type { TailnetBinding } from "./remote-access.js";
 
 /** The workstream's flag (packages/core/src/features.ts). */
 export const TAILNET_FLAG = "tailnet-hosts";
+
+/** Whether the `tailnet-hosts` flag is on here (off by default: incubating). */
+export function tailnetEnabled(features?: FeatureContext): boolean {
+  return featureEnabled(TAILNET_FLAG, features);
+}
 
 /**
  * Where the Tailscale CLI is installed, by platform. A fixed path, never a `PATH` lookup, so
@@ -314,7 +321,7 @@ export interface ReadTailnetOptions {
  * or broken Tailscale client hides the list and changes nothing else.
  */
 export async function readTailnet(options: ReadTailnetOptions = {}): Promise<TailnetRead> {
-  if (!featureEnabled(TAILNET_FLAG, options.features)) return { state: "off" };
+  if (!tailnetEnabled(options.features)) return { state: "off" };
   const cli = options.cliPath ?? TAILSCALE_CLI[options.platform ?? process.platform];
   if (!cli || !(options.exists ?? existsSync)(cli)) return { state: "absent" };
   let run: TailscaleRun;
@@ -342,12 +349,6 @@ export async function readTailnet(options: ReadTailnetOptions = {}): Promise<Tai
 // ---------------------------------------------------------------------------------------
 // Binding
 // ---------------------------------------------------------------------------------------
-
-/** What a profile picked from the tailnet stores: the stable node ID, and the name it had then. */
-export interface TailnetBinding {
-  node: string;
-  name: string;
-}
 
 export type TailnetResolution =
   | {
@@ -394,6 +395,35 @@ export function resolveTailnetBinding(snapshot: TailnetSnapshot, binding: Tailne
     host: isIP(address) === 6 ? `[${address}]` : address,
     renamed: peer.dnsName !== binding.name.toLowerCase(),
   };
+}
+
+/**
+ * The tunnel's `resolveHost` for a profile bound to `binding`: reads the tailnet on every
+ * connect and answers the node's current address, or refuses. A client that is off, absent or
+ * signed out is `tailnet-unavailable`; a node that is gone or replaced is `tailnet-moved`, which
+ * needs the person; an offline node is `tailnet-offline`.
+ */
+export function tailnetHostResolver(binding: TailnetBinding, options: ReadTailnetOptions = {}): () => Promise<string> {
+  return async () => {
+    const read = await readTailnet(options);
+    if (read.state !== "running") throw new TunnelRefusal("tailnet-unavailable");
+    const resolved = resolveTailnetBinding(read.snapshot, binding);
+    if (resolved.ok) return resolved.host;
+    switch (resolved.code) {
+      case "node-gone":
+      case "different-machine":
+        throw new TunnelRefusal("tailnet-moved");
+      case "offline":
+        throw new TunnelRefusal("tailnet-offline");
+      case "no-address":
+        throw new TunnelRefusal("tailnet-unavailable");
+    }
+  };
+}
+
+/** The binding to save for a peer picked from the list. */
+export function bindingFor(peer: TailnetPeer): TailnetBinding {
+  return { node: peer.nodeId, name: peer.dnsName };
 }
 
 // ---------------------------------------------------------------------------------------
