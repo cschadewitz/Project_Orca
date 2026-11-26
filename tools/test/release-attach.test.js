@@ -1,10 +1,10 @@
 /** release-attach.sh against a stateful fake `gh`: attach only to the exact draft it selected. */
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 const ATTACH = resolve("tools/deploy/release-attach.sh");
 const FEED_AUTO = resolve("tools/deploy/feed-auto.sh");
@@ -1252,6 +1252,223 @@ describe.skipIf(process.platform === "win32")("release-attach.sh", () => {
       expect(result.status).not.toBe(0);
       expect(result.stderr).toContain(message);
       expect(f.state().releases[0].draft).toBe(true);
+    });
+
+    describe("the Windows server bundle (#1238, incubating)", () => {
+      // The real script starts it with the 0.9 line, and these fixtures are 0.8.0 releases: the
+      // publishing and attach cases run a copy whose only change is that line, beside the real
+      // tools it calls.
+      const early = () => {
+        const root = mkdtempSync(join(tmpdir(), "orca-win-attach-"));
+        dirs.push(root);
+        mkdirSync(join(root, "tools", "deploy"), { recursive: true });
+        const script = readFileSync(ATTACH, "utf8");
+        expect(script).toMatch(/^WIN_SERVER_FROM=0\.9\.0$/m);
+        writeFileSync(
+          join(root, "tools", "deploy", "release-attach.sh"),
+          script.replace(/^WIN_SERVER_FROM=0\.9\.0$/m, "WIN_SERVER_FROM=0.8.0"),
+        );
+        symlinkSync(resolve("tools/deploy/feed-arches.js"), join(root, "tools", "deploy", "feed-arches.js"));
+        symlinkSync(resolve("tools/release-lane.js"), join(root, "tools", "release-lane.js"));
+        return join(root, "tools", "deploy", "release-attach.sh");
+      };
+      let WIN_ATTACH;
+      beforeEach(() => (WIN_ATTACH = early()));
+      const WIN_ENV = { SERVER_PLATFORM: "win-x64" };
+      const winFiles = (version = "0.8.0", sha = SHA, tag = "windows") => {
+        const names = ["zip", "manifest.json", "manifest.json.sigstore.json"].map(
+          (ext) => `orca-server-${version}-win-x64.${ext}`,
+        );
+        const archiveContent = `${tag} zip ${version}`;
+        const manifestContent = JSON.stringify({
+          schema: "orca-server-bundle/1",
+          version,
+          sourceSha: sha,
+          platform: "win-x64",
+          archive: { name: names[0], sha256: sha256(archiveContent).slice(7) },
+        });
+        return [archiveContent, manifestContent, `${tag} sigstore bundle`].map((content, i) => ({
+          id: 951 + i,
+          name: names[i],
+          digest: sha256(content),
+          content,
+        }));
+      };
+      const WIN = winFiles();
+      const winRecord = (run = 66, files = WIN) =>
+        `<!-- orca-server-win-x64-run: ${run} ${files.map((a) => a.digest).join(" ")} -->`;
+      const winReceipt = (id = 7, version = "0.8.0", sha = SHA, files = WIN) =>
+        `windows server bundle receipt: release ${id} v${version} ${sha} ` +
+        sha256(
+          `orca-server-receipt/1 platform=win-x64 release=${id} version=${version} sha=${sha} files=${files
+            .map((a) => a.digest)
+            .join(" ")}`,
+        );
+      const winJobs = () =>
+        ["sign the manifest (keyless, GitHub OIDC)", "verify on a clean Windows host", winReceipt()].map((name) => ({
+          name,
+          status: "completed",
+          conclusion: "success",
+        }));
+      const withWindows = (st) => {
+        st.releases[0].assets.push(...WIN.map((file) => ({ ...file })));
+        st.releases[0].body += `\n\n${winRecord()}`;
+        st.runs["66"] = {
+          ...serverRun(),
+          path: ".github/workflows/release-server-bundle-windows.yml",
+          display_title: `Release (Windows server bundle) v0.8.0 at ${SHA}`,
+        };
+        st.jobs["66"] = winJobs();
+      };
+      const winDir = () => {
+        const dir = mkdtempSync(join(tmpdir(), "orca-win-server-files-"));
+        dirs.push(dir);
+        for (const file of WIN) writeFileSync(join(dir, file.name), file.content);
+        return dir;
+      };
+      const publishEarly = (f) => f.run(WIN_ATTACH, ["publish", "7", "0.8.0", SHA, DEB.digest, f.digest]);
+
+      it("starts with the 0.9 line: the real script builds and writes nothing for 0.8.0", () => {
+        const f = setup({ releases: [bare()] });
+        f.edit((st) => (st.onLine = [SHA]));
+        expect(f.run(ATTACH, ["server-target", "0.8.0", SHA], WIN_ENV).stderr).toContain(
+          "before the Windows server bundle's 0.9.0 line",
+        );
+        expect(f.run(ATTACH, ["server-attach", "7", SHA, "0.8.0", "66", winDir()], WIN_ENV).stderr).toContain(
+          "before the Windows server bundle's 0.9.0 line",
+        );
+        expect(f.writes()).toEqual([]);
+      });
+
+      it("binds its receipt to the platform, so it is never the Linux bundle's", () => {
+        const f = setup();
+        const result = f.run(ATTACH, ["server-receipt", "7", SHA, "0.8.0", winDir()], WIN_ENV);
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout).toBe(
+          `digests=${WIN.map((a) => a.digest).join(" ")}\nreceipt=${winReceipt().split(" ").at(-1)}\n`,
+        );
+      });
+
+      it("attaches beside the Linux bundle with its own record, which neither bundle's commands mistake", () => {
+        const f = setup();
+        const first = f.run(WIN_ATTACH, ["server-attach", "7", SHA, "0.8.0", "66", winDir()], WIN_ENV);
+        expect(first.status, first.stderr).toBe(0);
+        const r = f.state().releases[0];
+        expect(r.assets.map((a) => a.digest)).toEqual([
+          DEB.digest,
+          ...SERVER.map((a) => a.digest),
+          ...WIN.map((a) => a.digest),
+        ]);
+        expect(r.body).toBe(`Notes.\n\n${SERVER_RECORD}\n\n${winRecord(66)}`);
+        // A rerun of either bundle's attach finds its own record and writes nothing.
+        const writes = f.writes().length;
+        expect(f.run(WIN_ATTACH, ["server-attach", "7", SHA, "0.8.0", "66", winDir()], WIN_ENV).status).toBe(0);
+        const linux = mkdtempSync(join(tmpdir(), "orca-server-files-"));
+        dirs.push(linux);
+        for (const file of SERVER) writeFileSync(join(linux, file.name), file.content);
+        const again = f.run(WIN_ATTACH, ["server-attach", "7", SHA, "0.8.0", "55", linux]);
+        expect(again.status, again.stderr).toBe(0);
+        expect(f.writes()).toHaveLength(writes);
+      });
+
+      it("publishes a final without it, or with all of it and its receipt", () => {
+        const without = setup();
+        ready(without);
+        const alone = publishEarly(without);
+        expect(alone.status, alone.stderr).toBe(0);
+        expect(without.state().releases[0].assets).toHaveLength(6);
+
+        const withIt = setup();
+        ready(withIt);
+        withIt.edit(withWindows);
+        const both = publishEarly(withIt);
+        expect(both.status, both.stderr).toBe(0);
+        expect(withIt.state().releases[0].assets).toHaveLength(9);
+        expect(withIt.state().releases[0].draft).toBe(false);
+      });
+
+      it.each([
+        [
+          "its files but no record",
+          (st) => {
+            withWindows(st);
+            st.releases[0].body = st.releases[0].body.replace(`\n\n${winRecord()}`, "");
+          },
+          "has no Windows server bundle record",
+        ],
+        [
+          "a record but only part of its files",
+          (st) => {
+            withWindows(st);
+            st.releases[0].assets = st.releases[0].assets.filter((a) => !a.name.endsWith("-win-x64.zip"));
+          },
+          "are not exactly the accepted",
+        ],
+        [
+          "a run whose clean Windows host check did not pass",
+          (st) => {
+            withWindows(st);
+            st.jobs["66"][1].conclusion = "failure";
+          },
+          "no successful 'verify on a clean Windows host' job",
+        ],
+        [
+          "the Linux bundle's run as its receipt",
+          (st) => {
+            withWindows(st);
+            st.releases[0].body = st.releases[0].body.replace(winRecord(), winRecord(55));
+          },
+          "is not a successful Release (Windows server bundle) dispatch",
+        ],
+        [
+          "a manifest for Linux",
+          (st) => {
+            withWindows(st);
+            const manifest = st.releases[0].assets.find((a) => a.name.endsWith("-win-x64.manifest.json"));
+            manifest.content = manifest.content.replace('"win-x64"', '"linux-x64"');
+            manifest.digest = sha256(manifest.content);
+            st.releases[0].body = st.releases[0].body.replace(
+              winRecord(),
+              winRecord(
+                66,
+                st.releases[0].assets.filter((a) => a.name.startsWith("orca-server-") && a.name.includes("-win-x64.")),
+              ),
+            );
+          },
+          "is not for v0.8.0 at",
+        ],
+      ])("refuses to publish a final with %s", (_label, change, message) => {
+        const f = setup();
+        ready(f);
+        f.edit(change);
+        const result = publishEarly(f);
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain(message);
+        expect(f.state().releases[0].draft).toBe(true);
+      });
+
+      it("dispatches its own workflow for a release without its record", () => {
+        const f = setup({
+          releases: [bare({ draft: false, prerelease: true, name: "v0.8.0-rc.1", tag_name: "v0.8.0-rc.1" })],
+        });
+        const result = f.run(WIN_ATTACH, ["server-reconcile"], WIN_ENV);
+        expect(result.status, result.stderr).toBe(0);
+        expect(f.writes()).toEqual([
+          [
+            "workflow",
+            "run",
+            "release-server-bundle-windows.yml",
+            "--repo",
+            "o/r",
+            "--ref",
+            "main",
+            "-f",
+            "version=0.8.0-rc.1",
+            "-f",
+            `source_sha=${SHA}`,
+          ],
+        ]);
+      });
     });
 
     describe("before the 0.8 line (0.7.1 keeps its approved desktop asset set)", () => {

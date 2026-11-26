@@ -495,13 +495,14 @@ it("binds each server bundle run to its version and commit (#876)", () => {
   const file = workflow("release-server-bundle.yml");
   expect(file["run-name"]).toBe("Release (server bundle) v${{ inputs.version }} at ${{ inputs.source_sha }}");
   const script = readFileSync("tools/deploy/release-attach.sh", "utf8");
-  expect(script).toContain("|Release (server bundle) v$version at $sha");
+  expect(script).toContain("|$(server_title) v$version at $sha");
+  expect(script).toContain('echo "Release (server bundle)"');
   // The receipt names the jobs exactly as the workflow does.
   for (const job of ["sign", "verify"]) expect(script).toContain(`"${file.jobs[job].name}"`);
   expect(file.jobs.attach.name).toBe(
     "server bundle receipt: release ${{ needs.resolve.outputs.id }} v${{ inputs.version }} ${{ inputs.source_sha }} ${{ needs.verify.outputs.receipt }}",
   );
-  expect(script).toContain('receipt="server bundle receipt: release $id v$version $sha $(receipt_hash');
+  expect(script).toContain('local prefix="server bundle receipt"');
   // The receipt is computed only after the clean-host stage, and the attach uploads only those bytes.
   const steps = file.jobs.verify.steps.map((step) => step.name ?? step.uses);
   expect(steps.indexOf("The receipt for exactly these bytes")).toBeGreaterThan(
@@ -509,6 +510,49 @@ it("binds each server bundle run to its version and commit (#876)", () => {
   );
   expect(file.jobs.attach.needs).toEqual(["resolve", "verify"]);
   expect(file.jobs.attach.steps.at(-1).env.VERIFIED).toBe("${{ needs.verify.outputs.digests }}");
+});
+
+it("binds each Windows server bundle run to its version and commit, separately from Linux (#1238)", () => {
+  const file = workflow("release-server-bundle-windows.yml");
+  expect(file["run-name"]).toBe("Release (Windows server bundle) v${{ inputs.version }} at ${{ inputs.source_sha }}");
+  expect(file.env.SERVER_PLATFORM).toBe("win-x64");
+  const script = readFileSync("tools/deploy/release-attach.sh", "utf8");
+  expect(script).toContain('echo "Release (Windows server bundle)"');
+  expect(script).toContain("echo release-server-bundle-windows.yml");
+  for (const job of ["sign", "verify"]) expect(script).toContain(`"${file.jobs[job].name}"`);
+  expect(file.jobs.verify["runs-on"]).toMatch(/^windows-/);
+  expect(file.jobs.attach.name).toBe(
+    "windows server bundle receipt: release ${{ needs.resolve.outputs.id }} v${{ inputs.version }} ${{ inputs.source_sha }} ${{ needs.verify.outputs.receipt }}",
+  );
+  expect(script).toContain('prefix="windows server bundle receipt"');
+  // Signed by this workflow's own identity, and verified on Windows against exactly it.
+  const identity = ".github/workflows/release-server-bundle-windows.yml@refs/heads/main";
+  expect(file.jobs.sign.steps.find((step) => step.name === "Sign").run).toContain(identity);
+  const check = file.jobs.verify.steps.find(
+    (step) => step.name === "Verify the signature with the pinned cosign for Windows",
+  );
+  expect(check.run).toContain(identity);
+  expect(check.env.COSIGN_VERSION).toBe(
+    file.jobs.sign.steps.find((step) => step.name === "Install the pinned cosign").env.COSIGN_VERSION,
+  );
+  // The receipt is computed only after the clean-host run, and the attach uploads only those bytes.
+  const steps = file.jobs.verify.steps.map((step) => step.name ?? step.uses);
+  expect(steps.indexOf("The receipt for exactly these bytes")).toBeGreaterThan(
+    steps.indexOf("Unpack it with Windows' own tools and run it with its node.exe"),
+  );
+  expect(file.jobs.attach.needs).toEqual(["resolve", "verify"]);
+  expect(file.jobs.attach.concurrency.group).toBe("release-draft-writes");
+  expect(file.jobs.attach.steps.at(-1).env.VERIFIED).toBe("${{ needs.verify.outputs.digests }}");
+});
+
+it("starts the Windows server bundle with the 0.9 line in the dispatch and in release-attach.sh alike (#1238)", () => {
+  const dispatch = workflow("release-publish.yml").jobs["server-bundle"].steps[1].run;
+  const script = readFileSync("tools/deploy/release-attach.sh", "utf8");
+  const from = script.match(/^WIN_SERVER_FROM=(\S+)$/m)[1];
+  expect(from).toBe("0.9.0");
+  expect(dispatch).toContain(`WIN_SERVER_FROM=${from}`);
+  expect(dispatch.indexOf("WIN_SERVER_FROM=")).toBeLessThan(dispatch.indexOf("gh workflow run"));
+  expect(dispatch).toContain("gh workflow run release-server-bundle-windows.yml");
 });
 
 it("starts the server bundle with the 0.8 line in the dispatch and in release-attach.sh alike (#876)", () => {
