@@ -38,17 +38,20 @@ the token and takes the lock only when **all** of these are true:
 
 A holder from **an earlier boot of this machine** is dead whatever its pid now names, so
 after a power loss (#1197) a contender also takes the lock when the token names this host and
-was written before this boot, even if its pid has been reused by another process or by the
-restarted daemon itself. On Linux, where the token recorded a liveness domain, the kernel boot
-ids decide; elsewhere the token's `at` must be older than the boot time. For the same reason an
-empty lock directory, or a token whose bytes never reached the disk (zero bytes or torn JSON),
-is cleared when it predates this boot by its modification time. Locks taken with
-`recovery: "provable"` (the config file's lock) keep the stricter rule and are never cleared
-this way.
+records a different kernel boot than this one, even if its pid has been reused by another
+process or by the restarted daemon itself. The boot is the Linux boot id, recorded in the
+token's liveness domain and, since #1197, in the token's name
+(`owner.<pid>.<boot id>-<uuid>.json`). The name survives a power loss that leaves the token's
+contents empty, so a torn token from an earlier boot is cleared too. Only positive boot identity
+counts: wall-clock timestamps are never compared with the boot time, because a clock corrected
+forward would make a live holder look older than the boot. So an empty lock directory, a torn
+token whose name records no boot, and any lock on a platform without boot ids still fail
+closed. Locks taken with `recovery: "provable"` (the config file's lock) keep the stricter rule
+and are never cleared this way.
 
 Anything else fails closed. That covers a token recording a different hostname, whatever its pid
 and however old it is; a token with no `host` (written before hosts were recorded); an
-empty directory or a malformed token from this boot; and an older lock file. The contender keeps waiting
+empty directory; a malformed token whose name records no earlier boot; and an older lock file. The contender keeps waiting
 with backoff and, at its deadline (60 s unless the caller sets `timeoutMs`), fails with
 `STORE_LOCK_TIMEOUT`. The holder's token is left exactly as it was. The age of a lock
 never breaks it: `staleMs` is still accepted but has no effect.

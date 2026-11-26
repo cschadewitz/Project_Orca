@@ -2,7 +2,7 @@
 import { readFileSync, readlinkSync } from "node:fs";
 import { link, mkdir, open, readdir, readFile, rename, rmdir, stat, unlink, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import { hostname, uptime } from "node:os";
+import { hostname } from "node:os";
 import { join } from "node:path";
 import { OrcaError } from "@orca/core";
 
@@ -15,7 +15,8 @@ export interface FileLockOptions {
   /**
    * When a lock left by a holder that is gone may be cleared automatically.
    *
-   * - `"host"` (the default): the holder named this host name and its pid is not running here.
+   * - `"host"` (the default): the holder named this host name and its pid is not running here,
+   *   or it recorded an earlier kernel boot of this machine (#1197).
    * - `"provable"`: only when the holder recorded the same liveness domain as this process (on
    *   Linux, this kernel boot and this pid namespace) and its pid is not running. A host name does
    *   not prove that pids are comparable (two containers, two machines on one share), so anything
@@ -54,24 +55,28 @@ function bootOf(domain: unknown): string | null {
   return match ? match[1]!.toLowerCase() : null;
 }
 
-/** Slack for uptime's whole-second rounding and filesystem timestamp granularity. */
-const BOOT_MARGIN_MS = 5_000;
-/** When this machine booted, by its wall clock now. */
-const bootTimeMs = () => Date.now() - uptime() * 1000;
+/** This kernel boot, as 32 hex digits for a token's name; null where no domain is established. */
+function bootTag(): string | null {
+  return bootOf(livenessDomain())?.replace(/-/g, "") ?? null;
+}
 
 /**
- * Whether a lock left on this host was taken before this machine last booted (#1197). Every
+ * Whether a lock left on this host was taken in an earlier boot of this machine (#1197). Every
  * process of an earlier boot is gone, so such a holder is dead whatever its pid now names: after
  * a power loss the pid is often reused, by an unrelated process or by the restarted daemon itself.
- * On Linux, when both sides recorded a liveness domain, the kernel boot ids decide exactly.
- * Otherwise the holder's own `at` (or, for a lock with no readable owner, the directory's mtime)
- * must be older than the boot time, with a margin for rounding.
+ *
+ * Only positive boot identity counts: the kernel boot ids, recorded in the token (its liveness
+ * domain) or in its name, compared with this boot's. A wall-clock comparison would not do — a
+ * clock corrected forward moves the computed boot time past a current holder's timestamps — so
+ * without boot ids on both sides (any platform but Linux, or a token from before #1197) the
+ * answer is always no, and the lock fails closed as before.
  */
-function fromEarlierBoot(recorded: { domain?: unknown; at?: number | undefined }): boolean {
-  const theirs = bootOf(recorded.domain);
-  const ours = bootOf(livenessDomain());
-  if (theirs && ours) return theirs !== ours;
-  return Number.isFinite(recorded.at) && recorded.at! < bootTimeMs() - BOOT_MARGIN_MS;
+function fromEarlierBoot(recorded: { domain?: unknown; token?: string }): boolean {
+  const ours = bootTag();
+  if (!ours) return false;
+  const named = recorded.token ? /^owner\.\d+\.([0-9a-f]{32})-[a-f0-9-]+\.json$/.exec(recorded.token)?.[1] : undefined;
+  const theirs = bootOf(recorded.domain)?.replace(/-/g, "") ?? named;
+  return theirs !== undefined && theirs !== ours;
 }
 
 export interface LockHolder {
@@ -97,7 +102,10 @@ export async function withFileLock<T>(
   fn: (stillHeld: () => Promise<void>) => Promise<T>,
   options: FileLockOptions = {},
 ): Promise<T> {
-  const token = `owner.${tag()}.json`;
+  // The boot id is in the name as well as the contents: a name survives a power loss that
+  // leaves the contents empty, so a torn token from an earlier boot can still be judged (#1197).
+  const boot = bootTag();
+  const token = `owner.${process.pid}.${boot ? `${boot}-` : ""}${randomUUID()}.json`;
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const deadline = Date.now() + timeoutMs;
   let backoff = 1;
@@ -156,7 +164,6 @@ async function removeToken(path: string, token: string): Promise<boolean> {
 async function removeDeadOwner(path: string, options: FileLockOptions): Promise<boolean> {
   try {
     const names = await readdir(path);
-    if (names.length === 0) return await removeEmptyFromEarlierBoot(path, options);
     if (names.length !== 1 || !/^owner\.\d+\.[a-f0-9-]+\.json$/.test(names[0]!)) return false;
     const token = names[0]!;
     let raw: Partial<LockHolder> & { host?: string; domain?: unknown };
@@ -165,9 +172,9 @@ async function removeDeadOwner(path: string, options: FileLockOptions): Promise<
     } catch (error) {
       if (!(error instanceof SyntaxError)) throw error;
       // A token torn by a power loss (often zero bytes: its data never reached the disk) names
-      // no holder. Only a token from before this boot is provably dead; any other stays closed.
-      if (options.recovery === "provable" || !fromEarlierBoot({ at: (await stat(join(path, token))).mtimeMs }))
-        return false;
+      // no holder. Only one whose name records an earlier boot is provably dead; an empty
+      // directory, or a torn token with no boot in its name, stays closed.
+      if (options.recovery === "provable" || !fromEarlierBoot({ token })) return false;
       return await removeToken(path, token);
     }
     if (options.recovery === "provable") {
@@ -192,22 +199,6 @@ async function removeDeadOwner(path: string, options: FileLockOptions): Promise<
       return false;
     throw error;
   }
-}
-
-/**
- * An empty lock directory is a holder that crashed between `mkdir` and publishing its token.
- * Under host recovery, one that predates this boot is removed; anything newer stays closed.
- */
-async function removeEmptyFromEarlierBoot(path: string, options: FileLockOptions): Promise<boolean> {
-  if (options.recovery === "provable" || !fromEarlierBoot({ at: (await stat(path)).mtimeMs })) return false;
-  try {
-    await rmdir(path);
-  } catch (error) {
-    // A contender published a token meanwhile: that is a live holder, not ours to remove.
-    if (["ENOTEMPTY", "EEXIST"].includes(codeOf(error) ?? "")) return false;
-    throw error;
-  }
-  return true;
 }
 
 /**
