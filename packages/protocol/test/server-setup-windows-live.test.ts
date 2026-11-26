@@ -15,6 +15,7 @@ import { ConnectionProfileSchema, SshTunnel } from "../src/remote-access.js";
 import {
   discoverServer,
   dropDiscovery,
+  inspectInvocation,
   readSetup,
   serverOs,
   setupInvocation,
@@ -51,10 +52,14 @@ describe.skipIf(!live || process.platform !== "win32")("a Windows server's setup
       const probe = await tunnel.exec(["ver"], 30_000);
       expect(probe, JSON.stringify(probe)).toMatchObject({ code: 0 });
       expect(await serverOs(tunnel), JSON.stringify(probe)).toBe("windows");
+      // The inspection itself, as discovery sends it, with everything it printed.
+      const inspect = inspectInvocation("windows", DEPLOY, "0.0.1", 6722);
+      const raw = await tunnel.exec(inspect.command, 120_000, inspect.input);
+      expect(raw, JSON.stringify(raw).slice(0, 6000)).toMatchObject({ code: 0 });
     } finally {
       await tunnel.close();
     }
-  }, 60_000);
+  }, 180_000);
 
   it("tells the server is Windows and inspects it read only with the Windows setup", async () => {
     const discovery = await discoverServer({
