@@ -75,9 +75,13 @@ export async function openLaunchWork(page: Page): Promise<void> {
   try {
     await expect(page.getByRole("region", { name: "Guided launch" })).toBeVisible();
   } catch (error) {
-    // #1177: the region was missing once, with protected-storage guidance on the page. Record
-    // what the page showed and what each guided-launch read answers now, so the next failure
-    // says which call refused before any snapshot succeeded instead of leaving it to inference.
+    // #1177: this once timed out on a page that was right. While a keyring prompt is up, the
+    // app's main process is inside the synchronous keyring call, and Playwright reaches the
+    // window through that process: it sees nothing until the prompt is answered, and the page
+    // in its own error context is the one from before the prompt. Record what the page shows
+    // and what each guided-launch read answers once the app answers again, so a failure here
+    // says whether the page was wrong or the wait was. `keyring-prompt.spec.ts` adds the
+    // prompt log.
     await test.info().attach("launch-work-aria", {
       body: await page
         .getByLabel("Launch work workspace")
