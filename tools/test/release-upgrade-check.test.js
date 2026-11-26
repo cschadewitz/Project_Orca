@@ -100,6 +100,7 @@ it("keeps every waiting member of the shared draft-writes queue (none replaces a
     "release-accept-arm64.yml x64-only",
     "release-attach-signed.yml attach",
     "release-publish-final.yml (workflow)",
+    "release-server-bundle-windows.yml attach",
     "release-server-bundle.yml attach",
     "release-upgrade-check.yml record",
   ]);
