@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import { FEATURES } from "../../packages/core/src/features.ts";
 
 const { parse } = createRequire(new URL("../../packages/cli/package.json", import.meta.url))("yaml");
 const workflow = parse(readFileSync(resolve(".github/workflows/incubating.yml"), "utf8"));
@@ -35,6 +36,7 @@ describe("the incubating features workflow", () => {
         encoding: "utf8",
       },
     );
-    expect(out.trim()).toBe("");
+    const incubating = FEATURES.filter((f) => f.stage === "incubating").map((f) => f.name);
+    expect(out.trim()).toBe(incubating.join(","));
   });
 });
