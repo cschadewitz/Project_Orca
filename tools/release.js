@@ -5,6 +5,8 @@
 // Usage:
 //   node tools/release.js version --bump minor [--pin 0.2.0-rc.1]   -> prints the next version
 //   node tools/release.js prepare 0.2.0                             -> rewrites package.json + CHANGELOG.md
+//                                                                      (a final deletes the fragments it
+//                                                                      rendered; a candidate keeps them)
 //   node tools/release.js notes 0.2.0                               -> prints that release's CHANGELOG body
 //   node tools/release.js notes --unreleased                        -> prints what changelog.d/ holds
 //   node tools/release.js line 0.7.1                                -> prints the branch it is cut from
@@ -137,10 +139,14 @@ function prepare(version) {
   const replacement = [...UNRELEASED_TEMPLATE.split("\n"), `## ${version} - ${date}`, "", ...entries, ""];
   writeFileSync(CHANGELOG, [...lines.slice(0, start), ...replacement, ...lines.slice(end)].join("\n"));
   writeFileSync(PKG, bumped);
-  deleteFragments(fragments);
+  // A candidate leaves its fragments in place: the final renders them again, so its section is
+  // the whole minor and nobody has to re-add a fragment before the final (#1211). Only a final
+  // consumes them, and Release (sync main) then deletes main's identical copies.
+  const candidate = parse(version).pre !== undefined;
+  if (!candidate) deleteFragments(fragments);
   console.error(
     `prepared ${version}: ${PKG} bumped, ${CHANGELOG} section dated ${date} from ` +
-      `${fragments.length} fragment(s), which are now deleted`,
+      `${fragments.length} fragment(s), which are now ${candidate ? "kept for the final" : "deleted"}`,
   );
 }
 
