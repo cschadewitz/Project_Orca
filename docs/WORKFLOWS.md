@@ -537,6 +537,15 @@ refuses a session whose Codex reports another version, or whose protocol lacks a
 session needs. The **Codex app-server protocol** workflow regenerates the types from the pinned
 Codex and fails on any drift.
 
+When the app-server exits under a session, the running turn fails, an ask it raised is never
+answered, and the next prompt starts a new app-server on the same thread (`thread/resume`, held
+to the same reviewer, approval policy and working directory as the open). After three exits or
+failed restarts within five minutes, waiting 0, 1 and 2 seconds before the restarts, the
+session stops. A protocol error, a turn that outlives the cancel grace, or a `turn/start` whose
+outcome is unknown stops the session at once. A session can also resume a thread by id: its
+history is replayed as session updates, and a thread that cannot be resumed starts a new one
+unless recovery is required.
+
 An `ask` is routed to the `humanInput` channel above, or upstream when ORCA runs as an ACP
 agent. **An `ask` nobody can answer is refused, never parked**: a permission cannot outlive
 the agent session that raised it, so `pause` cancels it, `auto` refuses it, and either way

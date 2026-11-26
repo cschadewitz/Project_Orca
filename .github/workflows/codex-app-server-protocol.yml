@@ -5,7 +5,8 @@
 # client against that Codex's app-server in an empty CODEX_HOME (handshake, no login refused,
 # a removed method refused), and runs ORCA's session driver (#1157) through one turn against the
 # model stand-in, comparing it with the same turn over the ACP adapter (codex-acp
-# CODEX_ACP_VERSION). It needs no account, key or secret. A weekly run sees a change
+# CODEX_ACP_VERSION), and through an app-server killed mid-turn and a thread resumed in a new
+# session (#1158). It needs no account, key or secret. A weekly run sees a change
 # behind the pin.
 #
 # CODEX_VERSION is the version in CODEX_APP_SERVER_PINNED (packages/agents/src/
@@ -24,6 +25,7 @@ on:
       - packages/agents/src/host.ts
       - packages/agents/test/codex-app-server-real-1156.test.ts
       - packages/cli/test/codex-app-server-session-real-1157.test.ts
+      - packages/cli/test/codex-app-server-recovery-real-1158.test.ts
       - packages/cli/test/codex-model-stand-in.ts
       - tools/codex-protocol.mjs
       - tools/test/codex-protocol-1156.test.js
@@ -119,6 +121,7 @@ jobs:
           set -euo pipefail
           pnpm exec vitest run tools/test/codex-protocol-1156.test.js packages/agents/test/codex-app-server-real-1156.test.ts \
             packages/cli/test/codex-app-server-session-real-1157.test.ts \
+            packages/cli/test/codex-app-server-recovery-real-1158.test.ts \
             --reporter=default --reporter=json --outputFile="$RUNNER_TEMP/protocol.json"
           # The suites skip their Codex tests without ORCA_CODEX_BIN; here every test has to have run.
           node -e '
