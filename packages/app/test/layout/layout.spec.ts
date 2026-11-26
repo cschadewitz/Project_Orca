@@ -84,11 +84,13 @@ async function frame(width: number, height: number, zoom = 1) {
     },
     { width, height, zoom },
   );
+  // Within a device pixel: at 125% a 1000 px window is 800 CSS px, which reads back as 1001.
   await expect
-    .poll(() =>
-      page.evaluate(() => [Math.round(innerWidth * devicePixelRatio), Math.round(innerHeight * devicePixelRatio)]),
-    )
-    .toEqual([width, height]);
+    .poll(async () => {
+      const [w, h] = await page.evaluate(() => [innerWidth * devicePixelRatio, innerHeight * devicePixelRatio]);
+      return Math.abs(w - width) <= 1 && Math.abs(h - height) <= 1;
+    })
+    .toBe(true);
   await settled();
 }
 
