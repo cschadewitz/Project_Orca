@@ -80,7 +80,7 @@ describe("tools/backport.sh", () => {
     git(work, "clone", "-q", "--no-local", origin, clone);
     // The checkout in Actions is main, with the tools from this repository.
     mkdirSync(join(clone, "tools"));
-    for (const f of ["backport.js", "backport.sh", "release-line-guard.js", "release-lane.js"])
+    for (const f of ["backport.js", "backport.sh", "backport-change.sh", "release-line-guard.js", "release-lane.js"])
       writeFileSync(join(clone, "tools", f), readFileSync(resolve("tools", f)));
     log = join(work, "gh.log");
     mkdirSync(join(work, "bin"));
@@ -244,6 +244,24 @@ describe("tools/backport.sh", () => {
     const calls = readFileSync(log, "utf8");
     expect(calls).not.toContain("pr create");
     expect(calls).toMatch(/pr comment 1300 [\s\S]*could not be established/);
+  });
+
+  it("hashes a text change, and fails closed on a binary change, an empty diff or a git error", () => {
+    const hash = (a, b) =>
+      execFileSync("bash", ["-c", '. tools/backport-change.sh; set -euo pipefail; change_of "$1" "$2"', "_", a, b], {
+        cwd: clone,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      }).trim();
+    const text = merged();
+    expect(hash(`${text}~1`, text)).toMatch(/^[0-9a-f]{64}$/);
+    expect(hash(text, text)).toBe("");
+    expect(hash(`${text}~1`, "0".repeat(40))).toBe("");
+    expect(hash("no-such-ref", text)).toBe("");
+    writeFileSync(join(origin, "logo.bin"), Buffer.from([0, 1, 2, 0]));
+    const bin = commit(origin, "app.txt", "one\nTWO\nthree\nfour\n", "text and binary");
+    git(clone, "fetch", "-q", "origin", "main");
+    expect(hash(text, bin)).toBe("");
   });
 
   it("refuses when the pull request head is not the one the merge recorded", () => {

@@ -22,15 +22,7 @@ fi
 gh label create backport-conflict --repo "$REPO" --force --color d93f0b \
   --description "The automatic backport did not apply; backport by hand" >/dev/null || true
 
-# change_of A B: a hash of the diff A..B with only what a rebase may move removed (blob ids and
-# hunk line numbers). Whitespace and context are kept, so it is content-sensitive.
-# A binary change prints no contents to compare, so it gives no hash and the inference refuses.
-change_of() {
-  if git diff --no-ext-diff --no-textconv --no-renames --numstat "$1" "$2" | grep -q $'^-\t-\t'; then return 0; fi
-  git diff --no-ext-diff --no-textconv --no-color --no-renames "$1" "$2" |
-    sed -E '/^index [0-9a-f]+\.\.[0-9a-f]+/d; s/^@@ -[0-9]+(,[0-9]+)? \+[0-9]+(,[0-9]+)? @@.*$/@@/' |
-    { read -r first || exit 0; { printf '%s\n' "$first"; cat; } | sha256sum | cut -d' ' -f1; }
-}
+. "$(dirname "$0")/backport-change.sh"
 
 # The complete change #NUMBER made on main, or nothing. A merge commit is picked against its
 # first parent, which holds all of it. A single-parent MERGE_SHA is either a squash (one commit)
