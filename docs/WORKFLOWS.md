@@ -526,8 +526,8 @@ credentials. Setup and limits: [docs/agents/claude-agent-sdk.md](agents/claude-a
 ORCA checks the executable and the login (two short local `claude` processes), then runs the
 session through the SDK (#1120): one Claude Code process per session, with no settings files, no
 MCP servers and no session files. Until ORCA answers Claude's permission asks (#1122), only
-`Read`, `Glob`, `Grep` (on paths ORCA does not protect) and `TodoWrite` run; every other tool
-call and every ask is denied. Leave `driver` out to run Claude over ACP as before.
+`Read` (of a file ORCA does not protect) and `TodoWrite` run; every other tool call, searches
+included, and every ask is denied. Linux and macOS only for now; Windows is refused. Leave `driver` out to run Claude over ACP as before.
 
 ## Completion policies (agent steps)
 

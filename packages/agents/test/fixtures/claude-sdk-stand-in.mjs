@@ -134,13 +134,14 @@ async function turn(text) {
     case "tools": {
       const read = await tool("t1", "Read", { file_path: text.split(/\s+/)[1] });
       const bash = await tool("t2", "Bash", { command: "echo hi" });
+      const grep = await tool("t2g", "Grep", { pattern: "x", path: process.cwd() });
       const todo = await tool("t3", "TodoWrite", {
         todos: [
           { content: "look", status: "completed", activeForm: "looking" },
           { content: "write", status: "in_progress", activeForm: "writing" },
         ],
       });
-      assistant([{ type: "text", text: JSON.stringify({ read, bash, todo }) }]);
+      assistant([{ type: "text", text: JSON.stringify({ read, bash, grep, todo }) }]);
       return result();
     }
     case "ask": {

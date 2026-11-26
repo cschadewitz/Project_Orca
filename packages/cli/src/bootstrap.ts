@@ -50,6 +50,7 @@ import {
   openAcpSession,
   claudeSdkRequested,
   claudeSdkPreflight,
+  claudeSdkPlatformUnsupported,
   openClaudeSdkSession,
   withProviderGuards,
   permissionPolicyPath,
@@ -369,6 +370,8 @@ export function makeSessionFactory(
             `the Claude Agent SDK driver runs only on ORCA's own machine for now (#1130).`,
           { agentId: options.agent.id, host: options.host.spec.id },
         );
+      // Refused before anything runs: no tested process-tree ownership on Windows yet.
+      if (process.platform === "win32") throw claudeSdkPlatformUnsupported(options.agent.id);
       const preflight = await claudeSdkPreflight({
         agent: options.agent,
         cwd: options.cwd,

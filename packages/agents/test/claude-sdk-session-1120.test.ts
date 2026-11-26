@@ -134,15 +134,16 @@ describe.runIf(process.platform !== "win32")("Claude Agent SDK session (#1120)",
     }
   });
 
-  it("lets only unprotected reads and TodoWrite run, maps tool calls and plans, and denies every ask", async () => {
+  it("lets only an unprotected Read and TodoWrite run, maps tool calls and plans, and denies every ask", async () => {
     const session = await open();
     const events = collect(session);
     await session.prompt(`tools ${join(dir, "notes.txt")}`);
-    expect(JSON.parse(texts(events).at(-1)!)).toEqual({ read: "ran", bash: "denied", todo: "ran" });
+    expect(JSON.parse(texts(events).at(-1)!)).toEqual({ read: "ran", bash: "denied", grep: "denied", todo: "ran" });
     const calls = events.filter((e) => e.summary.kind === "tool_call").map((e) => e.summary);
     expect(calls.map((c) => [c.title, c.toolKind])).toEqual([
       ["Read", "read"],
       ["Bash", "execute"],
+      ["Grep", "search"],
       ["TodoWrite", "think"],
     ]);
     expect(calls[0]!.locations).toEqual([join(dir, "notes.txt")]);
@@ -150,6 +151,7 @@ describe.runIf(process.platform !== "win32")("Claude Agent SDK session (#1120)",
     expect(updates.map((u) => [u.toolCallId, u.status])).toEqual([
       ["t1", "completed"],
       ["t2", "failed"],
+      ["t2g", "failed"],
       ["t3", "completed"],
     ]);
     const plan = events.find((e) => e.summary.kind === "plan")!.summary;
@@ -249,6 +251,18 @@ describe.runIf(process.platform !== "win32")("Claude Agent SDK session (#1120)",
     expect(Date.now() - started).toBeLessThan(5_000);
   });
 
+  it("refuses Windows before starting anything", async () => {
+    const logFile = join(dir, "log.jsonl");
+    const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { value: "win32" });
+    try {
+      await expect(open({ STAND_IN_LOG: logFile })).rejects.toThrow(/only on Linux and macOS for now/);
+    } finally {
+      Object.defineProperty(process, "platform", platform);
+    }
+    await expect(readFile(logFile, "utf8")).rejects.toThrow(/ENOENT/);
+  });
+
   it("fails the open, with nothing left running, when claude does not start a session", async () => {
     const silent = (await open({ STAND_IN_STARTUP: "silent" }, { startupTimeoutMs: 300 }).catch(
       (x: unknown) => x,
@@ -276,23 +290,25 @@ describe.runIf(process.platform !== "win32")("Claude Agent SDK session (#1120)",
 
 describe("tool gate (#1120 until #1122)", () => {
   const cwd = "/work";
-  it("allows Read, Glob and Grep on unprotected paths and TodoWrite; denies everything else", () => {
+  it("allows only TodoWrite and a Read of an unprotected file; denies everything else", () => {
     expect(toolRefusal("Read", { file_path: "/work/a.ts" }, cwd, undefined)).toBeUndefined();
-    expect(toolRefusal("Grep", { pattern: "x" }, cwd, undefined)).toBeUndefined();
-    expect(toolRefusal("Glob", { pattern: "src/**/*.ts" }, cwd, undefined)).toBeUndefined();
     expect(toolRefusal("TodoWrite", { todos: [] }, cwd, undefined)).toBeUndefined();
-    for (const tool of ["Bash", "Edit", "Write", "WebFetch", "Task", "mcp__x__y", "NotebookEdit"])
+    for (const tool of ["Bash", "Edit", "Write", "WebFetch", "Task", "mcp__x__y", "NotebookEdit", "Glob", "Grep"])
       expect(toolRefusal(tool, {}, cwd, undefined)).toMatch(/#1122/);
     expect(toolRefusal("Read", {}, cwd, undefined)).toMatch(/#1122/);
-    expect(toolRefusal("Glob", { pattern: "/etc/*" }, cwd, undefined)).toMatch(/only below its path/);
-    expect(toolRefusal("Glob", { pattern: "../**" }, cwd, undefined)).toMatch(/only below its path/);
   });
 
-  it("denies reads of paths ORCA keeps from agents", () => {
+  it("denies a read of a path ORCA keeps from agents", () => {
     const protectedPaths = { readOnly: ["/work/.orca"], noAccess: ["/home/me/.orca/auth"] };
     expect(toolRefusal("Read", { file_path: "/home/me/.orca/auth/key" }, cwd, protectedPaths)).toMatch(/protects/);
-    expect(toolRefusal("Grep", { pattern: "x", path: "/home/me/.orca/auth" }, cwd, protectedPaths)).toMatch(/protects/);
     expect(toolRefusal("Read", { file_path: "/work/.orca/config.yaml" }, cwd, protectedPaths)).toBeUndefined();
+  });
+
+  it("denies a search whose own path is free but which holds a protected path below it (#1274 review)", () => {
+    const protectedPaths = { readOnly: [], noAccess: ["/work/secrets"] };
+    expect(toolRefusal("Grep", { pattern: "token", path: "/work" }, cwd, protectedPaths)).toMatch(/#1122/);
+    expect(toolRefusal("Glob", { pattern: "**/*", path: "/work" }, cwd, protectedPaths)).toMatch(/#1122/);
+    expect(toolRefusal("Grep", { pattern: "token" }, cwd, protectedPaths)).toMatch(/#1122/);
   });
 });
 

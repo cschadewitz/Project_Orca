@@ -7,7 +7,7 @@ ORCA runs Claude over ACP today, through the `claude-agent-acp` adapter. `driver
 claude-agent-sdk` is a second, opt-in way: ORCA drives the Claude Agent SDK itself, which lets it
 see and decide more of what Claude does (#1153 lists what each slice adds). ORCA checks the launch,
 then runs the session through the SDK (#1120). Until ORCA answers Claude's permission asks
-(#1122), a session can read but not change anything: see [What a session may do](#what-a-session-may-do-for-now).
+(#1122), a session can read single files but not search or change anything: see [What a session may do](#what-a-session-may-do-for-now).
 
 ## 1. Install Claude Code and sign in yourself
 
@@ -72,7 +72,13 @@ builds Claude's arguments), and neither `nativeToolHook` nor `codexExecGate`.
 
 One session is one Claude Code process, started by the SDK from the executable checked above,
 with your login and the environment described in section 1. ORCA starts it in its own process
-group and ends that group when the session closes, so nothing Claude started outlives it.
+group. When the session closes, or a turn has to be stopped, ORCA ends Claude's input, waits
+briefly, then kills that whole group, and kills it again once Claude has exited, so what Claude
+started in its group goes with it. A process that leaves the group on purpose (for example with
+`setsid`) is not covered.
+
+**Linux and macOS only for now.** On Windows the session is refused before anything starts:
+ORCA does not yet own the whole process tree there. Leave `driver` out to run Claude over ACP.
 
 ORCA starts Claude with a fixed setup:
 
@@ -94,8 +100,8 @@ Model and effort choices, and resuming a session, are not there yet (#1120 follo
 
 ORCA does not answer Claude's permission asks yet (#1122), so:
 
-- **Read, Glob and Grep** run, on paths ORCA does not keep from agents (its credential and key
-  folders). A Glob pattern must stay below its search path.
+- **Read** runs, for a file ORCA does not keep from agents (its credential and key folders).
+- **Glob and Grep are denied**: a search can reach a protected folder below where it starts.
 - **TodoWrite** runs.
 - **Everything else is denied before it runs**: edits, writes, Bash, web fetches, subagents and
   any other tool, also where Claude's own rules would have allowed it.

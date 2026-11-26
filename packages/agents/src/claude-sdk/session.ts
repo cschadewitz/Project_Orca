@@ -14,8 +14,8 @@
  * - **Fixed setup.** No settings files (`settingSources: []`), no MCP servers, no session
  *   files, Claude Code's own system prompt, permission mode `default`.
  * - **Tools, until #1122.** ORCA does not answer Claude's permission asks yet: every ask is
- *   denied. A `PreToolUse` hook denies every tool call but the read-only `Read`, `Glob` and
- *   `Grep` on paths ORCA does not protect, and `TodoWrite`, before it runs, also the ones
+ *   denied. A `PreToolUse` hook denies every tool call but `Read` of a file ORCA does not
+ *   protect, and `TodoWrite`, before it runs, also the ones
  *   Claude's own rules would have allowed. What it lets through still meets Claude's own
  *   permission check, so a read outside the working directory is asked, and denied.
  *
@@ -24,7 +24,6 @@
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { isAbsolute } from "node:path";
 import type * as acp from "@agentclientprotocol/sdk";
 import {
   query,
@@ -74,7 +73,8 @@ export const CLAUDE_SDK_EXIT_GRACE_MS = 5_000;
 const KILL_SETTLE_MS = 1_000;
 
 /** The tools a session may use before ORCA answers permission asks (#1122). */
-const READ_ONLY_TOOLS = new Set(["Read", "Glob", "Grep"]);
+// Glob and Grep stay denied too: a recursive search can reach a protected path below its
+// starting path, or through a link, and ORCA cannot show it would not (#1274 review).
 const NO_FILE_TOOLS = new Set(["TodoWrite"]);
 const DENIED = "ORCA does not run this tool for a Claude Agent SDK session yet (#1122): it was denied before it ran.";
 const ASK_DENIED = "ORCA does not answer Claude's permission asks yet (#1122): this one was denied.";
@@ -87,6 +87,19 @@ interface ActiveTurn {
   grace?: ReturnType<typeof setTimeout>;
 }
 
+/**
+ * The refusal on Windows. A session owns Claude and everything it starts through a POSIX process
+ * group; Windows has no tested equivalent yet (a job object), so nothing is launched there.
+ */
+export function claudeSdkPlatformUnsupported(agentId: string): OrcaError {
+  return new OrcaError(
+    "NOT_SUPPORTED",
+    `agent ${agentId} has driver: claude-agent-sdk, which runs only on Linux and macOS for now: ` +
+      `on Windows ORCA cannot yet stop everything Claude starts. Leave driver out to run Claude over ACP.`,
+    { agentId, platform: process.platform },
+  );
+}
+
 /** Open a session that runs Claude through the Claude Agent SDK. */
 export async function openClaudeSdkSession(options: ClaudeSdkSessionOptions): Promise<AgentSession> {
   const clock = options.clock ?? systemClock;
@@ -95,8 +108,8 @@ export async function openClaudeSdkSession(options: ClaudeSdkSessionOptions): Pr
   const cwd = options.cwd;
   const cancelGraceMs = options.cancelGraceMs ?? options.agent.cancelGraceMs;
   const exitGraceMs = options.exitGraceMs ?? CLAUDE_SDK_EXIT_GRACE_MS;
-  const posix = process.platform !== "win32";
 
+  if (process.platform === "win32") throw claudeSdkPlatformUnsupported(options.agent.id);
   if (options.signal?.aborted)
     throw new OrcaError("CANCELLED", `opening agent ${options.agent.id} was cancelled before it started`);
 
@@ -114,8 +127,7 @@ export async function openClaudeSdkSession(options: ClaudeSdkSessionOptions): Pr
     const pid = child?.pid;
     if (pid === undefined) return;
     try {
-      if (posix) process.kill(-pid, signal);
-      else child?.kill(signal);
+      process.kill(-pid, signal);
     } catch {
       // ESRCH: the group is already gone.
     }
@@ -139,7 +151,7 @@ export async function openClaudeSdkSession(options: ClaudeSdkSessionOptions): Pr
       env: childEnv,
       // stderr is not read: nothing the CLI prints is kept (see the module comment).
       stdio: ["pipe", "pipe", "ignore"],
-      detached: posix,
+      detached: true,
       windowsHide: true,
     });
     child = proc;
@@ -153,9 +165,7 @@ export async function openClaudeSdkSession(options: ClaudeSdkSessionOptions): Pr
     return proc;
   };
   // Once the process is gone, anything it started in its group goes too.
-  const terminated: Promise<void> = exited.then(() => {
-    if (posix) killGroup("SIGKILL");
-  });
+  const terminated: Promise<void> = exited.then(() => killGroup("SIGKILL"));
 
   // ---- input, tool gate, the query ----------------------------------------------------------
   const input = new InputQueue();
@@ -468,9 +478,10 @@ export function claudeContent(input: string | acp.ContentBlock[]): ClaudeContent
 }
 
 /**
- * Why a tool call is refused before it runs, or undefined to let it run. Only the read-only
- * file tools and `TodoWrite` run until ORCA's permission answers reach this driver (#1122), and
- * a read-only one only on a path ORCA does not protect from reads.
+ * Why a tool call is refused before it runs, or undefined to let it run. Until ORCA's permission
+ * answers reach this driver (#1122) only `TodoWrite` and a `Read` of one file ORCA does not
+ * protect from reads run. Recursive searches (`Glob`, `Grep`) are denied: their starting path
+ * says nothing about what the search visits below it.
  */
 export function toolRefusal(
   tool: string,
@@ -479,16 +490,10 @@ export function toolRefusal(
   protectedPaths: ProtectedPaths | undefined,
 ): string | undefined {
   if (NO_FILE_TOOLS.has(tool)) return undefined;
-  if (!READ_ONLY_TOOLS.has(tool)) return DENIED;
+  if (tool !== "Read") return DENIED;
   const args = (typeof toolInput === "object" && toolInput !== null ? toolInput : {}) as Record<string, unknown>;
-  const path = tool === "Read" ? args.file_path : (args.path ?? cwd);
+  const path = args.file_path;
   if (typeof path !== "string" || path.length === 0) return DENIED;
-  if (tool === "Glob") {
-    const pattern = args.pattern;
-    // A pattern reaches beyond `path` when it is absolute or climbs out of it.
-    if (typeof pattern !== "string" || isAbsolute(pattern) || pattern.split(/[\\/]/).includes(".."))
-      return "ORCA lets Glob search only below its path for now (#1122).";
-  }
   if (protectedPathFor(path, "read", protectedPaths, cwd) !== undefined)
     return "ORCA protects this path from agents; it was not read.";
   return undefined;

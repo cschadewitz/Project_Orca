@@ -3,7 +3,7 @@
  * run, then a Claude Agent SDK session opens, and the ACP opener is never called.
  */
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { realpathSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -66,6 +66,26 @@ echo '{"loggedIn":false}'; exit 1
     await expect(factory({ host: new LocalHost({ id: "local", type: "local" }), agent, cwd: dir })).rejects.toThrow(
       /claude auth login/,
     );
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it("refuses Windows before running even the launch checks", async () => {
+    const marker = join(dir, "ran");
+    const claude = join(dir, "claude");
+    await writeFile(claude, `#!/bin/sh\ntouch "${marker}"\nexit 1\n`);
+    await chmod(claude, 0o755);
+    const { open, factory } = factoryWithSpy();
+    const agent = AgentSpecSchema.parse({ id: "claude", driver: "claude-agent-sdk", command: claude });
+    const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { value: "win32" });
+    try {
+      await expect(factory({ host: new LocalHost({ id: "local", type: "local" }), agent, cwd: dir })).rejects.toThrow(
+        /only on Linux and macOS for now/,
+      );
+    } finally {
+      Object.defineProperty(process, "platform", platform);
+    }
+    expect(existsSync(marker)).toBe(false);
     expect(open).not.toHaveBeenCalled();
   });
 
