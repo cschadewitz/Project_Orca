@@ -5,16 +5,17 @@
  * Before the fix the only route was `orca remote enroll`, which this workspace's first-run fence
  * refuses ("First-run mutation requires owned daemon admission"), and the app had no enrollment
  * screen. Now, after first-run setup, the remote and an agent that delegates to it are added the
- * way the app offers (Config > Raw, Validate and review, Save, Apply), and Config's Remote daemons
- * section enrolls it: the fingerprint typed in, **Enroll remote**, and the worker issues the
- * credential over ssh. A step then runs exactly once on the worker, and its report comes back.
+ * way the app offers (Config > Raw, Validate and review, Save, Apply, then quit and reopen so the
+ * bundled daemon starts on it), and Config's Remote daemons section enrolls it: the fingerprint
+ * typed in, **Enroll remote**, and the worker issues the credential over ssh. A step then runs
+ * exactly once on the worker, and its report comes back.
  *
  * The worker is a real `orca serve` from this checkout's built CLI, reached through a throwaway
  * loopback sshd (`@orca/testing/two-daemons`), as a remote machine would be. The screenshot of
  * the enrolled remote is this spec's evidence. Needs `/usr/sbin/sshd` (the CI job installs it).
  */
 import { test, expect, type Page } from "@playwright/test";
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { mkdtemp, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { userInfo } from "node:os";
@@ -30,7 +31,7 @@ import {
 import { repoRoot } from "../../../testing/src/child-bundle.js";
 import { NativeSession } from "./session.js";
 import { launchInstalled, noneLeft, quit } from "./app.js";
-import { disposableWorkspace, firstRunSetup, openConfig } from "./flows.js";
+import { connected, disposableWorkspace, firstRunSetup, openConfig } from "./flows.js";
 
 const SCRIPTED = join(repoRoot, "packages", "testing", "dist", "scripted-agent", "main.js");
 
@@ -61,6 +62,11 @@ async function saveRawConfig(page: Page, text: string): Promise<void> {
   await save.click();
   await page.getByRole("button", { name: "Apply saved configuration" }).click();
   await expect(page.getByText(/^Apply outcome:/).first()).toBeVisible({ timeout: 60_000 });
+  // Accepted, not refused: a new remote is taken by the next start of the daemon
+  // (restart-required), never invalid, unchanged or only validated.
+  await expect(page.getByText(/^Apply outcome: (applied|restart-required)\./).first()).toBeVisible();
+  // Bound for reopening: the next start of the bundled daemon serves this configuration.
+  await expect(page.locator('[data-reopen-binding="bound"]')).toBeVisible();
 }
 
 /** The worker: a daemon with a scripted agent and the workflow the app workspace delegates to. */
@@ -123,10 +129,18 @@ test("a first-run app workspace enrolls a remote from Config and delegates to it
   if (!sshd) throw new Error("remote-enroll.spec.ts needs /usr/sbin/sshd (apt-get install openssh-server)");
   worker = await startWorker(session.root);
 
-  const parentWorkflows = await mkdtemp(join(session.root, "parent-wf-"));
-  writeFileSync(
-    join(parentWorkflows, "delegate.yaml"),
-    `
+  const profile = await mkdtemp(join(session.root, "profile-remote-enroll-"));
+  const chosen = await disposableWorkspace(join(session.root, "remote-enroll"), session.env);
+
+  const first = await launchInstalled(session, profile, "x11");
+  try {
+    await firstRunSetup(first.app, first.page, chosen);
+    // The workflow that delegates lives in the app workspace and is named by a relative glob, as
+    // the first-run reopen binding requires of every workflow path.
+    mkdirSync(join(chosen.workspace, "delegate"), { recursive: true });
+    writeFileSync(
+      join(chosen.workspace, "delegate", "delegate.yaml"),
+      `
 id: delegate
 name: delegate
 start: s
@@ -143,20 +157,13 @@ edges:
   - { from: s, to: hand }
   - { from: hand, to: done }
 `,
-  );
-
-  const profile = await mkdtemp(join(session.root, "profile-remote-enroll-"));
-  const chosen = await disposableWorkspace(join(session.root, "remote-enroll"), session.env);
-  const launched = await launchInstalled(session, profile, "x11");
-  const page = launched.page;
-  try {
-    await firstRunSetup(launched.app, page, chosen);
+    );
     const doc = JSON.parse(await readFile(join(chosen.workspace, "orca.config.yaml"), "utf8")) as {
       workflows?: string[];
       agents: unknown[];
       remotes?: unknown[];
     };
-    doc.workflows = [...(doc.workflows ?? []), join(parentWorkflows, "*.yaml")];
+    doc.workflows = [...(doc.workflows ?? []), "delegate/*.yaml"];
     doc.remotes = [
       {
         id: "build-box",
@@ -170,7 +177,32 @@ edges:
       },
     ];
     doc.agents = [...doc.agents, { id: "builder", type: "orca-daemon", profile: "build-box", workflow: "build" }];
-    await saveRawConfig(page, JSON.stringify(doc, null, 2));
+    await saveRawConfig(first.page, JSON.stringify(doc, null, 2));
+  } catch (error) {
+    await test
+      .info()
+      .attach("remote-config-failure", { body: await first.page.screenshot(), contentType: "image/png" })
+      .catch(() => undefined);
+    await first.app.close().catch(() => undefined);
+    throw error;
+  }
+  // The running daemon keeps the configuration it started with (Apply says restart-required for
+  // a new remote), so quit and reopen: the app starts its daemon on the saved configuration, and
+  // that daemon holds the workspace's first-run fence again.
+  await quit(session, first, "x11");
+
+  const launched = await launchInstalled(session, profile, "x11");
+  const page = launched.page;
+  try {
+    await connected(page);
+    const offered = await page.evaluate(() => {
+      const orca = (
+        window as unknown as { orca: { remotes?: unknown; connection: { read(): { methods?: string[] } } } }
+      ).orca;
+      return { bridge: orca.remotes !== undefined, methods: orca.connection.read().methods ?? [] };
+    });
+    expect(offered.bridge).toBe(true);
+    expect(offered.methods).toEqual(expect.arrayContaining(["remotes.list", "remotes.enroll"]));
 
     // Config > Remote daemons: the remote, not enrolled.
     await openConfig(page);
@@ -185,7 +217,7 @@ edges:
     await expect(row).toHaveAttribute("data-enrollment", "enrolled", { timeout: 60_000 });
     await expect(row.getByText(sshd.hostKeyFingerprint)).toBeVisible();
     await expect(row.getByText(/issued by the remote/)).toBeVisible();
-    await row.scrollIntoViewIfNeeded();
+    await section.evaluate((el) => el.scrollIntoView({ block: "start" }));
     await test.info().attach("remote-enrolled", { body: await page.screenshot(), contentType: "image/png" });
 
     // The app's daemon wrote the record in the app's own workspace; nothing was hand-edited.
