@@ -19,15 +19,15 @@ import { mkdtemp, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { userInfo } from "node:os";
 // `@orca/testing` is not a dependency of the app package and Playwright has no workspace
-// alias, so the fixture is the built one (`pnpm run build` comes first, as for the package).
+// alias, so the fixture is imported from its source. It still runs the built CLI (`pnpm run build`).
 import {
   CLI_ENTRY,
   loopbackSshd,
   startTestDaemon,
   type LoopbackSshd,
   type TestDaemon,
-} from "../../../testing/dist/two-daemons.js";
-import { repoRoot } from "../../../testing/dist/child-bundle.js";
+} from "../../../testing/src/two-daemons.js";
+import { repoRoot } from "../../../testing/src/child-bundle.js";
 import { NativeSession } from "./session.js";
 import { launchInstalled, noneLeft, quit } from "./app.js";
 import { disposableWorkspace, firstRunSetup, openConfig } from "./flows.js";
