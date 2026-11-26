@@ -99,6 +99,7 @@ describe("Codex asks as permission requests", () => {
       effects: [
         { toolCall: { kind: "move", locations: [{ path: "/w/a" }, { path: "/w/b" }] } },
         { toolCall: { kind: "edit", title: "Write /w/b", locations: [{ path: "/w/b" }] } },
+        { toolCall: { kind: "delete", title: "Delete /w/a", locations: [{ path: "/w/a" }] } },
         { toolCall: { kind: "delete", title: "Delete /w/c", locations: [{ path: "/w/c" }] } },
         { toolCall: { kind: "edit", title: "Add /w/d" } },
         { toolCall: { kind: "edit", title: "Edit /w/e" } },
@@ -110,6 +111,7 @@ describe("Codex asks as permission requests", () => {
             { path: "/w/a" },
             { path: "/w/b" },
             { path: "/w/b" },
+            { path: "/w/a" },
             { path: "/w/c" },
             { path: "/w/d" },
             { path: "/w/e" },

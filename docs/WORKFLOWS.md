@@ -588,7 +588,7 @@ route: the agent's rules and sidecars, ORCA's protected paths, the run's answere
 configured, a judge's command advice. An ask with several effects is decided effect by effect,
 and one refused effect declines the whole ask: a command and the network access it asks for,
 and each change of a patch with its own kind (an edit, an addition, a deletion, and a move
-checked both as the move and as a write of its destination). A person is asked once, shown
+checked as the move, as a write of its destination and as a deletion of its source). A person is asked once, shown
 every effect with Codex's reason, working directory and parsed command actions. A file change
 is decided by the files of the change Codex started for it in that turn. A permissions ask
 (`item/permissions/requestApproval`) is a grant for the rest of the turn that ORCA's one-call

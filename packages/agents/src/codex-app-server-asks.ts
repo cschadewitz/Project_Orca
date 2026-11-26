@@ -189,8 +189,10 @@ function commandAsk(sessionId: string, p: Record<string, unknown>, target: Codex
 
 /**
  * One change of a patch as the calls it makes, each with its own semantics: an edit or a
- * deletion; a move is the move itself (its rule, and the removal of both entries) and the write
- * of its destination (edit rules and write protection), each of which must hold.
+ * deletion; a move is the move itself (its rule, and the removal of both entries), the write of
+ * its destination (edit rules and write protection) and the deletion of its source (delete
+ * rules), as Codex's apply-patch writes the destination and then removes the original. Each
+ * must hold.
  */
 function changeEffects(sessionId: string, target: CodexAskTarget, c: FileUpdateChange, i: number) {
   const id = `${target.itemId}:${i}`;
@@ -211,6 +213,12 @@ function changeEffects(sessionId: string, target: CodexAskTarget, c: FileUpdateC
         title: `Write ${c.kind.move_path}`,
         kind: "edit",
         locations: [{ path: c.kind.move_path }],
+      }),
+      request(sessionId, {
+        toolCallId: `${id}:source`,
+        title: `Delete ${c.path}`,
+        kind: "delete",
+        locations: [{ path: c.path }],
       }),
     ];
   return [

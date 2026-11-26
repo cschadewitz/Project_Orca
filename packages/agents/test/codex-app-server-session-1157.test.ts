@@ -1490,7 +1490,7 @@ describe("asks through ORCA's policy (#1159)", () => {
         }),
     });
     const edit = { path: `${CWD}/src/a.ts`, kind: { type: "update", move_path: null }, diff: "" };
-    const del = { path: `${CWD}/src/b.ts`, kind: { type: "delete" }, diff: "" };
+    const del = { path: `${CWD}/src/keep/b.ts`, kind: { type: "delete" }, diff: "" };
     const moveOut = {
       path: `${CWD}/src/c.ts`,
       kind: { type: "update", move_path: `${CWD}/orca.permissions.json` },
@@ -1498,7 +1498,7 @@ describe("asks through ORCA's policy (#1159)", () => {
     };
     const policy = {
       rules: [
-        { match: { kind: "delete" }, decision: "deny" },
+        { match: { kind: "delete", pathPrefix: "src/keep/" }, decision: "deny" },
         { match: { kind: "edit", pathPrefix: "src/locked/" }, decision: "deny" },
         { match: { pathPrefix: "src/" }, decision: "allow" },
       ],
@@ -1510,11 +1510,20 @@ describe("asks through ORCA's policy (#1159)", () => {
       kind: { type: "update", move_path: `${CWD}/src/locked/d.ts` },
       diff: "",
     };
+    // a move whose destination is allowed, out of a directory whose deletions are denied
+    const moveFromKept = {
+      path: `${CWD}/src/keep/e.ts`,
+      kind: { type: "update", move_path: `${CWD}/src/e.ts` },
+      diff: "",
+    };
+    const moveAllowed = { path: `${CWD}/src/f.ts`, kind: { type: "update", move_path: `${CWD}/src/g.ts` }, diff: "" };
     for (const [changes, want] of [
       [[edit], "accept"],
+      [[moveAllowed], "accept"],
       [[edit, del], "decline"],
       [[edit, moveOut], "decline"],
       [[moveToDenied], "decline"],
+      [[moveFromKept], "decline"],
     ] as const) {
       const c = asking(() => [patchOf([...changes])]);
       const s = scriptedHost(c.table);
