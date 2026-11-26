@@ -1,11 +1,13 @@
 // @vitest-environment happy-dom
 /** Config navigation uses the merged controls and exact validated bytes, with separate Save and Apply. */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useState } from "react";
 import { THEMES } from "@orca/design";
 import type { ConfigGetResult, ConfigSetParams } from "@orca/protocol";
 import type { OrcaBridge } from "../../src/bridge.js";
+import type { FirstRunBridge, FirstRunStatus } from "../../src/first-run-contract.js";
+import { FIRST_RUN_SAMPLE } from "../../src/first-run-sample.js";
 import type { DaemonTargetSnapshot } from "../../src/daemon-connection.js";
 import { ConfigProvider } from "../src/config/config-context.js";
 import { ConfigSurface } from "../src/config/config-surface.js";
@@ -64,10 +66,25 @@ it("shows the judge's setup on the connected Config route, only from a daemon th
   act(() => f.changeTarget());
   await waitFor(() => expect(reads).toBeGreaterThan(before));
 });
-function setup({ metadata = true, writable = true, deferIdentity = false, width = 1280, variant = false } = {}) {
+function setup({
+  metadata = true,
+  writable = true,
+  deferIdentity = false,
+  width = 1280,
+  variant = false,
+  firstRun,
+}: {
+  metadata?: boolean;
+  writable?: boolean;
+  deferIdentity?: boolean;
+  width?: number;
+  variant?: boolean;
+  firstRun?: FirstRunBridge;
+} = {}) {
   stubMatchMedia(width);
   const fake = fakeBridge();
   const bridge: OrcaBridge = fake.bridge;
+  if (firstRun) Object.assign(bridge, { firstRun });
   let target: DaemonTargetSnapshot = {
     epoch: 1,
     url: "http://localhost:7331",
@@ -402,3 +419,98 @@ it.each(["navigation", "target", "read authority"])(
     expect(f.writes).toHaveLength(0);
   },
 );
+
+describe("keeping the first-run workspace reopenable after a save (#1192)", () => {
+  const unbound: FirstRunStatus = {
+    state: "selection-required",
+    reason: "The workspace's configuration was saved without being bound for reopening.",
+    changedConfiguration: { workspace: "/workspace" },
+  };
+  function setupBridge(bind: () => ReturnType<NonNullable<FirstRunBridge["bindConfiguration"]>>, status = unbound) {
+    return {
+      status: vi.fn<FirstRunBridge["status"]>(async () => ({ ok: true, result: status })),
+      choose: vi.fn<FirstRunBridge["choose"]>(),
+      prepare: vi.fn<FirstRunBridge["prepare"]>(),
+      connect: vi.fn<FirstRunBridge["connect"]>(),
+      reviewConfiguration: vi.fn<NonNullable<FirstRunBridge["reviewConfiguration"]>>(async () => ({
+        ok: true,
+        result: {
+          state: "configuration-review",
+          review: { id: "review-1", revision: "reviewed-revision", agentCount: 1, checks: [] },
+        },
+      })),
+      cancelConfigurationReview: vi.fn<NonNullable<FirstRunBridge["cancelConfigurationReview"]>>(),
+      bindConfiguration: vi.fn<NonNullable<FirstRunBridge["bindConfiguration"]>>(bind),
+    } satisfies FirstRunBridge;
+  }
+  const prepared: FirstRunStatus = {
+    state: "prepared",
+    project: "/project",
+    workspace: "/workspace",
+    sample: FIRST_RUN_SAMPLE,
+  };
+  async function saveThenApplyAtOnce() {
+    await screen.findByRole("group", { name: "Configuration" });
+    fireEvent.change(command(), { target: { value: "new-command" } });
+    fireEvent.click(screen.getByRole("button", { name: "Validate and review" }));
+    await screen.findByText("Review configuration changes");
+    fireEvent.click(screen.getByRole("button", { name: "Save reviewed changes" }));
+    // The person's very next act: Apply, with no wait for anything the save started.
+    fireEvent.click(await screen.findByRole("button", { name: "Apply saved configuration" }));
+  }
+
+  it("holds Apply until a slow bind settles, then binds exactly the saved revision", async () => {
+    let finish!: () => void;
+    const firstRun = setupBridge(
+      () =>
+        new Promise((resolve) => {
+          finish = () => resolve({ ok: true, result: prepared });
+        }),
+    );
+    const f = setup({ firstRun });
+    await saveThenApplyAtOnce();
+    await waitFor(() => expect(firstRun.bindConfiguration).toHaveBeenCalledWith("review-1"));
+    expect(document.querySelector('[data-reopen-binding="binding"]')).not.toBeNull();
+    expect(f.applies()).toBe(0);
+    expect(screen.queryByText(/^Apply outcome/)).toBeNull();
+    await act(async () => finish());
+    await screen.findByText("Apply outcome: applied.");
+    expect(f.applies()).toBe(1);
+    expect(document.querySelector('[data-reopen-binding="bound"]')).not.toBeNull();
+  });
+
+  it("says a refused bind before any restart guidance, and still applies to the live daemon", async () => {
+    const firstRun = setupBridge(async () => ({
+      ok: false,
+      error: { code: "FIRST_RUN_REFUSED", message: "The selected local workspace is no longer live." },
+    }));
+    const f = setup({ firstRun });
+    await saveThenApplyAtOnce();
+    await screen.findByText(/^Apply outcome: applied\. The saved configuration is not bound for reopening/);
+    expect(f.applies()).toBe(1);
+    const notice = document.querySelector('[data-reopen-binding="refused"]');
+    expect(notice?.textContent).toContain("The selected local workspace is no longer live.");
+    expect(notice?.textContent).toContain("Before quitting");
+  });
+
+  it("treats an unanswered setup status as unknown, not as nothing to bind", async () => {
+    const firstRun = setupBridge(async () => ({ ok: true, result: prepared }));
+    firstRun.status.mockResolvedValue({ ok: false, error: { code: "UNAVAILABLE", message: "Setup is busy." } });
+    const f = setup({ firstRun });
+    await saveThenApplyAtOnce();
+    await screen.findByText(/not bound for reopening, so a restart will not open this workspace/);
+    expect(f.applies()).toBe(1);
+    expect(firstRun.bindConfiguration).not.toHaveBeenCalled();
+    expect(document.querySelector('[data-reopen-binding="refused"]')?.textContent).toContain("Setup is busy.");
+  });
+
+  it("shows nothing and binds nothing for a workspace that is already bound", async () => {
+    const firstRun = setupBridge(async () => ({ ok: true, result: prepared }), prepared);
+    const f = setup({ firstRun });
+    await saveThenApplyAtOnce();
+    await screen.findByText("Apply outcome: applied.");
+    expect(f.applies()).toBe(1);
+    expect(firstRun.reviewConfiguration).not.toHaveBeenCalled();
+    expect(document.querySelector("[data-reopen-binding]")).toBeNull();
+  });
+});

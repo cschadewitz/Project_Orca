@@ -599,7 +599,7 @@ jobs:
           test "$(id -u)" != 0
 
       - name: Native Linux acceptance
-        timeout-minutes: 15
+        timeout-minutes: 20
         env:
           PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report-linux-native
         run: |

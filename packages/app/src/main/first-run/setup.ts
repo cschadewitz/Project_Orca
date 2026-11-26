@@ -43,6 +43,9 @@ import {
 
 const changedSetupFiles = () =>
   selectionFailure("Setup files in the app workspace were changed, moved or removed since setup wrote them.");
+/** Shown on the first screen and in setup when only orca.config.yaml changed since it was last bound (#1192). */
+export const UNBOUND_CONFIGURATION =
+  "The workspace's configuration was saved without being bound for reopening, so the app did not start its local daemon. In Config, under Project setup, choose Review saved configuration for reopening, then Bind reviewed saved configuration, then Connect selected local workspace. If Connect asks for reconciliation, choose Review same-boot recovery and reconcile first.";
 const staleReview = () => selectionFailure("This directory review is out of date. Choose the directories again.");
 const changedSinceReview = () =>
   selectionFailure(
@@ -134,13 +137,23 @@ export class FirstRunSetup {
         /* Connect/recovery retains the concrete refusal; status never repairs evidence. */
       }
     }
-    return receipt
-      ? this.prepared(receipt)
-      : {
-          state: "selection-required",
-          reason:
-            "Choose a dedicated prepared Git project and a separate empty app workspace. Open a store is read-only and does not set up a project.",
-        };
+    if (receipt) return this.prepared(receipt);
+    // Everything but the saved configuration still verifies: Config saved a change nobody bound for reopening (#1192).
+    // Say so, so the person is pointed at the binding instead of a fresh setup. Startup stays refused until then.
+    const failure = this.receiptFailure;
+    const changed = await this.readReceipt(true);
+    this.receiptFailure = failure;
+    if (changed)
+      return {
+        state: "selection-required",
+        reason: UNBOUND_CONFIGURATION,
+        changedConfiguration: { workspace: changed.workspace.path },
+      };
+    return {
+      state: "selection-required",
+      reason:
+        "Choose a dedicated prepared Git project and a separate empty app workspace. Open a store is read-only and does not set up a project.",
+    };
   }
   /** Saved paths do not authorize startup until both physical directories and exact files verify. */
   private async readReceipt(allowChangedConfig = false): Promise<Receipt | undefined> {
