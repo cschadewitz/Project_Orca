@@ -174,7 +174,7 @@ describe.runIf(posix)("login (#1118)", () => {
     });
     expect(result).toMatchObject({
       executable: bin,
-      version: "2.1.332 (Claude Code)",
+      version: "2.1.332",
       authMethod: "oauth_token",
       apiProvider: "firstParty",
     });
@@ -205,6 +205,80 @@ describe.runIf(posix)("login (#1118)", () => {
     await expect(claudeSdkPreflight({ agent: agent({ command: prose }), cwd: dir, baseEnv: {} })).rejects.toThrow(
       /gave no answer ORCA can read/,
     );
+  });
+
+  it("never takes signed in from a probe that failed or was interrupted", async () => {
+    const SIGNED_IN = `echo '{"loggedIn":true,"authMethod":"oauth_token","apiProvider":"firstParty"}'`;
+    const cases: [string, string, RegExp][] = [
+      ["nonzero", `${SIGNED_IN}; exit 3`, /said signed in but exited with 3/],
+      ["hang", `${SIGNED_IN}; exec sleep 30`, /did not answer in time/],
+      ["signal", `${SIGNED_IN}; kill -9 $$`, /was ended by SIGKILL/],
+      ["flood", `${SIGNED_IN}; yes x | head -c 200000`, /printed more than ORCA reads/],
+    ];
+    for (const [name, body, message] of cases) {
+      const bin = await fakeClaude(join(dir, name), body);
+      const error = await claudeSdkPreflight({
+        agent: agent({ command: bin }),
+        cwd: dir,
+        baseEnv: {},
+        timeoutMs: 1_000,
+      }).catch((e: unknown) => e);
+      expect(error, name).toBeInstanceOf(OrcaError);
+      expect((error as OrcaError).message, name).toMatch(message);
+      expect((error as OrcaError).details, name).not.toHaveProperty("reason");
+    }
+    const cancelled = await fakeClaude(join(dir, "cancelled"), `${SIGNED_IN}; exec sleep 30`);
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 200);
+    await expect(
+      claudeSdkPreflight({ agent: agent({ command: cancelled }), cwd: dir, baseEnv: {}, signal: controller.signal }),
+    ).rejects.toThrow(/was cancelled/);
+  });
+
+  it("keeps none of the CLI's own text in an error or the result", async () => {
+    const SENTINEL = "SENTINEL-7f3a-do-not-disclose";
+    const noisy = await fakeClaude(
+      join(dir, "noisy"),
+      `echo "${SENTINEL} diagnostic" >&2; echo "${SENTINEL} not json"; exit 2`,
+      `if [ "$1" = "--version" ]; then echo "2.1.332 (Claude Code) ${SENTINEL}"; echo "${SENTINEL}" >&2; exit 0; fi`,
+    );
+    const error = await claudeSdkPreflight({ agent: agent({ command: noisy }), cwd: dir, baseEnv: {} }).catch(
+      (e: unknown) => e,
+    );
+    expect(error).toBeInstanceOf(OrcaError);
+    const e = error as OrcaError;
+    expect(e.message + JSON.stringify(e.details)).not.toContain(SENTINEL);
+    expect(e.details).toMatchObject({ exitCode: 2 });
+
+    const odd = await fakeClaude(
+      join(dir, "odd"),
+      `echo '{"loggedIn":true,"authMethod":"${SENTINEL} x","apiProvider":"firstParty"}'; exit 0`,
+      `if [ "$1" = "--version" ]; then echo "2.1.332 (Claude Code) ${SENTINEL}"; exit 0; fi`,
+    );
+    const ok = await claudeSdkPreflight({ agent: agent({ command: odd }), cwd: dir, baseEnv: {} });
+    expect(ok).toMatchObject({ version: "2.1.332", authMethod: "unknown", apiProvider: "firstParty" });
+    const refusal = await refuseClaudeSdkSessionUntilDriver({
+      agent: agent({ command: odd }),
+      cwd: dir,
+      baseEnv: {},
+    }).catch((x: unknown) => x as OrcaError);
+    expect(refusal.message + JSON.stringify(refusal.details)).not.toContain(SENTINEL);
+
+    const noVersion = await fakeClaude(
+      join(dir, "noversion"),
+      LOGGED_IN,
+      `if [ "$1" = "--version" ]; then echo "${SENTINEL}"; exit 0; fi`,
+    );
+    const versionError = (await claudeSdkPreflight({
+      agent: agent({ command: noVersion }),
+      cwd: dir,
+      baseEnv: {},
+    }).then(
+      () => undefined,
+      (x: unknown) => x,
+    )) as OrcaError;
+    expect(versionError.message).toMatch(/printed no Claude Code version/);
+    expect(versionError.message + JSON.stringify(versionError.details)).not.toContain(SENTINEL);
   });
 
   it("refuses the session after the checks, naming the driver issue", async () => {

@@ -51,11 +51,18 @@ Leave `driver` out and the agent runs over ACP exactly as before.
 
 ## What ORCA checks before a session
 
+These checks start two short-lived local processes, `claude --version` and `claude auth status
+--json`, with the environment described above. Neither starts an SDK session or a model turn.
+ORCA keeps none of their output beyond the version number and the auth method and provider
+names: no error or log carries text the CLI printed.
+
 1. **The executable**, resolved to the file that would run by its real path. One inside an
    `@anthropic-ai/claude-agent-sdk*` package (the SDK's bundled CLI) is refused.
 2. **`claude --version`**, under a deadline.
 3. **`claude auth status --json`**, under a deadline. `loggedIn: false` fails the session open
-   with "run `claude auth login`"; a timeout or an answer ORCA cannot read fails it too.
+   with "run `claude auth login`". Signed in counts only from a probe that ran to its own exit
+   with code 0; a timeout, cancellation, signal, output over the cap, nonzero exit or an answer
+   ORCA cannot read fails it.
 
 The agent must run on ORCA's own machine for now (SSH hosts: #1130). It takes no `args` (the SDK
 builds Claude's arguments), and neither `nativeToolHook` nor `codexExecGate`.

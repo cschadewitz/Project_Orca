@@ -520,7 +520,8 @@ credentials. Setup and limits: [docs/agents/claude-agent-sdk.md](agents/claude-a
     # command: /path/to/claude   # optional; `claude` on PATH when left out
 ```
 
-ORCA checks the executable and the login before anything starts, then **refuses the session**:
+ORCA checks the executable and the login (two short local `claude` processes, no SDK session
+and no model turn), then **refuses the session**:
 the session driver itself is the next slice (#1120). Leave `driver` out to run Claude over ACP
 as before.
 

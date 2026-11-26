@@ -21,7 +21,7 @@
  * Nothing here reads, stores or forwards a token. What it learns (version, auth method and
  * provider) is what `claude` printed about itself.
  */
-import { execFile } from "node:child_process";
+import { spawn } from "node:child_process";
 import { constants as fsConstants } from "node:fs";
 import { access, realpath, stat } from "node:fs/promises";
 import { delimiter, isAbsolute, join, resolve as resolvePath, sep } from "node:path";
@@ -198,36 +198,66 @@ export async function claudeSdkPreflight(options: ClaudeSdkPreflightOptions): Pr
   const run = (args: string[]) => runBounded(executable, args, { cwd, env, timeoutMs, signal: options.signal });
 
   const version = await run(["--version"]);
-  if (version.code !== 0 || version.stdout.trim().length === 0)
+  // Only the version number is kept from what the CLI printed: `command` is configurable, so
+  // its output is untrusted and none of its text reaches an error or a log.
+  const versionNumber = completed(version) ? CLI_VERSION.exec(version.stdout.trim())?.[0] : undefined;
+  if (versionNumber === undefined)
     throw new OrcaError(
       "AGENT_TRANSPORT",
-      `agent ${agent.id}: ${executable} --version ${describeFailure(version)}; it is not a Claude Code ORCA can run.`,
+      `agent ${agent.id}: ${executable} --version ${completed(version) ? "printed no Claude Code version" : describeFailure(version)}; ` +
+        `it is not a Claude Code ORCA can run.`,
       { agentId: agent.id, executable, ...failureDetails(version) },
     );
 
   const status = await run(["auth", "status", "--json"]);
-  const answer = parseAuthStatus(status.stdout);
+  // A probe that did not finish (timeout, cancellation, signal, output over the cap, no
+  // start) says nothing, whatever it printed first.
+  const answer = completed(status) ? parseAuthStatus(status.stdout) : undefined;
   if (answer === undefined)
     throw new OrcaError(
       "AGENT_TRANSPORT",
-      `agent ${agent.id}: ${executable} auth status ${status.timedOut || status.aborted ? describeFailure(status) : "gave no answer ORCA can read"}, ` +
+      `agent ${agent.id}: ${executable} auth status ${completed(status) ? "gave no answer ORCA can read" : describeFailure(status)}, ` +
         `so ORCA cannot tell whether it is signed in. Check \`claude auth status\` on this machine.`,
       { agentId: agent.id, executable, ...failureDetails(status) },
     );
-  if (answer.loggedIn !== true)
+  // The known signed-out answer, which the CLI may give with a nonzero exit.
+  if (answer.loggedIn === false)
     throw new OrcaError(
       "AGENT_TRANSPORT",
       `agent ${agent.id}: Claude Code is not signed in on this machine. Run \`claude auth login\` here as the person whose ` +
         `account this agent uses (ORCA offers no login), or give the agent its own API key in env.`,
       { agentId: agent.id, executable, reason: "claude-not-logged-in" },
     );
+  // Signed in counts only from a probe that finished and exited 0.
+  if (status.code !== 0)
+    throw new OrcaError(
+      "AGENT_TRANSPORT",
+      `agent ${agent.id}: ${executable} auth status said signed in but ${describeFailure(status)}, ` +
+        `so ORCA does not take it as signed in. Check \`claude auth status\` on this machine.`,
+      { agentId: agent.id, executable, ...failureDetails(status) },
+    );
   return {
     executable,
-    version: version.stdout.trim().split(/\r?\n/, 1)[0] ?? "",
-    authMethod: typeof answer.authMethod === "string" ? answer.authMethod : "unknown",
-    apiProvider: typeof answer.apiProvider === "string" ? answer.apiProvider : "unknown",
+    version: versionNumber,
+    authMethod: token(answer.authMethod),
+    apiProvider: token(answer.apiProvider),
     env,
   };
+}
+
+/** A Claude Code version number at the start of `claude --version`. */
+const CLI_VERSION = /^\d{1,4}\.\d{1,4}\.\d{1,6}(?:-[0-9A-Za-z.]{1,32})?(?=\s|$)/;
+
+/** A short identifier the CLI reported, or `unknown`: no other CLI text is kept. */
+function token(value: unknown): string {
+  return typeof value === "string" && /^[A-Za-z0-9_-]{1,40}$/.test(value) ? value : "unknown";
+}
+
+/** The process ran to its own exit: not timed out, cancelled, signalled, over the cap or unstarted. */
+function completed(r: BoundedResult): boolean {
+  return (
+    !r.timedOut && !r.aborted && !r.overLimit && r.signal === null && r.spawnError === undefined && r.code !== null
+  );
 }
 
 interface AuthStatus {
@@ -251,55 +281,84 @@ export function parseAuthStatus(stdout: string): AuthStatus | undefined {
 }
 
 interface BoundedResult {
+  /** The exit code, when the process exited on its own; null otherwise. */
   code: number | null;
   signal: NodeJS.Signals | null;
+  /** Standard output, only when the process completed within the cap. Standard error is never read. */
   stdout: string;
-  stderr: string;
   timedOut: boolean;
   aborted: boolean;
+  /** Standard output went over `MAX_OUTPUT_BYTES`; the process was killed. */
+  overLimit: boolean;
+  /** The process could not be started: the system error code (`ENOENT`, `EACCES`, …). */
   spawnError?: string;
 }
 
+/**
+ * Run `file` with a deadline, a cancellation signal and an output cap, each of which kills it
+ * and is reported by its own flag. Standard error goes nowhere: none of the CLI's text is kept.
+ */
 function runBounded(
   file: string,
   args: string[],
   o: { cwd: string; env: Record<string, string>; timeoutMs: number; signal?: AbortSignal | undefined },
 ): Promise<BoundedResult> {
   return new Promise((resolveResult) => {
-    let timedOut = false;
-    const child = execFile(
-      file,
-      args,
-      {
-        cwd: o.cwd,
-        env: o.env,
-        timeout: o.timeoutMs,
-        killSignal: "SIGKILL",
-        maxBuffer: MAX_OUTPUT_BYTES,
-        windowsHide: true,
-        ...(o.signal ? { signal: o.signal } : {}),
-      },
-      (error, stdout, stderr) => {
-        const e = error as (NodeJS.ErrnoException & { killed?: boolean; signal?: NodeJS.Signals }) | null;
-        if (e?.killed && !o.signal?.aborted) timedOut = true;
-        resolveResult({
-          code: e ? (typeof e.code === "number" ? e.code : null) : 0,
-          signal: e?.signal ?? null,
-          stdout: String(stdout),
-          stderr: String(stderr),
-          timedOut,
-          aborted: o.signal?.aborted === true,
-          ...(e && typeof e.code === "string" && e.code !== "ABORT_ERR" ? { spawnError: e.code } : {}),
-        });
-      },
-    );
-    child.stdin?.end();
+    const flags = { timedOut: false, aborted: false, overLimit: false };
+    const chunks: Buffer[] = [];
+    let bytes = 0;
+    let settled = false;
+    const child = spawn(file, args, {
+      cwd: o.cwd,
+      env: o.env,
+      stdio: ["ignore", "pipe", "ignore"],
+      windowsHide: true,
+    });
+    const kill = () => {
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        // Already gone.
+      }
+    };
+    const timer = setTimeout(() => {
+      flags.timedOut = true;
+      kill();
+    }, o.timeoutMs);
+    const onAbort = () => {
+      flags.aborted = true;
+      kill();
+    };
+    if (o.signal?.aborted) onAbort();
+    else o.signal?.addEventListener("abort", onAbort, { once: true });
+    const finish = (r: Omit<BoundedResult, "timedOut" | "aborted" | "overLimit" | "stdout">) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      o.signal?.removeEventListener("abort", onAbort);
+      const clean = !flags.timedOut && !flags.aborted && !flags.overLimit && r.spawnError === undefined;
+      resolveResult({ ...r, ...flags, stdout: clean ? Buffer.concat(chunks).toString("utf8") : "" });
+    };
+    child.stdout.on("data", (chunk: Buffer) => {
+      bytes += chunk.length;
+      if (bytes > MAX_OUTPUT_BYTES) {
+        flags.overLimit = true;
+        kill();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    child.on("error", (e: NodeJS.ErrnoException) => {
+      finish({ code: null, signal: null, spawnError: /^[A-Z0-9_]{1,40}$/.test(e.code ?? "") ? e.code! : "UNKNOWN" });
+    });
+    child.on("close", (code, signal) => finish({ code, signal }));
   });
 }
 
 function describeFailure(r: BoundedResult): string {
   if (r.aborted) return "was cancelled";
   if (r.timedOut) return "did not answer in time";
+  if (r.overLimit) return "printed more than ORCA reads";
   if (r.spawnError) return `could not start (${r.spawnError})`;
   if (r.signal) return `was ended by ${r.signal}`;
   return `exited with ${r.code ?? "no code"}`;
@@ -311,8 +370,9 @@ function failureDetails(r: BoundedResult): Record<string, unknown> {
     ...(r.signal ? { signal: r.signal } : {}),
     ...(r.timedOut ? { timedOut: true } : {}),
     ...(r.aborted ? { aborted: true } : {}),
-    // The CLI's own words, bounded; it prints no credential for these two commands.
-    ...(r.stderr.trim() ? { stderr: r.stderr.trim().slice(-2000) } : {}),
+    ...(r.overLimit ? { overLimit: true } : {}),
+    ...(r.spawnError ? { spawnError: r.spawnError } : {}),
+    // Nothing the CLI printed: its output is untrusted and may carry anything.
   };
 }
 
