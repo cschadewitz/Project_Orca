@@ -7,9 +7,17 @@
  * Evidence is read from `/proc` (Linux), so a platform without a digest here is refused rather
  * than trusted: attestation elsewhere is not in scope today.
  */
+
 import { createReadStream } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { open, readFile, stat } from "node:fs/promises";
 import { createHash } from "node:crypto";
+
+/** A file's content digest and the inode it was read from. */
+export interface ImageIdentity {
+  sha256: string;
+  dev: number;
+  ino: number;
+}
 
 /** The SHA-256 of each verified Codex native binary, by Codex version, then by `<platform>-<arch>`. */
 export const CODEX_VERIFIED_IMAGES: Readonly<Record<string, Readonly<Record<string, string>>>> = Object.freeze({
@@ -53,21 +61,61 @@ export async function procImageSha256(pid: number): Promise<{ sha256: string } |
 }
 
 /**
+ * The digest and inode of the file at `path`, read through one open descriptor whose file is
+ * unchanged (same inode, size, modification and change times) before and after it is hashed.
+ * For checking an executable before it is started; nothing is executed.
+ */
+export async function fileImageIdentity(path: string): Promise<ImageIdentity | { error: string }> {
+  let handle;
+  try {
+    handle = await open(path, "r");
+  } catch (error) {
+    return { error: `it cannot be read (${error instanceof Error ? error.message : String(error)})` };
+  }
+  try {
+    const before = await handle.stat();
+    if (!before.isFile()) return { error: "it is not a regular file" };
+    const hash = createHash("sha256");
+    for await (const chunk of handle.createReadStream({ autoClose: false, start: 0 })) hash.update(chunk as Buffer);
+    const after = await handle.stat();
+    if (
+      after.dev !== before.dev ||
+      after.ino !== before.ino ||
+      after.size !== before.size ||
+      after.mtimeMs !== before.mtimeMs ||
+      after.ctimeMs !== before.ctimeMs
+    )
+      return { error: "it changed while ORCA read it" };
+    return { sha256: hash.digest("hex"), dev: before.dev, ino: before.ino };
+  } catch (error) {
+    return { error: `it cannot be read (${error instanceof Error ? error.message : String(error)})` };
+  } finally {
+    await handle.close().catch(() => undefined);
+  }
+}
+
+/**
  * ORCA's own evidence for the image of a process ORCA itself started (Linux): `pid` must be a
  * live child of this process, and the same process (same parent and start time) before and
  * after its image is read. The digest is of `/proc/<pid>/exe`, the file the kernel is running
- * for it, wherever that is now and whatever is at its old path. Nothing is executed, and no
- * path the process reports is read.
+ * for it, wherever that is now and whatever is at its old path, and the inode is that file's.
+ * Nothing is executed, and no path the process reports is read.
  */
-export async function ownChildImageDigest(pid: number | undefined): Promise<{ sha256: string } | { error: string }> {
+export async function ownChildImageDigest(pid: number | undefined): Promise<ImageIdentity | { error: string }> {
   if (pid === undefined || !Number.isInteger(pid) || pid <= 1) return { error: "its process id is unknown" };
   const before = await procStat(pid);
   if (before === undefined || before.ppid !== process.pid)
     return { error: `process ${pid} is not running as a child ORCA started` };
+  let inode: { dev: number; ino: number };
+  try {
+    inode = await stat(`/proc/${pid}/exe`);
+  } catch (error) {
+    return { error: `its image cannot be read (${error instanceof Error ? error.message : String(error)})` };
+  }
   const image = await procImageSha256(pid);
   if ("error" in image) return image;
   const after = await procStat(pid);
   if (after === undefined || after.ppid !== before.ppid || after.start !== before.start)
     return { error: `process ${pid} changed while its image was read` };
-  return image;
+  return { sha256: image.sha256, dev: inode.dev, ino: inode.ino };
 }

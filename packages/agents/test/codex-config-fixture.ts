@@ -55,10 +55,12 @@ export const CONFIG_ANSWERS = {
 };
 
 /**
- * The image attestation a fake app-server passes (#1162): this "machine" is linux-x64 and the
- * process ORCA started runs the verified Codex 0.171.0 build.
+ * The image checks a fake app-server passes (#1162): this "machine" is linux-x64, and the file
+ * ORCA starts, and the process it then runs, are the verified Codex 0.171.0 build.
  */
+export const PINNED_IMAGE = { sha256: CODEX_VERIFIED_IMAGES["0.171.0"]!["linux-x64"]!, dev: 64769, ino: 1162 };
 export const VERIFIED_IMAGE = {
   imageTarget: "linux-x64",
-  imageDigest: async () => ({ sha256: CODEX_VERIFIED_IMAGES["0.171.0"]!["linux-x64"]! }),
+  imageFile: async () => PINNED_IMAGE,
+  imageDigest: async () => PINNED_IMAGE,
 };

@@ -543,16 +543,21 @@ refuses a session whose Codex reports another version, or whose protocol lacks a
 session needs. The **Codex app-server protocol** workflow regenerates the types from the pinned
 Codex and fails on any drift.
 
-ORCA also attests the Codex it starts (#1162). Each verified version has a SHA-256 per
+ORCA starts only a Codex build it verified (#1162). Each verified version has a SHA-256 per
 platform for Codex's native binary (today 0.171.0 on `linux-x64`; the ACP route's verified
-pairs read the same digests). Right after the process starts, and before ORCA sends it
-anything, ORCA hashes the image the kernel runs for its own child (`/proc/<pid>/exe`, checked
-to be the same child before and after) and refuses the session unless the digest is one it
-verified for this machine and the version `initialize` reports is that build's. A machine with
-no verified build is refused before anything starts, and a restart into another build ends the
-session. Nothing a process reports is executed or trusted for this. `command` must therefore
-name the native `codex` binary: an npm install's `codex` command starts Node, which then starts
-the binary, and is refused (with npm, the binary is
+pairs read the same digests). Before every start, including a restart, ORCA resolves `command`
+to the file itself and hashes it through one open descriptor that must stay unchanged while it
+is read; a file that is not a verified build for this machine is never started, so it gets no
+environment and no secret (the host reads secrets only as it starts the process). A machine
+with no verified build is refused before anything starts. Then, as corroboration and before
+ORCA sends it anything, ORCA reads the image the kernel runs for its own child
+(`/proc/<pid>/exe`, checked to be the same child before and after): it must be the very file
+checked (same inode and digest), or the process is stopped. The version `initialize` reports
+must be that build's. A restart onto another build ends the session. Nothing a process reports
+is executed or trusted for this. A same-user process could still rewrite the file in place in
+the moment between the check and the start; the child check then stops it, after it started.
+`command` must therefore name the native `codex` binary: an npm install's `codex` command is a
+Node script that then starts the binary, and is refused (with npm, the binary is
 `node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex` under the
 `@openai/codex` install).
 

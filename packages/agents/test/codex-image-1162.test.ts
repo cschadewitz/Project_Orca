@@ -4,13 +4,16 @@
  */
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFileSync, realpathSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   CODEX_HOOK_VERIFIED_PAIRS,
   CODEX_VERIFIED_IMAGES,
   codexImageTarget,
   codexVersionForImage,
+  fileImageIdentity,
   ownChildImageDigest,
 } from "../src/index.js";
 
@@ -29,11 +32,15 @@ describe("verified Codex images", () => {
 });
 
 describe.skipIf(process.platform !== "linux")("ownChildImageDigest", () => {
-  it("hashes the image the kernel runs for a child ORCA started", async () => {
+  it("hashes the image the kernel runs for a child ORCA started, with that file's inode", async () => {
+    const node = realpathSync(process.execPath);
     const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 10000)"], { stdio: "ignore" });
     await new Promise((r) => child.once("spawn", r));
     try {
-      expect(await ownChildImageDigest(child.pid)).toEqual({ sha256: sha256(realpathSync(process.execPath)) });
+      const { dev, ino } = statSync(node);
+      expect(await ownChildImageDigest(child.pid)).toEqual({ sha256: sha256(node), dev, ino });
+      // The same identity the check before a start reads from the file.
+      expect(await fileImageIdentity(node)).toEqual({ sha256: sha256(node), dev, ino });
     } finally {
       child.kill("SIGKILL");
     }
@@ -51,5 +58,23 @@ describe.skipIf(process.platform !== "linux")("ownChildImageDigest", () => {
     const child = spawn(process.execPath, ["-e", ""], { stdio: "ignore" });
     await new Promise((r) => child.once("exit", r));
     expect(await ownChildImageDigest(child.pid)).toMatchObject({ error: expect.stringMatching(/not running/) });
+  });
+});
+
+describe("fileImageIdentity", () => {
+  it("reads a file's digest and inode, and refuses what is not a readable regular file", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "orca-1162-"));
+    try {
+      const file = join(dir, "codex");
+      writeFileSync(file, "not codex");
+      const { dev, ino } = statSync(file);
+      expect(await fileImageIdentity(file)).toEqual({ sha256: sha256(file), dev, ino });
+      expect(await fileImageIdentity(dir)).toEqual({ error: "it is not a regular file" });
+      expect(await fileImageIdentity(join(dir, "missing"))).toMatchObject({
+        error: expect.stringMatching(/^it cannot be read \(ENOENT/),
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

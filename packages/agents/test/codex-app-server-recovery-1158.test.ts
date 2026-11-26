@@ -17,7 +17,7 @@ import {
   type CodexSessionContinuity,
   type SessionUpdateEvent,
 } from "../src/index.js";
-import { CONFIG_ANSWERS, configRead, WRITE_SANDBOX, VERIFIED_IMAGE } from "./codex-config-fixture.js";
+import { CONFIG_ANSWERS, configRead, WRITE_SANDBOX, PINNED_IMAGE, VERIFIED_IMAGE } from "./codex-config-fixture.js";
 
 const CWD = process.cwd();
 const INIT = { userAgent: "orca/0.171.0 (test)", codexHome: "/h/.codex", platformFamily: "unix", platformOs: "linux" };
@@ -416,10 +416,27 @@ describe("an app-server that exits", () => {
     });
   });
 
-  it("stops the session when a replacement is not a verified Codex build (#1162)", async () => {
+  it("ends the session, without starting it, when the file is another build at a restart (#1162)", async () => {
+    const s = scriptedHost(() => BASE);
+    let starts = 0;
+    const imageFile = vi.fn(async () => (++starts === 1 ? PINNED_IMAGE : { ...PINNED_IMAGE, sha256: "0".repeat(64) }));
+    const session = await open(s.host, { imageFile });
+    s.procs[0]!.crash();
+    await settle();
+    const error = (await session.prompt("go").catch((e: unknown) => e)) as OrcaError;
+    expect(error.code).toBe("NOT_SUPPORTED");
+    expect(error.details).toMatchObject({ reason: "codex-image-unverified" });
+    expect(imageFile).toHaveBeenCalledTimes(2);
+    // Never started: the host was asked once, for the first process.
+    expect(s.spawnAgent).toHaveBeenCalledTimes(1);
+    await expect(session.prompt("again")).rejects.toBe(error);
+    expect(s.spawnAgent).toHaveBeenCalledTimes(1);
+  });
+
+  it("ends the session when a restarted process does not run the checked file (#1162)", async () => {
     const s = scriptedHost(() => BASE);
     const imageDigest = vi.fn(async (pid: number | undefined) =>
-      pid === 4000 ? VERIFIED_IMAGE.imageDigest() : { sha256: "0".repeat(64) },
+      pid === 4000 ? PINNED_IMAGE : { ...PINNED_IMAGE, ino: PINNED_IMAGE.ino + 1 },
     );
     const session = await open(s.host, { imageDigest });
     s.procs[0]!.crash();

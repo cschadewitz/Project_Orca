@@ -31,6 +31,7 @@
  * - **Asks:** every approval ask is declined and any other ask refused until #1159.
  */
 import { realpathSync } from "node:fs";
+import { realpath } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import type * as acp from "@agentclientprotocol/sdk";
 import {
@@ -65,7 +66,14 @@ import type { ThreadStartParams } from "./codex-protocol/0.171.0/v2/ThreadStartP
 import type { TurnPlanStep } from "./codex-protocol/0.171.0/v2/TurnPlanStep.js";
 import type { ThreadTokenUsage } from "./codex-protocol/0.171.0/v2/ThreadTokenUsage.js";
 import { processCleanup } from "./process-cleanup.js";
-import { CODEX_VERIFIED_IMAGES, codexImageTarget, codexVersionForImage, ownChildImageDigest } from "./codex-image.js";
+import {
+  CODEX_VERIFIED_IMAGES,
+  codexImageTarget,
+  codexVersionForImage,
+  fileImageIdentity,
+  ownChildImageDigest,
+  type ImageIdentity,
+} from "./codex-image.js";
 import type { FileUpdateChange } from "./codex-protocol/0.171.0/v2/FileUpdateChange.js";
 import {
   codexAskRequest,
@@ -203,8 +211,10 @@ export interface OpenCodexAppServerSessionOptions {
    * sends it anything, so the caller can redact them from what the run records.
    */
   onSecretValues?: (values: readonly string[]) => void;
+  /** For tests: how the Codex executable is checked before ORCA starts it (#1162). */
+  imageFile?: (path: string) => Promise<ImageIdentity | { error: string }>;
   /** For tests: how the image of the app-server ORCA started is attested (#1162). */
-  imageDigest?: (pid: number | undefined) => Promise<{ sha256: string } | { error: string }>;
+  imageDigest?: (pid: number | undefined) => Promise<ImageIdentity | { error: string }>;
   /** For tests: this machine's `<platform>-<arch>`, the key of the verified images. */
   imageTarget?: string;
 }
@@ -784,8 +794,9 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
       { agentId: agent.id },
     );
   if (opts.requireContextRecovery && !opts.resumeThreadId?.trim()) throw codexRecoveryFailure("missing-thread-id");
-  // ORCA runs only a Codex build it verified for this machine, attested from the process it
-  // starts (#1162); a machine with no verified build is refused before anything starts.
+  // ORCA starts only a Codex build it verified for this machine (#1162): the file is checked
+  // before it is started, and the process it started is then attested to run that same file.
+  // A machine with no verified build is refused before anything starts.
   const imageTarget = opts.imageTarget ?? codexImageTarget();
   if (!Object.values(CODEX_VERIFIED_IMAGES).some((images) => images[imageTarget] !== undefined))
     throw codexImageRefusal(agent.id, imageTarget, `ORCA has no verified Codex build for ${imageTarget}`);
@@ -803,7 +814,19 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
     env: { ...process.env, ...(opts.env ?? {}) },
     sessionFlags: codexSessionFlags(opts.thread),
   });
-  const spec: AgentSpec = { ...secretPlan.agent, command: launch.command, args: launch.args };
+  // The file itself, not a link to it, is what is checked and then started: a link moved in
+  // between cannot change what runs.
+  let command: string;
+  try {
+    command = await realpath(launch.command);
+  } catch (error) {
+    throw codexImageRefusal(
+      agent.id,
+      imageTarget,
+      `ORCA could not resolve the Codex at its command (${error instanceof Error ? error.message : String(error)})`,
+    );
+  }
+  const spec: AgentSpec = { ...secretPlan.agent, command, args: launch.args };
   /** The `$TMPDIR` Codex sees, which a workspace-write sandbox lets it write unless excluded. */
   const fromAgent = agent.env.TMPDIR;
   const tmpdir = opts.env?.TMPDIR ?? (typeof fromAgent === "string" ? fromAgent : process.env.TMPDIR);
@@ -1359,6 +1382,24 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
    * any step; `stopped` says why it must not go on. The process is stopped on any failure.
    */
   const connect = async (replacement: boolean, stopped: () => Error | undefined): Promise<Connection> => {
+    // The executable is checked before it is started, on every start: nothing it is not runs,
+    // and no secret is read for it (the host reads them as it starts the process). A restart
+    // onto another build ends the session (#1162).
+    const file = await (opts.imageFile ?? fileImageIdentity)(spec.command);
+    const fileVersion = "sha256" in file ? codexVersionForImage(file.sha256, imageTarget) : undefined;
+    if (fileVersion === undefined) {
+      const refusal = codexImageRefusal(
+        agent.id,
+        imageTarget,
+        "sha256" in file
+          ? "the Codex at its command is not a build ORCA verified. Set the agent's command to the native codex binary of a verified version (an npm install's codex command is a Node script, which then starts that binary)"
+          : `ORCA could not check the Codex at its command before starting it: ${file.error}`,
+        "sha256" in file ? { sha256: file.sha256 } : {},
+      );
+      if (replacement) breakSession(refusal);
+      throw refusal;
+    }
+    const checked = file as ImageIdentity;
     const proc = await opts.host.spawnAgent(spec, {
       cwd: opts.cwd,
       ...(opts.env ? { env: opts.env } : {}),
@@ -1395,13 +1436,14 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
         if (replacement) breakSession(refusal);
         return fail(refusal);
       }
-    // The image of the process ORCA just started, read before ORCA sends it anything: a build
-    // ORCA did not verify is stopped before any thread starts, and a restart into one ends the
-    // session (#1162). The digest comes from the kernel's view of the child, never from a path
-    // or a version the process reports.
+    // Corroboration, before ORCA sends it anything: the process ORCA just started runs the
+    // very file checked above (same inode, same digest), read from the kernel's view of the
+    // child, never from a path or a version the process reports. Otherwise it is stopped before
+    // any thread starts, and a restart ends the session (#1162).
     const image = await (opts.imageDigest ?? ownChildImageDigest)(proc.pid);
-    const imageVersion = "sha256" in image ? codexVersionForImage(image.sha256, imageTarget) : undefined;
-    if (imageVersion === undefined) {
+    const bound =
+      "sha256" in image && image.sha256 === checked.sha256 && image.dev === checked.dev && image.ino === checked.ino;
+    if (!bound) {
       // A process that exited before its image could be read gets the startup diagnosis it
       // would have had at the handshake (a restart counts it as a crash, as before): ORCA never
       // talks to it either way.
@@ -1412,13 +1454,14 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
         agent.id,
         imageTarget,
         "sha256" in image
-          ? "the Codex it started is not a build ORCA verified. Set the agent's command to the native codex binary of a verified version (an npm install's codex command starts Node, which then starts that binary)"
+          ? "the process ORCA started does not run the Codex file ORCA checked before starting it"
           : `ORCA could not attest the Codex it started: ${image.error}`,
         "sha256" in image ? { sha256: image.sha256 } : {},
       );
       if (replacement) breakSession(refusal);
       return fail(refusal);
     }
+    const imageVersion = fileVersion;
     c.imageVersion = imageVersion;
     const why = stopped();
     if (why) return fail(why);
