@@ -15,7 +15,7 @@
  * `powershell ... -Command -`, and standard input carries one bootstrap line, with the setup's
  * arguments in it as PowerShell literals, followed by the script, which that line reads to its
  * end and runs (`windowsProgram`). The setup downloads its own signed bundle there and reports
- * the same lines. `discoverServer` tells the two apart by asking the server (`cmd /c ver`).
+ * the same lines. `discoverServer` tells the two apart by asking the server (`ver`).
  *
  * Nothing is installed on a key nobody confirmed (#881 review): `discoverServer` connects
  * read-only, with a first-seen key held in a scratch pin file rather than enrolled, and runs
@@ -213,9 +213,13 @@ export function setupInvocation(
   };
 }
 
-/** Which setup a server takes: Windows answers `cmd /c ver` with its version; anything else is Linux. */
+/**
+ * Which setup a server takes: Windows answers `ver` (a cmd.exe command, run by Windows OpenSSH's
+ * default shell) with its version; anything else is Linux. Not `cmd /c ver`: the nested cmd.exe
+ * gets the command line's closing quote as part of its own.
+ */
 export async function serverOs(tunnel: Pick<SetupTunnel, "exec">): Promise<ServerOs> {
-  const probe = await tunnel.exec(["cmd", "/c", "ver"], 30_000);
+  const probe = await tunnel.exec(["ver"], 30_000);
   return probe.code === 0 && /^\s*Microsoft Windows \[Version \d+\.\d+\.\d+/m.test(probe.stdout) ? "windows" : "linux";
 }
 

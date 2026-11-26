@@ -114,7 +114,7 @@ function fakeServer(opts: { key?: string; inspect?: RemoteResult; setup?: Remote
       },
       exec: async (command: readonly string[], _timeout?: number, input?: string) => {
         // Which system this is (`serverOs`): a Linux one, here.
-        if (command.join(" ") === "cmd /c ver") return { code: 127, stdout: "", serverLines: [] };
+        if (command.join(" ") === "ver") return { code: 127, stdout: "", serverLines: [] };
         server.commands.push({ command: [...command], input, options });
         return command.includes("--inspect") ? (opts.inspect ?? INSPECTED) : (opts.setup ?? READY);
       },

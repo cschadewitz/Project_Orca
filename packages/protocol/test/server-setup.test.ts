@@ -181,7 +181,7 @@ describe("a Windows server (#1238)", () => {
   const line = (value: unknown) => `orca-setup: ${JSON.stringify(value)}`;
   const result = (stdout: string, code = 0): RemoteResult => ({ code, stdout, serverLines: [] });
 
-  it("is told apart by its own answer to cmd /c ver", async () => {
+  it("is told apart by its own answer to ver", async () => {
     const answering = (answer: RemoteResult) => ({ exec: async () => answer });
     const ver = "\r\nMicrosoft Windows [Version 10.0.26100.4349]\r\n";
     expect(await serverOs(answering(result(ver)))).toBe("windows");
@@ -308,7 +308,7 @@ describe("a Windows server (#1238)", () => {
           open: async () => "http://127.0.0.1:1",
           exec: async (command, _timeout, input) => {
             ran.push({ command, ...(input !== undefined ? { input } : {}) });
-            return command[0] === "cmd"
+            return command[0] === "ver"
               ? result("Microsoft Windows [Version 10.0.26100.4349]")
               : result(line({ inspected: true, account, root, current: null }));
           },
@@ -320,7 +320,7 @@ describe("a Windows server (#1238)", () => {
       });
       expect(discovery.os).toBe("windows");
       expect(discovery.outcome.kind).toBe("inspected");
-      expect(ran.map((r) => r.command)).toEqual([["cmd", "/c", "ver"], WINDOWS_COMMAND]);
+      expect(ran.map((r) => r.command)).toEqual([["ver"], WINDOWS_COMMAND]);
       expect(ran[1]!.input).toBe(inspectInvocation("windows", DEPLOY, "0.9.0", 6722).input);
     } finally {
       rmSync(dir, { recursive: true, force: true });

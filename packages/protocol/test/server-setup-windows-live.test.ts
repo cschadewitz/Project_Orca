@@ -48,7 +48,7 @@ describe.skipIf(!live || process.platform !== "win32")("a Windows server's setup
     const tunnel = new SshTunnel({ ...base(), knownHostsFile: join(dir, "winlive-probe") });
     try {
       await tunnel.open();
-      const probe = await tunnel.exec(["cmd", "/c", "ver"], 30_000);
+      const probe = await tunnel.exec(["ver"], 30_000);
       expect(probe, JSON.stringify(probe)).toMatchObject({ code: 0 });
       expect(await serverOs(tunnel), JSON.stringify(probe)).toBe("windows");
     } finally {
