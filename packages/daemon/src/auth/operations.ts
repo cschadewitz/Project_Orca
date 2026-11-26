@@ -269,6 +269,16 @@ export const OPERATIONS: Readonly<Record<string, OperationSpec>> = {
   "secrets.check": { permission: "secrets.read", resource: "none" },
   // Where the plain-language rule judge's setup stands (#701): no value, no key, read-only.
   "judge.status": { permission: "config.read", resource: "none" },
+  // Delegation remotes enrolled by the daemon that owns the workspace (#1206). The list names
+  // credential ids and pinned fingerprints, never a token; enrolling pins host keys and saves or
+  // has the remote issue a credential beside the config, which is a configuration write.
+  "remotes.list": { permission: "config.read", resource: "none" },
+  "remotes.enroll": {
+    permission: "config.write",
+    additionalPermissions: ["config.read"],
+    resource: "none",
+    audit: "mutation",
+  },
 
   // Store-wide subscriptions are open to any principal: each notification is gated on its own
   // (guard.ts `notificationGate`). A run-scoped one needs `runs.read` and the run.

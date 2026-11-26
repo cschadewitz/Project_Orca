@@ -66,6 +66,23 @@ it("shows the judge's setup on the connected Config route, only from a daemon th
   act(() => f.changeTarget());
   await waitFor(() => expect(reads).toBeGreaterThan(before));
 });
+it("shows Remote daemons on the connected Config route, only from a daemon that lists remotes.list (#1206)", async () => {
+  const f = setup();
+  await screen.findByRole("group", { name: "Configuration" });
+  expect(screen.queryByRole("region", { name: "Remote daemons" })).toBeNull();
+  (f.fake.bridge as { remotes?: unknown }).remotes = {
+    list: async () => ({ ok: true, result: { remotes: [], canIssue: true } }),
+    enroll: async () => ({ ok: false, error: { code: "NOT_SUPPORTED", message: "unused" } }),
+  };
+  act(() =>
+    f.fake.connect({
+      ...f.fake.connection,
+      methods: ["config.get", "config.set", "config.apply", "remotes.list", "remotes.enroll"],
+    }),
+  );
+  const section = await screen.findByRole("region", { name: "Remote daemons" });
+  await waitFor(() => expect(section.textContent).toContain("No remotes are configured"));
+});
 function setup({
   metadata = true,
   writable = true,

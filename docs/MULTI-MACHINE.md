@@ -147,9 +147,20 @@ ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
 orca-cli remote enroll build-box --host-key SHA256:...
 ```
 
-The parent must be a workspace the CLI owns (one you run with `orca-cli serve`). A workspace the
-desktop app set up in first-run refuses `orca-cli remote enroll` ("First-run mutation requires owned
-daemon admission"), and the app has no enrollment screen yet
+A CLI-owned workspace (one you run with `orca-cli serve`) enrolls with the command above. A
+workspace the desktop app set up in first-run enrolls from the app instead: only the daemon the
+app launched may write that workspace, so its first-run fence refuses `orca-cli remote enroll`
+("First-run mutation requires owned daemon admission"). Add the `remotes:` entry and the
+`type: orca-daemon` agent in Config > Raw, then Validate and review, Save reviewed changes and
+Apply saved configuration. A new remote takes effect when the app's daemon next starts, so quit
+and reopen the app. The remote is then listed under **Remote daemons** on the Config surface.
+Choose **Enroll**, enter the fingerprint (and the jump host's, if the route has one), and choose
+**Enroll remote**. The app's daemon pins the key and has the worker issue the credential exactly
+as `orca-cli remote enroll` does. On Windows, where the worker cannot issue the credential during
+enrollment, paste the output of `orca-cli auth issue <name> --preset client --json` from the worker
+(its `serverCommand`) into the Credential field. The daemon proves it first and saves it, readable only by you, in its
+own file (`auth/remotes/<id>.<credential id>.token`) only when the enrollment commits, so a
+refused credential never replaces the one in use
 ([#1206](https://github.com/cschadewitz/Project_Orca/issues/1206)).
 
 Enrollment pins exactly that host key and has the worker issue the parent a credential over

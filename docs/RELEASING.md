@@ -570,8 +570,11 @@ The point is that a pull request creates a file instead of editing a shared list
 pull requests in flight cannot conflict over the changelog — and a dropped fragment is a
 missing file rather than a lost merge. `changelog.d/README.md` is the reference.
 
-`prepare` renders the fragments into the dated section and deletes them, so the deletions
-land in the `release: vX.Y.Z` pull request beside the section they became. Nothing else
+`prepare` renders the fragments into the dated section. For a final it deletes them, so the
+deletions land in the `release: vX.Y.Z` pull request beside the section they became. A
+candidate (`X.Y.Z-rc.N`) keeps them: each candidate's section shows everything since the last
+final, and the final renders them all once more and consumes them, so no fragment has to be
+re-added before a final. Nothing else
 reads `changelog.d/`: `notes <version>` quotes the committed `CHANGELOG.md`, which is what
 `release-publish.yml` publishes.
 
