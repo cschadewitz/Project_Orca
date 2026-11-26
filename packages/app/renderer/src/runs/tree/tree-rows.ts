@@ -454,7 +454,12 @@ export function applyStepChanged(detail: RunsGetResult, params: StepChangedParam
 }
 
 /** The `step.*` events after which a step is not going to move again on its own. */
-const TERMINAL_STEP_EVENTS: readonly string[] = ["step.completed", "step.failed", "step.cancelled", "step.skipped"];
+export const TERMINAL_STEP_EVENTS: readonly string[] = [
+  "step.completed",
+  "step.failed",
+  "step.cancelled",
+  "step.skipped",
+];
 
 /** `run.changed` into a projection: the run itself when it is this one, else a child row. */
 export function applyRunChangedToDetail(detail: RunsGetResult, params: RunChangedParams): RunsGetResult {

@@ -340,6 +340,60 @@ jobs:
           # pwsh steps exit with the last native exit code, here the deliberate failing command's.
           exit 0
 
+      # The updater's download cache (#1109). Same fresh-VM rule as above: this installs and
+      # uninstalls for the runner's own account. An update runs the old uninstaller with
+      # --updated, and the next differential download starts from that cache, so it stays; a
+      # real uninstall removes it. A sibling folder under %LOCALAPPDATA% stands for everything
+      # else there, which neither uninstall may touch.
+      - name: The Windows uninstaller removes the updater cache, except during an update
+        if: matrix.name == 'windows' && runner.environment == 'github-hosted'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installers = @(Get-ChildItem "packages/app/dist/release/x64/ORCA-*-win-x64.exe")
+          if ($installers.Count -ne 1) { throw "expected one x64 installer, found $($installers.Count)" }
+          $cache = Join-Path $env:LOCALAPPDATA '@orcaapp-updater'
+          $sibling = Join-Path $env:LOCALAPPDATA 'orca-uninstall-sibling'
+          $install = {
+            $p = Start-Process -FilePath $installers[0].FullName -ArgumentList '/S', '/currentuser' -Wait -PassThru
+            if ($p.ExitCode -ne 0) { throw "the installer exited $($p.ExitCode)" }
+            $exe = @(Get-ChildItem "$env:LOCALAPPDATA\Programs\*\ORCA.exe")
+            if ($exe.Count -ne 1) { throw "expected one installed ORCA.exe, found $($exe.Count)" }
+            $exe[0]
+          }
+          # The uninstaller hands itself to a copy in %TEMP% and returns: wait for the app to go
+          # and for that copy to exit, so its last step (the cache) has run.
+          $uninstall = {
+            param($exe, [string[]]$arguments)
+            $uninstaller = Join-Path $exe.DirectoryName 'Uninstall ORCA.exe'
+            Start-Process -FilePath $uninstaller -ArgumentList $arguments -Wait
+            $deadline = (Get-Date).AddSeconds(120)
+            while (((Test-Path $exe.FullName) -or (Get-Process -Name 'Un_*' -ErrorAction SilentlyContinue)) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 2 }
+            if (Test-Path $exe.FullName) { throw "the uninstaller ($($arguments -join ' ')) did not remove the app" }
+            if (Get-Process -Name 'Un_*' -ErrorAction SilentlyContinue) { throw "the uninstaller ($($arguments -join ' ')) is still running" }
+          }
+          $seed = {
+            New-Item -ItemType Directory -Force -Path (Join-Path $cache 'pending') | Out-Null
+            Set-Content -Path (Join-Path $cache 'pending\update.exe') -Value 'cached download'
+          }
+          New-Item -ItemType Directory -Force -Path $sibling | Out-Null
+          Set-Content -Path (Join-Path $sibling 'keep.txt') -Value 'not ORCA''s'
+
+          $exe = & $install
+          & $seed
+          & $uninstall $exe @('/S', '/currentuser', '--updated')
+          if (-not (Test-Path (Join-Path $cache 'pending\update.exe'))) { throw "an update-mode uninstall removed the updater cache" }
+          Write-Output "update-mode uninstall kept $cache"
+
+          $exe = & $install
+          & $seed
+          & $uninstall $exe @('/S', '/currentuser')
+          if (Test-Path $cache) { throw "a real uninstall left the updater cache at $cache" }
+          Write-Output "real uninstall removed $cache"
+
+          if ((Get-Content (Join-Path $sibling 'keep.txt')) -ne 'not ORCA''s') { throw "an uninstall touched $sibling" }
+          Write-Output "$sibling untouched"
+
       # GitHub-hosted fallback only; never runs on a self-hosted runner. Ubuntu 24.04 keeps
       # unprivileged user namespaces, which Chromium's sandbox needs, behind AppArmor. Rather
       # than lift that for the whole VM, load a profile that grants `userns` to the one
@@ -524,6 +578,8 @@ jobs:
           test "$(readlink -f /usr/bin/orca-desktop)" = /opt/ORCA/orca-desktop
           test "$(readlink -f "$(command -v orca-desktop)")" = /opt/ORCA/orca-desktop
           grep -qx 'Exec=/opt/ORCA/orca-desktop %U' /usr/share/applications/orca-desktop.desktop
+          # The window's class must name this entry, or the dock shows a generic icon (#1109).
+          grep -qx 'StartupWMClass=orca-desktop' /usr/share/applications/orca-desktop.desktop
           if grep -q '^MimeType=' /usr/share/applications/orca-desktop.desktop; then
             echo "::error::the desktop entry declares MIME types this package does not document"; exit 1
           fi
