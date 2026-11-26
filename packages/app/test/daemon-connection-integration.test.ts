@@ -309,9 +309,12 @@ it("dispatches verified opt-out before diagnostics initialization while opt-in w
   const off = invoke(false);
   expect(revoked).toHaveBeenCalledOnce();
   expect(initialize).not.toHaveBeenCalled();
-  // The shipping native adapter refuses persistence; logical revocation still
-  // occurs immediately and the cleanup failure remains visible.
-  expect(await off).toMatchObject({ ok: false, code: "cleanup_pending" });
+  // Logical revocation occurs immediately either way. Where the platform has a diagnostics
+  // backend that is missing here, the refused persistence stays visible as pending cleanup;
+  // where it has none at all (Linux), nothing can be owned, so nothing is pending (#1205).
+  if (process.platform === "darwin" || process.platform === "win32")
+    expect(await off).toMatchObject({ ok: false, code: "cleanup_pending" });
+  else expect(await off).toMatchObject({ ok: true, value: { enabled: false, cleanupPending: false } });
   const on = invoke(true);
   expect(initialize).toHaveBeenCalledOnce();
   expect(choices).toHaveBeenCalledTimes(1);

@@ -73,6 +73,7 @@ function setup({
   width = 1280,
   variant = false,
   firstRun,
+  applyOutcome = "applied",
 }: {
   metadata?: boolean;
   writable?: boolean;
@@ -80,6 +81,7 @@ function setup({
   width?: number;
   variant?: boolean;
   firstRun?: FirstRunBridge;
+  applyOutcome?: "applied" | "restart-required" | "invalid";
 } = {}) {
   stubMatchMedia(width);
   const fake = fakeBridge();
@@ -212,6 +214,24 @@ function setup({
   bridge.config.apply = async (params) => {
     applyCount++;
     expect(params).toEqual({ expectedRevision: "reviewed-revision", expectedGeneration: "generation-1" });
+    if (applyOutcome !== "applied") {
+      data = {
+        ...data,
+        generation: {
+          ...data.generation!,
+          state: applyOutcome,
+          restartRequired: applyOutcome === "restart-required" ? ["agents"] : [],
+        },
+      };
+      return {
+        ok: true,
+        result: {
+          outcome: applyOutcome,
+          status: data.generation!,
+          validation: { errors: applyOutcome === "invalid" ? [{ path: "agents", message: "refused" }] : [] },
+        },
+      };
+    }
     data = {
       ...data,
       generation: {
@@ -324,7 +344,8 @@ describe.each(THEMES)("wired configuration route in %s", (theme) => {
     expect(screen.getByText(/Saved source state: pending/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Apply saved configuration" }));
     await screen.findByText("Apply outcome: applied.");
-    expect(screen.getByText(/Saved source state: active/)).toBeTruthy();
+    // The status line follows the apply's reread, which can land a render after the outcome.
+    expect(await screen.findByText(/Saved source state: active/)).toBeTruthy();
   });
 });
 it("keeps the draft across surface navigation and asks before replacing it with Raw", async () => {
@@ -459,6 +480,29 @@ describe("keeping the first-run workspace reopenable after a save (#1192)", () =
     fireEvent.click(await screen.findByRole("button", { name: "Apply saved configuration" }));
   }
 
+  it("keeps Apply available while the save is being bound, with no stale save tooltip (#1210)", async () => {
+    let finish!: () => void;
+    const firstRun = setupBridge(
+      () =>
+        new Promise((resolve) => {
+          finish = () => resolve({ ok: true, result: prepared });
+        }),
+    );
+    setup({ firstRun });
+    await screen.findByRole("group", { name: "Configuration" });
+    fireEvent.change(command(), { target: { value: "new-command" } });
+    fireEvent.click(screen.getByRole("button", { name: "Validate and review" }));
+    await screen.findByText("Review configuration changes");
+    fireEvent.click(screen.getByRole("button", { name: "Save reviewed changes" }));
+    const apply = await screen.findByRole("button", { name: "Apply saved configuration" });
+    await waitFor(() => expect(firstRun.bindConfiguration).toHaveBeenCalled());
+    expect(document.querySelector('[data-reopen-binding="binding"]')).not.toBeNull();
+    // Apply waits for the bind itself (#1192), so binding is not a reason to refuse the click.
+    expect(apply.getAttribute("aria-disabled")).toBeNull();
+    expect(apply.getAttribute("title")).toBeNull();
+    await act(async () => finish());
+  });
+
   it("holds Apply until a slow bind settles, then binds exactly the saved revision", async () => {
     let finish!: () => void;
     const firstRun = setupBridge(
@@ -512,5 +556,67 @@ describe("keeping the first-run workspace reopenable after a save (#1192)", () =
     expect(f.applies()).toBe(1);
     expect(firstRun.reviewConfiguration).not.toHaveBeenCalled();
     expect(document.querySelector("[data-reopen-binding]")).toBeNull();
+  });
+});
+
+describe("a disabled Apply names the reason it is disabled (#1210)", () => {
+  async function saveReviewed() {
+    await screen.findByRole("group", { name: "Configuration" });
+    fireEvent.change(command(), { target: { value: "new-command" } });
+    fireEvent.click(screen.getByRole("button", { name: "Validate and review" }));
+    await screen.findByText("Review configuration changes");
+    fireEvent.click(screen.getByRole("button", { name: "Save reviewed changes" }));
+    return screen.findByRole("button", { name: "Apply saved configuration" });
+  }
+
+  it("is enabled with no tooltip once the reviewed draft is saved", async () => {
+    setup();
+    const apply = await saveReviewed();
+    expect(apply.getAttribute("aria-disabled")).toBeNull();
+    expect(apply.getAttribute("title")).toBeNull();
+  });
+
+  it.each([
+    ["restart-required", "Already applied. The daemon must restart before this revision takes effect."],
+    ["invalid", "The daemon refused this saved revision as invalid. Fix it and save a new revision before applying."],
+  ] as const)(
+    "says the saved revision was already applied after an Apply that came back %s",
+    async (outcome, reason) => {
+      const f = setup({ applyOutcome: outcome });
+      fireEvent.click(await saveReviewed());
+      await screen.findByText(`Apply outcome: ${outcome}.`);
+      expect(f.applies()).toBe(1);
+      const apply = screen.getByRole("button", { name: "Apply saved configuration" });
+      expect(apply.getAttribute("aria-disabled")).toBe("true");
+      expect(apply.getAttribute("title")).toBe(reason);
+      expect(apply.getAttribute("title")).not.toMatch(/save the reviewed draft/i);
+      fireEvent.click(apply);
+      expect(f.applies()).toBe(1);
+    },
+  );
+
+  it("says a read is in progress while Read current configuration is pending", async () => {
+    const f = setup({ applyOutcome: "restart-required" });
+    fireEvent.click(await saveReviewed());
+    await screen.findByText("Apply outcome: restart-required.");
+    const release = f.fake.hold("config.get");
+    fireEvent.click(screen.getByRole("button", { name: "Read current configuration" }));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Apply saved configuration" }).getAttribute("title")).toBe(
+        "Reading the current configuration…",
+      ),
+    );
+    await act(async () => release());
+  });
+
+  it("asks for a save only while an unsaved draft is retained", async () => {
+    const f = setup({ applyOutcome: "restart-required" });
+    fireEvent.click(await saveReviewed());
+    await screen.findByText("Apply outcome: restart-required.");
+    fireEvent.change(command(), { target: { value: "newer-command" } });
+    // The draft bar is back and Apply is gone: an edit is a new draft, not something to apply.
+    await screen.findByRole("group", { name: "Unsaved configuration changes" });
+    expect(screen.queryByRole("button", { name: "Apply saved configuration" })).toBeNull();
+    expect(f.applies()).toBe(1);
   });
 });

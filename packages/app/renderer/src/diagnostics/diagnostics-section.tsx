@@ -137,7 +137,10 @@ export function DiagnosticsSection({ bridge: supplied }: { bridge?: DiagnosticsB
           {status.cleanupPending && (
             <>
               <Text style="caption" as="p">
-                Cleanup is pending. A private plaintext export temporary may remain until safe removal succeeds.
+                {/* Say what is waiting, from what main reported, rather than one sentence for every case (#1205). */}
+                {status.unknownOperation
+                  ? "Cleanup is pending. The earlier export's private plaintext temporary may remain until safe removal succeeds."
+                  : "Cleanup is pending. ORCA could not yet verify that its retained diagnostic history and key material were removed."}{" "}
                 Deletion is not forensic erasure of storage, snapshots or backups.
               </Text>
               <Button disabled={state.busy} disabledReason={disabledReason} onClick={() => void state.retryCleanup()}>
