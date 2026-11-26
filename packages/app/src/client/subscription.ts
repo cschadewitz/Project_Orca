@@ -17,6 +17,14 @@
  *   and not data. A cursor is per-run, so this only applies to a subscription with a
  *   `runId`; a store-wide one reconnects fresh and the screens behind it re-read.
  *
+ * - **Notice a peer that went silent (#1198).** A machine that loses power sends no close, and
+ *   over an SSH tunnel neither does the tunnel until its own keepalive gives up, 45 s later.
+ *   So once live, a socket that has carried nothing for `LIVENESS_IDLE_MS` is asked a
+ *   question every daemon answers on any grant (an `unsubscribe` of a subscription that
+ *   does not exist), and one that answers nothing within `LIVENESS_TIMEOUT_MS` is dropped
+ *   and reopened as if it had closed. A subscribe that is never answered is dropped the same
+ *   way after `SUBSCRIBE_TIMEOUT_MS`, so the retry count moves on a tunnel to nowhere.
+ *
  * The socket is opened through a `SocketFactory` rather than `new WebSocket` directly, so a
  * test drives the whole lifecycle - open, frame, close, reconnect - without a server and
  * without waiting on a real timer.
@@ -25,6 +33,7 @@ import {
   PROTOCOL_VERSION,
   SUBSCRIBE_METHOD,
   SubscribeResultSchema,
+  UNSUBSCRIBE_METHOD,
   parseMessage,
   parseNotification,
   type DaemonNotification,
@@ -77,6 +86,15 @@ export const webSocketFactory: SocketFactory = (url, handlers, protocols) => {
  */
 export const RECONNECT_BACKOFF_MS = [0, 250, 1_000, 2_500, 5_000] as const;
 
+/** Silence on a live socket before it is asked whether the other end is still there. */
+export const LIVENESS_IDLE_MS = 3_000;
+/** How long that question may go unanswered before the socket counts as gone. */
+export const LIVENESS_TIMEOUT_MS = 3_000;
+/** How long an opened socket may leave `subscribe` unanswered before it counts as failed. */
+export const SUBSCRIBE_TIMEOUT_MS = 10_000;
+/** The subscription id the liveness question names: never one the daemon issued (`sub-<n>`). */
+export const LIVENESS_PROBE_ID = "orca.liveness-probe";
+
 /** What the connection indicator shows. `closed` is deliberate: nobody is trying any more. */
 export type SubscriptionState = "connecting" | "live" | "reconnecting" | "auth-failed" | "closed";
 
@@ -108,6 +126,8 @@ export interface DaemonSubscriptionOptions {
   onState?: ((state: SubscriptionState, retries: RetryCount) => void) | undefined;
   socket?: SocketFactory | undefined;
   backoffMs?: readonly number[] | undefined;
+  /** Overrides for `LIVENESS_IDLE_MS`, `LIVENESS_TIMEOUT_MS` and `SUBSCRIBE_TIMEOUT_MS`. */
+  liveness?: { idleMs?: number; timeoutMs?: number; subscribeTimeoutMs?: number } | undefined;
   /** Check this attempt's lifetime before publishing any verification side effects. */
   verify?: (isCurrent: () => boolean) => Promise<DaemonIdentity | undefined>;
   auth?: { tokens: DaemonTokenSource; verify?: () => Promise<void> };
@@ -119,6 +139,11 @@ export class DaemonSubscription {
   private readonly backoff: readonly number[];
   private handle: SocketHandle | undefined;
   private timer: ReturnType<typeof setTimeout> | undefined;
+  /** The liveness watch on the open socket: idle, then waiting on an answer (#1198). */
+  private watchTimer: ReturnType<typeof setTimeout> | undefined;
+  private readonly idleMs: number;
+  private readonly answerMs: number;
+  private readonly subscribeMs: number;
   /** How many times in a row the connection has failed; reset by a successful `subscribe`. */
   private attempt = 0;
   private requestId = 0;
@@ -137,6 +162,9 @@ export class DaemonSubscription {
     this.opts = opts;
     this.socket = opts.socket ?? webSocketFactory;
     this.backoff = opts.backoffMs ?? RECONNECT_BACKOFF_MS;
+    this.idleMs = opts.liveness?.idleMs ?? LIVENESS_IDLE_MS;
+    this.answerMs = opts.liveness?.timeoutMs ?? LIVENESS_TIMEOUT_MS;
+    this.subscribeMs = opts.liveness?.subscribeTimeoutMs ?? SUBSCRIBE_TIMEOUT_MS;
     this.connect();
   }
 
@@ -164,11 +192,55 @@ export class DaemonSubscription {
     if (this.done) return;
     this.done = true;
     this.epoch += 1;
+    this.unwatch();
     if (this.timer !== undefined) clearTimeout(this.timer);
     this.timer = undefined;
     this.handle?.close();
     this.handle = undefined;
     this.setState("closed");
+  }
+
+  private unwatch(): void {
+    if (this.watchTimer !== undefined) clearTimeout(this.watchTimer);
+    this.watchTimer = undefined;
+  }
+
+  /** Arm a deadline for this socket: when it passes with nothing heard, the socket is gone. */
+  private deadline(epoch: number, ms: number): void {
+    this.unwatch();
+    this.watchTimer = setTimeout(() => {
+      this.watchTimer = undefined;
+      if (this.epoch !== epoch || this.done) return;
+      // No close came and none may for a long while: drop it ourselves and reopen. The epoch
+      // moves first, so a late `close` from this socket is not counted a second time.
+      const handle = this.handle;
+      this.onClose();
+      handle?.close();
+    }, ms);
+    this.watchTimer.unref?.();
+  }
+
+  /** Heard from a live socket: wait for the next silence, then ask. */
+  private heard(epoch: number): void {
+    this.unwatch();
+    this.watchTimer = setTimeout(() => {
+      this.watchTimer = undefined;
+      if (this.epoch !== epoch || this.done) return;
+      try {
+        this.handle?.send(
+          JSON.stringify({
+            kind: "request",
+            id: ++this.requestId,
+            method: UNSUBSCRIBE_METHOD,
+            params: { subscriptionId: LIVENESS_PROBE_ID },
+          }),
+        );
+      } catch {
+        // A socket that cannot take a frame is as good as gone; the deadline below says so.
+      }
+      this.deadline(epoch, this.answerMs);
+    }, this.idleMs);
+    this.watchTimer.unref?.();
   }
 
   private setState(state: SubscriptionState): void {
@@ -243,6 +315,7 @@ export class DaemonSubscription {
   /** A revoked credential is not a network blip. One local reload, then stay refused. */
   private authenticationFailed(refresh: boolean): void {
     this.epoch += 1;
+    this.unwatch();
     const handle = this.handle;
     this.handle = undefined;
     this.pendingSubscribe = undefined;
@@ -268,14 +341,19 @@ export class DaemonSubscription {
     const params: SubscribeParams =
       this.opts.params.runId !== undefined && this.cursor !== undefined ? { ...base, since: this.cursor } : base;
     this.handle?.send(JSON.stringify({ kind: "request", id: this.pendingSubscribe, method: SUBSCRIBE_METHOD, params }));
+    this.deadline(this.epoch, this.subscribeMs);
   }
 
   private onMessage(text: string): void {
+    // Any frame at all is the other end answering; the liveness probe's own reply included.
+    if (this.current === "live" && this.pendingSubscribe === undefined) this.heard(this.epoch);
     const message = parseMessage(text);
     if (!message) return;
     if (message.kind === "response") {
       if (message.id !== this.pendingSubscribe) return;
       this.pendingSubscribe = undefined;
+      // Answered, whatever it says: the subscribe deadline is over.
+      this.unwatch();
       if (!message.ok && authenticationCode(message)) {
         this.authenticationFailed(message.error.code === "AUTH_INVALID");
         return;
@@ -286,6 +364,7 @@ export class DaemonSubscription {
       this.attempt = 0;
       this.authRetried = false;
       this.setState("live");
+      this.heard(this.epoch);
       return;
     }
     if (message.kind !== "notification") return;
@@ -298,7 +377,10 @@ export class DaemonSubscription {
        compares `undefined` with `undefined` and passes, which would fold `undefined` into
        the cursor the moment a cursor-less notification arrived. */
     const { runId, seq } = notification.params as { runId?: string; seq?: number };
-    if (runId === this.opts.params.runId && typeof seq === "number") {
+    // And only on a subscription that has a run: `plan.changed` carries the *plan journal's*
+    // seq and no `runId`, which on a store-wide stream compared undefined with undefined and
+    // put a plan sequence number in the status bar as "event 79" (#1213).
+    if (this.opts.params.runId !== undefined && runId === this.opts.params.runId && typeof seq === "number") {
       this.cursor = this.cursor === undefined ? seq : Math.max(this.cursor, seq);
     }
     this.opts.onNotification(notification);
@@ -310,6 +392,7 @@ export class DaemonSubscription {
       return;
     }
     this.epoch += 1;
+    this.unwatch();
     this.handle = undefined;
     this.pendingSubscribe = undefined;
     const delay = this.backoff[Math.min(this.attempt, this.backoff.length - 1)] ?? 0;

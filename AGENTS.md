@@ -19,6 +19,10 @@ template for substantial planned work. In particular:
   parallel work, and validate the hard-dependency graph is acyclic.
 - Preserve existing metadata and history unless asked to change them. Leave milestone
   assignment for explicit release planning, and read published issues back to verify.
+- A large feature with no target release is a workstream ([docs/WORKSTREAMS.md](docs/WORKSTREAMS.md)).
+  By default, land it on `main` in small pull requests behind an incubating flag. Use a
+  `feature/<name>` branch only when the work cannot safely ship dark: an outside sign-off gates
+  even dark code, or a store or protocol break cannot be hidden. Say which in the tracking issue.
 
 ## Before you touch the UI
 

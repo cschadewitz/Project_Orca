@@ -310,6 +310,13 @@ describe("the source commit the run builds", () => {
     // A 0.7.x version on the 0.6 line: never compared with release/0.6.
     git(origin, "checkout", "-qb", "wrongLine", commits.linePatch);
     commits.wrongLine = commit(origin, "package.json", rootManifest("0.7.1"));
+    // A new minor's line, cut from main at its first candidate: release/0.9.
+    git(origin, "checkout", "-qb", "release/0.9", main);
+    commits.cutCandidate = commit(origin, "package.json", rootManifest("0.9.0-rc.1"));
+    git(origin, "checkout", "-qb", "cut-moved", commits.cutCandidate);
+    git(origin, "checkout", "-q", "release/0.9");
+    commits.cutHead = commit(origin, "packages/app/src/rc-fix.ts", "export const fix = 1;\n");
+    commits.cutHeadVersion = commit(origin, "package.json", rootManifest("0.9.0-rc.2"));
     git(origin, "checkout", "-q", "--detach", main);
     commits.unbranched = commit(origin, "dangling", "d\n");
     git(origin, "checkout", "-q", "--detach", main);
@@ -373,6 +380,18 @@ describe("the source commit the run builds", () => {
     expect(failure?.status).toBe(1);
     expect(String(failure.stdout)).toMatch(/^::error::/m);
     expect(String(failure.stdout)).toMatch(message);
+  });
+
+  it("checks a new minor's candidate on its cut line against the line's head, not main", () => {
+    expect(resolveWith(commits.cutHeadVersion, main)).toBe(`sha=${commits.cutHeadVersion}\n`);
+    let failure;
+    try {
+      resolveWith(commits.cutCandidate, main);
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure?.status).toBe(1);
+    expect(String(failure.stdout)).toMatch(/differs from release\/0\.9/);
   });
 
   it("accepts changes to docs, workflow files and test files", () => {

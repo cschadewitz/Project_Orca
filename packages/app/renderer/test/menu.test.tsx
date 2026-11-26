@@ -306,6 +306,18 @@ describe("menu placement", () => {
     expect(placeMenu({ trigger: near, menu: { width: 4000, height: 100 }, viewport }).inline).toBe("start");
   });
 
+  it("inside a scrolling pane, goes above only when it fits there whole (#1112)", () => {
+    // The pane can scroll down to a menu below its trigger, never up to one past its top.
+    const pane = { width: 1000, height: 410 };
+    const trigger = { top: 260, left: 200, width: 150, height: 24 };
+    const menu = { width: 420, height: 290 };
+    expect(placeMenu({ trigger, menu, viewport: pane }).block).toBe("above");
+    expect(placeMenu({ trigger, menu, viewport: pane, scrolls: true }).block).toBe("below");
+    expect(placeMenu({ trigger, menu: { width: 420, height: 200 }, viewport: pane, scrolls: true }).block).toBe(
+      "above",
+    );
+  });
+
   /** Rectangles a layout engine would have produced, handed to the component directly. */
   const measureAt = (top: number, left: number) =>
     vi.fn((): MenuMeasurement => ({

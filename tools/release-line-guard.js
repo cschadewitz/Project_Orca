@@ -1,9 +1,11 @@
 // The patch-content gate for release line branches (docs/RELEASING.md, "Release lines").
 //
-// A pull request into `release/X.Y` may only carry work for a patch of that line: it must
+// A pull request into `release/X.Y` may only carry work for a release of that line: it must
 // name at least one issue (`Fixes #N`, `Refs #N`, `Backport of #N`, ...), and every issue it
 // names must be in a milestone of that line (`X.Y.Z`, Z > 0) and carry no `release:minor` or
-// `release:major` label. The release pull request `release-prepare.yml` opens for the line is
+// `release:major` label. While the line is still stabilizing its `X.Y.0` (no `vX.Y.0` tag yet:
+// the line was cut from `main` for the first candidate), the `X.Y.0` milestone counts as the
+// line's too, and its issues may carry the minor or major bump they ship with. The release pull request `release-prepare.yml` opens for the line is
 // checked instead as what it must be: label `release`, head `release/vX.Y.Z` in this
 // repository, a version whose lane (tools/release-lane.js) is this line, and a diff that is
 // exactly a release preparation (the version bump, the CHANGELOG section, deleted fragments).
@@ -36,27 +38,41 @@ export function referencedIssues(body) {
   return found;
 }
 
-/** Whether a milestone title names a patch of the line (`0.7.1`, `v0.7.2`, `0.7.1-rc.1`). */
-export function inLine(title, line) {
+/**
+ * Whether a milestone title names a patch of the line (`0.7.1`, `v0.7.2`, `0.7.1-rc.1`), or,
+ * with `zero` (a line still stabilizing its `.0`), the line's `.0` itself (`0.9.0`).
+ */
+export function inLine(title, line, { zero = false } = {}) {
   const m = /^v?(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z.-]+)?$/.exec(String(title ?? "").trim());
-  return Boolean(m) && Number(m[1]) === line.major && Number(m[2]) === line.minor && Number(m[3]) > 0;
+  return (
+    Boolean(m) &&
+    Number(m[1]) === line.major &&
+    Number(m[2]) === line.minor &&
+    (Number(m[3]) > 0 || (zero && Number(m[3]) === 0))
+  );
 }
+
+/** Whether a milestone title names the line's `.0` (`0.9.0`, `v0.9.0`). */
+const isZero = (title, line) => inLine(title, line, { zero: true }) && !inLine(title, line);
 
 /**
  * Problems with a pull request into a line branch; empty means it may merge.
  * `pr`: { base, head, labels: [name], milestone: title | null, body, sameRepository,
  *   release: { files: [{ filename, status }], basePackage, headPackage } }.
  * `issues`: { [number]: { labels: [name], milestone: title | null, isPullRequest } }.
+ * `stabilizing`: the line has no `vX.Y.0` tag yet, so its `.0` milestone is the line's too.
  */
-export function checkLinePullRequest(pr, issues) {
+export function checkLinePullRequest(pr, issues, { stabilizing = false } = {}) {
   const line = lineOf(pr.base);
   if (!line) return [`${pr.base} is not a release line branch (release/X.Y)`];
   const name = `${line.major}.${line.minor}`;
+  const what = stabilizing ? `${name}.0 or ${name}.x patch` : `${name}.x patch`;
   const problems = [];
   const bump = (pr.labels ?? []).find((l) => BUMPS.has(l));
-  if (bump) problems.push(`the pull request is labelled ${bump}; minor and major work never goes into release/${name}`);
-  if (pr.milestone && !inLine(pr.milestone, line))
-    problems.push(`the pull request's milestone "${pr.milestone}" is not a ${name}.x patch milestone`);
+  if (bump && !(stabilizing && isZero(pr.milestone, line)))
+    problems.push(`the pull request is labelled ${bump}; minor and major work never goes into release/${name}`);
+  if (pr.milestone && !inLine(pr.milestone, line, { zero: stabilizing }))
+    problems.push(`the pull request's milestone "${pr.milestone}" is not a ${what} milestone`);
 
   // Release-shaped by label or by head: then it must be the release preparation, nothing else.
   const release = /^release\/v(.+)$/.exec(pr.head ?? "");
@@ -88,9 +104,11 @@ export function checkLinePullRequest(pr, issues) {
     }
     if (issue.isPullRequest) continue; // a backport names its source pull request too
     const label = (issue.labels ?? []).find((l) => BUMPS.has(l));
-    if (label) problems.push(`#${n} is labelled ${label}; it belongs to the next minor, not release/${name}`);
-    if (!inLine(issue.milestone, line))
-      problems.push(`#${n} is in milestone "${issue.milestone ?? "none"}", not a ${name}.x patch milestone`);
+    // A minor's own issues carry its bump; they belong on its line until its .0 is tagged.
+    if (label && !(stabilizing && isZero(issue.milestone, line)))
+      problems.push(`#${n} is labelled ${label}; it belongs to the next minor, not release/${name}`);
+    if (!inLine(issue.milestone, line, { zero: stabilizing }))
+      problems.push(`#${n} is in milestone "${issue.milestone ?? "none"}", not a ${what} milestone`);
   }
   if (numbers.length && numbers.every((n) => issues[n]?.isPullRequest))
     problems.push(`name at least one ${name}.x issue, not only pull requests`);
@@ -143,7 +161,18 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
       // Reported as "could not be read" below.
     }
   }
-  const problems = checkLinePullRequest(pr, issues);
+  // A line with no `vX.Y.0` tag yet is still stabilizing its .0 (tools/release-lane.js). Only a
+  // definite 404 says so; any other failure keeps the stricter patch-only rules.
+  const line = lineOf(pr.base);
+  let stabilizing = false;
+  if (line) {
+    try {
+      api(`git/ref/tags/v${line.major}.${line.minor}.0`);
+    } catch (error) {
+      stabilizing = /HTTP 404/.test(String(error.stderr ?? ""));
+    }
+  }
+  const problems = checkLinePullRequest(pr, issues, { stabilizing });
   if (problems.length) {
     for (const problem of problems) console.log(`::error::${problem}`);
     process.exit(1);

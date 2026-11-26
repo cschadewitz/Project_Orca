@@ -1,6 +1,6 @@
 {
   "name": "orca",
-  "version": "0.8.0-rc.2",
+  "version": "0.8.0",
   "private": true,
   "description": "ORCA - Orchestration Runtime for Coding Agents. A workflow engine that sits above AI-SDLC agent steps, passing artifacts between agents over ACP.",
   "type": "module",
@@ -21,6 +21,7 @@
     "app:admission-intents": "playwright test --config packages/app/test/smoke/playwright.config.ts --project=admission-intents",
     "app:revision-workflow": "playwright test --config packages/app/test/smoke/playwright.config.ts --project=revision-workflow",
     "app:linux-native": "playwright test --config packages/app/test/smoke/playwright.config.ts --project=linux-native",
+    "app:layout": "playwright test --config packages/app/test/smoke/playwright.config.ts --project=layout",
     "app:windows-update": "playwright test --config packages/app/test/smoke/playwright.config.ts --project=windows-update",
     "app:windows-store-upgrade": "playwright test --config packages/app/test/smoke/playwright.config.ts --project=windows-store-upgrade",
     "app:type-proof:update": "playwright test --config packages/app/test/smoke/playwright.config.ts --project=type-proof --update-snapshots",

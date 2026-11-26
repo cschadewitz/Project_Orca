@@ -31,3 +31,40 @@ it("drops the old cursor after a new boot/backup rewind and ignores old socket f
   expect(notify).not.toHaveBeenCalled();
   stream.close();
 });
+
+it("a store-wide stream keeps no cursor, even from a plan.changed that carries the plan journal's seq (#1213)", () => {
+  let handlers!: SocketHandlers;
+  const stream = new DaemonSubscription({
+    url: "ws://localhost",
+    params: {},
+    onNotification: () => {},
+    socket: (_url, h) => {
+      handlers = h;
+      return { send: () => {}, close: () => {} };
+    },
+  });
+  handlers.onOpen();
+  handlers.onMessage(
+    JSON.stringify({
+      kind: "notification",
+      method: "plan.changed",
+      params: { subscriptionId: "sub-1", planId: "plan", kinds: ["schedule"], seq: 79, at: "2026-11-26T00:00:00Z" },
+    }),
+  );
+  handlers.onMessage(
+    JSON.stringify({
+      kind: "notification",
+      method: "run.changed",
+      params: {
+        subscriptionId: "sub-1",
+        runId: "run",
+        seq: 126,
+        at: "2026-11-26T00:00:00Z",
+        status: "running",
+        event: "run.started",
+      },
+    }),
+  );
+  expect(stream.lastSeq).toBeUndefined();
+  stream.close();
+});

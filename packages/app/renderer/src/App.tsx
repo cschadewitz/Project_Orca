@@ -330,6 +330,7 @@ export function App(): JSX.Element {
               connection={connection.state}
               feed={attention}
               onOpenRun={(runId) => navigate(runUrl(runId))}
+              onOpenConfig={() => selectSurface("config")}
             />
           ) : activeSurface.id === "runs" ? (
             /* A `run` route selects the row; an `artifact` route names the run that
@@ -381,7 +382,10 @@ export function App(): JSX.Element {
               connection={connection.state}
               {...(window.orca.guidedLaunch ? { onLaunch: () => navigate(launchUrl()) } : {})}
               {...(route?.kind === "launch"
-                ? { launch: <GuidedLaunchRoute onConfiguration={() => navigate(configUrl())} onClose={closeLaunch} /> }
+                ? {
+                    launch: <GuidedLaunchRoute onConfiguration={() => navigate(configUrl())} onClose={closeLaunch} />,
+                    onCloseLaunch: closeLaunch,
+                  }
                 : {})}
               {...(route?.kind === "config" ? { open: route.document } : {})}
             />
