@@ -203,6 +203,10 @@ describe("parseTailnetStatus", () => {
 });
 
 describe("readTailnet", () => {
+  const exited =
+    (stdout: string, code = 0) =>
+    async () => ({ kind: "exited" as const, code, stdout });
+
   it("never starts the CLI while the flag is off", async () => {
     let ran = false;
     const read = await readTailnet({
@@ -210,7 +214,7 @@ describe("readTailnet", () => {
       exists: () => true,
       run: async () => {
         ran = true;
-        return status([]);
+        return { kind: "exited", code: 0, stdout: status([]) };
       },
     });
     expect(read).toEqual({ state: "off" });
@@ -225,42 +229,64 @@ describe("readTailnet", () => {
       exists: (path) => path === TAILSCALE_CLI.win32,
       run: async (file, args) => {
         calls.push([file, args]);
-        return status([peer({})]);
+        return { kind: "exited", code: 0, stdout: status([peer({})]) };
       },
     });
     expect(calls).toEqual([["C:\\Program Files\\Tailscale\\tailscale.exe", ["status", "--json"]]]);
     expect(read.state).toBe("running");
   });
 
-  it("is absent with no CLI file, no path for the platform, or ENOENT", async () => {
-    const run = async () => status([]);
+  it("is absent with no CLI file, no path for the platform, or a missing executable", async () => {
+    const run = exited(status([]));
     expect(await readTailnet({ features: ON, platform: "linux", exists: () => false, run })).toEqual({
       state: "absent",
     });
     expect(await readTailnet({ features: ON, platform: "darwin", exists: () => true, run })).toEqual({
       state: "absent",
     });
-    const missing = Object.assign(new Error("spawn"), { code: "ENOENT" });
     expect(
       await readTailnet({
         features: ON,
         platform: "linux",
         exists: () => true,
-        run: async () => {
-          throw missing;
-        },
+        run: async () => ({ kind: "failed", reason: "missing" }),
       }),
     ).toEqual({ state: "absent" });
   });
 
-  it("turns a CLI failure into an error state instead of throwing", async () => {
+  it("reads the stopped and signed-out states the CLI prints with exit 0", async () => {
+    const read = (stdout: string) =>
+      readTailnet({ features: ON, platform: "linux", exists: () => true, run: exited(stdout) });
+    expect((await read(JSON.stringify({ BackendState: "Stopped" }))).state).toBe("stopped");
+    expect((await read(JSON.stringify({ BackendState: "NeedsLogin" }))).state).toBe("signed-out");
+  });
+
+  it("never takes a snapshot from a run that did not exit 0, whatever it printed", async () => {
+    // A Running status on stdout of an unsuccessful run is not believed.
+    const running = status([peer({})]);
+    for (const run of [
+      exited(running, 1),
+      async () => ({ kind: "failed" as const, reason: "timeout" as const }),
+      async () => ({ kind: "failed" as const, reason: "too-large" as const }),
+      async () => ({ kind: "failed" as const, reason: "killed" as const }),
+      async () => {
+        throw new Error("runner broke");
+      },
+    ]) {
+      const read = await readTailnet({ features: ON, platform: "linux", exists: () => true, run });
+      expect(read.state).not.toBe("running");
+      expect(read).not.toHaveProperty("snapshot");
+    }
+    const failed = await readTailnet({ features: ON, platform: "linux", exists: () => true, run: exited(running, 1) });
+    expect(failed).toEqual({ state: "stopped" });
+  });
+
+  it("treats truncated output from a run that exited 0 as an error, not a snapshot", async () => {
     const read = await readTailnet({
       features: ON,
       platform: "linux",
       exists: () => true,
-      run: async () => {
-        throw Object.assign(new Error("timed out"), { code: "ETIMEDOUT" });
-      },
+      run: exited(status([peer({})]).slice(0, 80)),
     });
     expect(read.state).toBe("error");
   });
@@ -324,6 +350,7 @@ describe("pinning advertised host keys", () => {
     dirs.push(dir);
     return join(dir, "pins", "build-1.known_hosts");
   };
+  const TRUST = { source: "tailnet-advertised" } as const;
   const withKeys = (keys: string[]): TailnetPeer => running(status([peer({ sshHostKeys: keys })])).peers[0]!;
 
   it("compares the presented fingerprint with the advertised keys", () => {
@@ -335,7 +362,7 @@ describe("pinning advertised host keys", () => {
 
   it("seeds an unenrolled pin file under the profile's alias and marks it enrolled", () => {
     const file = pinFile();
-    writeAdvertisedPin(file, "orca-build-1", withKeys([buildKey, otherKey]));
+    writeAdvertisedPin(file, "orca-build-1", withKeys([buildKey, otherKey]), TRUST);
     expect(readFileSync(file, "utf8")).toBe(`orca-build-1 ${buildKey}\norca-build-1 ${otherKey}\n`);
     expect(pinState(file)).toBe("pinned");
     expect(existsSync(`${file}.enrolled`)).toBe(true);
@@ -345,14 +372,42 @@ describe("pinning advertised host keys", () => {
 
   it("never replaces an existing or broken pin, and refuses a node with no advertised keys", () => {
     const file = pinFile();
-    expect(() => writeAdvertisedPin(file, "orca-build-1", withKeys([]))).toThrow(AdvertisedPinRefused);
-    writeAdvertisedPin(file, "orca-build-1", withKeys([buildKey]));
-    expect(() => writeAdvertisedPin(file, "orca-build-1", withKeys([otherKey]))).toThrow(
+    expect(() => writeAdvertisedPin(file, "orca-build-1", withKeys([]), TRUST)).toThrow(AdvertisedPinRefused);
+    writeAdvertisedPin(file, "orca-build-1", withKeys([buildKey]), TRUST);
+    expect(() => writeAdvertisedPin(file, "orca-build-1", withKeys([otherKey]), TRUST)).toThrow(
       /already has a pinned host key/,
     );
     writeFileSync(file, "");
     expect(pinState(file)).toBe("broken");
-    expect(() => writeAdvertisedPin(file, "orca-build-1", withKeys([otherKey]))).toThrow(AdvertisedPinRefused);
-    expect(() => writeAdvertisedPin(pinFile(), "bad alias", withKeys([buildKey]))).toThrow(/alias/);
+    expect(() => writeAdvertisedPin(file, "orca-build-1", withKeys([otherKey]), TRUST)).toThrow(AdvertisedPinRefused);
+  });
+
+  it.each([
+    ["no explicit trust choice", (peer: TailnetPeer) => [peer, {}], /explicit choice/],
+    ["a bad alias", (peer: TailnetPeer) => [peer, TRUST, "bad alias"], /alias/],
+    ["a shared-in peer", (peer: TailnetPeer) => [{ ...peer, sharedIn: true }, TRUST], /shared from another tailnet/],
+    [
+      "a key line with a newline in it",
+      (peer: TailnetPeer) => [{ ...peer, sshHostKeys: [`${buildKey}\n* ssh-ed25519 AAAA`] }, TRUST],
+      /cannot use/,
+    ],
+    [
+      "a key with a comment",
+      (peer: TailnetPeer) => [{ ...peer, sshHostKeys: [`${buildKey} root@host`] }, TRUST],
+      /cannot use/,
+    ],
+    ["a non-canonical key", (peer: TailnetPeer) => [{ ...peer, sshHostKeys: [` ${buildKey}`] }, TRUST], /cannot use/],
+    [
+      "no keys at all",
+      (peer: TailnetPeer) => [{ ...peer, sshHostKeys: undefined }, TRUST],
+      /advertises no SSH host keys/,
+    ],
+  ])("refuses %s on a direct call, writing neither a pin nor an enrollment marker", (_, args, message) => {
+    const file = pinFile();
+    const [peer, trust, alias] = args(withKeys([buildKey])) as [TailnetPeer, { source: "tailnet-advertised" }, string?];
+    expect(() => writeAdvertisedPin(file, alias ?? "orca-build-1", peer, trust)).toThrow(message);
+    expect(existsSync(file)).toBe(false);
+    expect(existsSync(`${file}.enrolled`)).toBe(false);
+    expect(pinState(file)).toBe("none");
   });
 });

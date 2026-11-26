@@ -267,19 +267,33 @@ export function parseTailnetStatus(json: string): TailnetRead {
   };
 }
 
-/** Runs the CLI: `(file, args) → stdout`. Rejects with the Node error (`code: "ENOENT"` when missing). */
-export type TailscaleRunner = (file: string, args: readonly string[]) => Promise<string>;
+/**
+ * How one run of the CLI ended. `exited`: it ran to its own exit, with that code and what it
+ * printed. `failed`: it never ran (`missing` when there is no file), or was stopped (`timeout`,
+ * `too-large` past the output cap, `killed` by a signal): its output is never read.
+ */
+export type TailscaleRun =
+  | { kind: "exited"; code: number; stdout: string }
+  | { kind: "failed"; reason: "missing" | "timeout" | "too-large" | "killed" | "spawn" };
+
+/** Runs the CLI. Never rejects: every failure is a `failed` run. */
+export type TailscaleRunner = (file: string, args: readonly string[]) => Promise<TailscaleRun>;
 
 const execRunner: TailscaleRunner = (file, args) =>
-  new Promise((resolve, reject) => {
+  new Promise((resolve) => {
     execFile(
       file,
       [...args],
       { timeout: STATUS_TIMEOUT_MS, maxBuffer: STATUS_MAX_BYTES, windowsHide: true, encoding: "utf8" },
       (error, stdout) => {
-        // `status --json` exits non-zero when the client is stopped but still prints the state.
-        if (error && !stdout) reject(Object.assign(new Error(error.message), { code: error.code }));
-        else resolve(stdout);
+        if (!error) return resolve({ kind: "exited", code: 0, stdout });
+        const code = (error as { code?: unknown }).code;
+        if (code === "ENOENT") return resolve({ kind: "failed", reason: "missing" });
+        if (code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") return resolve({ kind: "failed", reason: "too-large" });
+        if (error.killed) return resolve({ kind: "failed", reason: "timeout" });
+        if (error.signal) return resolve({ kind: "failed", reason: "killed" });
+        if (typeof code === "number") return resolve({ kind: "exited", code, stdout });
+        resolve({ kind: "failed", reason: "spawn" });
       },
     );
   });
@@ -303,16 +317,26 @@ export async function readTailnet(options: ReadTailnetOptions = {}): Promise<Tai
   if (!featureEnabled(TAILNET_FLAG, options.features)) return { state: "off" };
   const cli = options.cliPath ?? TAILSCALE_CLI[options.platform ?? process.platform];
   if (!cli || !(options.exists ?? existsSync)(cli)) return { state: "absent" };
-  let stdout: string;
+  let run: TailscaleRun;
   try {
-    stdout = await (options.run ?? execRunner)(cli, ["status", "--json"]);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { state: "absent" };
+    run = await (options.run ?? execRunner)(cli, ["status", "--json"]);
+  } catch {
     return { state: "error", detail: "Tailscale did not answer" };
   }
-  if (Buffer.byteLength(stdout) > STATUS_MAX_BYTES)
+  if (run.kind === "failed")
+    return run.reason === "missing"
+      ? { state: "absent" }
+      : {
+          state: "error",
+          detail: run.reason === "too-large" ? "Tailscale's status is too large" : "Tailscale did not answer",
+        };
+  // `status --json` prints the state and exits 0 whatever it is, stopped and signed out included.
+  // A non-zero exit means it could not reach its daemon (tailscaled not running): never a snapshot,
+  // whatever it printed.
+  if (run.code !== 0) return { state: "stopped" };
+  if (Buffer.byteLength(run.stdout) > STATUS_MAX_BYTES)
     return { state: "error", detail: "Tailscale's status is too large" };
-  return parseTailnetStatus(stdout);
+  return parseTailnetStatus(run.stdout);
 }
 
 // ---------------------------------------------------------------------------------------
@@ -403,16 +427,37 @@ export class AdvertisedPinRefused extends Error {
  * changed key must stay a refusal the person resolves. From then on the tunnel runs with
  * `StrictHostKeyChecking=yes`, so a server that presents any other key is refused by ssh itself.
  */
-export function writeAdvertisedPin(knownHostsFile: string, hostKeyAlias: string, peer: TailnetPeer): void {
+export function writeAdvertisedPin(
+  knownHostsFile: string,
+  hostKeyAlias: string,
+  peer: TailnetPeer,
+  /**
+   * The caller's explicit choice to take the tailnet's coordination server's word for this host's
+   * keys (a person chose it, or a flow that shows "advertised by your tailnet" and has them
+   * confirm). Anything else refuses, so manual confirmation stays the default.
+   */
+  trust: { source: "tailnet-advertised" },
+): void {
+  if (trust?.source !== "tailnet-advertised")
+    throw new AdvertisedPinRefused("Pinning from the tailnet needs an explicit choice to trust it");
   if (!/^[A-Za-z0-9._-]{1,128}$/.test(hostKeyAlias)) throw new AdvertisedPinRefused("Unsupported host key alias");
-  if (!peer.sshHostKeys.length)
+  // Shared in from another tailnet: that tailnet's coordination server is not the user's own.
+  if (peer.sharedIn)
+    throw new AdvertisedPinRefused(`${peer.dnsName} is shared from another tailnet: confirm its fingerprint instead`);
+  if (!Array.isArray(peer.sshHostKeys) || !peer.sshHostKeys.length)
     throw new AdvertisedPinRefused(`${peer.dnsName} advertises no SSH host keys: confirm its fingerprint instead`);
+  // Checked again here, whoever built the peer: only canonical `<type> <base64>` keys are written.
+  const keys = peer.sshHostKeys.map((key) => parseAdvertisedHostKey(key));
+  if (keys.some((key, index) => key === undefined || key !== peer.sshHostKeys[index]))
+    throw new AdvertisedPinRefused(
+      `${peer.dnsName} advertises a host key ORCA cannot use: confirm its fingerprint instead`,
+    );
   if (pinState(knownHostsFile) !== "none")
     throw new AdvertisedPinRefused(
       "This profile already has a pinned host key; reset it before pinning from the tailnet",
     );
   mkdirSync(dirname(knownHostsFile), { recursive: true });
-  const lines = peer.sshHostKeys.map((key) => `${hostKeyAlias} ${key}\n`).join("");
+  const lines = [...new Set(keys as string[])].map((key) => `${hostKeyAlias} ${key}\n`).join("");
   writeFileSync(knownHostsFile, lines, { mode: 0o600, flag: "wx" });
   markPinEnrolled(knownHostsFile);
 }
