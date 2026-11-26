@@ -2,9 +2,11 @@
  * Agents installed on this managed server, on its Config surface (#1235). Shown only while the app
  * is connected to a saved SSH profile whose server reports installed agents (#1236). **Add to
  * configuration** puts the agent's `agents:` entry (the one `orca-cli remote agent install`
- * prints) into the draft; for an entry with the same id already there it updates only what runs
- * the agent (`command`, `args` and the agent's own `env` keys), keeping its permissions and every
- * other field, and it refuses an entry with that id that is not a local ACP agent. Nothing is
+ * prints) into the draft. An entry with the same id that an earlier install here added (the same
+ * profile, the managed command and arguments at any version) has only what runs the agent
+ * updated (`command`, `args` and the agent's own `env` keys), keeping its permissions and every
+ * other field. Any other entry with that id, including a local ACP one the person configured, is
+ * left alone with the reason. Nothing is
  * written until the person reviews, saves and applies the draft as with any other edit.
  *
  * A report belongs to the connection it was read on: its epoch and profile. It is shown, and
@@ -29,9 +31,9 @@ const sameStrings = (a: unknown, b: readonly string[]) =>
 
 /**
  * The edits that put `entry` into the draft's `agents:` list. A new id goes at the end. For an
- * existing local ACP entry with its id, only `command`, `args` and the entry's own `env` keys are
- * set: its name, permissions, roles, other env and the rest stay as the person wrote them. Any
- * other entry with that id is left alone, with the reason.
+ * existing entry with its id that an install here added (see `managedBy`), only `command`, `args`
+ * and the entry's own `env` keys are set: its name, permissions, roles, other env and the rest
+ * stay as the person wrote them. Any other entry with that id is left alone, with the reason.
  */
 export function agentEntryPlan(draft: unknown, entry: Entry): AgentEntryPlan {
   const agents = isRecord(draft) ? draft.agents : undefined;
@@ -44,21 +46,43 @@ export function agentEntryPlan(draft: unknown, entry: Entry): AgentEntryPlan {
   const existing = agents[index] as Record<string, unknown>;
   const conflict = (why: string): AgentEntryPlan => ({
     kind: "conflict",
-    reason: `This configuration already has an agent called ${entry.id} ${why}. Change or rename it to use the one installed here.`,
+    reason: `This configuration already has an agent called ${entry.id} ${why}. Remove or rename it to add the one installed here.`,
   });
   if (existing.type !== undefined && existing.type !== "acp") return conflict("that is not an ACP agent");
   if (existing.hostId !== undefined && existing.hostId !== "local") return conflict("that runs on another host");
-  if (existing.env !== undefined && !isRecord(existing.env)) return conflict("whose env is not a map");
+  if (!isRecord(existing.env)) return conflict("that was not added from this server's install");
+  if (!managedBy(existing as Record<string, unknown> & { env: Record<string, unknown> }, entry))
+    return conflict("that was not added from this server's install (its command, arguments or profile differ)");
   const edits: EditIntent[] = [];
   const at = ["agents", index] as const;
   if (existing.command !== entry.command) edits.push({ kind: "set", path: [...at, "command"], value: entry.command });
   if (!sameStrings(existing.args, entry.args)) edits.push({ kind: "set", path: [...at, "args"], value: entry.args });
-  const env = existing.env;
-  if (!env) edits.push({ kind: "set", path: [...at, "env"], value: entry.env });
-  else
-    for (const [name, value] of Object.entries(entry.env))
-      if (env[name] !== value) edits.push({ kind: "set", path: [...at, "env", name], value });
+  for (const [name, value] of Object.entries(entry.env))
+    if (existing.env[name] !== value) edits.push({ kind: "set", path: [...at, "env", name], value });
   return edits.length ? { kind: "update", edits } : { kind: "current" };
+}
+
+/**
+ * Whether `existing` is an entry for this agent as installed on this server, at any version: the
+ * same profile (its home under the server root), and a command and arguments that are the
+ * managed ones but for the version directory. Only such an entry is updated in place; one the
+ * person configured themselves, even a local ACP one with the same id, is not.
+ */
+function managedBy(existing: Record<string, unknown> & { env: Record<string, unknown> }, entry: Entry): boolean {
+  const suffix = `/agents/${entry.id}/home`;
+  const homeKey = Object.keys(entry.env).find((name) => entry.env[name]!.endsWith(suffix));
+  if (!homeKey || existing.env[homeKey] !== entry.env[homeKey]) return false;
+  const prefix = `${entry.env[homeKey]!.slice(0, -suffix.length)}/agents/${entry.id}/`;
+  const unversioned = (value: unknown) =>
+    typeof value === "string" && value.startsWith(prefix)
+      ? prefix + value.slice(prefix.length).replace(/^\d+\.\d+\.\d+\//, "*/")
+      : value;
+  return (
+    unversioned(existing.command) === unversioned(entry.command) &&
+    Array.isArray(existing.args) &&
+    existing.args.length === entry.args.length &&
+    existing.args.every((arg, i) => unversioned(arg) === unversioned(entry.args[i]))
+  );
 }
 
 /** The agents a server reported, with the connection they were read on. */

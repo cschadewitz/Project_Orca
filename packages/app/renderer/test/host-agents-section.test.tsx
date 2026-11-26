@@ -102,29 +102,26 @@ describe("the agents: entry for an installed agent", () => {
     });
   });
 
-  it("updates only what runs an existing one, keeping its policy and other settings", () => {
+  it("updates only what runs one an earlier install added, keeping its policy and other settings", () => {
     const permissions = { default: "deny", rules: [{ tool: "shell", decision: "deny" }] };
     const existing = {
       id: "codex",
       name: "My Codex",
-      command: "/old/node",
-      args: ["/old/index.js"],
-      env: { CODEX_HOME: "/old/home", HTTPS_PROXY: "http://proxy:3128", TOKEN: { secret: "t" } },
+      command: entry.command,
+      // The entry an install of 0.170.0 here added.
+      args: [entry.args[0]!.replace("/codex/0.171.0/", "/codex/0.170.0/")],
+      env: { CODEX_HOME: entry.env.CODEX_HOME, HTTPS_PROXY: "http://proxy:3128", TOKEN: { secret: "t" } },
       permissions,
       roles: ["reviewer"],
     };
     const plan = agentEntryPlan({ agents: [{ id: "local" }, existing] }, entry);
     expect(plan).toEqual({
       kind: "update",
-      edits: [
-        { kind: "set", path: ["agents", 1, "command"], value: entry.command },
-        { kind: "set", path: ["agents", 1, "args"], value: entry.args },
-        { kind: "set", path: ["agents", 1, "env", "CODEX_HOME"], value: entry.env.CODEX_HOME },
-      ],
+      edits: [{ kind: "set", path: ["agents", 1, "args"], value: entry.args }],
     });
     // Nothing the edits touch is the policy, the name, the roles or the other env.
     const touched = plan.kind === "update" ? plan.edits.map((edit) => edit.path.slice(2).join(".")) : [];
-    expect(touched).toEqual(["command", "args", "env.CODEX_HOME"]);
+    expect(touched).toEqual(["args"]);
     expect(
       agentEntryPlan({ agents: [{ ...existing, ...entry, env: { ...existing.env, ...entry.env } }] }, entry),
     ).toEqual({
@@ -132,8 +129,16 @@ describe("the agents: entry for an installed agent", () => {
     });
   });
 
-  it("refuses an entry with its id that is not a local ACP agent", () => {
+  it("refuses an entry with its id that no install here added, local ACP ones included", () => {
+    const home = entry.env.CODEX_HOME;
     for (const other of [
+      // Configured by the person: their own codex-acp, their own node and adapter, or another profile.
+      { id: "codex", command: "codex-acp", env: { CODEX_HOME: home } },
+      { id: "codex", command: "/usr/bin/node", args: entry.args, env: { CODEX_HOME: home } },
+      { id: "codex", command: entry.command, args: ["/home/a/src/codex-acp/dist/index.js"], env: { CODEX_HOME: home } },
+      { id: "codex", command: entry.command, args: [...entry.args, "--verbose"], env: { CODEX_HOME: home } },
+      { id: "codex", command: entry.command, args: entry.args, env: { CODEX_HOME: "/home/a/.codex" } },
+      { id: "codex", command: entry.command, args: entry.args },
       { id: "codex", type: "orca-daemon", profile: "lab", workflow: "w" },
       { id: "codex", command: "codex-acp", hostId: "builder" },
       { id: "codex", command: "codex-acp", env: ["A=1"] },
@@ -142,6 +147,9 @@ describe("the agents: entry for an installed agent", () => {
         kind: "conflict",
         reason: expect.stringMatching(/already has an agent called codex/),
       });
+    expect(
+      agentEntryPlan({ agents: [{ id: "codex", command: "codex-acp", env: { CODEX_HOME: home } }] }, entry),
+    ).toMatchObject({ reason: expect.stringMatching(/not added from this server's install/) });
     expect(agentEntryPlan({ agents: "codex" }, entry)).toMatchObject({ kind: "conflict" });
   });
 });
@@ -170,13 +178,13 @@ describe("the section", () => {
   });
 
   it("shows a conflicting entry's reason and stages nothing", async () => {
-    studio.value = { agents: [{ id: "codex", type: "orca-daemon", profile: "lab", workflow: "w" }] };
+    studio.value = { agents: [{ id: "codex", command: "codex-acp", env: { CODEX_HOME: "/home/a/.codex" } }] };
     const server = connect([codex], lab);
     render(<HostAgentsSection />);
     await server.reply();
     const button = await screen.findByRole("button", { name: "Update in configuration" });
     expect(button.getAttribute("aria-disabled")).toBe("true");
-    expect(screen.getByText(/not an ACP agent/)).toBeTruthy();
+    expect(screen.getByText(/not added from this server.s install/)).toBeTruthy();
     fireEvent.click(button);
     expect(studio.edits).toEqual([]);
   });

@@ -325,9 +325,10 @@ the sign-in page's host, and **Open sign-in page** opens that page in your brows
 Code there is no **Sign in**: it shows the command to run on the machine instead. While the app
 is connected to that machine's profile, Config lists the agents installed there: **Add to
 configuration** puts the agent's `agents:` entry (the one `install` prints) into the draft. If an
-agent with that id is already there, **Update in configuration** changes only its `command`,
-`args` and the agent's own `env` key, keeping its permissions, name and other settings; an entry
-with that id that is not a local ACP agent is left alone and Config says why. Review, save and
+earlier install there added an agent with that id, **Update in configuration** changes only its
+`command`, `args` and the agent's own `env` keys, keeping its permissions, name and other
+settings. Any other agent with that id, including one you configured yourself, is left alone and
+Config says why: remove or rename it to add the installed one. Review, save and
 apply it as with any other change (#1235).
 
 **Policy notes.** The default tailnet policy lets you SSH to machines you own. If you tag a host
