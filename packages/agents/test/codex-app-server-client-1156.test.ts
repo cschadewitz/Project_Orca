@@ -326,6 +326,25 @@ describe("asks and notifications from Codex", () => {
       ["turn/completed", undefined],
     ]);
   });
+
+  it("closes the connection as a protocol error when the notification handler throws", async () => {
+    const onClose = vi.fn();
+    const p = peer();
+    const c = client(p, {
+      onNotification: () => {
+        throw new Error("cannot read it");
+      },
+      onClose,
+    });
+    const pending = c.request("thread/start", {});
+    p.say({ method: "item/started", params: {} });
+    await expect(pending).rejects.toMatchObject({ code: "AGENT_PROTOCOL" });
+    expect(c.closed?.message).toBe(
+      "codex app-server sent a item/started notification ORCA could not read (cannot read it); ORCA closed the connection",
+    );
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(p.closed).toBe(true);
+  });
 });
 
 describe("a malformed message closes the connection", () => {

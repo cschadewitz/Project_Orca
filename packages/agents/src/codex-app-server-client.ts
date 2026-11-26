@@ -301,7 +301,12 @@ export class CodexAppServerClient {
         void this.answer(message.id, message.method, message.params);
         return;
       }
-      this.options.onNotification?.(message.method, message.params);
+      try {
+        this.options.onNotification?.(message.method, message.params);
+      } catch (error) {
+        // A handler that cannot read what Codex sent ends the connection, never the stdio callback.
+        this.closeOnProtocolError(`a ${message.method} notification ORCA could not read (${(error as Error).message})`);
+      }
       return;
     }
     if (!hasId || typeof message.id !== "number")
@@ -355,9 +360,17 @@ export class CodexAppServerClient {
     }
   }
 
-  private protocolError(what: string): void {
+  /**
+   * End the connection because Codex sent `what`, which the protocol does not allow: pending
+   * requests fail, and `onClose` gets `AGENT_PROTOCOL`.
+   */
+  closeOnProtocolError(what: string): void {
     this.shutdown(new OrcaError("AGENT_PROTOCOL", `codex app-server sent ${what}; ORCA closed the connection`));
     this.transport.close();
+  }
+
+  private protocolError(what: string): void {
+    this.closeOnProtocolError(what);
   }
 
   private shutdown(error: OrcaError): void {

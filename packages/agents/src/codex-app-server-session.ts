@@ -16,7 +16,13 @@
  * - **Turns:** `turn/start` per prompt; the turn ends on Codex's `turn/completed` for that turn
  *   (`completed` → `end_turn`, `interrupted` → `cancelled`, `failed` → an error with Codex's
  *   message). Cancel, abort and timeout send `turn/interrupt`; a turn Codex does not end within
- *   the cancel grace kills the process, as on the ACP route.
+ *   the cancel grace kills the process, as on the ACP route, and the caller settles then even
+ *   while `turn/start` is unanswered.
+ * - **Failures:** a `turn/start` whose outcome is unknown (no answer in time, the connection
+ *   lost, an answer without a turn id) ends the session, since Codex may be running the turn; a
+ *   refusal Codex answers with an error does not. Every notification ORCA reads is checked
+ *   against the pinned protocol before use: anything malformed closes the connection as
+ *   `AGENT_PROTOCOL`, fails the turn and stops the process.
  * - **Events:** Codex's items and deltas become ACP session updates (`codexItemUpdate` and
  *   friends below), so the event log, the app and the ACP facade read them unchanged.
  * - **Asks:** every approval ask is declined and any other ask refused until #1159.
@@ -106,6 +112,18 @@ export const CODEX_SESSION_METHODS = [
   "thread/unsubscribe",
   "model/list",
 ] as const;
+
+/** The notifications the session reads; anything else Codex sends is ignored. */
+const HANDLED_NOTIFICATIONS = new Set([
+  "item/agentMessage/delta",
+  "item/reasoning/summaryTextDelta",
+  "item/reasoning/textDelta",
+  "item/started",
+  "item/completed",
+  "turn/plan/updated",
+  "thread/tokenUsage/updated",
+  "turn/completed",
+]);
 
 /** Asks that are approvals, declined until ORCA's policy answers them (#1159). */
 const APPROVAL_ASKS: Readonly<Record<string, unknown>> = {
@@ -312,11 +330,92 @@ export function codexStopReason(agentId: string, turn: unknown): acp.StopReason 
   );
 }
 
+const isString = (v: unknown): v is string => typeof v === "string";
+/** A nullable field: absent, null or a string. */
+const optionalString = (v: unknown) => v === undefined || v === null || typeof v === "string";
+const PLAN_STATUSES = new Set(["pending", "inProgress", "completed"]);
+
+/**
+ * What is wrong with an item Codex sent, against the pinned protocol, for the fields ORCA reads;
+ * undefined when nothing is. Checked before `codexItemUpdate` reads nested fields, so a
+ * malformed item ends the session as a protocol failure instead of throwing in the stdio callback.
+ */
+export function codexItemProblem(item: unknown): string | undefined {
+  if (!isObject(item) || !isString(item.id) || !item.id || !isString(item.type))
+    return "an item without an id and a type";
+  const status = item.status === undefined || isString(item.status);
+  switch (item.type) {
+    case "agentMessage":
+      return isString(item.text) ? undefined : "an agentMessage item without its text";
+    case "commandExecution": {
+      if (!isString(item.command) || !isString(item.cwd) || !Array.isArray(item.commandActions) || !status)
+        return "a commandExecution item without its command, cwd, actions or status";
+      if (!optionalString(item.aggregatedOutput) || !(item.exitCode == null || typeof item.exitCode === "number"))
+        return "a commandExecution item with a malformed output or exit code";
+      for (const a of item.commandActions as unknown[]) {
+        if (!isObject(a) || !isString(a.type)) return "a command action without a type";
+        if (a.type === "read" && !isString(a.path)) return "a read command action without its path";
+        if (a.type === "listFiles" && !optionalString(a.path))
+          return "a listFiles command action with a malformed path";
+        if (a.type === "search" && !(optionalString(a.path) && optionalString(a.query)))
+          return "a search command action with a malformed query or path";
+      }
+      return undefined;
+    }
+    case "fileChange":
+      if (!Array.isArray(item.changes) || !status) return "a fileChange item without its changes or status";
+      for (const c of item.changes as unknown[])
+        if (!isObject(c) || !isString(c.path) || !isString(c.diff) || !isObject(c.kind) || !isString(c.kind.type))
+          return "a file change without its path, kind or diff";
+      return undefined;
+    case "mcpToolCall":
+      return isString(item.server) && isString(item.tool) && status
+        ? undefined
+        : "an mcpToolCall item without its server, tool or status";
+    default:
+      return status ? undefined : `a ${item.type} item with a malformed status`;
+  }
+}
+
+/** What is wrong with a plan Codex sent, or undefined. */
+export function codexPlanProblem(plan: unknown): string | undefined {
+  if (!Array.isArray(plan)) return "a plan that is not a list";
+  for (const step of plan as unknown[])
+    if (!isObject(step) || !isString(step.step) || !PLAN_STATUSES.has(step.status as string))
+      return "a plan step without its text or a known status";
+  return undefined;
+}
+
+const TOKEN_FIELDS = [
+  "totalTokens",
+  "inputTokens",
+  "cachedInputTokens",
+  "cacheWriteInputTokens",
+  "outputTokens",
+  "reasoningOutputTokens",
+] as const;
+
+/** What is wrong with token usage Codex sent, or undefined. */
+export function codexTokenUsageProblem(usage: unknown): string | undefined {
+  const breakdown = (b: unknown) => isObject(b) && TOKEN_FIELDS.every((f) => typeof b[f] === "number");
+  if (!isObject(usage) || !breakdown(usage.total) || !breakdown(usage.last))
+    return "token usage without its total and last counts";
+  if (!(usage.modelContextWindow == null || typeof usage.modelContextWindow === "number"))
+    return "token usage with a malformed context window";
+  return undefined;
+}
+
 interface ActiveTurn {
   /** Codex's turn id, once `turn/start` answers. */
   turnId?: string;
+  /** Turns Codex finished while `turn/start` had not answered yet; dropped with the turn. */
+  finishedEarly: Map<string, unknown>;
+  /** Agent message items that streamed deltas, so their completion does not repeat the text. */
+  streamed: Set<string>;
   cancelReason?: string;
   grace?: ReturnType<typeof setTimeout>;
+  /** The turn already failed (the cancel grace ran out, or the connection ended). */
+  failed?: boolean;
   done: (turn: unknown) => void;
   fail: (error: Error) => void;
 }
@@ -374,10 +473,10 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
   const id = newId("sess", clock.now());
   let threadId = "";
   let active: ActiveTurn | undefined;
-  /** Turns Codex finished before `turn/start` answered with their id. */
-  const finishedEarly = new Map<string, unknown>();
-  /** Agent message items that streamed deltas, so their completion does not repeat the text. */
-  const streamed = new Set<string>();
+  /** Set once the session cannot take another prompt: Codex may still be running a turn. */
+  let broken: OrcaError | undefined;
+  /** Stops the session once it is open (until then, a failed open stops the process itself). */
+  let shutdown: () => Promise<void> = async () => undefined;
   let closedResolve!: () => void;
   const closed = new Promise<void>((r) => (closedResolve = r));
 
@@ -391,43 +490,59 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
     for (const l of listeners) l(e);
   };
 
+  /** Codex sent something the pinned protocol does not allow: the connection ends, and the session with it. */
+  class PayloadProblem extends Error {}
+  const check = (problem: string | undefined) => {
+    if (problem) throw new PayloadProblem(problem);
+  };
+
   const onNotification = (method: string, params: unknown) => {
-    if (!isObject(params)) return;
+    if (!isObject(params)) {
+      if (HANDLED_NOTIFICATIONS.has(method)) throw new PayloadProblem("params that are not an object");
+      return;
+    }
     if (threadId && typeof params.threadId === "string" && params.threadId !== threadId) return;
     switch (method) {
       case "item/agentMessage/delta":
-        if (typeof params.itemId === "string") streamed.add(params.itemId);
-        if (typeof params.delta === "string" && params.delta)
-          emit({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: params.delta } });
+        check(isString(params.itemId) && isString(params.delta) ? undefined : "a delta without its item id and text");
+        active?.streamed.add(params.itemId as string);
+        if (params.delta)
+          emit({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: params.delta as string } });
         return;
       case "item/reasoning/summaryTextDelta":
       case "item/reasoning/textDelta":
-        if (typeof params.delta === "string" && params.delta)
-          emit({ sessionUpdate: "agent_thought_chunk", content: { type: "text", text: params.delta } });
+        check(isString(params.delta) ? undefined : "a reasoning delta without its text");
+        if (params.delta)
+          emit({ sessionUpdate: "agent_thought_chunk", content: { type: "text", text: params.delta as string } });
         return;
       case "item/started":
       case "item/completed": {
-        if (!isObject(params.item) || typeof params.item.id !== "string" || typeof params.item.type !== "string")
-          return;
+        check(codexItemProblem(params.item));
         const item = params.item as ThreadItem;
-        if (method === "item/completed" && item.type === "agentMessage" && !streamed.has(item.id) && item.text)
+        if (method === "item/completed" && item.type === "agentMessage" && !active?.streamed.has(item.id) && item.text)
           emit({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: item.text } });
         const update = codexItemUpdate(item, method === "item/started" ? "started" : "completed");
         if (update) emit(update);
         return;
       }
       case "turn/plan/updated":
-        if (Array.isArray(params.plan)) emit(codexPlanUpdate(params.plan as TurnPlanStep[]));
+        check(codexPlanProblem(params.plan));
+        emit(codexPlanUpdate(params.plan as TurnPlanStep[]));
         return;
       case "thread/tokenUsage/updated":
-        if (isObject(params.tokenUsage)) opts.onTokenUsage?.(params.tokenUsage as ThreadTokenUsage);
+        check(codexTokenUsageProblem(params.tokenUsage));
+        opts.onTokenUsage?.(params.tokenUsage as ThreadTokenUsage);
         return;
       case "turn/completed": {
         const turn = params.turn;
-        const turnId = isObject(turn) && typeof turn.id === "string" ? turn.id : undefined;
-        if (!turnId) return;
-        if (active?.turnId === turnId) active.done(turn);
-        else finishedEarly.set(turnId, turn);
+        check(
+          isObject(turn) && isString(turn.id) && isString(turn.status) ? undefined : "a turn without its id and status",
+        );
+        const turnId = (turn as { id: string }).id;
+        if (!active) return;
+        if (active.turnId === turnId) active.done(turn);
+        // Only while this session's turn/start is still unanswered: its turn may finish first.
+        else if (active.turnId === undefined) active.finishedEarly.set(turnId, turn);
         return;
       }
       default:
@@ -437,7 +552,14 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
 
   const client = new CodexAppServerClient(stdioLineTransport(proc.stdio()), {
     requestTimeoutMs: opts.requestTimeoutMs ?? 30_000,
-    onNotification,
+    onNotification: (method, params) => {
+      try {
+        onNotification(method, params);
+      } catch (error) {
+        if (!(error instanceof PayloadProblem)) throw error;
+        client.closeOnProtocolError(`a ${method} notification with ${error.message}`);
+      }
+    },
     // Until ORCA's policy answers asks (#1159): approvals declined, anything else refused.
     onServerRequest: async (method) => {
       const answer = APPROVAL_ASKS[method];
@@ -449,7 +571,10 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
     },
     onClose: (error) => {
       active?.fail(error);
-      closedResolve();
+      broken ??= error;
+      // The connection is gone (Codex exited, or sent what the protocol does not allow): stop
+      // the process too, without waiting on a reply that cannot come.
+      void shutdown();
     },
   });
 
@@ -496,6 +621,7 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
 
   const cancelGraceMs = opts.cancelGraceMs ?? agent.cancelGraceMs;
   let terminating: Promise<void> | undefined;
+  /** Close: unsubscribe from the thread while the connection is up, then stop the process. */
   const terminate = () =>
     (terminating ??= (async () => {
       if (!client.closed) {
@@ -505,6 +631,20 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
       await cleanup();
       closedResolve();
     })());
+  /**
+   * Stop now, waiting on no reply: the connection is closed first, so a pending unsubscribe
+   * fails at once, and the process is stopped.
+   */
+  const stopNow = () => {
+    if (!client.closed) client.close("closed by ORCA: the session stopped");
+    return terminate();
+  };
+  shutdown = stopNow;
+  /** The session takes no further prompt, and stops. */
+  const breakSession = (error: OrcaError) => {
+    broken ??= error;
+    void stopNow().catch(() => undefined);
+  };
   const terminated = (async () => {
     await proc.exited;
   })();
@@ -524,8 +664,10 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
         `agent '${agent.id}' did not end its turn within ${cancelGraceMs}ms of turn/interrupt (${reason}); killing it`,
         { reason, stderr: proc.stderrTail() },
       );
+      // The caller settles now, whether turn/start has answered or not, and the process stops
+      // without waiting on any reply from it.
       turn.fail(err);
-      void terminate();
+      breakSession(err);
     }, cancelGraceMs);
   };
 
@@ -541,6 +683,7 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
 
     prompt: (input, options: PromptOptions = {}) =>
       redacted(async (): Promise<TurnResult> => {
+        if (broken) throw broken;
         if (active) throw new OrcaError("RUN_STATE", "a prompt turn is already active on this session");
         if (options.signal?.aborted) throw new OrcaError("CANCELLED", String(options.signal.reason ?? "cancelled"));
         if (client.closed) throw client.closed;
@@ -554,8 +697,27 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
         const started = clock.now();
         let turn!: ActiveTurn;
         const ended = new Promise<unknown>((resolve, reject) => {
-          turn = { done: resolve, fail: reject };
+          turn = {
+            done: resolve,
+            fail: (error) => {
+              turn.failed = true;
+              reject(error);
+            },
+            finishedEarly: new Map(),
+            streamed: new Set(),
+          };
         });
+        /** turn/start's outcome is unknown: Codex may be running the turn, so the session stops. */
+        const unknownStart = (what: string) => {
+          const error = new OrcaError(
+            "AGENT_TRANSPORT",
+            `agent ${agent.id}: turn/start got ${what}, so whether Codex is running the turn is unknown; ` +
+              `ORCA stops the session and takes no further prompt on it`,
+            { agentId: agent.id },
+          );
+          breakSession(error);
+          return error;
+        };
         ended.catch(() => undefined);
         active = turn;
         const onAbort = () => requestCancel(`aborted: ${String(options.signal?.reason ?? "cancelled")}`);
@@ -564,23 +726,37 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
           ? setTimeout(() => requestCancel(`turn timed out after ${options.timeoutMs}ms`), options.timeoutMs)
           : undefined;
         try {
-          const answer = await client.request("turn/start", {
+          const start = client.request("turn/start", {
             threadId,
             clientUserMessageId: randomUUID(),
             input: blocks.map((b) => ({ type: "text", text: (b as { text: string }).text, text_elements: [] })),
             ...(model ? { model } : {}),
             ...(effort ? { effort } : {}),
           });
+          start.catch(() => undefined);
+          let answer: unknown;
+          try {
+            // Before turn/start answers, `ended` can only fail (the cancel grace, the connection
+            // ending), and then the caller settles without waiting on the answer.
+            answer = await Promise.race([start, ended]);
+          } catch (error) {
+            if (turn.failed) throw error;
+            // Codex answered with an error: it did not start the turn, and the session goes on.
+            if (error instanceof CodexRpcError)
+              throw new OrcaError("AGENT_PROTOCOL", `agent ${agent.id}: Codex refused turn/start: ${error.message}`, {
+                code: error.code,
+              });
+            // No answer (timeout, connection lost): Codex may be running the turn, so the session ends.
+            throw unknownStart(`no answer (${(error as Error).message})`);
+          }
           const turnId =
-            isObject(answer) && isObject(answer.turn) && typeof answer.turn.id === "string"
+            isObject(answer) && isObject(answer.turn) && typeof answer.turn.id === "string" && answer.turn.id
               ? answer.turn.id
               : undefined;
-          if (!turnId)
-            throw new OrcaError("AGENT_PROTOCOL", `agent ${agent.id}: turn/start answered without a turn id`);
+          if (!turnId) throw unknownStart("an answer without a turn id");
           turn.turnId = turnId;
-          if (finishedEarly.has(turnId)) {
-            turn.done(finishedEarly.get(turnId));
-            finishedEarly.delete(turnId);
+          if (turn.finishedEarly.has(turnId)) {
+            turn.done(turn.finishedEarly.get(turnId));
           } else if (turn.cancelReason) {
             void client.request("turn/interrupt", { threadId, turnId }).catch(() => undefined);
           }
@@ -590,6 +766,7 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
           if (timer) clearTimeout(timer);
           if (turn.grace) clearTimeout(turn.grace);
           options.signal?.removeEventListener("abort", onAbort);
+          turn.finishedEarly.clear();
           active = undefined;
         }
       }),

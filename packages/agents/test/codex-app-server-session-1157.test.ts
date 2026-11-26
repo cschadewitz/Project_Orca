@@ -403,6 +403,109 @@ describe("a turn", () => {
     await session.cancel();
     await expect(turn).rejects.toThrow(/did not end its turn within 50ms of turn\/interrupt/);
     expect(s.kill).toHaveBeenCalled();
+    // stopped without asking Codex anything more, and takes no further prompt
+    expect(s.peer.received.some((m) => m.method === "thread/unsubscribe")).toBe(false);
+    await expect(session.prompt("again")).rejects.toThrow(/did not end its turn/);
+  });
+
+  it("settles a cancel past the grace while turn/start is still unanswered, and stops at once", async () => {
+    const s = scriptedHost({ ...turnPlaying(() => undefined, "none"), "turn/start": () => NO_ANSWER });
+    const session = await open(s.host, { cancelGraceMs: 50, requestTimeoutMs: 60_000 });
+    const turn = session.prompt("go");
+    await vi.waitFor(() => expect(s.peer.received.some((m) => m.method === "turn/start")).toBe(true));
+    const cancelled = Date.now();
+    await session.cancel();
+    await expect(turn).rejects.toThrow(/did not end its turn within 50ms/);
+    expect(Date.now() - cancelled).toBeLessThan(5_000);
+    // no turn id, so no interrupt could be sent; the process is stopped without waiting on Codex
+    expect(s.peer.received.some((m) => m.method === "turn/interrupt")).toBe(false);
+    await vi.waitFor(() => expect(s.kill).toHaveBeenCalled());
+    await session.close();
+    expect(s.peer.received.some((m) => m.method === "thread/unsubscribe")).toBe(false);
+  });
+
+  it("ends the session when turn/start's outcome is unknown: no answer in time", async () => {
+    const s = scriptedHost({ ...turnPlaying(() => undefined, "none"), "turn/start": () => NO_ANSWER });
+    const session = await open(s.host, { requestTimeoutMs: 100 });
+    await expect(session.prompt("go")).rejects.toMatchObject({
+      code: "AGENT_TRANSPORT",
+      message: expect.stringMatching(/turn\/start got no answer .*whether Codex is running the turn is unknown/),
+    });
+    await vi.waitFor(() => expect(s.kill).toHaveBeenCalled());
+    await expect(session.prompt("again")).rejects.toThrow(/whether Codex is running the turn is unknown/);
+    expect(s.peer.received.filter((m) => m.method === "turn/start")).toHaveLength(1);
+    await session.close();
+  });
+
+  it("ends the session when turn/start answers without a turn id", async () => {
+    const s = scriptedHost({ ...turnPlaying(() => undefined, "none"), "turn/start": () => ({ turn: {} }) });
+    const session = await open(s.host);
+    await expect(session.prompt("go")).rejects.toThrow(/turn\/start got an answer without a turn id/);
+    await vi.waitFor(() => expect(s.kill).toHaveBeenCalled());
+    await expect(session.prompt("again")).rejects.toThrow(/without a turn id/);
+    await session.close();
+  });
+
+  it("keeps the session when Codex refuses turn/start with an error", async () => {
+    let refuse = true;
+    const play = turnPlaying(() => undefined);
+    const s = scriptedHost({
+      ...play,
+      "turn/start": (msg, peer) => {
+        if (!refuse) return play["turn/start"]!(msg, peer);
+        refuse = false;
+        peer.say({ id: msg.id, error: { code: -32602, message: "bad input" } });
+        return NO_ANSWER;
+      },
+    });
+    const session = await open(s.host);
+    await expect(session.prompt("go")).rejects.toMatchObject({
+      code: "AGENT_PROTOCOL",
+      message: "agent codex: Codex refused turn/start: bad input",
+    });
+    await expect(session.prompt("again")).resolves.toMatchObject({ stopReason: "end_turn" });
+    expect(s.kill).not.toHaveBeenCalled();
+    await session.close();
+  });
+
+  it("takes a completion early only for the pending start, and keeps none across turns", async () => {
+    let n = 0;
+    const finish = (id: string) =>
+      s.peer.notify("turn/completed", { threadId: "thr_1", turn: { id, status: "completed" } });
+    const s = scriptedHost({
+      ...BASE,
+      "turn/start": (msg, peer) => {
+        const turnId = `turn_${++n}`;
+        // while turn 2 starts, Codex reports turn 3 finished: held for turn 2's start only
+        if (n === 2) finish("turn_3");
+        peer.say({ id: msg.id, result: { turn: { id: turnId, status: "inProgress" } } });
+        return NO_ANSWER;
+      },
+    });
+    const session = await open(s.host);
+    const pending = async (turn: Promise<unknown>) => {
+      let settled = false;
+      void turn.finally(() => (settled = true)).catch(() => undefined);
+      await new Promise((r) => setTimeout(r, 30));
+      return !settled;
+    };
+    // between turns, a stray completion is dropped, so turn 1 does not end on it
+    finish("turn_1");
+    await new Promise((r) => setImmediate(r));
+    const one = session.prompt("one");
+    expect(await pending(one)).toBe(true);
+    finish("turn_1");
+    await expect(one).resolves.toMatchObject({ stopReason: "end_turn" });
+    const two = session.prompt("two");
+    expect(await pending(two)).toBe(true);
+    finish("turn_2");
+    await expect(two).resolves.toMatchObject({ stopReason: "end_turn" });
+    // turn 3's early completion went with turn 2's start
+    const three = session.prompt("three");
+    expect(await pending(three)).toBe(true);
+    finish("turn_3");
+    await expect(three).resolves.toMatchObject({ stopReason: "end_turn" });
+    await session.close();
   });
 
   it("refuses a second prompt while one is running", async () => {
@@ -412,6 +515,110 @@ describe("a turn", () => {
     await expect(session.prompt("two")).rejects.toMatchObject({ code: "RUN_STATE" });
     await session.cancel();
     await first;
+    await session.close();
+  });
+});
+
+describe("malformed notifications", () => {
+  const cases: [string, string, Record<string, unknown>, RegExp][] = [
+    [
+      "an item without actions",
+      "item/started",
+      { item: { type: "commandExecution", id: "c", command: "ls", cwd: "/", status: "inProgress" } },
+      /commandExecution item without/,
+    ],
+    [
+      "a read action without a path",
+      "item/started",
+      {
+        item: {
+          type: "commandExecution",
+          id: "c",
+          command: "cat",
+          cwd: "/",
+          status: "inProgress",
+          commandActions: [{ type: "read" }],
+        },
+      },
+      /read command action without its path/,
+    ],
+    [
+      "a file change without a kind",
+      "item/started",
+      { item: { type: "fileChange", id: "p", status: "inProgress", changes: [{ path: "a", diff: "" }] } },
+      /file change without/,
+    ],
+    [
+      "an item without an id",
+      "item/completed",
+      { item: { type: "agentMessage", text: "x" } },
+      /item without an id and a type/,
+    ],
+    [
+      "a message without text",
+      "item/completed",
+      { item: { type: "agentMessage", id: "m" } },
+      /agentMessage item without its text/,
+    ],
+    [
+      "an MCP call without its tool",
+      "item/started",
+      { item: { type: "mcpToolCall", id: "m", server: "s", status: "inProgress" } },
+      /mcpToolCall item without/,
+    ],
+    [
+      "a plan step with an unknown status",
+      "turn/plan/updated",
+      { plan: [{ step: "a", status: "doing" }] },
+      /plan step without/,
+    ],
+    [
+      "token usage without counts",
+      "thread/tokenUsage/updated",
+      { tokenUsage: { total: {}, last: {} } },
+      /token usage without/,
+    ],
+    ["a delta without text", "item/agentMessage/delta", { itemId: "m", delta: 3 }, /delta without/],
+    [
+      "a completed turn without a status",
+      "turn/completed",
+      { turn: { id: "turn_1" } },
+      /turn without its id and status/,
+    ],
+  ];
+  it.each(cases)("%s fails the turn as a protocol error and stops the process", async (_name, method, params, why) => {
+    const s = scriptedHost({
+      ...BASE,
+      "turn/start": (_msg, peer) => {
+        setImmediate(() => peer.notify(method, { threadId: "thr_1", turnId: "turn_1", ...params }));
+        return { turn: { id: "turn_1", status: "inProgress" } };
+      },
+    });
+    const session = await open(s.host);
+    const error = (await session.prompt("go").catch((e: unknown) => e)) as OrcaError;
+    expect(error.code).toBe("AGENT_PROTOCOL");
+    expect(error.message).toMatch(why);
+    expect(error.message).toContain(`a ${method} notification with`);
+    await vi.waitFor(() => expect(s.kill).toHaveBeenCalled());
+    await expect(session.prompt("again")).rejects.toMatchObject({ code: "AGENT_PROTOCOL" });
+    await session.close();
+  });
+
+  it("ignores params it does not read, and notifications it does not handle", async () => {
+    const s = scriptedHost({
+      ...BASE,
+      "turn/start": (_msg, peer) => {
+        setImmediate(() => {
+          peer.notify("thread/status/changed", { threadId: "thr_1", status: 7 });
+          peer.say({ method: "some/new/notification", params: "anything" });
+          peer.notify("turn/completed", { threadId: "thr_1", turn: { id: "turn_1", status: "completed" } });
+        });
+        return { turn: { id: "turn_1", status: "inProgress" } };
+      },
+    });
+    const session = await open(s.host);
+    await expect(session.prompt("go")).resolves.toMatchObject({ stopReason: "end_turn" });
+    expect(s.kill).not.toHaveBeenCalled();
     await session.close();
   });
 });
