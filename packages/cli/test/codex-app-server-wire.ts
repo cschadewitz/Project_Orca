@@ -55,6 +55,13 @@ export interface Wire {
   seen: { fromCodex: number; toCodex: number };
   asks: WireAsk[];
   threadRequests: { method: string; answered: "thread" | "error" | null }[];
+  /**
+   * Each command item Codex reported, with when (ms since the epoch, by the harness's clock) it
+   * reported it started and finished, and the status it finished with; null while unfinished.
+   */
+  commands: { itemId: string; startedAt: number; completedAt: number | null; status: string | null }[];
+  /** Each turn Codex reported finished: when, and the status it gave. */
+  turns: { completedAt: number; status: string | null }[];
 }
 
 export const newWire = (): Wire => ({
@@ -62,6 +69,8 @@ export const newWire = (): Wire => ({
   seen: { fromCodex: 0, toCodex: 0 },
   asks: [],
   threadRequests: [],
+  commands: [],
+  turns: [],
 });
 
 const sha256 = (bytes: string) => createHash("sha256").update(bytes).digest("hex");
@@ -102,8 +111,21 @@ export function wireReader(wire: Wire) {
       const method = str(m["method"]);
       const params = (m["params"] ?? {}) as Record<string, unknown>;
       const item = params["item"] as
-        { type?: unknown; id?: unknown; server?: unknown; tool?: unknown; arguments?: unknown } | undefined;
-      if (
+        | { type?: unknown; id?: unknown; status?: unknown; server?: unknown; tool?: unknown; arguments?: unknown }
+        | undefined;
+      if ((method === "item/started" || method === "item/completed") && item?.type === "commandExecution") {
+        const itemId = str(item.id);
+        if (itemId === null) return;
+        if (method === "item/started")
+          wire.commands.push({ itemId, startedAt: Date.now(), completedAt: null, status: null });
+        else {
+          const command = wire.commands.find((c) => c.itemId === itemId && c.completedAt === null);
+          if (command) Object.assign(command, { completedAt: Date.now(), status: str(item.status) });
+        }
+      } else if (method === "turn/completed") {
+        const turn = params["turn"] as { status?: unknown } | undefined;
+        wire.turns.push({ completedAt: Date.now(), status: str(turn?.status) });
+      } else if (
         (method === "item/started" || method === "item/completed") &&
         item?.type === "mcpToolCall" &&
         typeof item.id === "string"

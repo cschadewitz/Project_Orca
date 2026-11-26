@@ -517,7 +517,20 @@ describe.skipIf(CODEX === undefined)("installed-session evidence for the Codex a
       },
       // Milliseconds from the prompt: when ORCA saw started.txt, sent and finished the cancel,
       // saw the turn end, and when done.txt was written (its mtime), with the turn's stop reason.
-      timing: { ...at, doneWritten, stopReason },
+      timing: {
+        ...at,
+        doneWritten,
+        stopReason,
+        // What Codex itself reported on the wire, on the same clock.
+        codexCommands: s.wires
+          .flatMap((w) => w.commands)
+          .map((c) => ({
+            status: c.status,
+            started: c.startedAt - t0,
+            completed: c.completedAt === null ? null : c.completedAt - t0,
+          })),
+        codexTurns: s.wires.flatMap((w) => w.turns).map((t) => ({ status: t.status, completed: t.completedAt - t0 })),
+      },
       toolOutput: model.outputs.slice(outputsBefore),
     });
     expect(failures).toEqual([]);

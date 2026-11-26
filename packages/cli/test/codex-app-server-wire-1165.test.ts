@@ -157,6 +157,23 @@ describe("wireReader", () => {
   });
 });
 
+describe("wireReader commands and turns", () => {
+  it("records when each command item started and finished, and the turn's status", () => {
+    const wire = newWire();
+    const read = wireReader(wire);
+    const cmd = (method: string, status: string) => ({
+      method,
+      params: { item: { type: "commandExecution", id: "c1", status } },
+    });
+    read.fromCodex(cmd("item/started", "inProgress"));
+    read.fromCodex({ method: "turn/completed", params: { turn: { id: "t", status: "interrupted" } } });
+    expect(wire.commands).toEqual([{ itemId: "c1", startedAt: expect.any(Number), completedAt: null, status: null }]);
+    read.fromCodex(cmd("item/completed", "failed"));
+    expect(wire.commands[0]).toMatchObject({ completedAt: expect.any(Number), status: "failed" });
+    expect(wire.turns).toEqual([{ completedAt: expect.any(Number), status: "interrupted" }]);
+  });
+});
+
 describe("tapStdio", () => {
   const handle = (stdio?: AgentProcessHandle["stdio"]) => ({ stdio }) as unknown as AgentProcessHandle;
 
