@@ -421,6 +421,45 @@ describe("the run tree", () => {
     await waitFor(() => expect(within(rows()[6]!).getByText(STATUS_PRESENTATION.failed.word)).toBeTruthy());
   });
 
+  /* A parent's re-read can be current for the parent and still older for a child run whose
+     own cursor moved while it was out: the child's newer status is replayed over the answer. */
+  it("keeps a child run's newer status through a parent re-read that predates it", async () => {
+    await openParent();
+    fireEvent.click(twisty(rows()[6]!));
+    expect(within(rows()[7]!).getByText(STATUS_PRESENTATION.succeeded.word)).toBeTruthy();
+    let answer!: () => void;
+    fake.script({
+      "runs.get": () =>
+        new Promise((resolve) => {
+          answer = () => resolve({ ok: true, result: { ...RUN_DETAILS["run-parent"]!, lastSeq: 40 } });
+        }),
+    });
+
+    act(() => fake.notify(stepChanged({ stepRunId: "s-build-2", status: "failed", event: "step.failed" })));
+    await waitFor(() => expect(fake.calls.filter((c) => c.method === "runs.get")).toHaveLength(2));
+    act(() =>
+      fake.notify({
+        kind: "notification",
+        method: "run.changed",
+        params: {
+          subscriptionId: "sub-1",
+          runId: "run-child-ok",
+          seq: 3,
+          at: "2026-03-01T09:00:55.000Z",
+          status: "failed",
+          event: "run.failed",
+        },
+      }),
+    );
+    await waitFor(() => expect(within(rows()[7]!).getByText(STATUS_PRESENTATION.failed.word)).toBeTruthy());
+
+    await act(async () => {
+      answer();
+    });
+    expect(ids()[7]).toBe("run-parent/s-fan/run-child-ok");
+    expect(within(rows()[7]!).getByText(STATUS_PRESENTATION.failed.word)).toBeTruthy();
+  });
+
   it("draws a step it has never seen, from the step.scheduled that introduces it", async () => {
     await openParent();
 

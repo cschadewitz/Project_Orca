@@ -56,6 +56,18 @@ interface PendingChange {
   apply: (detail: RunsGetResult) => RunsGetResult;
 }
 
+/**
+ * Fold the notifications that arrived while a `runs.get` was out over its answer. The read may
+ * already include a transition of its own run; child-run cursors are independent of the
+ * parent's, so only a notification about the read's own run is compared against its cursor.
+ */
+function replay(pending: readonly PendingChange[], runId: string, read: RunsGetResult): RunsGetResult {
+  return pending.reduce((held, change) => {
+    if (change.runId === runId && change.seq <= read.lastSeq) return held;
+    return change.apply(held);
+  }, read);
+}
+
 export function useRunTree(roots: readonly RunSummaryView[]): RunTree {
   const stream = useNotifications();
   const generation = useSubscriptionGeneration();
@@ -71,7 +83,7 @@ export function useRunTree(roots: readonly RunSummaryView[]): RunTree {
   const epoch = useRef(0);
   /* Runs with a re-read in flight, each with whether it moved again while that read was out.
      The entry is the request's own object, so a settling read only ever clears itself. */
-  const rereading = useRef(new Map<string, { again: boolean }>());
+  const rereading = useRef(new Map<string, { again: boolean; pending: PendingChange[] }>());
   /* Runs that settled while their first read was still out: that read may predate the step's
      variables, and the status patch queued behind it carries none, so it is read once more. */
   const rereadAfterFetch = useRef(new Set<string>());
@@ -112,19 +124,23 @@ export function useRunTree(roots: readonly RunSummaryView[]): RunTree {
       inFlight.again = true;
       return;
     }
-    const entry = { again: false };
+    const entry = { again: false, pending: [] as PendingChange[] };
     rereading.current.set(runId, entry);
     const requestEpoch = epoch.current;
     const settle = (result: Awaited<ReturnType<typeof window.orca.runs.get>> | undefined): void => {
       // A reconnect cleared the map; a newer request may own the slot now, so only remove ours.
       if (rereading.current.get(runId) === entry) rereading.current.delete(runId);
       if (requestEpoch !== epoch.current) return;
-      if (result?.ok && result.result.lastSeq >= (notified.current.get(runId) ?? 0))
+      if (result?.ok && result.result.lastSeq >= (notified.current.get(runId) ?? 0)) {
+        // As for the first read: what arrived while this one was out is replayed over it, since
+        // a child run's cursor says nothing about whether the parent's answer includes it.
+        const detail = replay(entry.pending, runId, result.result);
         setDetails((prev) => {
           const current = prev.get(runId);
-          if (!current || current.lastSeq > result.result.lastSeq) return prev;
-          return new Map(prev).set(runId, result.result);
+          if (!current || current.lastSeq > detail.lastSeq) return prev;
+          return new Map(prev).set(runId, detail);
         });
+      }
       if (entry.again) read(runId);
     };
     void window.orca.runs.get({ runId }).then(settle, () => settle(undefined));
@@ -161,12 +177,7 @@ export function useRunTree(roots: readonly RunSummaryView[]): RunTree {
         if (!result?.ok) return;
         // Only when the read predates something that settled while it was out.
         const again = settled && pending.some((change) => change.runId === runId && change.seq > result.result.lastSeq);
-        const detail = pending.reduce((held, change) => {
-          // The read may already include this transition. Child-run cursors are independent
-          // of the parent's, so only compare a notification against its own run's cursor.
-          if (change.runId === runId && change.seq <= result.result.lastSeq) return held;
-          return change.apply(held);
-        }, result.result);
+        const detail = replay(pending, runId, result.result);
         setDetails((prev) => new Map(prev).set(runId, detail));
         if (again) read(runId);
       };
@@ -179,6 +190,7 @@ export function useRunTree(roots: readonly RunSummaryView[]): RunTree {
     const patch = (apply: (detail: RunsGetResult) => RunsGetResult, runId: string, seq: number): void => {
       notified.current.set(runId, Math.max(seq, notified.current.get(runId) ?? 0));
       for (const pending of fetching.current.values()) pending.push({ apply, runId, seq });
+      for (const { pending } of rereading.current.values()) pending.push({ apply, runId, seq });
       setDetails((prev) => {
         let touched = false;
         const next = new Map(prev);
