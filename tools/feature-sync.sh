@@ -109,6 +109,13 @@ for name in "${branches[@]}"; do
   feature="feature/$name"
   sync="feature-sync/$name"
   head=$(git rev-parse "refs/remotes/origin/$feature")
+  # A branch that shares no history with main cannot be synced by a merge; that is no file
+  # conflict for an issue, but a branch to archive or rebuild from main.
+  if ! git merge-base "$main" "$head" >/dev/null 2>&1; then
+    summary "$feature shares no history with main; skipped. Archive it, or rebuild it from main."
+    echo "::warning::$feature shares no history with main; skipped"
+    continue
+  fi
   if git merge-base --is-ancestor "$main" "$head"; then
     summary "$feature already contains main."
     issue=$(conflict_issue "$name")

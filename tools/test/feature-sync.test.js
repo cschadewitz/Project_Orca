@@ -311,6 +311,19 @@ describe("tools/feature-sync.sh", () => {
     expect(again).toMatch(/issue comment 41 /);
   });
 
+  it("skips a feature branch with no history in common with main, without an issue", () => {
+    git(origin, "checkout", "-q", "--orphan", "feature/old");
+    git(origin, "rm", "-rqf", ".");
+    commit(origin, "old.txt", "unrelated\n");
+    git(origin, "checkout", "-q", "main");
+    const calls = run();
+    expect(calls).not.toMatch(/issue create .*feature\/old/);
+    expect(calls).not.toMatch(/pr create .*feature\/old/);
+    expect(readFileSync(join(work, "summary"), "utf8")).toContain("feature/old shares no history with main; skipped");
+    // The other feature branch is still synced.
+    expect(calls).toMatch(/pr create --repo o\/r --base feature\/sdk/);
+  });
+
   it("leaves a feature branch that already contains main alone, and closes its conflict issue", () => {
     git(origin, "checkout", "-q", "feature/sdk");
     git(origin, "-c", "user.name=t", "-c", "user.email=t@t", "merge", "-q", "--no-edit", "main");
