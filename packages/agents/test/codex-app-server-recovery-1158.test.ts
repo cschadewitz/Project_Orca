@@ -597,6 +597,67 @@ describe("an app-server that exits", () => {
     expect(methods(s.procs[1]!)).not.toContain("turn/start");
   });
 
+  describe("a replacement Codex connects the thread to another environment (#1154)", () => {
+    const foreign = (proc: Proc) =>
+      proc.say({ method: "thread/environment/connected", params: { threadId: "thr_1", environmentId: "devbox" } });
+
+    it("while it resumes the thread: no prompt is sent to it", async () => {
+      const s = scriptedHost((i) => ({
+        ...BASE,
+        ...(i === 1
+          ? {
+              "thread/resume": (m: Msg, proc: Proc) => (foreign(proc), thread(m.params!["threadId"] as string)),
+            }
+          : {}),
+      }));
+      const session = await open(s.host);
+      s.procs[0]!.crash();
+      await settle();
+      const error = (await session.prompt("go").catch((e: unknown) => e)) as OrcaError;
+      expect(error.details).toMatchObject({ reason: "codex-foreign-environment" });
+      expect(methods(s.procs[1]!)).toContain("thread/resume");
+      expect(methods(s.procs[1]!)).not.toContain("turn/start");
+      await expect(session.prompt("again")).rejects.toBe(error);
+    });
+
+    it("before it resumes the thread: the thread is not resumed on it", async () => {
+      const s = scriptedHost((i) => ({
+        ...BASE,
+        ...(i === 1
+          ? { "account/read": (m: Msg, proc: Proc, n: number) => (foreign(proc), BASE["account/read"]!(m, proc, n)) }
+          : {}),
+      }));
+      const session = await open(s.host);
+      s.procs[0]!.crash();
+      await settle();
+      const error = (await session.prompt("go").catch((e: unknown) => e)) as OrcaError;
+      expect(error.details).toMatchObject({ reason: "codex-foreign-environment" });
+      expect(methods(s.procs[1]!)).not.toContain("thread/resume");
+    });
+
+    it("with the last answer before the replacement takes the turn", async () => {
+      const s = scriptedHost((i) => ({
+        ...BASE,
+        ...(i === 1
+          ? {
+              "hooks/list": (m: Msg, proc: Proc, n: number) => {
+                if (!m.params!["threadId"]) return BASE["hooks/list"]!(m, proc, n);
+                proc.say({ id: m.id, result: BASE["hooks/list"]!(m, proc, n) });
+                foreign(proc);
+                return NO_ANSWER;
+              },
+            }
+          : {}),
+      }));
+      const session = await open(s.host);
+      s.procs[0]!.crash();
+      await settle();
+      const error = (await session.prompt("go").catch((e: unknown) => e)) as OrcaError;
+      expect(error.details).toMatchObject({ reason: "codex-foreign-environment" });
+      expect(methods(s.procs[1]!)).not.toContain("turn/start");
+    });
+  });
+
   it("stops the session after the crash budget, waiting the backoff before each restart", async () => {
     const sleep = vi.fn(async () => {});
     // every app-server after the first exits as soon as its thread is resumed

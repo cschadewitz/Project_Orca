@@ -70,7 +70,8 @@ import {
   codexAskRequest,
   codexAskResponse,
   isCodexPolicyAsk,
-  isCodexLocalEnvironment,
+  codexEnvironmentForeign,
+  codexEnvironmentProblem,
   type CodexAskOutcome,
   type CodexPolicyAsk,
 } from "./codex-app-server-asks.js";
@@ -230,6 +231,8 @@ interface Connection {
   account: CodexAccountIdentity;
   /** Codex sent `account/updated` that ORCA has not re-read the account for yet. */
   accountUpdated?: boolean;
+  /** Codex reported a thread on this connection connected to an environment other than `local`. */
+  foreignEnvironment?: boolean;
 }
 
 /** Provider errors can carry private context: report only the failed recovery boundary, as the ACP route does. */
@@ -786,8 +789,6 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
   let active: ActiveTurn | undefined;
   /** Set once the session cannot take another prompt: Codex may still be running a turn. */
   let broken: OrcaError | undefined;
-  /** Set once Codex reports the thread connected to an environment other than this machine. */
-  let foreignEnvironment: OrcaError | undefined;
   /** The account the session started on, which every later answer is compared to. */
   const sessionAccount: { identity?: CodexAccountIdentity } = {};
   /**
@@ -1194,22 +1195,9 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
     }
     if (threadId && typeof params.threadId === "string" && params.threadId !== threadId) return;
     switch (method) {
-      // ORCA's checks read this machine's filesystem. A thread Codex connects to another of its
-      // environments acts where they cannot see, so the session stops (#1159 binding).
+      // Fenced on the connection (see connect); here only its payload is checked.
       case "thread/environment/connected":
-        check(isString(params.environmentId) ? undefined : "an environment connection without its id");
-        if (!isCodexLocalEnvironment(params.environmentId)) {
-          const error = new OrcaError(
-            "NOT_SUPPORTED",
-            `agent ${agent.id}: Codex connected the thread to an environment other than this machine, whose filesystem ORCA's checks do not read; ORCA stops the session`,
-            { agentId: agent.id, reason: "codex-foreign-environment" },
-          );
-          foreignEnvironment ??= error;
-          if (open) {
-            active?.fail(error);
-            breakSession(error);
-          }
-        }
+        check(codexEnvironmentProblem(params));
         return;
       case "item/agentMessage/delta":
         check(isString(params.itemId) && isString(params.delta) ? undefined : "a delta without its item id and text");
@@ -1366,6 +1354,17 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
       onNotification: (method, params) => {
         // Noted for a connection not yet live too: it is not published until it is re-read.
         if (method === "account/updated") c.accountUpdated = true;
+        // ORCA's checks read this machine's filesystem: a thread Codex connects anywhere else
+        // (or a connection report ORCA cannot read) fences this connection, whether it is live,
+        // opening or a replacement being resumed (#1154).
+        if (method === "thread/environment/connected" && codexEnvironmentForeign(params)) {
+          c.foreignEnvironment = true;
+          if (conn === c && open) {
+            const error = foreignEnvironmentRefusal();
+            active?.fail(error);
+            breakSession(error);
+          }
+        }
         if (conn !== c) return;
         try {
           onNotification(method, params);
@@ -1466,6 +1465,13 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
    * Refusals of what Codex would run with: its config, or the sandbox a thread came back with.
    * On a restart these stop the session; a request that failed or was cut short is not one.
    */
+  function foreignEnvironmentRefusal() {
+    return new OrcaError(
+      "NOT_SUPPORTED",
+      `agent ${agent.id}: Codex connected a thread to an environment other than this machine, whose filesystem ORCA's checks do not read; ORCA stops the session`,
+      { agentId: agent.id, reason: "codex-foreign-environment" },
+    );
+  }
   const configRefusals = new WeakSet<object>();
   const configRefusal = (error: OrcaError) => {
     configRefusals.add(error);
@@ -1561,6 +1567,13 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
       c.proc.exited,
     );
   }
+  // Codex connected the thread to another environment while it opened: no session.
+  if (conn.foreignEnvironment) {
+    closing = true;
+    conn.client.close("closed after a refused open");
+    await conn.cleanup().catch(() => undefined);
+    throw foreignEnvironmentRefusal();
+  }
   // An account update during the open: the session starts on the account Codex reports now.
   while (conn.accountUpdated) {
     const now = await rereadAccount(conn);
@@ -1632,8 +1645,6 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
   open = true;
   // Codex may have exited between its last answer and here.
   if (conn.client.closed) connectionClosed(conn, conn.client.closed);
-  // Codex may have connected the thread to another environment while it opened.
-  if (foreignEnvironment) breakSession(foreignEnvironment);
 
   /**
    * A new app-server for the same thread after the last one exited: after the backoff its crash
@@ -1705,10 +1716,14 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
       // before the replacement is published) fences any update Codex sent during the awaits.
       await checkAccount(c);
       while (c.accountUpdated) await checkAccount(c);
+      // And the same synchronous fence for an environment connection, before the resume and
+      // right before the replacement is published.
+      if (c.foreignEnvironment) refused(configRefusal(foreignEnvironmentRefusal()));
       const resumed = await resumeOn(c, threadId).catch(refused);
       const reverified = await verifyConfig(c, threadId).catch(refused);
       await checkAccount(c);
       while (c.accountUpdated) await checkAccount(c);
+      if (c.foreignEnvironment) refused(configRefusal(foreignEnvironmentRefusal()));
       const late = stopped();
       if (late) throw late;
       conn = c;

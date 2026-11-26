@@ -274,13 +274,30 @@ function permissionsAsk(target: CodexAskTarget): CodexAskMapping {
 }
 
 /**
- * Codex's id for the environment on the machine it runs on (`local` in 0.171.0; absent or null
- * on asks from before environments). Every other environment is another filesystem, which
- * ORCA's protected-path and rule checks do not read.
+ * Codex's id for the environment on the machine it runs on: every command ask the pinned Codex
+ * (0.171.0) sends for a local command names it. Anything else, absent and null included, is
+ * not positive evidence of this machine, whose filesystem ORCA's protected-path and rule
+ * checks read, so it is not decided as one.
  */
 export const CODEX_LOCAL_ENVIRONMENT_ID = "local";
-export const isCodexLocalEnvironment = (id: unknown): boolean =>
-  id === undefined || id === null || id === CODEX_LOCAL_ENVIRONMENT_ID;
+export const isCodexLocalEnvironment = (id: unknown): boolean => id === CODEX_LOCAL_ENVIRONMENT_ID;
+
+/** What is wrong with a `thread/environment/connected` payload, or undefined when it names a thread and an environment. */
+export function codexEnvironmentProblem(params: unknown): string | undefined {
+  if (!isObject(params)) return "params that are not an object";
+  if (typeof params.threadId !== "string" || !params.threadId) return "an environment connection without its thread";
+  if (typeof params.environmentId !== "string") return "an environment connection without its id";
+  return undefined;
+}
+
+/**
+ * Whether a `thread/environment/connected` fences the connection: a connection of any thread
+ * on it (subagent threads act under the same checks) to an environment other than `local`, or
+ * a report ORCA cannot read.
+ */
+export const codexEnvironmentForeign = (params: unknown): boolean =>
+  codexEnvironmentProblem(params) !== undefined ||
+  !isCodexLocalEnvironment((params as { environmentId: unknown }).environmentId);
 
 /**
  * Codex's ask as the calls ORCA's policy decides, or why ORCA declines it unasked. A file change

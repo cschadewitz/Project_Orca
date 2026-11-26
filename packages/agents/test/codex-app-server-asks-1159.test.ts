@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { codexAskRequest, codexAskResponse, CODEX_POLICY_ASKS, type CodexAskOutcome } from "../src/index.js";
 
 const TARGET = { threadId: "thr", turnId: "t1", itemId: "i1" };
-const COMMAND = { kind: "command", ...TARGET, startedAtMs: 1, environmentId: null, command: "ls", cwd: "/w" };
+const COMMAND = { kind: "command", ...TARGET, startedAtMs: 1, environmentId: "local", command: "ls", cwd: "/w" };
 
 describe("Codex asks as permission requests", () => {
   it("maps a command with its reason, directory and parsed actions, shown to a person", () => {
@@ -159,6 +159,11 @@ describe("Codex asks as permission requests", () => {
     );
     expect(refused("item/commandExecution/requestApproval", { ...COMMAND, environmentId: "local" })).toBeUndefined();
     expect(refused("item/commandExecution/requestApproval", { ...COMMAND, environmentId: 1 })).toMatch(/environmentId/);
+    // Only Codex's explicit `local` is this machine: absent or null is no evidence of it.
+    for (const environmentId of [null, undefined, ""])
+      expect(refused("item/commandExecution/requestApproval", { ...COMMAND, environmentId })).toMatch(
+        /environment other than this machine/,
+      );
     expect(
       refused("item/commandExecution/requestApproval", { ...COMMAND, commandActions: [{ type: "read" }] }),
     ).toMatch(/parsed command actions/);

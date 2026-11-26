@@ -1307,7 +1307,7 @@ describe("asks through ORCA's policy (#1159)", () => {
     turnId: "turn_1",
     itemId: "call_1",
     startedAtMs: 1,
-    environmentId: null,
+    environmentId: "local",
     command: "/bin/bash -lc 'cat src/a.ts'",
     cwd: CWD,
     reason: "to read the file",
@@ -1664,14 +1664,34 @@ describe("asks through ORCA's policy (#1159)", () => {
       await vi.waitFor(() => expect(s.kill).toHaveBeenCalled());
     });
 
-    it("takes no prompt when Codex connected the thread to another environment while it opened", async () => {
+    it("refuses the open when Codex connected the thread to another environment while it opened", async () => {
       const s = scriptedHost({
         ...BASE,
         "thread/start": (_msg, peer) => (connected("devbox")(peer), THREAD()),
       });
-      const session = await open(s.host);
-      await expect(session.prompt("go")).rejects.toThrow(/environment other than this machine/);
+      await expect(open(s.host)).rejects.toMatchObject({ details: { reason: "codex-foreign-environment" } });
       expect(s.peer.received.map((m) => m.method)).not.toContain("turn/start");
+      expect(s.kill).toHaveBeenCalled();
+    });
+
+    it("stops on another thread's connection, or a report it cannot read", async () => {
+      for (const params of [
+        { threadId: "thr_sub", environmentId: "devbox" },
+        { threadId: "thr_1" },
+        { environmentId: "local" },
+      ]) {
+        const s = scriptedHost({
+          ...BASE,
+          "turn/start": (_msg, peer) => {
+            setImmediate(() => peer.notify("thread/environment/connected", params));
+            return { turn: { id: "turn_1", status: "inProgress" } };
+          },
+        });
+        const session = await open(s.host);
+        await expect(session.prompt("go"), JSON.stringify(params)).rejects.toMatchObject({
+          details: { reason: "codex-foreign-environment" },
+        });
+      }
     });
   });
 
