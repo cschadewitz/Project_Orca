@@ -32,7 +32,10 @@ export function codexMcpServersConfig(
   servers: readonly McpServerConfig[],
 ): Record<string, Record<string, unknown>> | undefined {
   if (servers.length === 0) return undefined;
-  const config: Record<string, Record<string, unknown>> = {};
+  // Own keys only: a name like `__proto__` assigned to a plain object would set its prototype
+  // and drop out of the serialized config while ORCA still counts it as configured.
+  const entries: [string, Record<string, unknown>][] = [];
+  const seen = new Set<string>();
   for (const server of servers) {
     if (!SERVER_NAME.test(server.name))
       throw new OrcaError(
@@ -40,7 +43,7 @@ export function codexMcpServersConfig(
         `agent ${agentId} has an MCP server whose name Codex does not accept; use letters, digits, "_" and "-" only`,
         { agentId },
       );
-    if (Object.hasOwn(config, server.name))
+    if (seen.has(server.name))
       throw new OrcaError("CONFIG_INVALID", `agent ${agentId} has two MCP servers named ${server.name}`, {
         agentId,
         server: server.name,
@@ -48,14 +51,21 @@ export function codexMcpServersConfig(
     const env = Object.fromEntries(
       Object.entries(server.env).filter((e): e is [string, string] => typeof e[1] === "string"),
     );
-    config[server.name] = {
-      command: server.command,
-      args: [...server.args],
-      ...(Object.keys(env).length ? { env } : {}),
-      enabled: true,
-      default_tools_approval_mode: CODEX_MCP_APPROVAL_MODE,
-    };
+    seen.add(server.name);
+    entries.push([
+      server.name,
+      {
+        command: server.command,
+        args: [...server.args],
+        ...(Object.keys(env).length ? { env } : {}),
+        enabled: true,
+        default_tools_approval_mode: CODEX_MCP_APPROVAL_MODE,
+      },
+    ]);
   }
+  const config = Object.fromEntries(entries);
+  if (Object.keys(config).length !== servers.length)
+    throw new OrcaError("INTERNAL", "an MCP server was lost from the config");
   return config;
 }
 

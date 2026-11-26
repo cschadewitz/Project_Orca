@@ -1182,6 +1182,15 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
       logger.warn("Codex asked something ORCA declines without asking", { method, why: mapping.refused });
       return respond("decline", "refused");
     }
+    // An MCP ask is bound to the one call it matched (#1163): no other ask is attributed to that
+    // call, and the decision is given only while that very call still runs.
+    const mcpKey = method === "mcpServer/elicitation/request" ? `${turn.turnId}\0${mapping.target.itemId}` : undefined;
+    const mcpCall = mcpKey ? turn.mcpCalls.get(mcpKey) : undefined;
+    if (mcpKey) {
+      if (!mcpCall || mcpCall.asked) return respond("decline", "refused");
+      mcpCall.asked = true;
+    }
+    const callLive = () => !mcpKey || turn.mcpCalls.get(mcpKey) === mcpCall;
     const { effects, review } = mapping;
     const title = review.toolCall.title ?? "";
     const invocation: PermissionInvocation = {
@@ -1278,6 +1287,7 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
     // A person stopped the turn while it was asked: cancel. Otherwise only a live turn is allowed.
     if (turn.cancelReason) return respond("cancel", "turn-cancelled", title);
     if (!live()) return respond("decline", "turn-ended", title);
+    if (!callLive()) return respond("decline", "call-ended", title);
     return codexAskResponse(method, accepted ? "accept" : "decline");
   };
 

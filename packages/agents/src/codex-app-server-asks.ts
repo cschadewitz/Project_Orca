@@ -63,6 +63,8 @@ export interface CodexMcpCall {
   server: string;
   tool: string;
   arguments: unknown;
+  /** Set once an ask was bound to this call: one call gets one decision. */
+  asked?: boolean;
 }
 
 /** What a mapping needs beyond the ask itself. */
@@ -347,7 +349,9 @@ export const CODEX_MCP_TOOL_CALL_ASK = "mcp_tool_call";
  * policy for `<server>: <tool>`, of kind `other`. The elicitation names no item, so it is
  * matched to the call Codex started in the same turn for the same server, tool and arguments,
  * and those are what is decided: a server ORCA did not configure, an ask for no started call,
- * and anything else elicited (a server's own form or URL, a non-goal) are declined.
+ * and anything else elicited (a server's own form or URL, a non-goal) are declined, as is an ask
+ * that matches several running calls (identical ones in flight) or a call already asked about.
+ * The session binds the decision to the matched call and accepts only while it still runs.
  */
 function mcpAsk(sessionId: string, p: Record<string, unknown>, ctx: CodexAskContext): CodexAskMapping {
   if (typeof p.threadId !== "string" || typeof p.turnId !== "string" || typeof p.serverName !== "string")
@@ -360,14 +364,19 @@ function mcpAsk(sessionId: string, p: Record<string, unknown>, ctx: CodexAskCont
   if (typeof meta.tool_name !== "string" || !meta.tool_name)
     return { target: undefined, refused: "an MCP ask without its tool" };
   const args = meta.tool_params ?? null;
-  const call = [...(ctx.mcpCalls ?? [])].find(
+  const matches = [...(ctx.mcpCalls ?? [])].filter(
     (c) =>
       c.turnId === p.turnId &&
       c.server === p.serverName &&
       c.tool === meta.tool_name &&
       isDeepStrictEqual(c.arguments ?? null, args),
   );
-  if (!call) return { target: undefined, refused: "an MCP ask for no call Codex started in this turn" };
+  if (matches.length === 0) return { target: undefined, refused: "an MCP ask for no call Codex started in this turn" };
+  // Identical calls in flight: the ask names no item, so which one it is about is unknown.
+  if (matches.length > 1) return { target: undefined, refused: "an MCP ask that matches more than one running call" };
+  const call = matches[0]!;
+  // One decision per call: a second ask for a call already asked about is not attributed to it.
+  if (call.asked) return { target: undefined, refused: "a second MCP ask for one call" };
   const target = { threadId: p.threadId, turnId: call.turnId, itemId: call.itemId };
   const effect = request(sessionId, {
     toolCallId: call.itemId,
