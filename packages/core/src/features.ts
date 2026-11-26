@@ -7,9 +7,13 @@
  * Stages:
  * - `incubating`: off in every build. Only a developer or a test turns it on, through the
  *   `ORCA_INCUBATING` environment variable (`all`, or flag names separated by commas). Never
- *   settable from configuration, so no user can reach half-built code.
+ *   settable from app configuration, so it is off for anyone who does not launch the process
+ *   with that override. That is a default, not an authorization boundary: whoever controls the
+ *   process environment can reach incubating code.
  * - `experimental`: off unless the owner opts in (the caller passes the opt-in it read, such as a
- *   config switch), or `ORCA_EXPERIMENTAL` names it.
+ *   config switch), or `ORCA_EXPERIMENTAL` names it. `ORCA_EXPERIMENTAL` takes names only:
+ *   `all` is reserved to the incubating test switch, so no setting opts into experiments added
+ *   after it was written.
  * - `stable`: on. The flag and its checks are removed in the next minor.
  *
  * Dependency-free on purpose: CI reads this file directly (`.github/workflows/incubating.yml`).
@@ -40,11 +44,11 @@ export interface FeatureContext {
   readonly optIns?: Readonly<Record<string, boolean | undefined>>;
 }
 
-const named = (value: string | undefined, name: string): boolean =>
+const named = (value: string | undefined, name: string, all: boolean): boolean =>
   (value ?? "")
     .split(",")
     .map((part) => part.trim())
-    .some((part) => part === "all" || part === name);
+    .some((part) => part === name || (all && part === "all"));
 
 /** A registry over `flags`: `FEATURES` for the product, a fixture list in tests. */
 export function featureRegistry(flags: readonly FeatureFlag[]) {
@@ -70,8 +74,9 @@ export function featureRegistry(flags: readonly FeatureFlag[]) {
       const flag = get(name);
       const env = context.env ?? (typeof process === "undefined" ? {} : process.env);
       if (flag.stage === "stable") return true;
-      if (flag.stage === "experimental") return context.optIns?.[name] === true || named(env.ORCA_EXPERIMENTAL, name);
-      return named(env.ORCA_INCUBATING, name);
+      if (flag.stage === "experimental")
+        return context.optIns?.[name] === true || named(env.ORCA_EXPERIMENTAL, name, false);
+      return named(env.ORCA_INCUBATING, name, true);
     },
     /** The flags at a stage, in name order. */
     atStage: (stage: FeatureStage): FeatureFlag[] => {

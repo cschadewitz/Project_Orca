@@ -1,7 +1,8 @@
 # Dark code stays tested (#1239, docs/WORKSTREAMS.md). Unfinished work lands on main behind an
 # `incubating` flag (packages/core/src/features.ts) that is off in every build, so the ordinary
-# CI run never exercises it. This runs the typecheck, build and test suite again with every
-# incubating flag on (`ORCA_INCUBATING=all`), so a dark feature cannot rot until its promotion.
+# CI run never exercises it. This runs the test suite again with every incubating flag on
+# (`ORCA_INCUBATING=all`), after a typecheck and build (which the flag does not change), so a dark
+# feature cannot rot until its promotion.
 #
 # Nightly, after each push to main or a feature branch, and on dispatch; GitHub-hosted, so it
 # never takes Tyler's runners from the required `check`. With no incubating flag listed it stops

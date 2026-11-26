@@ -24,6 +24,10 @@ describe("the feature flag registry", () => {
     expect(registry.enabled("remote-judge", { env: {}, optIns: { "remote-judge": true } })).toBe(true);
     expect(registry.enabled("remote-judge", { env: { ORCA_EXPERIMENTAL: "remote-judge" } })).toBe(true);
     expect(registry.enabled("remote-judge", { env: { ORCA_INCUBATING: "all" } })).toBe(false);
+    // `all` belongs to the incubating test switch only: no blanket opt-in to every experiment.
+    expect(registry.enabled("remote-judge", { env: { ORCA_EXPERIMENTAL: "all" } })).toBe(false);
+    expect(registry.enabled("remote-judge", { env: { ORCA_EXPERIMENTAL: "all,other" } })).toBe(false);
+    expect(registry.enabled("planner-v2", { env: { ORCA_INCUBATING: "all" } })).toBe(true);
   });
 
   it("keeps a stable flag on", () => {
