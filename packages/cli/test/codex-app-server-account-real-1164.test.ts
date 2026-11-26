@@ -53,7 +53,7 @@ describe.skipIf(!CODEX)("account and usage limits against the real pinned Codex"
 
   it("fails a turn on the usage limit with the window and reset time, then runs once it allows", async () => {
     const accounts: CodexAccountStatus[] = [];
-    const limits: CodexRateLimits[] = [];
+    const limits: (CodexRateLimits | null)[] = [];
     const session = await openCodexAppServerSession({
       host: new LocalHost({ id: "local", type: "local" }),
       agent: AgentSpecSchema.parse({

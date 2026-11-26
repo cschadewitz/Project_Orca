@@ -301,7 +301,7 @@ describe("account and usage limits (#1164)", () => {
   });
 
   it("keeps each limit bucket apart, and names no window when two buckets are at their limit", async () => {
-    const limits: { limitId: string | null }[] = [];
+    const limits: ({ limitId: string | null } | null)[] = [];
     let both = false;
     const s = scriptedHost(
       turns(
@@ -328,7 +328,7 @@ describe("account and usage limits (#1164)", () => {
       ),
     );
     const session = await open(s.host, { onRateLimits: (l) => limits.push(l) });
-    await vi.waitFor(() => expect(limits.map((l) => l.limitId)).toEqual(["codex", "codex_other"]));
+    await vi.waitFor(() => expect(limits.map((l) => l?.limitId)).toEqual(["codex", "codex_other"]));
     // one bucket at its limit during the turn names its window
     const one = (await session.prompt("go").catch((e: unknown) => e)) as OrcaError;
     expect(one.message).toContain("the 5-hour window is 100% used");
@@ -337,7 +337,7 @@ describe("account and usage limits (#1164)", () => {
     const two = (await session.prompt("again").catch((e: unknown) => e)) as OrcaError;
     expect(two.message).toContain("Codex reported no single window at its limit for this turn");
     expect(two.details).toMatchObject({ reason: "codex-usage-limit", window: null });
-    expect(limits.filter((l) => l.limitId === "codex_other").at(-1)).toMatchObject({ primary: window(100, 60) });
+    expect(limits.filter((l) => l?.limitId === "codex_other").at(-1)).toMatchObject({ primary: window(100, 60) });
     await session.close();
   });
 
@@ -357,7 +357,7 @@ describe("account and usage limits (#1164)", () => {
   });
 
   it("never lets a usage-limit read overwrite an update Codex sent after it began", async () => {
-    const limits: { primary: unknown }[] = [];
+    const limits: ({ primary: unknown } | null)[] = [];
     let readId: unknown;
     const s = scriptedHost({
       ...BASE,
