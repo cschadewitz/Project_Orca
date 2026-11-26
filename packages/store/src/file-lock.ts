@@ -1,7 +1,7 @@
 /** Cross-process mutex directories. Only the remover of an exact owner token may rmdir. */
 import { readFileSync, readlinkSync } from "node:fs";
 import { link, mkdir, open, readdir, readFile, rename, rmdir, stat, unlink, writeFile } from "node:fs/promises";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { hostname } from "node:os";
 import { join } from "node:path";
 import { OrcaError } from "@orca/core";
@@ -15,7 +15,8 @@ export interface FileLockOptions {
   /**
    * When a lock left by a holder that is gone may be cleared automatically.
    *
-   * - `"host"` (the default): the holder named this host name and its pid is not running here.
+   * - `"host"` (the default): the holder named this host name and its pid is not running here,
+   *   or it recorded an earlier kernel boot of this machine (#1197).
    * - `"provable"`: only when the holder recorded the same liveness domain as this process (on
    *   Linux, this kernel boot and this pid namespace) and its pid is not running. A host name does
    *   not prove that pids are comparable (two containers, two machines on one share), so anything
@@ -47,6 +48,67 @@ export function livenessDomain(): string | null {
     return (domainCache = null);
   }
 }
+/** The kernel boot a liveness domain names, or null when it is not one `livenessDomain` wrote. */
+function bootOf(domain: unknown): string | null {
+  if (typeof domain !== "string") return null;
+  const match = /^linux:([0-9a-f-]{36}):pid:\[[0-9]+\]$/i.exec(domain);
+  return match ? match[1]!.toLowerCase() : null;
+}
+
+/** This kernel boot, as 32 hex digits for a token's name; null where no domain is established. */
+function bootTag(): string | null {
+  return bootOf(livenessDomain())?.replace(/-/g, "") ?? null;
+}
+
+let machineCache: string | null | undefined;
+/**
+ * This machine, for a token's name: 16 hex digits of a digest of `/etc/machine-id` (the systemd
+ * machine id, stable across boots) and the host name, or null where there is no machine id. A
+ * torn token keeps only its name, and the name is all that can say the holder was this machine.
+ */
+export function machineTag(): string | null {
+  if (machineCache !== undefined) return machineCache;
+  if (process.platform !== "linux") return (machineCache = null);
+  try {
+    const id = readFileSync("/etc/machine-id", "utf8").trim();
+    if (!/^[0-9a-f]{32}$/i.test(id)) return (machineCache = null);
+    return (machineCache = createHash("sha256")
+      .update(`${id.toLowerCase()}\n${hostname()}`)
+      .digest("hex")
+      .slice(0, 16));
+  } catch {
+    return (machineCache = null);
+  }
+}
+
+const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+/** `owner.<pid>.<boot>-<machine>-<uuid>.json`: what a token's name alone says about its holder. */
+const NAMED = new RegExp(`^owner\\.\\d+\\.([0-9a-f]{32})-([0-9a-f]{16})-${UUID}\\.json$`);
+
+/**
+ * Whether a holder was this machine in an earlier boot (#1197). Every process of an earlier
+ * boot is gone, so such a holder is dead whatever its pid now names: after a power loss the pid
+ * is often reused, by an unrelated process or by the restarted daemon itself.
+ *
+ * Only positive identity counts. A wall clock proves nothing (corrected forward, it moves the
+ * computed boot time past a live holder's timestamps), and a different boot id alone says only
+ * "not this boot", not "this machine". So: a readable token, whose host the caller has already
+ * matched, by the boot id in its liveness domain; a torn one only by its name, which must carry
+ * both this machine's tag and another boot id. Anything less (another or unknown machine, a
+ * platform without boot ids, a token from before #1197) is no, and the lock fails closed.
+ */
+function fromEarlierBoot(recorded: { domain: unknown } | { token: string }): boolean {
+  const ours = bootTag();
+  if (!ours) return false;
+  if ("domain" in recorded) {
+    const theirs = bootOf(recorded.domain)?.replace(/-/g, "");
+    return theirs !== undefined && theirs !== ours;
+  }
+  const named = NAMED.exec(recorded.token);
+  const machine = machineTag();
+  return !!named && !!machine && named[2] === machine && named[1] !== ours;
+}
+
 export interface LockHolder {
   pid: number;
   at: number;
@@ -70,7 +132,12 @@ export async function withFileLock<T>(
   fn: (stillHeld: () => Promise<void>) => Promise<T>,
   options: FileLockOptions = {},
 ): Promise<T> {
-  const token = `owner.${tag()}.json`;
+  // The boot id and this machine's tag are in the name as well as the contents: a name survives
+  // a power loss that leaves the contents empty, so a torn token from an earlier boot of this
+  // machine can still be judged (#1197). Without both, the name is the old one.
+  const boot = bootTag();
+  const machine = machineTag();
+  const token = `owner.${process.pid}.${boot && machine ? `${boot}-${machine}-` : ""}${randomUUID()}.json`;
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const deadline = Date.now() + timeoutMs;
   let backoff = 1;
@@ -131,10 +198,17 @@ async function removeDeadOwner(path: string, options: FileLockOptions): Promise<
     const names = await readdir(path);
     if (names.length !== 1 || !/^owner\.\d+\.[a-f0-9-]+\.json$/.test(names[0]!)) return false;
     const token = names[0]!;
-    const raw = JSON.parse(await readFile(join(path, token), "utf8")) as Partial<LockHolder> & {
-      host?: string;
-      domain?: unknown;
-    };
+    let raw: Partial<LockHolder> & { host?: string; domain?: unknown };
+    try {
+      raw = JSON.parse(await readFile(join(path, token), "utf8")) as typeof raw;
+    } catch (error) {
+      if (!(error instanceof SyntaxError)) throw error;
+      // A token torn by a power loss (often zero bytes: its data never reached the disk) names
+      // no holder. Only one whose name records an earlier boot is provably dead; an empty
+      // directory, or a torn token with no boot in its name, stays closed.
+      if (options.recovery === "provable" || !fromEarlierBoot({ token })) return false;
+      return await removeToken(path, token);
+    }
     if (options.recovery === "provable") {
       const domain = livenessDomain();
       if (domain === null || raw.domain !== domain) return false;
@@ -144,7 +218,8 @@ async function removeDeadOwner(path: string, options: FileLockOptions): Promise<
       !Number.isInteger(raw.pid) ||
       raw.pid! <= 0 ||
       !Number.isFinite(raw.at) ||
-      processAlive(raw.pid!)
+      // A pid from an earlier boot names nobody we can probe: it is dead, whatever runs under it now.
+      ((options.recovery === "provable" || !fromEarlierBoot({ domain: raw.domain })) && processAlive(raw.pid!))
     )
       return false;
     const removed = await removeToken(path, token);

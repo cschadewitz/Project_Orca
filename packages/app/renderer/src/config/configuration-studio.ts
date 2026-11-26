@@ -16,6 +16,14 @@ import {
   sameEditorTarget,
 } from "./configuration-adapter.js";
 
+/** What a disabled Apply says once the saved revision was already handed to the daemon (#1210). */
+const APPLIED_REASON: Record<ConfigApplyResult["outcome"], string> = {
+  applied: "Already applied. Save a new revision to apply again.",
+  unchanged: "Already applied: the daemon was already running this revision.",
+  "restart-required": "Already applied. The daemon must restart before this revision takes effect.",
+  invalid: "The daemon refused this saved revision as invalid. Fix it and save a new revision before applying.",
+  validated: "The daemon only validated this revision. Read current configuration before applying it.",
+};
 const busyPhase = (phase: EditorSnapshot["phase"]) => ["validating", "saving", "applying"].includes(phase);
 const failure = (error: unknown): BridgeResult<never> => ({
   ok: false,
@@ -94,6 +102,8 @@ export class ConfigurationStudio {
   private rawSequence = 0;
   private rawState: EditorSnapshot = { phase: "editing", sequence: 0, edits: [], errors: [], changes: [] };
   private saved: { revision: string; generation: string } | undefined;
+  /** The outcome of the last Apply of this saved revision, so a disabled Apply can say it already ran (#1210). */
+  private lastApply: ConfigApplyResult["outcome"] | undefined;
   private reopen: ReopenBinding | undefined;
   private reopenSequence = 0;
   private disposed = false;
@@ -182,10 +192,11 @@ export class ConfigurationStudio {
     if (this.mode === "form" && !this.shape)
       return "Structured metadata is missing or unsupported. The authorized raw editor is available.";
     if (action === "apply") {
-      if (!this.saved || this.dirty)
-        return this.data.generation
-          ? "Save the reviewed draft before applying it."
-          : "Saved generation status is unavailable.";
+      if (!this.data.generation) return "Saved generation status is unavailable.";
+      if (this.dirty) return "Save the reviewed draft before applying it.";
+      // Nothing saved waits to be applied: say why, rather than asking for a save that already happened (#1210).
+      if (!this.saved)
+        return this.lastApply ? APPLIED_REASON[this.lastApply] : "Nothing saved is waiting to be applied.";
       if (
         this.data.config.revision !== this.saved.revision ||
         this.data.generation?.activeGeneration !== this.saved.generation
@@ -275,6 +286,7 @@ export class ConfigurationStudio {
     this.saved = result.generation
       ? { revision: result.document.revision, generation: result.generation.activeGeneration }
       : undefined;
+    this.lastApply = undefined;
     this.bindForReopening(result.document);
   }
   /** What keeping this workspace reopenable after the last save came to (#1192); undefined when nothing applied. */
@@ -311,6 +323,14 @@ export class ConfigurationStudio {
   private acceptApply(result: ConfigApplyResult): void {
     this.data = { ...this.data, generation: result.status };
     this.saved = undefined;
+    this.lastApply = result.outcome;
+  }
+  /**
+   * Why a shown Apply is unavailable while a reread holds the editor. Validate, Save and Apply each move the
+   * editor out of the saved phase, which hides Apply, so a read is the one busy state it is visible in.
+   */
+  get busyReason(): string | undefined {
+    return this.reading ? "Reading the current configuration…" : undefined;
   }
   observe(data: ConfigGetResult, target: EditorTarget | undefined): void {
     if (!sameEditorTarget(target, this.target)) {
@@ -373,6 +393,7 @@ export class ConfigurationStudio {
     }
     this.adapter.invalidate();
     this.saved = undefined;
+    this.lastApply = undefined;
     this.emit();
   }
   editRaw(text: string): void {
@@ -381,6 +402,7 @@ export class ConfigurationStudio {
     this.rawSequence++;
     this.adapter.invalidate();
     this.saved = undefined;
+    this.lastApply = undefined;
     this.rawState = { phase: "editing", sequence: this.rawSequence, edits: [], errors: [], changes: [] };
     this.emit();
   }
@@ -398,6 +420,7 @@ export class ConfigurationStudio {
     this.rawSequence++;
     this.adapter.invalidate();
     this.saved = undefined;
+    this.lastApply = undefined;
     this.rawState = { phase: "editing", sequence: this.rawSequence, edits: [], errors: [], changes: [] };
     this.session = this.createSession();
     this.rows = new RowIdentities();
@@ -569,6 +592,7 @@ export class ConfigurationStudio {
             this.stale = false;
             this.adapter.invalidate();
             this.saved = undefined;
+            this.lastApply = undefined;
             this.rows = new RowIdentities();
             return;
           }

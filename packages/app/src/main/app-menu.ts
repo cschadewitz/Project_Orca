@@ -30,6 +30,16 @@ export interface AppMenuActions {
 }
 
 /**
+ * Quit, with its shortcut written down (#1209). Electron's `quit` role brings
+ * `CommandOrControl+Q` on macOS and Linux but no accelerator at all on Windows, where the
+ * role's only shortcut is the window manager's Alt+F4 — so Ctrl+Q did nothing there. The
+ * role still does the quitting, so the shutdown is `app.quit()`, the same one closing the
+ * last window reaches through `window-all-closed`.
+ */
+export const QUIT_ACCELERATOR = "CmdOrCtrl+Q";
+const QUIT: MenuTemplateItem = { role: "quit", accelerator: QUIT_ACCELERATOR };
+
+/**
  * The menu for this platform. macOS keeps the app menu in front and puts Quit in it;
  * everywhere else Quit belongs to File, which is why the two differ at all.
  */
@@ -50,7 +60,7 @@ export function appMenuTemplate(
       { label: "Open a store…", accelerator: "CmdOrCtrl+O", click: actions.openStore },
       { label: "Connect to a daemon…", click: actions.connectLive },
       { type: "separator" },
-      mac ? { role: "close" } : { role: "quit" },
+      mac ? { role: "close" } : QUIT,
     ],
   };
 
@@ -92,7 +102,7 @@ export function appMenuTemplate(
 
   const appItem: MenuTemplateItem = {
     label: appName,
-    submenu: [{ role: "about" }, { type: "separator" }, { role: "quit" }],
+    submenu: [{ role: "about" }, { type: "separator" }, QUIT],
   };
 
   return [...(mac ? [appItem] : []), file, edit, view, windows];
