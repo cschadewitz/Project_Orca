@@ -2,7 +2,7 @@
  * The words the Machines surface says about each machine (#882), as plain functions with a
  * plain test, like `agents/agent-groups.ts`.
  */
-import type { FleetMachine, FleetSnapshot } from "../../../src/daemon-connection.js";
+import type { FleetMachine, FleetSnapshot, TailnetPresenceView } from "../../../src/daemon-connection.js";
 import { counted, unit } from "../ui/index.js";
 
 /** "3 of 4 agent sessions · 2 queued", or nothing when the daemon does not report slots (#873). */
@@ -33,4 +33,34 @@ export function fleetSummary(snapshot: FleetSnapshot): string {
 /** "Last heard …" applies only to a machine that is not live and has something to show. */
 export function isStale(machine: FleetMachine): boolean {
   return machine.staleSince !== undefined && machine.state !== "live" && machine.state !== "file";
+}
+
+/** One profile's presence on the tailnet (#1230). */
+export type MachinePresence = TailnetPresenceView[string];
+
+/** The profile a machine's key names, when it is a saved profile. */
+export function machineProfileId(machine: FleetMachine): string | undefined {
+  return machine.key.startsWith("profile:") ? machine.key.slice("profile:".length) : undefined;
+}
+
+/** What the tailnet says about a machine: a hint beside its connection state, never that state. */
+export function presenceText(presence: MachinePresence): string {
+  switch (presence.kind) {
+    case "online":
+      return "Online on your tailnet";
+    case "offline":
+      return "Offline on your tailnet";
+    case "gone":
+      return "No longer on your tailnet";
+    case "different-machine":
+      return "Its tailnet name is now another machine's";
+  }
+}
+
+/**
+ * Whether the tailnet's word replaces the connection's reason: a machine that is not live and
+ * that the tailnet says is not there shows that, instead of a connect timeout.
+ */
+export function presenceExplains(machine: FleetMachine, presence: MachinePresence | undefined): boolean {
+  return presence !== undefined && presence.kind !== "online" && machine.state !== "live" && machine.state !== "file";
 }

@@ -342,7 +342,21 @@ export interface FleetBridge {
   subscribe(this: void, listener: (snapshot: FleetSnapshot) => void): () => void;
   /** Start or stop watching a saved profile. Focusing one goes through `connect`. */
   watch(this: void, profileId: string, watched: boolean): Promise<ProfileResult<null>>;
+  /**
+   * Whether each profile bound to a tailnet node is online there (#1230), from this computer's
+   * Tailscale client: read only while a listener is subscribed. A hint only; a machine's
+   * connection state still comes from its SSH lease. Absent unless `tailnet-hosts` is on.
+   */
+  tailnetPresence?(this: void, listener: (snapshot: TailnetPresenceView) => void): () => void;
 }
+
+/** Tailnet presence by profile id (#1230). Empty when Tailscale is not running here. */
+export type TailnetPresenceView = Record<
+  string,
+  | { kind: "online"; name: string }
+  | { kind: "offline"; name: string; lastSeen?: string }
+  | { kind: "gone" | "different-machine" }
+>;
 
 /** Never echo a rejected URL: it may contain a pasted credential. */
 export function daemonEndpoint(value: string): string {

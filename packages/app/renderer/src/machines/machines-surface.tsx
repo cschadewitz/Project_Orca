@@ -27,6 +27,7 @@ import type {
   FleetRun,
   FleetSnapshot,
   RemoteProfileView,
+  TailnetPresenceView,
 } from "../../../src/daemon-connection.js";
 import {
   Button,
@@ -40,7 +41,15 @@ import {
   textClass,
   type MenuItem,
 } from "../ui/index.js";
-import { fleetSummary, isStale, slotsLabel } from "./machine-model.js";
+import {
+  fleetSummary,
+  isStale,
+  machineProfileId,
+  presenceExplains,
+  presenceText,
+  slotsLabel,
+  type MachinePresence,
+} from "./machine-model.js";
 import { ownerText, progressText, waitText } from "../runs/board/board-model.js";
 import "./machines.css";
 
@@ -72,6 +81,13 @@ function useFleet(fleet: FleetBridge): FleetSnapshot {
   return snapshot;
 }
 
+/** Tailnet presence (#1230): read by the main process only while this view is open. */
+function useTailnetPresence(fleet: FleetBridge): TailnetPresenceView {
+  const [presence, setPresence] = useState<TailnetPresenceView>({});
+  useEffect(() => fleet.tailnetPresence?.(setPresence), [fleet]);
+  return presence;
+}
+
 function Machines({
   bridge,
   fleet,
@@ -79,6 +95,7 @@ function Machines({
   onOpenInput,
 }: MachinesSurfaceProps & { bridge: DaemonConnectionBridge; fleet: FleetBridge }): JSX.Element {
   const snapshot = useFleet(fleet);
+  const presence = useTailnetPresence(fleet);
   const [profiles, setProfiles] = useState<readonly RemoteProfileView[]>([]);
   const [problem, setProblem] = useState<string>();
   const [focusing, setFocusing] = useState<string>();
@@ -156,6 +173,7 @@ function Machines({
             <MachineSection
               key={machine.key}
               machine={machine}
+              presence={presence[machineProfileId(machine) ?? ""]}
               focusing={focusing === machine.key}
               busy={focusing !== undefined}
               onFocus={() => void focus(machine)}
@@ -188,6 +206,7 @@ const ROWS = 8;
 
 function MachineSection({
   machine,
+  presence,
   focusing,
   busy,
   onFocus,
@@ -196,6 +215,7 @@ function MachineSection({
   onOpenInput,
 }: {
   machine: FleetMachine;
+  presence: MachinePresence | undefined;
   focusing: boolean;
   busy: boolean;
   onFocus: () => void;
@@ -256,7 +276,18 @@ function MachineSection({
           {slots !== undefined && <Text style="caption">{slots}</Text>}
         </div>
       )}
-      {machine.reason !== undefined && (
+      {presence !== undefined && (
+        <Text style="caption" as="p" className="orca-machine__presence">
+          {presenceText(presence)}
+          {presence.kind === "offline" && presence.lastSeen !== undefined && (
+            <>
+              {" · last seen "}
+              <Time at={new Date(presence.lastSeen)} show="relative" />
+            </>
+          )}
+        </Text>
+      )}
+      {machine.reason !== undefined && !presenceExplains(machine, presence) && (
         <Text style="caption" as="p" className="orca-machine__reason">
           {machine.reason}
         </Text>

@@ -404,6 +404,28 @@ export function resolveTailnetBinding(snapshot: TailnetSnapshot, binding: Tailne
 }
 
 /**
+ * Whether a bound profile's machine is on the tailnet now, as the Machines view shows it (#1230):
+ * a hint from the local client only, never the connection's state. Found by the stable node ID,
+ * like `resolveTailnetBinding`; a name now held by another node is not this machine.
+ */
+export type TailnetPresence =
+  | { kind: "online"; name: string }
+  | { kind: "offline"; name: string; lastSeen?: string }
+  | { kind: "gone" | "different-machine" };
+
+export function tailnetPresence(snapshot: TailnetSnapshot, binding: TailnetBinding): TailnetPresence {
+  const peer = snapshot.peers.find((candidate) => candidate.nodeId === binding.node);
+  if (!peer)
+    return {
+      kind: snapshot.peers.some((candidate) => candidate.dnsName === binding.name.toLowerCase())
+        ? "different-machine"
+        : "gone",
+    };
+  if (peer.online) return { kind: "online", name: peer.dnsName };
+  return { kind: "offline", name: peer.dnsName, ...(peer.lastSeen ? { lastSeen: peer.lastSeen } : {}) };
+}
+
+/**
  * Whose approval pages a tailnet connection passes on (#1228): Tailscale's coordination server,
  * or, for a self-hosted control plane such as Headscale, the one https origin named explicitly in
  * `ORCA_TAILNET_LOGIN_ORIGIN`. Nothing is taken from a server's own banner.

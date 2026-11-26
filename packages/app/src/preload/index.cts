@@ -22,6 +22,7 @@ import type {
   FleetSnapshot,
   HostAgentView,
   HostRepositoryView,
+  TailnetPresenceView,
   LoginApprovalView,
   ProfileRemoval,
   ProfileResult,
@@ -318,6 +319,19 @@ const bridge: OrcaBridge = {
         };
       },
       watch: (id, watched) => ipcRenderer.invoke("orca:fleet.watch", id, watched) as Promise<ProfileResult<null>>,
+      ...(tailnetHosts
+        ? {
+            tailnetPresence: (listener: (snapshot: TailnetPresenceView) => void) => {
+              const forward = (_event: unknown, snapshot: TailnetPresenceView) => listener(snapshot);
+              ipcRenderer.on("orca:fleet.tailnetPresence", forward);
+              ipcRenderer.send("orca:fleet.watchTailnetPresence", true);
+              return () => {
+                ipcRenderer.off("orca:fleet.tailnetPresence", forward);
+                ipcRenderer.send("orca:fleet.watchTailnetPresence", false);
+              };
+            },
+          }
+        : {}),
     },
   },
   serverUpdate: {

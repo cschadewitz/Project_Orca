@@ -24,6 +24,7 @@ import {
   type TailnetPeer,
   type TailnetSnapshot,
   tailnetLoginOrigins,
+  tailnetPresence,
 } from "../src/tailnet.js";
 
 const ON = { env: { ORCA_INCUBATING: "tailnet-hosts" } };
@@ -340,6 +341,39 @@ describe("resolveTailnetBinding", () => {
       ok: true,
       host: "[fd7a:115c:a1e0::7]",
     });
+  });
+});
+
+describe("tailnetPresence (#1230)", () => {
+  const snapshot = running(
+    status([
+      peer({ ID: "nBuild1", DNSName: "build-1.example-tailnet.ts.net." }),
+      peer({
+        ID: "nOff1",
+        DNSName: "off.example-tailnet.ts.net.",
+        Online: false,
+        LastSeen: "2026-11-26T18:04:05Z",
+      }),
+    ]),
+  );
+
+  it("says whether the bound node is online, by its ID, with when an offline one was last seen", () => {
+    expect(tailnetPresence(snapshot, { node: "nBuild1", name: "old-name.example-tailnet.ts.net" })).toEqual({
+      kind: "online",
+      name: "build-1.example-tailnet.ts.net",
+    });
+    expect(tailnetPresence(snapshot, { node: "nOff1", name: "off.example-tailnet.ts.net" })).toEqual({
+      kind: "offline",
+      name: "off.example-tailnet.ts.net",
+      lastSeen: "2026-11-26T18:04:05Z",
+    });
+  });
+
+  it("never reports another node holding the name as this machine", () => {
+    expect(tailnetPresence(snapshot, { node: "nGone", name: "build-1.example-tailnet.ts.net" })).toEqual({
+      kind: "different-machine",
+    });
+    expect(tailnetPresence(snapshot, { node: "nGone", name: "gone.example-tailnet.ts.net" })).toEqual({ kind: "gone" });
   });
 });
 
