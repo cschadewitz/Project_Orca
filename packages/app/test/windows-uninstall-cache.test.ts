@@ -6,7 +6,7 @@
  */
 import { readFileSync } from "node:fs";
 import { expect, it } from "vitest";
-import { UPDATER_CACHE } from "../src/main/legacy-updater-cache.js";
+import { LEGACY_UPDATER_CACHE, UPDATER_CACHE } from "../src/main/legacy-updater-cache.js";
 
 const read = (relative: string) => readFileSync(new URL(relative, import.meta.url), "utf8");
 
@@ -20,4 +20,11 @@ it("removes the updater cache electron-builder names after the package", () => {
   expect(nsh).toContain(`RMDir /r "$LOCALAPPDATA\\${cache}"`);
   // Never during an update, which runs the uninstaller with --updated.
   expect(nsh).toMatch(/\$\{ifNot\} \$\{isUpdated\}[\s\S]*RMDir[\s\S]*\$\{endIf\}/);
+});
+
+it("also removes the cache a pre-rename install left, on a real uninstall only", () => {
+  const nsh = read("../build/installer.nsh");
+  const uninstall = /\$\{ifNot\} \$\{isUpdated\}([\s\S]*?)\$\{endIf\}/.exec(nsh)?.[1] ?? "";
+  expect(uninstall).toContain(`RMDir /r "$LOCALAPPDATA\\${LEGACY_UPDATER_CACHE}"`);
+  expect(uninstall).toContain(`RMDir /r "$LOCALAPPDATA\\${UPDATER_CACHE}"`);
 });
