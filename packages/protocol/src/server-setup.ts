@@ -338,7 +338,11 @@ export function readSetup(result: RemoteResult): SetupOutcome {
 
 /** The managed launcher a setup in `root` installs: derived here, never taken from the server. */
 export function managedLauncher(root: string, os: ServerOs = "linux"): string {
-  return os === "windows" ? `${root.replace(/\\+$/, "")}\\orca.cmd` : `${root.replace(/\/+$/, "")}/orca`;
+  const sep = separator(os);
+  // Trailing separators trimmed by hand: a `/sep+$/` regex is polynomial on a long run of them.
+  let end = root.length;
+  while (end > 0 && root[end - 1] === sep) end -= 1;
+  return `${root.slice(0, end)}${sep}${os === "windows" ? "orca.cmd" : "orca"}`;
 }
 
 /**
