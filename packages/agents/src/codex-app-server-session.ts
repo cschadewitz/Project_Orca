@@ -1386,6 +1386,10 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
     // and no secret is read for it (the host reads them as it starts the process). A restart
     // onto another build ends the session (#1162).
     const file = await (opts.imageFile ?? fileImageIdentity)(spec.command);
+    // A close or cancel during the check wins: nothing is started, and no secret resolved,
+    // after it.
+    const early = stopped();
+    if (early) throw early;
     const fileVersion = "sha256" in file ? codexVersionForImage(file.sha256, imageTarget) : undefined;
     if (fileVersion === undefined) {
       const refusal = codexImageRefusal(

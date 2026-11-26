@@ -9,7 +9,7 @@
  */
 
 import { createReadStream } from "node:fs";
-import { open, readFile, stat } from "node:fs/promises";
+import { open, readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 
 /** A file's content digest and the inode it was read from. */
@@ -60,12 +60,34 @@ export async function procImageSha256(pid: number): Promise<{ sha256: string } |
   }
 }
 
+/** How long one image check may take before ORCA refuses rather than wait (#1162). */
+export const CODEX_IMAGE_CHECK_TIMEOUT_MS = 30_000;
+
 /**
  * The digest and inode of the file at `path`, read through one open descriptor whose file is
- * unchanged (same inode, size, modification and change times) before and after it is hashed.
- * For checking an executable before it is started; nothing is executed.
+ * unchanged (same inode, size, modification and change times) before and after it is hashed:
+ * the inode is the descriptor's own, so both describe the same file. For checking an
+ * executable before it is started; nothing is executed. Gives up, with an error, once
+ * `timeoutMs` passes.
  */
-export async function fileImageIdentity(path: string): Promise<ImageIdentity | { error: string }> {
+export async function fileImageIdentity(
+  path: string,
+  timeoutMs: number = CODEX_IMAGE_CHECK_TIMEOUT_MS,
+): Promise<ImageIdentity | { error: string }> {
+  const deadline = AbortSignal.timeout(timeoutMs);
+  let onAbort = () => undefined as void;
+  const expired = new Promise<{ error: string }>((resolve) => {
+    onAbort = () => resolve({ error: `ORCA's check did not finish within ${timeoutMs} ms` });
+    deadline.addEventListener("abort", onAbort, { once: true });
+  });
+  try {
+    return await Promise.race([readIdentity(path, deadline), expired]);
+  } finally {
+    deadline.removeEventListener("abort", onAbort);
+  }
+}
+
+async function readIdentity(path: string, deadline: AbortSignal): Promise<ImageIdentity | { error: string }> {
   let handle;
   try {
     handle = await open(path, "r");
@@ -76,7 +98,10 @@ export async function fileImageIdentity(path: string): Promise<ImageIdentity | {
     const before = await handle.stat();
     if (!before.isFile()) return { error: "it is not a regular file" };
     const hash = createHash("sha256");
-    for await (const chunk of handle.createReadStream({ autoClose: false, start: 0 })) hash.update(chunk as Buffer);
+    for await (const chunk of handle.createReadStream({ autoClose: false, start: 0 })) {
+      if (deadline.aborted) return { error: "ORCA's check did not finish in time" };
+      hash.update(chunk as Buffer);
+    }
     const after = await handle.stat();
     if (
       after.dev !== before.dev ||
@@ -97,25 +122,23 @@ export async function fileImageIdentity(path: string): Promise<ImageIdentity | {
 /**
  * ORCA's own evidence for the image of a process ORCA itself started (Linux): `pid` must be a
  * live child of this process, and the same process (same parent and start time) before and
- * after its image is read. The digest is of `/proc/<pid>/exe`, the file the kernel is running
- * for it, wherever that is now and whatever is at its old path, and the inode is that file's.
- * Nothing is executed, and no path the process reports is read.
+ * after its image is read. The image is opened once through `/proc/<pid>/exe`, the file the
+ * kernel is running for it, wherever that is now and whatever is at its old path, and its
+ * digest and inode both come from that one descriptor. Nothing is executed, and no path the
+ * process reports is read. Bounded as `fileImageIdentity` is.
  */
-export async function ownChildImageDigest(pid: number | undefined): Promise<ImageIdentity | { error: string }> {
+export async function ownChildImageDigest(
+  pid: number | undefined,
+  timeoutMs: number = CODEX_IMAGE_CHECK_TIMEOUT_MS,
+): Promise<ImageIdentity | { error: string }> {
   if (pid === undefined || !Number.isInteger(pid) || pid <= 1) return { error: "its process id is unknown" };
   const before = await procStat(pid);
   if (before === undefined || before.ppid !== process.pid)
     return { error: `process ${pid} is not running as a child ORCA started` };
-  let inode: { dev: number; ino: number };
-  try {
-    inode = await stat(`/proc/${pid}/exe`);
-  } catch (error) {
-    return { error: `its image cannot be read (${error instanceof Error ? error.message : String(error)})` };
-  }
-  const image = await procImageSha256(pid);
-  if ("error" in image) return image;
+  const image = await fileImageIdentity(`/proc/${pid}/exe`, timeoutMs);
+  if ("error" in image) return { error: image.error.replace(/^it /, "its image ") };
   const after = await procStat(pid);
   if (after === undefined || after.ppid !== before.ppid || after.start !== before.start)
     return { error: `process ${pid} changed while its image was read` };
-  return { sha256: image.sha256, dev: inode.dev, ino: inode.ino };
+  return image;
 }

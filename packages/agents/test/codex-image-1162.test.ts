@@ -46,6 +46,12 @@ describe.skipIf(process.platform !== "linux")("ownChildImageDigest", () => {
     }
   });
 
+  it("gives up on a check that does not finish in time", async () => {
+    expect(await fileImageIdentity(realpathSync(process.execPath), 1)).toMatchObject({
+      error: expect.stringMatching(/did not finish/),
+    });
+  });
+
   it("refuses a process that is not its own child, and an unknown pid", async () => {
     expect(await ownChildImageDigest(process.pid)).toEqual({
       error: `process ${process.pid} is not running as a child ORCA started`,

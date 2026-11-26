@@ -433,6 +433,47 @@ describe("an app-server that exits", () => {
     expect(s.spawnAgent).toHaveBeenCalledTimes(1);
   });
 
+  it("starts nothing when a restart is cancelled or closed while its file is checked (#1162)", async () => {
+    const held = () => {
+      let release!: () => void;
+      let calls = 0;
+      const gate = new Promise<void>((r) => (release = r));
+      const imageFile = vi.fn(async () => {
+        if (++calls > 1) await gate;
+        return PINNED_IMAGE;
+      });
+      return { imageFile, release: () => release() };
+    };
+
+    const a = held();
+    const s = scriptedHost(() => BASE);
+    const session = await open(s.host, { imageFile: a.imageFile });
+    s.procs[0]!.crash();
+    await settle();
+    const turn = session.prompt("go");
+    await settle();
+    expect(a.imageFile).toHaveBeenCalledTimes(2);
+    const cancelled = session.cancel();
+    a.release();
+    await cancelled;
+    await expect(turn).resolves.toMatchObject({ stopReason: "cancelled" });
+    expect(s.spawnAgent).toHaveBeenCalledTimes(1);
+
+    const b = held();
+    const t = scriptedHost(() => BASE);
+    const other = await open(t.host, { imageFile: b.imageFile });
+    t.procs[0]!.crash();
+    await settle();
+    const pending = other.prompt("go");
+    await settle();
+    expect(b.imageFile).toHaveBeenCalledTimes(2);
+    const closed = other.close();
+    b.release();
+    await closed;
+    await expect(pending).rejects.toMatchObject({ code: "RUN_STATE" });
+    expect(t.spawnAgent).toHaveBeenCalledTimes(1);
+  });
+
   it("ends the session when a restarted process does not run the checked file (#1162)", async () => {
     const s = scriptedHost(() => BASE);
     const imageDigest = vi.fn(async (pid: number | undefined) =>
