@@ -447,6 +447,50 @@ async function chooseTheme(page: Page, theme: "light" | "dark") {
   expect(await current()).toBe(theme);
 }
 
+/**
+ * #1213: one store, one moment, one count. Machines, the sidebar badge and Attention show the
+ * same waiting number; the status bar never prints an event number (the cursor is per run and
+ * is drawn beside the run, docs/design/60-implementation.md); and on a healthy connection
+ * Attention shows no "could not be refreshed" notice. Each state is captured.
+ */
+async function liveStateAgrees(page: Page) {
+  const counts = async () => {
+    await openSurface(page, "Attention");
+    const attention = await page.getByTestId("attention").locator(".orca-attn__head").innerText();
+    const badge = await page
+      .getByRole("navigation", { name: "Surfaces" })
+      .locator(".orca-nav__count--waiting")
+      .innerText()
+      .catch(() => "0");
+    await openSurface(page, "Machines");
+    const machines = await page.locator("body").innerText();
+    return {
+      attention: Number(/(\d+) waiting/.exec(attention)?.[1] ?? 0),
+      badge: Number(badge.trim() || 0),
+      machines: Number(/(\d+) asks? waiting/.exec(machines)?.[1] ?? 0),
+    };
+  };
+  // The surfaces re-read a moment after each push, so agreement is awaited, not sampled once.
+  await expect
+    .poll(
+      async () => {
+        const seen = await counts();
+        return seen.attention === seen.badge && seen.badge === seen.machines ? seen.attention : seen;
+      },
+      { timeout: 30_000 },
+    )
+    .toBeGreaterThan(0)
+    .finally(() => capture(page, "live-state-machines-count"));
+  await openSurface(page, "Attention");
+  await capture(page, "live-state-attention-count");
+  await expect(page.getByText(/could not be refreshed/)).toHaveCount(0);
+  await openSurface(page, "Runs");
+  await page.getByRole("treeitem").filter({ hasText: "running" }).first().click({ timeout: 5000 });
+  await expect(page.getByText(/as of event \d+/).first()).toBeVisible();
+  await expect(page.locator(".orca-statusbar")).not.toContainText(/event \d+/);
+  await capture(page, "live-state-status-bar-with-run-open");
+}
+
 sweep("seed a fresh install and capture every surface", async () => {
   test.setTimeout(60 * 60_000);
   await mkdir(join(OUT, "logs"), { recursive: true });
@@ -480,6 +524,7 @@ sweep("seed a fresh install and capture every surface", async () => {
     await expect(page.getByText(agent, { exact: true }).first()).toBeVisible();
   await openSurface(page, "Attention");
   await expect(page.getByText(/^PERMISSION$/i).first()).toBeVisible();
+  await attempt("live-state", () => liveStateAgrees(page));
   await openSurface(page, "Workflows");
   await expect(page.getByText("release-train", { exact: true }).first()).toBeVisible();
   await everySurface(page, "1280");
