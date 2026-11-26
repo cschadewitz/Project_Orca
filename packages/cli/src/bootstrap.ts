@@ -49,7 +49,9 @@ import {
   sweepHookTelemetrySpools,
   openAcpSession,
   claudeSdkRequested,
-  refuseClaudeSdkSessionUntilDriver,
+  claudeSdkPreflight,
+  claudeSdkPlatformUnsupported,
+  openClaudeSdkSession,
   withProviderGuards,
   permissionPolicyPath,
   type AgentSession,
@@ -358,8 +360,8 @@ export function makeSessionFactory(
   return async (options: Parameters<SessionFactory>[0]) => {
     const bound = { ...options, permissionFiles, protectedPaths };
     // Claude through the Claude Agent SDK (#1118, held on feature/claude-agent-sdk): the
-    // person's own `claude` and login, checked before anything starts. The session driver is
-    // the next slice (#1120); until then the open is refused after the checks.
+    // person's own `claude` and login, checked before anything starts, then a session over
+    // one streaming `query()` (#1120).
     if (claudeSdkRequested(options.agent)) {
       if (options.host.spec.type !== "local")
         throw new OrcaError(
@@ -368,11 +370,24 @@ export function makeSessionFactory(
             `the Claude Agent SDK driver runs only on ORCA's own machine for now (#1130).`,
           { agentId: options.agent.id, host: options.host.spec.id },
         );
-      return refuseClaudeSdkSessionUntilDriver({
+      // Refused before anything runs: no tested process-tree ownership on Windows yet.
+      if (process.platform === "win32") throw claudeSdkPlatformUnsupported(options.agent.id);
+      const preflight = await claudeSdkPreflight({
         agent: options.agent,
         cwd: options.cwd,
         orcaEnv: options.env ?? {},
         signal: options.origin?.signal,
+      });
+      return openClaudeSdkSession({
+        agent: options.agent,
+        hostId: options.host.id,
+        cwd: options.cwd,
+        preflight,
+        protectedPaths,
+        signal: options.origin?.signal,
+        logger: options.logger,
+        clock: options.clock,
+        cancelGraceMs: options.cancelGraceMs,
       });
     }
     // ORCA's gate in Codex's executor path (#1026): its own route, which refuses every session
