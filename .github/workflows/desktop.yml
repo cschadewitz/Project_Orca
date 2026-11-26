@@ -337,6 +337,8 @@ jobs:
           $final = & $userPath
           if ($final -cne $before) { throw "user PATH after uninstall: '$final', expected '$before'" }
           Write-Output "uninstalled; user PATH restored"
+          # pwsh steps exit with the last native exit code, here the deliberate failing command's.
+          exit 0
 
       # GitHub-hosted fallback only; never runs on a self-hosted runner. Ubuntu 24.04 keeps
       # unprivileged user namespaces, which Chromium's sandbox needs, behind AppArmor. Rather
