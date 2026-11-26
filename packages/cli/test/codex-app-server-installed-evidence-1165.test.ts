@@ -41,11 +41,11 @@ import {
   readdir,
   realpath,
   rm,
+  stat,
   writeFile,
 } from "node:fs/promises";
 import { arch, platform, release, tmpdir } from "node:os";
 import { join, relative } from "node:path";
-import { PassThrough, type Readable } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -61,6 +61,7 @@ import {
 } from "@orca/agents";
 import { codexAppServerSessionOptions } from "../src/codex-app-server-factory.js";
 import { modelStandIn, script, shell, type ModelStandIn, type Step } from "./codex-model-stand-in.js";
+import { correlate as correlateWire, newWire, tapStdio, type Decision, type Wire } from "./codex-app-server-wire.js";
 
 const CODEX = process.env["ORCA_CODEX_BIN"];
 const RECEIPT_DIR = process.env["ORCA_ENFORCEMENT_RECEIPT_DIR"];
@@ -159,137 +160,6 @@ type Status = "verified" | "unverified" | "failed" | "known limitation";
 const statusOf = (failures: string[], unverified: string[]): Status =>
   failures.length > 0 ? "failed" : unverified.length > 0 ? "unverified" : "verified";
 
-interface Decision {
-  toolCallId?: string;
-  title: string;
-  decision: string;
-}
-
-/** The asks ORCA's driver answers through its policy, as Codex sends them. */
-const ASK_METHODS = new Set([
-  "item/commandExecution/requestApproval",
-  "item/fileChange/requestApproval",
-  "item/permissions/requestApproval",
-  "mcpServer/elicitation/request",
-]);
-
-/** One ask Codex sent, read off the wire: identifiers only, never its params' values. */
-interface WireAsk {
-  id: string | number;
-  method: string;
-  itemId: string | null;
-  approvalId: string | null;
-  approvalKind: string | null;
-  /**
-   * For an MCP ask, which names no item: the one MCP call item Codex had started and not
-   * finished for the same server, tool and arguments (compared by digest), as read on the wire;
-   * null when there was none or more than one.
-   */
-  matchedItem?: string | null;
-  /** ORCA's answer as it went back: the decision or action only. */
-  answer: string | null;
-}
-
-/**
- * What passed between ORCA and one Codex process, read by the harness at the process's stdio:
- * the asks Codex sent with ORCA's answers, and whether ORCA asked for a thread and Codex gave
- * one. Methods, ids and outcomes only: no params, config or values are kept.
- */
-interface Wire {
-  asks: WireAsk[];
-  threadRequests: { method: string; answered: "thread" | "error" | null }[];
-}
-
-/** Calls `on` with each JSON-RPC message in a line stream; lines that are not JSON are skipped. */
-function eachMessage(stream: Readable, on: (m: Record<string, unknown>) => void) {
-  let buffer = "";
-  stream.on("data", (d: Buffer) => {
-    buffer += d.toString();
-    for (let nl = buffer.indexOf("\n"); nl !== -1; nl = buffer.indexOf("\n")) {
-      const line = buffer.slice(0, nl);
-      buffer = buffer.slice(nl + 1);
-      try {
-        const m = JSON.parse(line) as unknown;
-        if (m && typeof m === "object" && !Array.isArray(m)) on(m as Record<string, unknown>);
-      } catch {
-        // not a message
-      }
-    }
-  });
-}
-
-/** Taps a process handle's stdio so the harness reads what ORCA and Codex send each other, unchanged. */
-function tapStdio(handle: AgentProcessHandle, wire: Wire): void {
-  const stdio = handle.stdio?.bind(handle);
-  if (!stdio) return;
-  handle.stdio = () => {
-    const { stdin, stdout } = stdio();
-    const toOrca = new PassThrough();
-    const toCodex = new PassThrough();
-    const threadIds = new Map<string | number, number>();
-    /** MCP call items Codex started and has not finished: id -> server, tool, digest of its arguments. */
-    const mcpItems = new Map<string, string>();
-    const callKey = (server: unknown, tool: unknown, args: unknown) =>
-      `${String(server)}\0${String(tool)}\0${sha256(JSON.stringify(args ?? null))}`;
-    const str = (v: unknown) => (typeof v === "string" ? v : null);
-    eachMessage(stdout, (m) => {
-      const id = m["id"] as string | number | undefined;
-      const method = str(m["method"]);
-      const params = (m["params"] ?? {}) as Record<string, unknown>;
-      const item = params["item"] as
-        { type?: unknown; id?: unknown; server?: unknown; tool?: unknown; arguments?: unknown } | undefined;
-      if (
-        (method === "item/started" || method === "item/completed") &&
-        item?.type === "mcpToolCall" &&
-        typeof item.id === "string"
-      ) {
-        if (method === "item/started") mcpItems.set(item.id, callKey(item.server, item.tool, item.arguments));
-        else mcpItems.delete(item.id);
-      } else if (method && id !== undefined && ASK_METHODS.has(method)) {
-        const p = params;
-        const meta = (p["_meta"] ?? {}) as Record<string, unknown>;
-        const ask: WireAsk = {
-          id,
-          method,
-          itemId: str(p["itemId"]),
-          approvalId: str(p["approvalId"]),
-          approvalKind: str(meta["codex_approval_kind"]),
-          answer: null,
-        };
-        if (method === "mcpServer/elicitation/request") {
-          const key = callKey(p["serverName"], meta["tool_name"], meta["tool_params"]);
-          const matches = [...mcpItems].filter(([, k]) => k === key).map(([itemId]) => itemId);
-          ask.matchedItem = matches.length === 1 ? matches[0]! : null;
-        }
-        wire.asks.push(ask);
-      } else if (!method && id !== undefined && threadIds.has(id)) {
-        const request = wire.threadRequests[threadIds.get(id)!]!;
-        const thread = (m["result"] as { thread?: { id?: unknown } } | undefined)?.thread;
-        request.answered = typeof thread?.id === "string" ? "thread" : "error";
-      }
-    });
-    eachMessage(toCodex, (m) => {
-      const id = m["id"] as string | number | undefined;
-      const method = str(m["method"]);
-      if ((method === "thread/start" || method === "thread/resume") && id !== undefined) {
-        threadIds.set(id, wire.threadRequests.length);
-        wire.threadRequests.push({ method, answered: null });
-      } else if (!method && id !== undefined) {
-        const ask = wire.asks.find((a) => a.id === id);
-        if (!ask) return;
-        const result = m["result"] as { decision?: unknown; action?: unknown; permissions?: unknown } | undefined;
-        ask.answer =
-          str(result?.decision) ??
-          str(result?.action) ??
-          (result?.permissions ? "nothing granted" : m["error"] ? "error" : null);
-      }
-    });
-    stdout.pipe(toOrca);
-    toCodex.pipe(stdin);
-    return { stdin: toCodex, stdout: toOrca };
-  };
-}
-
 describe.skipIf(CODEX === undefined)("installed-session evidence for the Codex app-server route (#1165)", () => {
   let model: ModelStandIn;
   let root: string;
@@ -356,7 +226,7 @@ describe.skipIf(CODEX === undefined)("installed-session evidence for the Codex a
     host.spawnAgent = async (...args: Parameters<typeof spawnAgent>) => {
       const handle = await spawnAgent(...args);
       spawned.push(handle);
-      const wire: Wire = { asks: [], threadRequests: [] };
+      const wire = newWire();
       wires.push(wire);
       tapStdio(handle, wire);
       return handle;
@@ -390,37 +260,10 @@ describe.skipIf(CODEX === undefined)("installed-session evidence for the Codex a
   };
 
   /** ORCA's policy decisions (`allow`, `deny`, `ask:*`), apart from the driver's own unasked declines. */
-  const policyDecisions = (decisions: Decision[]) => decisions.filter((d) => !d.decision.startsWith("codex:"));
+  const policyDecisions = (decisions: readonly Decision[]) => decisions.filter((d) => !d.decision.startsWith("codex:"));
   type Opened = Awaited<ReturnType<typeof open>>;
-  /**
-   * Each ask Codex sent, read off the wire, with ORCA's policy decision for it and the answer
-   * that went back, correlated by the ask's item (or approval) id. An ask ORCA's callback has no
-   * decision for is `unverified` in its own right; an answer that contradicts the decision fails.
-   */
-  const correlate = (s: Opened) => {
-    const asks = s.wires.flatMap((w) => w.asks);
-    const decided = policyDecisions(s.decisions);
-    const rows = asks.map((a) => {
-      const key = a.approvalId ?? a.itemId ?? a.matchedItem ?? null;
-      const orca = decided.filter((d) => key !== null && d.toolCallId === key).map((d) => d.decision);
-      return { ask: a, orcaDecision: orca.length === 1 ? orca[0]! : orca.length === 0 ? "unverified" : orca };
-    });
-    const failures: string[] = [];
-    const unverified: string[] = [];
-    for (const r of rows) {
-      if (r.orcaDecision === "allow" && r.ask.answer !== "accept")
-        failures.push(`ORCA allowed ${r.ask.method}, but ${r.ask.answer ?? "nothing"} went back`);
-      if (r.orcaDecision === "deny" && r.ask.answer === "accept")
-        failures.push(`ORCA denied ${r.ask.method}, but accept went back`);
-      if (typeof r.orcaDecision !== "string" || r.orcaDecision === "unverified")
-        unverified.push(`no single ORCA decision correlates with the ask ${String(r.ask.id)} (${r.ask.method})`);
-    }
-    // A decision with no ask on the wire: the harness did not see what ORCA decided about.
-    for (const d of decided)
-      if (!asks.some((a) => (a.approvalId ?? a.itemId ?? a.matchedItem ?? null) === d.toolCallId))
-        unverified.push(`ORCA decided ${d.decision} for ${d.toolCallId ?? "a call"} with no ask seen on the wire`);
-    return { rows, failures, unverified, asks };
-  };
+  /** Each ask on the wire with ORCA's decision and the answer that went back (`codex-app-server-wire.ts`). */
+  const correlate = (s: Opened) => correlateWire(s.wires, s.decisions, s.spawned.length);
   const nativeOf = (s: Opened) => ({
     threadPolicy: s.verified.at(-1)
       ? {
@@ -430,7 +273,8 @@ describe.skipIf(CODEX === undefined)("installed-session evidence for the Codex a
         }
       : "unverified",
     processesStarted: s.spawned.length,
-    asksSentByCodex: s.wires.flatMap((w) => w.asks).length,
+    asksSentByCodex: correlate(s).askCount,
+    exchangeObserved: correlate(s).observed,
     threadRequests: s.wires.flatMap((w) => w.threadRequests),
     asks: correlate(s).rows,
     unaskedDeclines: s.decisions.filter((d) => d.decision.startsWith("codex:")),
@@ -522,7 +366,8 @@ describe.skipIf(CODEX === undefined)("installed-session evidence for the Codex a
       const wire = correlate(s);
       failures.push(...wire.failures);
       const unverified: string[] = [...wire.unverified];
-      if (wire.asks.length !== c.asks) unverified.push(`Codex sent ${wire.asks.length} asks, not ${c.asks}`);
+      if (wire.observed && wire.asks.length !== c.asks)
+        unverified.push(`Codex sent ${wire.asks.length} asks, not ${c.asks}`);
       if (allow && effect === "none")
         unverified.push("ORCA allowed the call, but it had no effect under the native safeguards (sandbox)");
       const status = statusOf(failures, unverified);
@@ -563,7 +408,7 @@ describe.skipIf(CODEX === undefined)("installed-session evidence for the Codex a
     if (decided.some((d) => d.decision !== "deny"))
       failures.push(`ORCA decided ${decided.map((d) => d.decision).join(", ")}`);
     // The limitation is shown only by the wire: Codex sent no ask at all for the call.
-    const unasked = wire.asks.length === 0 && decided.length === 0;
+    const unasked = wire.observed && wire.asks.length === 0 && decided.length === 0;
     const status: Status = failures.length
       ? "failed"
       : unasked
@@ -601,13 +446,21 @@ describe.skipIf(CODEX === undefined)("installed-session evidence for the Codex a
     const s = await open("shell-cancel", [rule]);
     const session = await s.opened;
     const before = await tree(s.workspace);
+    const outputsBefore = model.outputs.length;
     let started = false;
     let cancelled = false;
+    // Times relative to the prompt, for telling a late completion from one before the cancel.
+    const t0 = Date.now();
+    const at: { startedSeen?: number; cancelSent?: number; cancelReturned?: number; turnEnded?: number } = {};
+    let stopReason: string | undefined;
     try {
       const turn = session.prompt(script(escalated(cmd)), { timeoutMs: 90_000 });
       for (const until = Date.now() + 30_000; Date.now() < until;) {
         started = (await readFile(join(s.workspace, "started.txt"), "utf8").catch(() => undefined)) !== undefined;
-        if (started) break;
+        if (started) {
+          at.startedSeen = Date.now() - t0;
+          break;
+        }
         const done = await Promise.race([
           turn.then(
             () => true,
@@ -618,10 +471,16 @@ describe.skipIf(CODEX === undefined)("installed-session evidence for the Codex a
         if (done) break;
       }
       if (started) {
+        at.cancelSent = Date.now() - t0;
         await session.cancel();
+        at.cancelReturned = Date.now() - t0;
         cancelled = true;
       }
-      await turn.catch(() => undefined);
+      stopReason = await turn.then(
+        (t) => t.stopReason,
+        (e: unknown) => `rejected: ${e instanceof Error ? e.message.slice(0, 200) : "?"}`,
+      );
+      at.turnEnded = Date.now() - t0;
       // Longer than the command's own wait: a command still running would have written by now.
       await delay(6_000);
     } finally {
@@ -630,12 +489,16 @@ describe.skipIf(CODEX === undefined)("installed-session evidence for the Codex a
     const after = await tree(s.workspace);
     const decided = policyDecisions(s.decisions).map((d) => d.decision);
     const finished = "done.txt" in after;
+    const doneWritten = await stat(join(s.workspace, "done.txt")).then(
+      (st) => Math.round(st.mtimeMs) - t0,
+      () => undefined,
+    );
     const wire = correlate(s);
     const failures: string[] = [...wire.failures];
     if (decided.some((d) => d !== "allow")) failures.push(`ORCA decided ${decided.join(", ")}, not allow`);
     if (cancelled && finished) failures.push("the command's result appeared after the turn was cancelled");
     const unverified: string[] = [...wire.unverified];
-    if (wire.asks.length !== 1) unverified.push(`Codex sent ${wire.asks.length} asks, not 1`);
+    if (wire.observed && wire.asks.length !== 1) unverified.push(`Codex sent ${wire.asks.length} asks, not 1`);
     if (!started) unverified.push("the command never started, so cancellation could not be observed");
     results.push({
       id: "shell-cancel",
@@ -652,6 +515,10 @@ describe.skipIf(CODEX === undefined)("installed-session evidence for the Codex a
         finished,
         changed: changes(before, after),
       },
+      // Milliseconds from the prompt: when ORCA saw started.txt, sent and finished the cancel,
+      // saw the turn end, and when done.txt was written (its mtime), with the turn's stop reason.
+      timing: { ...at, doneWritten, stopReason },
+      toolOutput: model.outputs.slice(outputsBefore),
     });
     expect(failures).toEqual([]);
   }, 180_000);
@@ -726,11 +593,15 @@ describe.skipIf(CODEX === undefined)("installed-session evidence for the Codex a
     // started there was none to ask.
     const threadRequests = s.wires.flatMap((w) => w.threadRequests);
     if (threadRequests.length > 0) failures.push("ORCA asked Codex for a thread before refusing");
+    // A process the harness could not observe leaves whether a thread was asked for unknown.
+    const observed = s.wires.length === s.spawned.length && s.wires.every((w) => w.attached && w.seen.fromCodex > 0);
+    const unverified =
+      s.spawned.length > 0 && !observed ? ["the harness did not observe the started process's exchange"] : [];
     results.push({
       id,
       action,
-      status: statusOf(failures, []),
-      reasons: failures,
+      status: statusOf(failures, unverified),
+      reasons: failures.length > 0 ? failures : unverified,
       orca: {
         refusal: error
           ? {
@@ -743,7 +614,7 @@ describe.skipIf(CODEX === undefined)("installed-session evidence for the Codex a
       native: {
         processesStarted: s.spawned.length,
         // Read on each started process's stdio; "none started" when there was no process to ask.
-        threadRequested: s.spawned.length === 0 ? "none started" : threadRequests.length > 0,
+        threadRequested: s.spawned.length === 0 ? "none started" : observed ? threadRequests.length > 0 : "unverified",
         threadRequests,
       },
     });
