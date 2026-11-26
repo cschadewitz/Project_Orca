@@ -1620,6 +1620,61 @@ describe("asks through ORCA's policy (#1159)", () => {
     }
   });
 
+  describe("bound to this machine's environment", () => {
+    const connected = (environmentId: unknown) => (peer: Peer) =>
+      peer.notify("thread/environment/connected", { threadId: "thr_1", environmentId });
+
+    it("declines unasked a command in another of Codex's environments", async () => {
+      const asked = vi.fn(async () => "accept");
+      const c = asking(() => [
+        { method: "item/commandExecution/requestApproval", params: COMMAND({ environmentId: "local" }) },
+        { method: "item/commandExecution/requestApproval", params: COMMAND({ environmentId: "devbox" }) },
+        { method: "item/commandExecution/requestApproval", params: COMMAND({ environmentId: 7 }) },
+      ]);
+      const s = scriptedHost(c.table);
+      const session = await open(s.host, { agent: withPolicy({ default: "allow" }), askPermission: asked });
+      await session.prompt("go");
+      expect(c.answers).toEqual([{ decision: "accept" }, { decision: "decline" }, { decision: "decline" }]);
+      expect(asked).not.toHaveBeenCalled();
+      await session.close();
+    });
+
+    it("keeps going when Codex reports this machine's environment", async () => {
+      const c = asking(() => [
+        { method: "item/commandExecution/requestApproval", params: COMMAND(), before: connected("local") },
+      ]);
+      const s = scriptedHost(c.table);
+      const session = await open(s.host, { agent: withPolicy({ default: "allow" }) });
+      await session.prompt("go");
+      expect(c.answers).toEqual([{ decision: "accept" }]);
+      await session.close();
+    });
+
+    it("stops the session when Codex connects the thread to another environment mid-turn", async () => {
+      const s = scriptedHost({
+        ...BASE,
+        "turn/start": (_msg, peer) => {
+          setImmediate(() => connected("devbox")(peer));
+          return { turn: { id: "turn_1", status: "inProgress" } };
+        },
+      });
+      const session = await open(s.host);
+      await expect(session.prompt("go")).rejects.toThrow(/environment other than this machine/);
+      await expect(session.prompt("again")).rejects.toThrow(/environment other than this machine/);
+      await vi.waitFor(() => expect(s.kill).toHaveBeenCalled());
+    });
+
+    it("takes no prompt when Codex connected the thread to another environment while it opened", async () => {
+      const s = scriptedHost({
+        ...BASE,
+        "thread/start": (_msg, peer) => (connected("devbox")(peer), THREAD()),
+      });
+      const session = await open(s.host);
+      await expect(session.prompt("go")).rejects.toThrow(/environment other than this machine/);
+      expect(s.peer.received.map((m) => m.method)).not.toContain("turn/start");
+    });
+  });
+
   it("declines a permissions grant unasked, whatever the policy", async () => {
     const asked = vi.fn(async () => "accept");
     const c = asking(() => [

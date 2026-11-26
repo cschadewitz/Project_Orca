@@ -154,6 +154,11 @@ describe("Codex asks as permission requests", () => {
     expect(refused("item/commandExecution/requestApproval", { ...COMMAND, kind: "writeStdin" })).toMatch(/terminal/);
     expect(refused("item/commandExecution/requestApproval", { ...COMMAND, command: null })).toMatch(/names no command/);
     expect(refused("item/commandExecution/requestApproval", { ...COMMAND, command: 1 })).toMatch(/command/);
+    expect(refused("item/commandExecution/requestApproval", { ...COMMAND, environmentId: "devbox" })).toMatch(
+      /environment other than this machine/,
+    );
+    expect(refused("item/commandExecution/requestApproval", { ...COMMAND, environmentId: "local" })).toBeUndefined();
+    expect(refused("item/commandExecution/requestApproval", { ...COMMAND, environmentId: 1 })).toMatch(/environmentId/);
     expect(
       refused("item/commandExecution/requestApproval", { ...COMMAND, commandActions: [{ type: "read" }] }),
     ).toMatch(/parsed command actions/);

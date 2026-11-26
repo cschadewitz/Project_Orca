@@ -70,6 +70,7 @@ import {
   codexAskRequest,
   codexAskResponse,
   isCodexPolicyAsk,
+  isCodexLocalEnvironment,
   type CodexAskOutcome,
   type CodexPolicyAsk,
 } from "./codex-app-server-asks.js";
@@ -335,6 +336,7 @@ const HANDLED_NOTIFICATIONS = new Set([
   "turn/completed",
   "account/updated",
   "account/rateLimits/updated",
+  "thread/environment/connected",
 ]);
 
 /** Codex's legacy (v1) approvals, which a v2 thread does not send: declined. */
@@ -784,6 +786,8 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
   let active: ActiveTurn | undefined;
   /** Set once the session cannot take another prompt: Codex may still be running a turn. */
   let broken: OrcaError | undefined;
+  /** Set once Codex reports the thread connected to an environment other than this machine. */
+  let foreignEnvironment: OrcaError | undefined;
   /** The account the session started on, which every later answer is compared to. */
   const sessionAccount: { identity?: CodexAccountIdentity } = {};
   /**
@@ -1190,6 +1194,23 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
     }
     if (threadId && typeof params.threadId === "string" && params.threadId !== threadId) return;
     switch (method) {
+      // ORCA's checks read this machine's filesystem. A thread Codex connects to another of its
+      // environments acts where they cannot see, so the session stops (#1159 binding).
+      case "thread/environment/connected":
+        check(isString(params.environmentId) ? undefined : "an environment connection without its id");
+        if (!isCodexLocalEnvironment(params.environmentId)) {
+          const error = new OrcaError(
+            "NOT_SUPPORTED",
+            `agent ${agent.id}: Codex connected the thread to an environment other than this machine, whose filesystem ORCA's checks do not read; ORCA stops the session`,
+            { agentId: agent.id, reason: "codex-foreign-environment" },
+          );
+          foreignEnvironment ??= error;
+          if (open) {
+            active?.fail(error);
+            breakSession(error);
+          }
+        }
+        return;
       case "item/agentMessage/delta":
         check(isString(params.itemId) && isString(params.delta) ? undefined : "a delta without its item id and text");
         active?.streamed.add(params.itemId as string);
@@ -1611,6 +1632,8 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
   open = true;
   // Codex may have exited between its last answer and here.
   if (conn.client.closed) connectionClosed(conn, conn.client.closed);
+  // Codex may have connected the thread to another environment while it opened.
+  if (foreignEnvironment) breakSession(foreignEnvironment);
 
   /**
    * A new app-server for the same thread after the last one exited: after the backoff its crash
