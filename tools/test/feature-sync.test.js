@@ -17,7 +17,7 @@ const FAKE_GH = `#!/usr/bin/env node
 const fs = require("node:fs");
 const { execFileSync } = require("node:child_process");
 const args = process.argv.slice(2);
-fs.appendFileSync(process.env.LOG, args.join(" ") + "\\n");
+fs.appendFileSync(process.env.LOG, args.join(" ") + " [token=" + process.env.GH_TOKEN + "]\\n");
 const jq = (json) => {
   const i = args.indexOf("--jq");
   return i < 0 ? json : execFileSync("jq", ["-r", args[i + 1]], { input: json, encoding: "utf8" });
@@ -93,6 +93,7 @@ describe("tools/feature-sync.sh", () => {
         PATH: `${join(work, "bin")}:${process.env.PATH}`,
         LOG: log,
         GH_TOKEN: "t",
+        ISSUES_TOKEN: "issues",
         REPO: "o/r",
         GITHUB_STEP_SUMMARY: join(work, "summary"),
         ...env,
@@ -300,6 +301,9 @@ describe("tools/feature-sync.sh", () => {
     commit(origin, "app.txt", "one\nmain\nthree\n");
     const calls = run();
     expect(calls).toMatch(/issue create --repo o\/r --title Sync conflict: feature\/sdk --label sync-conflict/);
+    // Issues go through the workflow's own token, not the release App's.
+    expect(calls).toMatch(/issue create --repo o\/r --title Sync conflict: feature\/sdk [\s\S]*?\[token=issues\]/);
+    expect(calls).toMatch(/label create sync-conflict .*\[token=issues\]/);
     expect(calls).not.toContain("pr create");
     expect(git(origin, "branch", "--list", "feature-sync/*")).toBe("");
     // A second run comments on the open issue instead of opening another.
