@@ -140,6 +140,151 @@ const open = (host: AgentHost, more: Partial<Parameters<typeof openCodexAppServe
     ...more,
   });
 
+describe("account and usage limits (#1164)", () => {
+  const CHATGPT = (userId = "user-1") => ({
+    account: { type: "chatgpt", email: "someone@example.com", planType: "pro", workspaceName: null },
+    userId,
+    requiresOpenaiAuth: true,
+  });
+  const SNAPSHOT = {
+    limitId: "codex",
+    limitName: null,
+    primary: { usedPercent: 42, windowDurationMins: 300, resetsAt: 1_795_000_000 },
+    secondary: null,
+    credits: null,
+    planType: "pro",
+    rateLimitReachedType: null,
+  };
+  /** A Codex whose turns end as `end`, after playing `play`. */
+  const turns = (end: (peer: Peer, turnId: string) => void, more: Record<string, Responder> = {}) => {
+    let n = 0;
+    return {
+      ...BASE,
+      ...more,
+      "turn/start": (_msg: Msg, peer: Peer) => {
+        const turnId = `turn_${++n}`;
+        setImmediate(() => end(peer, turnId));
+        return { turn: { id: turnId, status: "inProgress" } };
+      },
+    };
+  };
+  const completed = (peer: Peer, turnId: string) =>
+    peer.notify("turn/completed", { threadId: "thr_1", turn: { id: turnId, status: "completed", error: null } });
+
+  it("reports the account at open, and reads a ChatGPT login's usage limits in the background", async () => {
+    const accounts: unknown[] = [];
+    const limits: unknown[] = [];
+    const s = scriptedHost({
+      ...BASE,
+      "account/read": () => CHATGPT(),
+      "account/rateLimits/read": () => ({ rateLimits: SNAPSHOT, rateLimitsByLimitId: null }),
+    });
+    const session = await open(s.host, { onAccount: (a) => accounts.push(a), onRateLimits: (l) => limits.push(l) });
+    expect(accounts).toEqual([{ kind: "chatgpt", planType: "pro" }]);
+    await vi.waitFor(() => expect(limits).toHaveLength(1));
+    expect(limits[0]).toEqual({
+      limitId: "codex",
+      limitName: null,
+      primary: { usedPercent: 42, windowDurationMins: 300, resetsAt: 1_795_000_000 },
+      secondary: null,
+      planType: "pro",
+      rateLimitReachedType: null,
+    });
+    expect(s.peer.received.find((m) => m.method === "account/rateLimits/read")?.params).toEqual({
+      excludeResetCreditDetails: true,
+    });
+    await session.close();
+    // an API-key login has no usage limits to read
+    const k = scriptedHost(BASE);
+    await (await open(k.host)).close();
+    expect(k.peer.received.some((m) => m.method === "account/rateLimits/read")).toBe(false);
+  });
+
+  it("names the window and its reset time when a turn ends on the usage limit", async () => {
+    const limits: unknown[] = [];
+    const s = scriptedHost(
+      turns((peer, turnId) => {
+        peer.notify("account/rateLimits/updated", {
+          rateLimits: { ...SNAPSHOT, primary: { usedPercent: 100, windowDurationMins: 300, resetsAt: 1_795_000_000 } },
+        });
+        peer.notify("turn/completed", {
+          threadId: "thr_1",
+          turn: {
+            id: turnId,
+            status: "failed",
+            error: {
+              message: "You've hit your usage limit.",
+              codexErrorInfo: "usageLimitExceeded",
+              additionalDetails: null,
+            },
+          },
+        });
+      }),
+    );
+    const session = await open(s.host, { onRateLimits: (l) => limits.push(l) });
+    const error = (await session.prompt("go").catch((e: unknown) => e)) as OrcaError;
+    expect(error.message).toContain(
+      `the usage limit of its login is reached: the 5-hour window is 100% used and resets at ${new Date(1_795_000_000_000).toISOString()}`,
+    );
+    expect(error.details).toMatchObject({ reason: "codex-usage-limit" });
+    expect(limits).toHaveLength(1);
+    // the session goes on: the next turn runs once the limit allows
+    await session.close();
+  });
+
+  it("refuses new turns while Codex reports the user signed out, and takes them again once signed in", async () => {
+    let account: unknown = { account: { type: "apiKey" }, userId: null, requiresOpenaiAuth: true };
+    const accounts: unknown[] = [];
+    const s = scriptedHost(turns(completed, { "account/read": () => account }));
+    const session = await open(s.host, { onAccount: (a) => accounts.push(a) });
+    account = { account: null, userId: null, requiresOpenaiAuth: true };
+    s.peer.notify("account/updated", { authMode: null, planType: null, reason: null });
+    await vi.waitFor(() => expect(accounts).toHaveLength(2));
+    const error = (await session.prompt("go").catch((e: unknown) => e)) as OrcaError;
+    expect(error.code).toBe("NOT_SUPPORTED");
+    expect(error.message).toContain("Codex is no longer signed in. Run `codex login`");
+    expect(s.peer.received.some((m) => m.method === "turn/start")).toBe(false);
+    account = { account: { type: "apiKey" }, userId: null, requiresOpenaiAuth: true };
+    s.peer.notify("account/updated", { authMode: "apikey", planType: null, reason: null });
+    await vi.waitFor(() => expect(accounts).toHaveLength(3));
+    await expect(session.prompt("again")).resolves.toMatchObject({ stopReason: "end_turn" });
+    await session.close();
+  });
+
+  it("refuses new turns once Codex reports another account than the session started on", async () => {
+    let account: unknown = CHATGPT("user-1");
+    const accounts: unknown[] = [];
+    const s = scriptedHost(
+      turns(completed, {
+        "account/read": () => account,
+        "account/rateLimits/read": () => ({ rateLimits: SNAPSHOT }),
+      }),
+    );
+    const session = await open(s.host, { onAccount: (a) => accounts.push(a) });
+    account = CHATGPT("user-2");
+    s.peer.notify("account/updated", { authMode: "chatgpt", planType: "pro", reason: null });
+    await vi.waitFor(() => expect(accounts).toHaveLength(2));
+    await expect(session.prompt("go")).rejects.toMatchObject({
+      code: "NOT_SUPPORTED",
+      details: { reason: "codex-account-switched" },
+    });
+    await session.close();
+  });
+
+  it("ends the session on a malformed usage-limit update or account update", async () => {
+    for (const [method, params] of [
+      ["account/rateLimits/updated", { rateLimits: { primary: { usedPercent: "full" } } }],
+      ["account/updated", { authMode: 1, planType: null, reason: null }],
+    ] as const) {
+      const s = scriptedHost(BASE);
+      const session = await open(s.host);
+      s.peer.notify(method, params);
+      await vi.waitFor(() => expect(s.kill).toHaveBeenCalled());
+      await expect(session.prompt("go")).rejects.toMatchObject({ code: "AGENT_PROTOCOL" });
+    }
+  });
+});
+
 describe("Codex's config (#1160)", () => {
   const refused = async (answers: Record<string, Responder>, more: Partial<Parameters<typeof open>[1]> = {}) => {
     const s = scriptedHost({ ...BASE, ...answers });

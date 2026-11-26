@@ -560,6 +560,16 @@ directory (the app-server already runs in it), because Codex records a named dir
 trusted project in the user's own `config.toml` when the sandbox can write it; ORCA leaves the
 user's Codex profile unchanged.
 
+ORCA reads the account and usage limits from Codex itself (`account/read`,
+`account/rateLimits/read` for a ChatGPT login, and Codex's `account/updated` and
+`account/rateLimits/updated`), and keeps the kind of login, the ChatGPT plan and each limit
+window's use and reset time; never the email, workspace name or credentials. A turn Codex ends
+on a usage or rate limit fails with the window and its reset time named, when Codex reported
+them. When Codex reports the user signed out or on another account than the session started on,
+new turns are refused with what to do (`codex login`, or a new session) until it reports the
+same account again. A running app-server does not notice a `codex logout` run elsewhere
+(Codex keeps the login it started with), so this covers what Codex itself reports.
+
 When the app-server exits under a session, the running turn fails, an ask it raised is never
 answered, and the next prompt starts a new app-server on the same thread (`thread/resume`, held
 to the same checks of the thread and of Codex's config as the open; a config that no longer

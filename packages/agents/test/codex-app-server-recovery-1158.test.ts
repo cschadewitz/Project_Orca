@@ -485,6 +485,29 @@ describe("an app-server that exits", () => {
     expect(t.spawnAgent).toHaveBeenCalledTimes(2);
   });
 
+  it("stops the session when the replacement runs on another account (#1164)", async () => {
+    const s = scriptedHost((i) => ({
+      ...BASE,
+      ...(i === 1
+        ? {
+            "account/read": () => ({
+              account: { type: "chatgpt", planType: "pro" },
+              userId: "u2",
+              requiresOpenaiAuth: true,
+            }),
+          }
+        : {}),
+    }));
+    const session = await open(s.host);
+    s.procs[0]!.crash();
+    await settle();
+    const error = (await session.prompt("go").catch((e: unknown) => e)) as OrcaError;
+    expect(error.details).toMatchObject({ reason: "codex-account-switched" });
+    expect(methods(s.procs[1]!)).not.toContain("thread/resume");
+    await expect(session.prompt("again")).rejects.toBe(error);
+    expect(s.spawnAgent).toHaveBeenCalledTimes(2);
+  });
+
   it("stops the session after the crash budget, waiting the backoff before each restart", async () => {
     const sleep = vi.fn(async () => {});
     // every app-server after the first exits as soon as its thread is resumed
