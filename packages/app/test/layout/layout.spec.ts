@@ -44,6 +44,10 @@ test.beforeAll(async () => {
   desktop = await Desktop.start();
   daemon = await startSeededDaemon();
   profile = await mkdtemp(join(desktop.root, "profile-"));
+  // A permission ask that arrives while the window has focus takes it to Attention (#165);
+  // the seeded asking-builders keep asking, which moved the window off the surface a test was
+  // measuring. Permission alerts off; the other tiers are off by default.
+  await writeFile(join(profile, "preferences.json"), JSON.stringify({ alerts: { permission: false } }));
   app = await electron.launch({
     // `-r` runs before Playwright's own loader appends `--password-store=basic`; the switch it
     // sets is read later, so the libsecret store wins and Launch work can keep an intent.
@@ -136,6 +140,8 @@ test("#1193 Runs keeps twenty characters of title and its toolbar at 800×600 an
   for (const [width, height, zoom, name] of [
     [800, 600, 1, "1193-runs-800x600"],
     [1280, 900, 1.5, "1193-runs-1280x900-150"],
+    // Both at once: about 530 CSS pixels, where the step detail folds under the tree.
+    [800, 600, 1.5, "1193-runs-800x600-150"],
   ] as const) {
     await frame(width, height, zoom);
     await expect(page.locator(".orca-runs__tree .orca-runs__name").first()).toBeVisible({ timeout: 30_000 });
@@ -179,6 +185,24 @@ test("#1193 Runs keeps twenty characters of title and its toolbar at 800×600 an
       expect(view.bottom, `${name}: ${view.label}`).toBeLessThanOrEqual(measured.height);
     }
   }
+  await frame(1280, 900);
+});
+
+test("#1193 at 800×600 and 150% the step detail folds under the tree, and only once a run is selected", async () => {
+  await surface("Runs");
+  await frame(800, 600, 1.5);
+  const tree = page.locator(".orca-runs__tree");
+  const detail = page.locator(".orca-runs__detail");
+  await expect(tree.locator(".orca-runs__name").first()).toBeVisible({ timeout: 30_000 });
+  await expect(detail).toBeHidden();
+  await page.getByRole("treeitem").first().click();
+  await expect(detail).toBeVisible({ timeout: 30_000 });
+  const [treeBox, detailBox] = await Promise.all([tree.boundingBox(), detail.boundingBox()]);
+  await shot("1193-runs-800x600-150-selected");
+  // One column: the detail under the tree, as wide as it, not beside it.
+  expect(detailBox!.y).toBeGreaterThanOrEqual(treeBox!.y + treeBox!.height - 0.5);
+  expect(Math.abs(detailBox!.width - treeBox!.width)).toBeLessThanOrEqual(1);
+  await page.keyboard.press("Escape");
   await frame(1280, 900);
 });
 
