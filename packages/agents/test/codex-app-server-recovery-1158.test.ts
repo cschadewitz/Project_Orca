@@ -536,6 +536,36 @@ describe("an app-server that exits", () => {
     await expect(session.prompt("again")).rejects.toBe(error);
   });
 
+  it("reads an account update sent during the replacement's config checks before resuming the thread (#1164)", async () => {
+    let switched = false;
+    const s = scriptedHost((i) => ({
+      ...BASE,
+      "account/read": () => ({
+        account: { type: "chatgpt", planType: "pro" },
+        userId: switched ? "u2" : "u1",
+        requiresOpenaiAuth: true,
+      }),
+      ...(i === 1
+        ? {
+            "config/read": (m: Msg, proc: Proc, n: number) => {
+              if (!switched) {
+                switched = true;
+                proc.say({ method: "account/updated", params: { authMode: "chatgpt", planType: "pro", reason: null } });
+              }
+              return BASE["config/read"]!(m, proc, n);
+            },
+          }
+        : {}),
+    }));
+    const session = await open(s.host);
+    s.procs[0]!.crash();
+    await settle();
+    const error = (await session.prompt("go").catch((e: unknown) => e)) as OrcaError;
+    expect(error.details).toMatchObject({ reason: "codex-account-switched" });
+    expect(methods(s.procs[1]!)).toContain("config/read");
+    expect(methods(s.procs[1]!)).not.toContain("thread/resume");
+  });
+
   it("stops the session after the crash budget, waiting the backoff before each restart", async () => {
     const sleep = vi.fn(async () => {});
     // every app-server after the first exits as soon as its thread is resumed
