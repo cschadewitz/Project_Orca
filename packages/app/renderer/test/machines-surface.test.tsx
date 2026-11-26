@@ -13,6 +13,7 @@ import type {
   FleetMachine,
   FleetSnapshot,
   RemoteProfileView,
+  TailnetPresenceView,
 } from "../../src/daemon-connection.js";
 import { MachinesSurface } from "../src/machines/machines-surface.js";
 import { fleetSummary, slotsLabel } from "../src/machines/machine-model.js";
@@ -248,6 +249,79 @@ describe("the Machines surface", () => {
       fireEvent.click(screen.getAllByRole("menuitem").find((item) => item.textContent?.startsWith("Delta"))!);
     });
     expect(fleet.watch).toHaveBeenCalledWith("delta", true);
+  });
+});
+
+describe("tailnet presence (#1230)", () => {
+  it("is read only while the surface is open, and is a hint beside the connection state", () => {
+    let send: ((snapshot: TailnetPresenceView) => void) | undefined;
+    const stop = vi.fn();
+    fleet.tailnetPresence = vi.fn((listener: (snapshot: TailnetPresenceView) => void) => {
+      send = listener;
+      return stop;
+    });
+    SNAPSHOT.machines[3] = { ...SNAPSHOT.machines[3]!, reason: "Timed out connecting" };
+    try {
+      renderSurface();
+      expect(fleet.tailnetPresence).toHaveBeenCalledTimes(1);
+      expect(within(section("Gamma")).getByText("Timed out connecting")).toBeTruthy();
+      act(() =>
+        send!({
+          alpha: { kind: "online", name: "alpha.example-tailnet.ts.net" },
+          gamma: { kind: "offline", name: "gamma.example-tailnet.ts.net", lastSeen: "2026-11-22T11:00:00.000Z" },
+        }),
+      );
+      // A live machine keeps its state; the tailnet's word is beside it.
+      expect(within(section("Alpha")).getByText("Online on your tailnet")).toBeTruthy();
+      // An offline one says so, with when it was last seen, beside the connection's own reason.
+      const gamma = section("Gamma");
+      expect(within(gamma).getByText(/Offline on your tailnet/)).toBeTruthy();
+      expect(within(gamma).getByText(/last seen/)).toBeTruthy();
+      expect(within(gamma).getByText("Timed out connecting")).toBeTruthy();
+      // A machine with no tailnet binding says nothing about it.
+      expect(within(section("Beta")).queryByText(/tailnet/)).toBeNull();
+      cleanup();
+      expect(stop).toHaveBeenCalledTimes(1);
+    } finally {
+      SNAPSHOT.machines[3] = machine({
+        key: "profile:gamma",
+        name: "Gamma",
+        request: { profile: "gamma" },
+        state: "disconnected",
+      });
+    }
+  });
+
+  it("never hides a refusal to sign in or a different machine behind the tailnet's word", () => {
+    let send: ((snapshot: TailnetPresenceView) => void) | undefined;
+    fleet.tailnetPresence = (listener) => {
+      send = listener;
+      return () => {};
+    };
+    const before = SNAPSHOT.machines[3]!;
+    for (const reason of [
+      "Credential invalid or revoked. Import a new credential for the profile, or update the configured credential file.",
+      "The server presented a different host key than the one pinned for this profile.",
+    ]) {
+      SNAPSHOT.machines[3] = { ...before, reason };
+      try {
+        renderSurface();
+        act(() => send!({ gamma: { kind: "offline", name: "gamma.example-tailnet.ts.net" } }));
+        const gamma = section("Gamma");
+        expect(within(gamma).getByText(/Offline on your tailnet/)).toBeTruthy();
+        expect(within(gamma).getByText(reason)).toBeTruthy();
+        act(() => send!({ gamma: { kind: "gone" } }));
+        expect(within(section("Gamma")).getByText(reason)).toBeTruthy();
+      } finally {
+        cleanup();
+        SNAPSHOT.machines[3] = before;
+      }
+    }
+  });
+
+  it("says nothing in a build without it", () => {
+    renderSurface();
+    expect(screen.queryByText(/tailnet/)).toBeNull();
   });
 });
 
