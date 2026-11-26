@@ -2,7 +2,7 @@
 import { readFileSync, readlinkSync } from "node:fs";
 import { link, mkdir, open, readdir, readFile, rename, rmdir, stat, unlink, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import { hostname } from "node:os";
+import { hostname, uptime } from "node:os";
 import { join } from "node:path";
 import { OrcaError } from "@orca/core";
 
@@ -47,6 +47,33 @@ export function livenessDomain(): string | null {
     return (domainCache = null);
   }
 }
+/** The kernel boot a liveness domain names, or null when it is not one `livenessDomain` wrote. */
+function bootOf(domain: unknown): string | null {
+  if (typeof domain !== "string") return null;
+  const match = /^linux:([0-9a-f-]{36}):pid:\[[0-9]+\]$/i.exec(domain);
+  return match ? match[1]!.toLowerCase() : null;
+}
+
+/** Slack for uptime's whole-second rounding and filesystem timestamp granularity. */
+const BOOT_MARGIN_MS = 5_000;
+/** When this machine booted, by its wall clock now. */
+const bootTimeMs = () => Date.now() - uptime() * 1000;
+
+/**
+ * Whether a lock left on this host was taken before this machine last booted (#1197). Every
+ * process of an earlier boot is gone, so such a holder is dead whatever its pid now names: after
+ * a power loss the pid is often reused, by an unrelated process or by the restarted daemon itself.
+ * On Linux, when both sides recorded a liveness domain, the kernel boot ids decide exactly.
+ * Otherwise the holder's own `at` (or, for a lock with no readable owner, the directory's mtime)
+ * must be older than the boot time, with a margin for rounding.
+ */
+function fromEarlierBoot(recorded: { domain?: unknown; at?: number | undefined }): boolean {
+  const theirs = bootOf(recorded.domain);
+  const ours = bootOf(livenessDomain());
+  if (theirs && ours) return theirs !== ours;
+  return Number.isFinite(recorded.at) && recorded.at! < bootTimeMs() - BOOT_MARGIN_MS;
+}
+
 export interface LockHolder {
   pid: number;
   at: number;
@@ -129,12 +156,20 @@ async function removeToken(path: string, token: string): Promise<boolean> {
 async function removeDeadOwner(path: string, options: FileLockOptions): Promise<boolean> {
   try {
     const names = await readdir(path);
+    if (names.length === 0) return await removeEmptyFromEarlierBoot(path, options);
     if (names.length !== 1 || !/^owner\.\d+\.[a-f0-9-]+\.json$/.test(names[0]!)) return false;
     const token = names[0]!;
-    const raw = JSON.parse(await readFile(join(path, token), "utf8")) as Partial<LockHolder> & {
-      host?: string;
-      domain?: unknown;
-    };
+    let raw: Partial<LockHolder> & { host?: string; domain?: unknown };
+    try {
+      raw = JSON.parse(await readFile(join(path, token), "utf8")) as typeof raw;
+    } catch (error) {
+      if (!(error instanceof SyntaxError)) throw error;
+      // A token torn by a power loss (often zero bytes: its data never reached the disk) names
+      // no holder. Only a token from before this boot is provably dead; any other stays closed.
+      if (options.recovery === "provable" || !fromEarlierBoot({ at: (await stat(join(path, token))).mtimeMs }))
+        return false;
+      return await removeToken(path, token);
+    }
     if (options.recovery === "provable") {
       const domain = livenessDomain();
       if (domain === null || raw.domain !== domain) return false;
@@ -144,7 +179,8 @@ async function removeDeadOwner(path: string, options: FileLockOptions): Promise<
       !Number.isInteger(raw.pid) ||
       raw.pid! <= 0 ||
       !Number.isFinite(raw.at) ||
-      processAlive(raw.pid!)
+      // A pid from an earlier boot names nobody we can probe: it is dead, whatever runs under it now.
+      ((options.recovery === "provable" || !fromEarlierBoot(raw)) && processAlive(raw.pid!))
     )
       return false;
     const removed = await removeToken(path, token);
@@ -156,6 +192,22 @@ async function removeDeadOwner(path: string, options: FileLockOptions): Promise<
       return false;
     throw error;
   }
+}
+
+/**
+ * An empty lock directory is a holder that crashed between `mkdir` and publishing its token.
+ * Under host recovery, one that predates this boot is removed; anything newer stays closed.
+ */
+async function removeEmptyFromEarlierBoot(path: string, options: FileLockOptions): Promise<boolean> {
+  if (options.recovery === "provable" || !fromEarlierBoot({ at: (await stat(path)).mtimeMs })) return false;
+  try {
+    await rmdir(path);
+  } catch (error) {
+    // A contender published a token meanwhile: that is a live holder, not ours to remove.
+    if (["ENOTEMPTY", "EEXIST"].includes(codeOf(error) ?? "")) return false;
+    throw error;
+  }
+  return true;
 }
 
 /**

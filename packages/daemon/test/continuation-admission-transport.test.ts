@@ -1,6 +1,6 @@
 /** Real token transports and durable stores; no permissive continuation authority fixture. */
 import { afterEach, expect, it, vi } from "vitest";
-import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { AgentRegistry } from "@orca/agents";
@@ -579,6 +579,44 @@ it("startup does not recover revoked original authority through a valid owner cr
   expect(f.effects).not.toHaveBeenCalled();
   const events = await executionEvents(await restarted.stores.events.read(f.runId), restarted.stores.execution);
   expect(events.filter((event) => event.type === "continuation.recorded" && event.payload.decision)).toHaveLength(1);
+});
+
+it("startup after a power loss clears the retry journal's torn lock and recovers the signed-in client's continuation (#1197)", async () => {
+  const f = await fixture({ manualDispatch: true });
+  const admitted = RunsContinueResultSchema.parse(result(await f.http("runs.continue", f.params)));
+  if (admitted.state !== "resolved") throw new Error("not resolved");
+  // The power went while a tick held the catalog mutex: the directory survived, its owner
+  // token's bytes did not (a zero-byte file), and both predate this boot.
+  const lock = join(f.dir, "admission-retries", "catalog.lock");
+  const token = join(lock, `owner.${process.pid}.0b5e55ed-0000-4000-8000-000000001197.json`);
+  await mkdir(lock);
+  await writeFile(token, "");
+  const beforeBoot = new Date("2020-01-01T00:00:00Z");
+  await utimes(token, beforeBoot, beforeBoot);
+  const restarted = await f.boot();
+  await expect(restarted.daemon.recoverContinuations!()).resolves.toBeUndefined();
+  await f.entered.wait;
+  f.finish.release();
+  await restarted.model.drain();
+  expect(
+    result(
+      await restarted.http("continuations.get", { continuationId: admitted.result.continuationId }, f.owner.token),
+    ),
+  ).toMatchObject({ state: "settled" });
+  expect(f.effects).toHaveBeenCalledTimes(1);
+  expect(await readdir(join(f.dir, "admission-retries"))).not.toContain("catalog.lock");
+});
+
+it("startup leaves a torn lock from this boot in place and says why, rather than guessing (#1197)", async () => {
+  const f = await fixture({ manualDispatch: true });
+  const admitted = RunsContinueResultSchema.parse(result(await f.http("runs.continue", f.params)));
+  if (admitted.state !== "resolved") throw new Error("not resolved");
+  const lock = join(f.dir, "admission-retries", "catalog.lock");
+  await mkdir(lock);
+  await writeFile(join(lock, `owner.${process.pid}.0b5e55ed-0000-4000-8000-000000001197.json`), "");
+  const restarted = await f.boot();
+  await expect(restarted.daemon.recoverContinuations!()).rejects.toMatchObject({ code: "STORE_LOCK_TIMEOUT" });
+  expect(f.effects).not.toHaveBeenCalled();
 });
 
 it.each(["http", "socket"] as const)(
