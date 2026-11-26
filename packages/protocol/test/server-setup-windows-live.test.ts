@@ -16,6 +16,7 @@ import {
   discoverServer,
   dropDiscovery,
   readSetup,
+  serverOs,
   setupInvocation,
   SETUP_TIMEOUT_MS,
   type Inspected,
@@ -43,6 +44,18 @@ describe.skipIf(!live || process.platform !== "win32")("a Windows server's setup
   });
   let inspected: Inspected | undefined;
 
+  it("answers the probe that tells it is Windows", async () => {
+    const tunnel = new SshTunnel({ ...base(), knownHostsFile: join(dir, "winlive-probe") });
+    try {
+      await tunnel.open();
+      const probe = await tunnel.exec(["cmd", "/c", "ver"], 30_000);
+      expect(probe, JSON.stringify(probe)).toMatchObject({ code: 0 });
+      expect(await serverOs(tunnel), JSON.stringify(probe)).toBe("windows");
+    } finally {
+      await tunnel.close();
+    }
+  }, 60_000);
+
   it("tells the server is Windows and inspects it read only with the Windows setup", async () => {
     const discovery = await discoverServer({
       base: base(),
@@ -52,7 +65,7 @@ describe.skipIf(!live || process.platform !== "win32")("a Windows server's setup
     });
     dropDiscovery(discovery);
     expect(discovery.os).toBe("windows");
-    expect(discovery.outcome.kind).toBe("inspected");
+    expect(discovery.outcome.kind, JSON.stringify(discovery.outcome)).toBe("inspected");
     if (discovery.outcome.kind !== "inspected") return;
     inspected = discovery.outcome.inspected;
     // The sshd session's own account and its own per-user directory, a first install.
