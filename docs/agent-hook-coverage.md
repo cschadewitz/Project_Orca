@@ -124,12 +124,12 @@ no claim is made on this route until Cal agrees one on #1026.
 | verified | Allow-once asks again | Two identical escalated commands are asked about and decided twice; Codex keeps no grant |
 | verified | Command denied by a rule | Asked, decided `deny`, and the workspace does not change |
 | verified | MCP call annotated read-only | Asked about (`default_tools_approval_mode = "prompt"`), decided as `<server>: <tool>`; allowed runs, denied does not |
-| verified | Cancel during a command | After the turn is cancelled, the allowed command leaves no late result |
 | verified | App-server crash | After a `SIGKILL`, the next prompt restarts Codex on the same thread, its config checked again, and the next call is still decided by ORCA's rule |
 | verified | Unknown pin | A Codex build ORCA has not verified is refused before it is started (#1162) |
 | verified | Unmanaged config | Codex's own config that sets another approval policy, or adds an MCP server, is refused before a thread starts (#1160, #1163) |
 | known limitation | Calls Codex runs in its sandbox | Codex does not ask about a command it runs inside its sandbox, so ORCA's rule is never consulted (`sandboxed-unasked`). The sandbox, not ORCA, bounds those calls |
 | known limitation | The optional hook on this driver | Keeps Codex's fail-open hook runner, as above |
+| known limitation | Cancel during a command | Codex's `turn/interrupt` ends the turn as `interrupted` without always stopping a command it started: on the GitHub-hosted runner the allowed command ran on and Codex reported it `completed` 4 s later. ORCA does not take `interrupted` as proof (#1299): it waits up to the cancel grace for Codex to report each command in flight ended, reports the turn's `cancel` as `confirmed`, `unconfirmed` or `not-carried-out`, and takes no further prompt on the session while one may still run. Closing the session is not counted as stopping it |
 | not yet verified | SSH hosts | The driver runs on ORCA's own machine only (#1166) |
 | not yet verified | A real model | The stand-in plays scripted calls only; a real model may make calls in shapes it does not |
 | not yet verified | Typed input to a running command | Codex's `writeStdin` asks are declined when sent, and none was observed under `on-request` |

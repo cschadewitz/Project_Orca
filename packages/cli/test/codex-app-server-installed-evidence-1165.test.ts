@@ -80,6 +80,7 @@ const SETTINGS = {
 /** What these cases do not cover, and why; recorded so nothing reads as more than it is. */
 const NOT_COVERED = [
   "known limitation: Codex decides which calls run inside its sandbox without asking, so ORCA has no decision for them (the sandboxed-unasked case records one)",
+  "known limitation: Codex's turn/interrupt ends the turn without always stopping a command it started; ORCA reports such a cancel as unconfirmed or not carried out and takes no further prompt (#1299; the shell-cancel case records one)",
   "not covered: ORCA's optional pre-tool hook on this route (#1161), whose runner keeps Codex's fail-open behaviour",
   "not covered: the judge; on this driver it advises on commands only",
   "not covered: SSH hosts (#1166); the driver runs on ORCA's own machine only",
@@ -453,6 +454,8 @@ describe.skipIf(CODEX === undefined)("installed-session evidence for the Codex a
     const t0 = Date.now();
     const at: { startedSeen?: number; cancelSent?: number; cancelReturned?: number; turnEnded?: number } = {};
     let stopReason: string | undefined;
+    /** ORCA's own account of whether the cancel ended the command (#1299). */
+    let orcaCancel: string | undefined;
     try {
       const turn = session.prompt(script(escalated(cmd)), { timeoutMs: 90_000 });
       for (const until = Date.now() + 30_000; Date.now() < until;) {
@@ -477,7 +480,7 @@ describe.skipIf(CODEX === undefined)("installed-session evidence for the Codex a
         cancelled = true;
       }
       stopReason = await turn.then(
-        (t) => t.stopReason,
+        (t) => ((orcaCancel = t.cancel), t.stopReason),
         (e: unknown) => `rejected: ${e instanceof Error ? e.message.slice(0, 200) : "?"}`,
       );
       at.turnEnded = Date.now() - t0;
@@ -496,17 +499,35 @@ describe.skipIf(CODEX === undefined)("installed-session evidence for the Codex a
     const wire = correlate(s);
     const failures: string[] = [...wire.failures];
     if (decided.some((d) => d !== "allow")) failures.push(`ORCA decided ${decided.join(", ")}, not allow`);
-    if (cancelled && finished) failures.push("the command's result appeared after the turn was cancelled");
+    // ORCA claiming the cancel ended the command while its result still appeared contradicts it;
+    // ORCA saying it could not confirm that, or that the command ran on, is a truthful report of
+    // a limitation of Codex's interrupt, not a pass (#1299).
+    const limitations: string[] = [];
+    if (cancelled && finished && (orcaCancel === "confirmed" || orcaCancel === undefined))
+      failures.push(
+        `the command's result appeared after the turn was cancelled, and ORCA reported the cancel as ${orcaCancel ?? "nothing"}`,
+      );
+    else if (cancelled && finished)
+      limitations.push(
+        `the command's result appeared after the turn was cancelled; ORCA reported the cancel as ${orcaCancel} and took no further prompt`,
+      );
+    else if (cancelled && orcaCancel === "unconfirmed")
+      limitations.push("Codex never reported the command ended, so ORCA reported the cancel as unconfirmed");
     const unverified: string[] = [...wire.unverified];
+    if (cancelled && !finished && orcaCancel === "not-carried-out")
+      unverified.push("ORCA reported the command completed after the cancel, but its result did not appear");
     if (wire.observed && wire.asks.length !== 1) unverified.push(`Codex sent ${wire.asks.length} asks, not 1`);
     if (!started) unverified.push("the command never started, so cancellation could not be observed");
     results.push({
       id: "shell-cancel",
       action: `escalated shell: ${cmd}, turn cancelled once started.txt appears`,
       rule,
-      status: statusOf(failures, unverified),
-      reasons: failures.length > 0 ? failures : unverified,
-      orca: { configured: "allow", decisions: policyDecisions(s.decisions) },
+      status:
+        failures.length === 0 && unverified.length === 0 && limitations.length > 0
+          ? "known limitation"
+          : statusOf(failures, unverified),
+      reasons: failures.length > 0 ? failures : unverified.length > 0 ? unverified : limitations,
+      orca: { configured: "allow", decisions: policyDecisions(s.decisions), cancel: orcaCancel ?? null },
       native: nativeOf(s),
       effect: {
         expected: "no completion marker (done.txt) after the cancel, waiting past the command's own sleep",

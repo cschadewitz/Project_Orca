@@ -2543,3 +2543,162 @@ describe("MCP servers ORCA configures (#1163)", () => {
     expect(s.spawnAgent).not.toHaveBeenCalled();
   });
 });
+
+describe("whether a cancel ended the turn's commands (#1299)", () => {
+  const cmd = (id: string, status: string) => ({
+    type: "commandExecution",
+    id,
+    command: "/bin/bash -lc 'sleep 4; echo done > done.txt'",
+    cwd: CWD,
+    commandActions: [{ type: "unknown", command: "sleep 4; echo done > done.txt" }],
+    status,
+    aggregatedOutput: null,
+    exitCode: null,
+  });
+  /**
+   * A Codex whose turn starts command `c1` and runs until interrupted; on the interrupt it ends
+   * the turn as `interrupted`, then reports the command as `after` (or never, for `none`).
+   */
+  function commandTurn(after: "failed" | "completed" | "none", afterMs = 0) {
+    let peerRef!: Peer;
+    const report = (turnId: string, status: string) =>
+      peerRef.notify("item/completed", { threadId: "thr_1", turnId, item: cmd("c1", status) });
+    const answers: Record<string, Responder> = {
+      ...BASE,
+      "turn/start": (_msg, peer) => {
+        peerRef = peer;
+        setImmediate(() =>
+          peer.notify("item/started", { threadId: "thr_1", turnId: "turn_1", item: cmd("c1", "inProgress") }),
+        );
+        return { turn: { id: "turn_1", status: "inProgress" } };
+      },
+      "turn/interrupt": (msg, peer) => {
+        setImmediate(() => {
+          peer.notify("turn/completed", {
+            threadId: "thr_1",
+            turn: { id: msg.params!["turnId"], status: "interrupted", error: null },
+          });
+          if (after !== "none") setTimeout(() => report("turn_1", after), afterMs);
+        });
+        return {};
+      },
+    };
+    return { answers, report: (status: string) => report("turn_1", status) };
+  }
+  const startAndCancel = async (
+    session: Awaited<ReturnType<typeof open>>,
+    peer: { received: { method?: string }[] },
+  ) => {
+    const turn = session.prompt("go");
+    await vi.waitFor(() => expect(peer.received.some((m) => m.method === "turn/start")).toBe(true));
+    await new Promise((r) => setTimeout(r, 10));
+    await session.cancel();
+    return turn;
+  };
+
+  it("a cancel with no command in flight is confirmed", async () => {
+    const s = scriptedHost({
+      ...BASE,
+      "turn/start": () => ({ turn: { id: "turn_1", status: "inProgress" } }),
+      "turn/interrupt": (msg, peer) => (
+        setImmediate(() =>
+          peer.notify("turn/completed", {
+            threadId: "thr_1",
+            turn: { id: msg.params!["turnId"], status: "interrupted", error: null },
+          }),
+        ),
+        {}
+      ),
+    });
+    const session = await open(s.host);
+    await expect(startAndCancel(session, s.peer)).resolves.toMatchObject({
+      stopReason: "cancelled",
+      cancel: "confirmed",
+    });
+    await session.close();
+  });
+
+  it("a command Codex reports failed after the interrupt is confirmed ended, and the session goes on", async () => {
+    const t = commandTurn("failed", 20);
+    const s = scriptedHost(t.answers);
+    const session = await open(s.host, { cancelGraceMs: 2_000 });
+    await expect(startAndCancel(session, s.peer)).resolves.toMatchObject({
+      stopReason: "cancelled",
+      cancel: "confirmed",
+    });
+    // the next prompt is taken
+    const next = session.prompt("again");
+    await vi.waitFor(() => expect(s.peer.received.filter((m) => m.method === "turn/start")).toHaveLength(2));
+    await session.cancel();
+    await next;
+    await session.close();
+  });
+
+  it("a command Codex reports completed after the interrupt means the cancel was not carried out", async () => {
+    const warn = vi.fn();
+    const logger = { ...silentLogger, warn, child: () => logger } as typeof silentLogger;
+    const t = commandTurn("completed", 20);
+    const s = scriptedHost(t.answers);
+    const session = await open(s.host, { cancelGraceMs: 2_000, logger });
+    await expect(startAndCancel(session, s.peer)).resolves.toMatchObject({
+      stopReason: "cancelled",
+      cancel: "not-carried-out",
+    });
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringMatching(/reported a command in flight at the cancel as completed/),
+      {
+        agentId: "codex",
+        completed: ["c1"],
+        stillOpen: [],
+      },
+    );
+    await session.close();
+  });
+
+  it("a command Codex never reports ended leaves the cancel unconfirmed, and no further prompt is taken until it does", async () => {
+    const warn = vi.fn();
+    const logger = { ...silentLogger, warn, child: () => logger } as typeof silentLogger;
+    const t = commandTurn("none");
+    const s = scriptedHost(t.answers);
+    const session = await open(s.host, { cancelGraceMs: 50, logger });
+    await expect(startAndCancel(session, s.peer)).resolves.toMatchObject({
+      stopReason: "cancelled",
+      cancel: "unconfirmed",
+    });
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/without reporting that its commands ended/), {
+      agentId: "codex",
+      completed: [],
+      stillOpen: ["c1"],
+    });
+    const refused = (await session.prompt("again").catch((e: unknown) => e)) as OrcaError;
+    expect(refused.code).toBe("RUN_STATE");
+    expect(refused.details).toMatchObject({ reason: "codex-cancel-unconfirmed" });
+    expect(s.peer.received.filter((m) => m.method === "turn/start")).toHaveLength(1);
+    // Codex reports it ended: the session takes prompts again
+    t.report("failed");
+    await vi.waitFor(() =>
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringMatching(/command from a cancelled turn finished/),
+        expect.anything(),
+      ),
+    );
+    const next = session.prompt("again");
+    await vi.waitFor(() => expect(s.peer.received.filter((m) => m.method === "turn/start")).toHaveLength(2));
+    await session.cancel();
+    await next;
+    await session.close();
+  });
+
+  it("closing with a command never reported ended warns that it may still run", async () => {
+    const warn = vi.fn();
+    const logger = { ...silentLogger, warn, child: () => logger } as typeof silentLogger;
+    const s = scriptedHost(commandTurn("none").answers);
+    const session = await open(s.host, { cancelGraceMs: 50, logger });
+    await startAndCancel(session, s.peer);
+    await session.close();
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/never reported ended/), {
+      agentId: "codex",
+      commands: ["c1"],
+    });
+  });
+});
