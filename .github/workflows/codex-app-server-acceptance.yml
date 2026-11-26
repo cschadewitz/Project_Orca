@@ -1,0 +1,109 @@
+# Installed-session evidence for the Codex app-server route (#1165), checks-only, beside
+# codex-hook-acceptance.yml. The pinned Codex (CODEX_VERSION, the one build in
+# CODEX_VERIFIED_IMAGES) runs `codex app-server` in sessions opened with the options ORCA's
+# session factory maps for the driver, against the scripted stand-in for the OpenAI Responses
+# API, so the run needs no account, key or secret and costs nothing.
+#
+# Codex keeps its native protections as the driver gives them (on-request, reviewer user,
+# workspace-write, every MCP call asked); this runner is not changed for it, so a command
+# Codex runs in its sandbox may have no effect here, and such a case is recorded as such
+# rather than passed. The suite never gives an affirmative approval itself. Each case records
+# ORCA's decision, Codex's decision and the observed effect apart; only contradicting evidence
+# fails the run. The record is uploaded unsigned: it is evidence, not a receipt, a tier or a
+# scoped label, and nothing here signs, stages or promotes anything.
+name: Codex app-server acceptance
+
+on:
+  pull_request:
+    branches: [main, "feature/**"]
+    paths:
+      - packages/agents/src/codex-app-server.ts
+      - packages/agents/src/codex-app-server-client.ts
+      - packages/agents/src/codex-app-server-session.ts
+      - packages/agents/src/codex-app-server-config.ts
+      - packages/agents/src/codex-app-server-account.ts
+      - packages/agents/src/codex-app-server-asks.ts
+      - packages/agents/src/codex-app-server-mcp.ts
+      - packages/agents/src/codex-image.ts
+      - packages/agents/src/permissions.ts
+      - packages/cli/src/codex-app-server-factory.ts
+      - packages/cli/test/codex-app-server-installed-evidence-1165.test.ts
+      - packages/cli/test/codex-model-stand-in.ts
+      - .github/workflows/codex-app-server-acceptance.yml
+  schedule:
+    - cron: "47 7 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codex-app-server-acceptance-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CODEX_VERSION: 0.171.0
+
+jobs:
+  linux:
+    name: codex app-server acceptance (linux)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+
+      - name: Install the pinned Codex outside the workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          d="$RUNNER_TEMP/codex"
+          mkdir -p "$d"
+          cd "$d"
+          npm init -y >/dev/null
+          npm install --no-audit --no-fund --ignore-scripts \
+            "@openai/codex@${CODEX_VERSION}" \
+            "@openai/codex-linux-x64@npm:@openai/codex@${CODEX_VERSION}-linux-x64"
+          bin="$d/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex"
+          test "$("$bin" --version)" = "codex-cli ${CODEX_VERSION}"
+          echo "ORCA_CODEX_BIN=$bin" >> "$GITHUB_ENV"
+
+      - name: Build the workspace
+        run: pnpm exec tsc -b tsconfig.build.json
+
+      - name: Run the installed-session cases
+        shell: bash
+        env:
+          ORCA_ENFORCEMENT_RECEIPT_DIR: ${{ runner.temp }}/evidence
+        run: |
+          set -euo pipefail
+          pnpm exec vitest run packages/cli/test/codex-app-server-installed-evidence-1165.test.ts \
+            --reporter=default --reporter=json --outputFile="$RUNNER_TEMP/acceptance.json"
+          # The suite is skipped without ORCA_CODEX_BIN; here every case has to have run.
+          node -e '
+            const r = require(process.argv[1]);
+            if (r.numTotalTests === 0 || r.numPendingTests > 0 || r.numPassedTests !== r.numTotalTests)
+              throw new Error(`expected every case to run and pass: ${JSON.stringify({total: r.numTotalTests, passed: r.numPassedTests, skipped: r.numPendingTests})}`);
+          ' "$RUNNER_TEMP/acceptance.json"
+          node -e '
+            const e = require(process.argv[1]);
+            console.log(JSON.stringify(e.summary, null, 2));
+          ' "$RUNNER_TEMP/evidence/codex-app-server-installed-evidence.json"
+
+      - name: Upload the evidence (unsigned)
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: codex-app-server-installed-evidence
+          path: ${{ runner.temp }}/evidence/
+          if-no-files-found: ignore
+          retention-days: 30

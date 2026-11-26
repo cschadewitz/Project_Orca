@@ -244,7 +244,8 @@
       "tier": "none",
       "routes": ["acp-ask"],
       "pendingRoutes": {
-        "codex-native-hook": "#705 Codex adapter, shipped as an experimental, unqualified opt-in (nativeToolHook: experimental, off by default). An ORCA ask blocks the call; the hook runner fails open after the session-open probe; typed stdin is outside. No tier"
+        "codex-native-hook": "#705 Codex adapter, shipped as an experimental, unqualified opt-in (nativeToolHook: experimental, off by default). An ORCA ask blocks the call; the hook runner fails open after the session-open probe; typed stdin is outside. No tier",
+        "codex-app-server-ask": "#1154-#1165 driver: codex app-server, held on feature/codex-app-server and refused by the session factory. Every ask Codex sends is decided by ORCA's policy (MCP calls always asked); calls Codex runs in its sandbox are not asked about. Unsigned evidence from codex-app-server-acceptance.yml only. No tier until Cal agrees one (#1026)"
       },
       "receipts": [],
       "unverified": [

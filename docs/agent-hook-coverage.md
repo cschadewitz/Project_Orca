@@ -107,6 +107,37 @@ so this route is reached only by tests until qualification (#1165). Whatever the
 the driver's MCP tool calls are decided through its asks (#1163): Codex asks about every one,
 and ORCA answers each through its policy as `<server>: <tool>`.
 
+### Evidence for the Codex app-server driver's asks (#1165)
+
+[`codex-app-server-acceptance.yml`](../.github/workflows/codex-app-server-acceptance.yml) runs
+the pinned Codex 0.171.0 as `codex app-server`, in sessions opened with the factory's options for
+the driver and with Codex's native protections as the driver sets them (`on-request`, reviewer
+`user`, `workspace-write`, every MCP call asked). It never gives an approval itself: every allow
+is a configured ORCA rule, and an ask put to a person is declined. Each case records ORCA's
+decision, Codex's decision (what it asked about) and the observed effect on the workspace apart,
+and the record is uploaded unsigned. **It is evidence, not a tier**: Codex stays at `none`, and
+no claim is made on this route until Cal agrees one on #1026.
+
+| Status | Case | What the evidence shows |
+|---|---|---|
+| verified | Command allowed by a rule | Codex asks for an escalated command; ORCA's rule allows it once and it runs |
+| verified | Allow-once asks again | Two identical escalated commands are asked about and decided twice; Codex keeps no grant |
+| verified | Command denied by a rule | Asked, decided `deny`, and the workspace does not change |
+| verified | MCP call annotated read-only | Asked about (`default_tools_approval_mode = "prompt"`), decided as `<server>: <tool>`; allowed runs, denied does not |
+| verified | Cancel during a command | After the turn is cancelled, the allowed command leaves no late result |
+| verified | App-server crash | After a `SIGKILL`, the next prompt restarts Codex on the same thread, its config checked again, and the next call is still decided by ORCA's rule |
+| verified | Unknown pin | A Codex build ORCA has not verified is refused before it is started (#1162) |
+| verified | Unmanaged config | Codex's own config that sets another approval policy, or adds an MCP server, is refused before a thread starts (#1160, #1163) |
+| known limitation | Calls Codex runs in its sandbox | Codex does not ask about a command it runs inside its sandbox, so ORCA's rule is never consulted (`sandboxed-unasked`). The sandbox, not ORCA, bounds those calls |
+| known limitation | The optional hook on this driver | Keeps Codex's fail-open hook runner, as above |
+| not yet verified | SSH hosts | The driver runs on ORCA's own machine only (#1166) |
+| not yet verified | A real model | The stand-in plays scripted calls only; a real model may make calls in shapes it does not |
+| not yet verified | Typed input to a running command | Codex's `writeStdin` asks are declined when sent, and none was observed under `on-request` |
+
+A case is `verified` only when ORCA's decision, Codex's asks and the effect agree on the run that
+recorded it; a case whose effect the runner's sandbox prevents is recorded as `unverified`, never
+as passed. The table above is what a passing run on Linux x64 showed when it was added.
+
 ### The IPC caveat
 
 The standing caveat, stated before you opt in, is in
