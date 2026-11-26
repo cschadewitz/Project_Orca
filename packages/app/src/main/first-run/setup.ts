@@ -11,7 +11,7 @@ import { constants } from "node:fs";
 import { randomUUID, createHash } from "node:crypto";
 import { lstat, mkdir, open, readFile, rename } from "node:fs/promises";
 import { FirstRunOwnershipRefusal, inspectFirstRunOwnership, absent } from "./ownership.js";
-import { parse as parseYaml } from "yaml";
+import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import {
   FirstRunRecovery,
   bindQuiescentConfiguration,
@@ -252,23 +252,22 @@ export class FirstRunSetup {
   private files(project: string): Record<string, string> {
     return {
       ...FIRST_RUN_SAMPLE_FILES,
-      "orca.config.yaml":
-        JSON.stringify(
-          {
-            version: 1,
-            storeDir: ".orca",
-            agents: [],
-            roles: {},
-            plugins: [],
-            hosts: [{ id: "local", type: "local" }],
-            workspace: { provider: "local", root: project, hostId: "local" },
-            workflows: ["first-run/workflow.yaml"],
-            templates: [],
-            humanInput: { mode: "pause" },
-          },
-          null,
-          2,
-        ) + "\n",
+      // Block YAML, as a person writes the file and as Config > Raw then shows it (#1200). It was
+      // JSON, which is valid YAML but read as braces and quoted keys in a `.yaml` file, and the
+      // structured editor refused to edit flow style in place. A workspace written as JSON
+      // before this still opens: its receipt holds the digest of what was written then.
+      "orca.config.yaml": stringifyYaml({
+        version: 1,
+        storeDir: ".orca",
+        agents: [],
+        roles: {},
+        plugins: [],
+        hosts: [{ id: "local", type: "local" }],
+        workspace: { provider: "local", root: project, hostId: "local" },
+        workflows: ["first-run/workflow.yaml"],
+        templates: [],
+        humanInput: { mode: "pause" },
+      }),
     };
   }
   async choose(assertCurrent: () => void): Promise<FirstRunStatus> {

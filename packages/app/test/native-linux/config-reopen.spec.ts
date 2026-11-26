@@ -11,6 +11,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { mkdtemp, readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { NativeSession } from "./session.js";
 import { launchInstalled, noneLeft, quit } from "./app.js";
 import { connected, disposableWorkspace, firstRunSetup, openConfig } from "./flows.js";
@@ -53,11 +54,12 @@ test("an agent added in Config > Raw, saved and applied, is there after quit and
   const first = await launchInstalled(session, profile, "x11");
   try {
     await firstRunSetup(first.app, first.page, chosen);
-    const doc = JSON.parse(await readFile(join(chosen.workspace, "orca.config.yaml"), "utf8")) as {
+    // First-run setup writes block YAML (#1200); this edits it and pastes it back as YAML.
+    const doc = parseYaml(await readFile(join(chosen.workspace, "orca.config.yaml"), "utf8")) as {
       agents: unknown[];
     };
     doc.agents = [{ id: "echo", name: "Echo", command: "/bin/cat", args: [], roles: [] }];
-    await saveRawConfig(first.page, JSON.stringify(doc, null, 2));
+    await saveRawConfig(first.page, stringifyYaml(doc));
   } catch (error) {
     await first.app.close().catch(() => undefined);
     throw error;

@@ -34,6 +34,11 @@
  *   locked GNOME keyring and its real unlock prompt (#857, #858). Linux only, on a
  *   GitHub-hosted runner; `packages/app/test/native-linux/README.md` has the details.
  *
+ * - **`layout`** (`pnpm run app:layout`) points the built app at a daemon the demo seed filled
+ *   (#1115) and measures and screenshots the 0.8.1 layout fixes (#1112, #1193, #1194, #1200),
+ *   in a disposable Xvfb session with an unlocked keyring. Linux only;
+ *   `packages/app/test/layout/layout.spec.ts` has the details.
+ *
  * - **`windows-update`** (`pnpm run app:windows-update`) updates an *installed* Windows
  *   build from N to N+1 through a local copy of the feed Worker (#863), in
  *   `feed-update-e2e.yml` on a GitHub-hosted Windows runner.
@@ -145,6 +150,14 @@ export default defineConfig({
       outputDir: here("../../../../test-results/windows-store-upgrade"),
       // Nothing to record: the store is the demo's, and the app runs on a throwaway profile.
       use: { trace: "off", video: "off", screenshot: "off" },
+    },
+    {
+      name: "layout",
+      testDir: here("../layout"),
+      testMatch: "*.spec.ts",
+      outputDir: here("../../../../test-results/layout"),
+      // Screenshots of ORCA's own window on the demo seed's synthetic data; no profile or keyring.
+      use: { trace: "off", video: "off" },
     },
     {
       name: "linux-native",
