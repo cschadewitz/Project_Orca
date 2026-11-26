@@ -79,8 +79,10 @@ function tailnet(peer: Record<string, unknown>, env: Record<string, string> = { 
     cliPath: "/fake/tailscale",
     exists: () => true,
     run: () =>
-      Promise.resolve(
-        JSON.stringify({
+      Promise.resolve({
+        kind: "exited" as const,
+        code: 0,
+        stdout: JSON.stringify({
           BackendState: "Running",
           Peer: {
             "nodekey:1": {
@@ -94,7 +96,7 @@ function tailnet(peer: Record<string, unknown>, env: Record<string, string> = { 
             },
           },
         }),
-      ),
+      }),
   };
   return options;
 }
@@ -179,6 +181,20 @@ describe("orca remote add --tailnet", () => {
     });
     expect(errs.join("\n")).toContain("sudo tailscale set --ssh");
     expect(lines.join("\n")).toMatch(/\(not pinned yet\)/);
+  });
+
+  it("never takes another tailnet's word for a shared-in machine's key", async () => {
+    const { make } = fakeServer();
+    const { context, lines, errs } = ctx(["add", "build-1"], { tailnet: true });
+    await remoteCommand(context, {
+      tunnel: make,
+      scripts: scripts(),
+      version: "0.9.0",
+      tailnet: tailnet({ AltSharerUserID: 9 }),
+    });
+    expect(errs.join("\n")).toContain("shared from another tailnet");
+    expect(lines.join("\n")).toMatch(/\(not pinned yet\)/);
+    expect(lines.join("\n")).not.toContain("advertised");
   });
 
   it.each([

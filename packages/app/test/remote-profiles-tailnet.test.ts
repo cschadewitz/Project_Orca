@@ -37,8 +37,10 @@ function tailnet(peers: Record<string, unknown>[], features: FeatureContext = ON
     cliPath: "/fake/tailscale",
     exists: () => true,
     run: () =>
-      Promise.resolve(
-        JSON.stringify({
+      Promise.resolve({
+        kind: "exited" as const,
+        code: 0,
+        stdout: JSON.stringify({
           BackendState: "Running",
           Self: { ID: "nSelf", DNSName: "laptop.example-tailnet.ts.net." },
           Peer: Object.fromEntries(
@@ -48,7 +50,7 @@ function tailnet(peers: Record<string, unknown>[], features: FeatureContext = ON
             ]),
           ),
         }),
-      ),
+      }),
   };
 }
 

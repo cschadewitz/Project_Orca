@@ -157,7 +157,10 @@ export async function remoteCommand(
     tunnel: make,
     version,
     program,
-    ...(peer?.sshHostKeys.length ? { advertised: { alias: `orca-${profile.id}`, keys: peer.sshHostKeys } } : {}),
+    // A machine shared in from another tailnet is vouched for by that tailnet, not yours: confirm by hand.
+    ...(peer?.sshHostKeys.length && !peer.sharedIn
+      ? { advertised: { alias: `orca-${profile.id}`, keys: peer.sshHostKeys } }
+      : {}),
   });
   const found = discovery.outcome;
   if (found.kind !== "inspected") {

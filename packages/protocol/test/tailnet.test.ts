@@ -418,7 +418,7 @@ describe("tailnetHostResolver", () => {
     features: { env },
     cliPath: "/fake/tailscale",
     exists: () => true,
-    run: () => Promise.resolve(json),
+    run: () => Promise.resolve({ kind: "exited" as const, code: 0, stdout: json }),
   });
   const binding = { node: "nBuild1", name: "build-1.example-tailnet.ts.net" };
 

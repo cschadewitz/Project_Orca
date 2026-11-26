@@ -31,6 +31,7 @@ import {
   type RemoteResult,
   type SshTunnelOptions,
 } from "./remote-access.js";
+import { parseAdvertisedHostKey } from "./tailnet.js";
 
 /** The two files, as shipped: `server-setup/` in a packaged app, `tools/deploy/` in a checkout. */
 export const SETUP_SCRIPT = "orca-server-setup.py";
@@ -389,7 +390,7 @@ export async function discoverServer(options: {
   if (advertised) {
     if (
       !/^[A-Za-z0-9._-]{1,128}$/.test(advertised.alias) ||
-      advertised.keys.some((key) => !/^[a-z0-9-]{1,40} [A-Za-z0-9+/]+={0,2}$/.test(key))
+      advertised.keys.some((key) => parseAdvertisedHostKey(key) !== key)
     ) {
       rmSync(scratch!, { recursive: true, force: true });
       throw new Error("Unusable advertised host keys");

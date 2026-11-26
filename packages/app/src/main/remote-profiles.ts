@@ -1062,7 +1062,8 @@ export class RemoteProfiles {
     if (JSON.stringify(this.get(id)?.tailnet) !== JSON.stringify(profile.tailnet))
       throw new ConnectionRefusal("That profile changed; try again.");
     try {
-      writeAdvertisedPin(this.pins(id), `orca-${id}`, resolved.peer);
+      // The person asked for this profile to be pinned from the tailnet (Add a machine, #1227).
+      writeAdvertisedPin(this.pins(id), `orca-${id}`, resolved.peer, { source: "tailnet-advertised" });
     } catch (error) {
       if (error instanceof AdvertisedPinRefused) throw new ConnectionRefusal(error.message);
       throw error;
@@ -1080,7 +1081,10 @@ export class RemoteProfiles {
     const read = await this.tailnetMachines();
     if (read.state !== "running") return undefined;
     const resolved = resolveTailnetBinding(read.snapshot, profile.tailnet);
-    return resolved.ok && resolved.peer.sshHostKeys.length ? resolved.peer.sshHostKeys : undefined;
+    // A machine shared in from another tailnet is vouched for by that tailnet, not yours.
+    return resolved.ok && resolved.peer.sshHostKeys.length && !resolved.peer.sharedIn
+      ? resolved.peer.sshHostKeys
+      : undefined;
   }
 
   /** The host keys the profile's pins vouch for now (server, and jump host). */
