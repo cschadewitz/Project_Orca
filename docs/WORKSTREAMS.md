@@ -15,8 +15,9 @@ A long-lived branch is the exception, for work that cannot ship dark: an outside
 even dark code, or the change breaks the store format or protocol and cannot be hidden.
 
 - **Pull requests only.** Work reaches `feature/<name>` through reviewed pull requests, as on
-  `main`. The `feature/*` ruleset requires a pull request and the `check (node 24)` check, and
-  blocks force pushes and deletion.
+  `main`. The `feature/*` ruleset requires a pull request and the `check (node 24)` check from
+  GitHub Actions with the strict policy (the head must be up to date with the feature branch),
+  and blocks force pushes and deletion.
 - **CI.** `ci.yml` runs on pushes to `feature/**` and on pull requests into it. Its runner
   choice is the same as for `main`: same-repository branches and pull requests may use the
   self-hosted runners, since only collaborators with write access can push a `feature/*` or
@@ -31,11 +32,16 @@ even dark code, or the change breaks the store format or protocol and cannot be 
   request at that exact head succeeded. Unrelated green checks, a missing, queued, skipped or
   neutral `check (node 24)`, or any failed check do not count. A current head that is not that
   merge gets a comment and the `sync-conflict` label and is never merged.
-- **Unattended merging is off until the ruleset exists.** The workflow merges only when the
-  repository variable `FEATURE_SYNC_AUTO_MERGE` is `true`. Set it only after the `feature/*`
-  ruleset below is in place, so the merge gate and the ruleset are two layers, not one. A conflict opens no pull request: one issue per branch, `Sync conflict:
-  feature/<name>` with the `sync-conflict` label, lists the files for the workstream's owner,
-  and the next clean sync closes it.
+  A conflict opens no pull request: one issue per branch, `Sync conflict: feature/<name>` with
+  the `sync-conflict` label, lists the files for the workstream's owner, and the next clean sync
+  closes it.
+- **Unattended merging needs the ruleset.** The workflow merges only when the repository
+  variable `FEATURE_SYNC_AUTO_MERGE` is `true` and the feature branch's active rules require a
+  pull request and an up-to-date (strict) `check (node 24)`; it reads them before every merge
+  and otherwise leaves the pull request for a person. Right before merging it also reads the
+  feature branch again and skips the merge if it moved since the check; the strict policy makes
+  GitHub refuse a merge if it moves after that. Set the variable only after the ruleset exists,
+  so the merge gate and the ruleset are two layers, not one.
 - **Landing.** One pull request from `feature/<name>` into `main` when the gate opens. Its
   changelog fragments live in `changelog.d/` on the branch and arrive with it; the landing pull
   request takes the target release's milestone.

@@ -10,7 +10,8 @@
 # commit, so the feature branch keeps its own history. A head that is current but not that merge
 # is reported on the pull request and never merged. Unattended merging stays off until the
 # repository variable FEATURE_SYNC_AUTO_MERGE is `true`, which is set only once the `feature/*`
-# ruleset (pull request and `check (node 24)` required) is in place as a second layer. A merge that
+# ruleset (pull request and an up-to-date `check (node 24)` required, which the script also
+# reads before every merge) is in place as a second layer. A merge that
 # conflicts opens nothing: one issue per branch, labelled `sync-conflict`, lists the files for
 # the workstream's owner, and is closed by the next clean sync.
 #

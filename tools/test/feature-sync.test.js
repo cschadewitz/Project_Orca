@@ -10,9 +10,9 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 const { parse } = createRequire(new URL("../../packages/cli/package.json", import.meta.url))("yaml");
 
-// gh: logs every call; `pr list` answers $PRS ("<number> <head sha> <cross repo> <is bot>
-// <labels>" or nothing); `api` answers $RUNS for workflow runs and $CHECKS for check runs, through
-// jq with the call's --jq filter; `issue list` answers $ISSUES.
+// gh: logs every call; `pr list` answers $PRS (the JSON gh returns) and every `api` call its JSON
+// ($RUNS for workflow runs, $RULES for branch rules, $FEATURE_REF for the feature ref, $CHECKS for
+// check runs), each through the call's real --jq filter; `issue list` answers $ISSUES.
 const FAKE_GH = `#!/usr/bin/env node
 const fs = require("node:fs");
 const { execFileSync } = require("node:child_process");
@@ -22,7 +22,9 @@ const jq = (json) => {
   const i = args.indexOf("--jq");
   return i < 0 ? json : execFileSync("jq", ["-r", args[i + 1]], { input: json, encoding: "utf8" });
 };
-if (args[0] === "pr" && args[1] === "list") process.stdout.write((process.env.PRS || "") + "\\n");
+if (args[0] === "pr" && args[1] === "list") process.stdout.write(jq(process.env.PRS || "[]") + "\\n");
+else if (args[0] === "api" && args[1].includes("/rules/branches/")) process.stdout.write(jq(process.env.RULES || "[]"));
+else if (args[0] === "api" && args[1].includes("/git/ref/heads/")) process.stdout.write(jq(JSON.stringify({ object: { sha: process.env.FEATURE_REF } })));
 else if (args[0] === "api" && args[1].includes("/actions/runs")) process.stdout.write(jq(process.env.RUNS || '{"workflow_runs":[]}'));
 else if (args[0] === "api") process.stdout.write(jq(process.env.CHECKS || '{"check_runs":[]}'));
 else if (args[0] === "issue" && args[1] === "list") process.stdout.write((process.env.ISSUES || "") + "\\n");
@@ -105,6 +107,30 @@ describe("tools/feature-sync.sh", () => {
     expect(calls).toMatch(/pr create --repo o\/r --base feature\/sdk --head feature-sync\/sdk/);
   });
 
+  // `gh pr list --json ...` for the open sync pull request.
+  const prs = (sha, { cross = false, bot = true, labels = [] } = {}) =>
+    JSON.stringify([
+      {
+        number: 12,
+        headRefOid: sha,
+        isCrossRepository: cross,
+        author: { login: "orca-release[bot]", is_bot: bot },
+        labels: labels.map((name) => ({ name })),
+      },
+    ]);
+  // The feature branch's active rules, as the ruleset provides them.
+  const rules = (strict = true, contexts = ["check (node 24)"]) =>
+    JSON.stringify([
+      { type: "pull_request", parameters: {} },
+      {
+        type: "required_status_checks",
+        parameters: {
+          strict_required_status_checks_policy: strict,
+          required_status_checks: contexts.map((context) => ({ context, integration_id: 15368 })),
+        },
+      },
+    ]);
+  const ruled = () => ({ RULES: rules(), FEATURE_REF: git(origin, "rev-parse", "refs/heads/feature/sdk") });
   // A ci.yml pull_request run for #12 at `sha`, and its check runs.
   const ciRun = (sha, over = {}) =>
     JSON.stringify({
@@ -135,11 +161,11 @@ describe("tools/feature-sync.sh", () => {
   it("merges a sync pull request only on a successful required CI job for its exact head", () => {
     run();
     const sync = git(origin, "rev-parse", "refs/heads/feature-sync/sdk");
-    const PRS = `12 ${sync} false true -`;
+    const PRS = prs(sync);
     const merge = `pr merge 12 --repo o/r --merge --match-head-commit ${sync}`;
     const attempt = (env) => {
       writeFileSync(log, "");
-      return run({ PRS, AUTO_MERGE: "true", ...env });
+      return run({ PRS, AUTO_MERGE: "true", ...ruled(), ...env });
     };
     // Unrelated green checks are not evidence: no CI run, or a run without the required job.
     expect(attempt({ CHECKS: checks(check("classify changes", "success"), check("lint", "success")) })).not.toContain(
@@ -183,14 +209,42 @@ describe("tools/feature-sync.sh", () => {
     );
   });
 
+  it("merges only under a ruleset that enforces an up-to-date required check, and not after the feature moved", () => {
+    run();
+    const sync = git(origin, "rev-parse", "refs/heads/feature-sync/sdk");
+    const merge = `pr merge 12 --repo o/r --merge --match-head-commit ${sync}`;
+    const base = { PRS: prs(sync), AUTO_MERGE: "true", RUNS: ciRun(sync), CHECKS: checks(check(REQUIRED, "success")) };
+    const attempt = (env) => {
+      writeFileSync(log, "");
+      return run({ ...base, ...ruled(), ...env });
+    };
+    expect(attempt({ RULES: "[]" })).not.toContain(merge);
+    expect(attempt({ RULES: rules(false) })).not.toContain(merge);
+    expect(attempt({ RULES: rules(true, ["lint"]) })).not.toContain(merge);
+    expect(readFileSync(join(work, "summary"), "utf8")).toContain("do not require an up-to-date");
+    // The feature branch advanced after the run fetched it: the checked tree is no longer proof.
+    expect(attempt({ FEATURE_REF: "b".repeat(40) })).not.toContain(merge);
+    expect(readFileSync(join(work, "summary"), "utf8")).toContain("moved since sync #12 was checked");
+    expect(attempt({})).toContain(merge);
+  });
+
+  it("reads a same-repository pull request's explicit false through the real filter", () => {
+    run();
+    const sync = git(origin, "rev-parse", "refs/heads/feature-sync/sdk");
+    const env = { AUTO_MERGE: "true", RUNS: ciRun(sync), CHECKS: checks(check(REQUIRED, "success")), ...ruled() };
+    expect(run({ PRS: prs(sync, { cross: false, labels: ["no-changelog", "two words"] }), ...env })).toContain(
+      "pr merge 12",
+    );
+  });
+
   it("never merges a current sync head that is not exactly the bot's clean merge, and reports it", () => {
     run();
-    const green = { AUTO_MERGE: "true", CHECKS: checks(check(REQUIRED, "success")) };
+    const green = { AUTO_MERGE: "true", CHECKS: checks(check(REQUIRED, "success")), ...ruled() };
     // Someone pushed an extra commit onto the sync branch: still current, but not the merge.
     git(origin, "checkout", "-q", "feature-sync/sdk");
     const extra = commit(origin, "extra.txt", "not from main\n");
     git(origin, "checkout", "-q", "main");
-    const calls = run({ PRS: `12 ${extra} false true -`, RUNS: ciRun(extra), ...green });
+    const calls = run({ PRS: prs(extra), RUNS: ciRun(extra), ...green });
     expect(calls).not.toContain("pr merge");
     expect(calls).toMatch(/pr comment 12 [\s\S]*will not merge/);
     expect(calls).toContain("pr edit 12 --repo o/r --add-label sync-conflict");
@@ -202,16 +256,16 @@ describe("tools/feature-sync.sh", () => {
     const amended = git(origin, "rev-parse", "HEAD");
     git(origin, "checkout", "-q", "main");
     writeFileSync(log, "");
-    expect(run({ PRS: `12 ${amended} false true sync-conflict`, RUNS: ciRun(amended), ...green })).not.toContain(
+    expect(run({ PRS: prs(amended, { labels: ["sync-conflict"] }), RUNS: ciRun(amended), ...green })).not.toContain(
       "pr merge",
     );
     expect(readFileSync(join(work, "summary"), "utf8")).toContain("contents differ from the clean merge");
     // The right merge, but from a fork or not opened by a bot.
-    run({ PRS: "", ...green });
+    run({ PRS: "[]", ...green });
     const sync = git(origin, "rev-parse", "refs/heads/feature-sync/sdk");
     writeFileSync(log, "");
-    expect(run({ PRS: `12 ${sync} true true -`, RUNS: ciRun(sync), ...green })).not.toContain("pr merge");
-    expect(run({ PRS: `12 ${sync} false false -`, RUNS: ciRun(sync), ...green })).not.toContain("pr merge");
+    expect(run({ PRS: prs(sync, { cross: true }), RUNS: ciRun(sync), ...green })).not.toContain("pr merge");
+    expect(run({ PRS: prs(sync, { bot: false }), RUNS: ciRun(sync), ...green })).not.toContain("pr merge");
   });
 
   it("reports a conflict on one sync-conflict issue and opens no pull request", () => {
