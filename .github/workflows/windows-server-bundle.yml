@@ -16,6 +16,7 @@ on:
     paths:
       - tools/deploy/server-bundle.py
       - tools/deploy/server-bundle-smoke.mjs
+      - tools/test/server-bundle-smoke.test.js
       - packages/app/scripts/build-daemon.js
       - release-compatibility.json
       - pnpm-lock.yaml
