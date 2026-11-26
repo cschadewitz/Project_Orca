@@ -22,11 +22,20 @@ fi
 gh label create backport-conflict --repo "$REPO" --force --color d93f0b \
   --description "The automatic backport did not apply; backport by hand" >/dev/null || true
 
+# change_of A B: a hash of the diff A..B with only what a rebase may move removed (blob ids and
+# hunk line numbers). Whitespace and context are kept, so it is content-sensitive.
+change_of() {
+  git diff --no-ext-diff --no-color --no-renames "$1" "$2" |
+    sed -E '/^index [0-9a-f]+\.\.[0-9a-f]+/d; s/^@@ -[0-9]+(,[0-9]+)? \+[0-9]+(,[0-9]+)? @@.*$/@@/' |
+    { read -r first || exit 0; { printf '%s\n' "$first"; cat; } | sha256sum | cut -d' ' -f1; }
+}
+
 # The complete change #NUMBER made on main, or nothing. A merge commit is picked against its
 # first parent, which holds all of it. A single-parent MERGE_SHA is either a squash (one commit)
 # or the last of a rebase merge's COMMITS commits; GitHub does not say which, so take the range
-# whose combined diff has the same patch id as the pull request's own diff, and refuse when
-# neither does rather than pick part of it.
+# whose combined change is byte for byte the pull request's own change at the head the merge
+# recorded (whitespace included; only line numbers and blob ids may differ), and refuse when
+# neither is, rather than pick part of it or something else.
 pick=(-x)
 if [ "$(git rev-list --parents -n 1 "$MERGE_SHA" | wc -w)" -gt 2 ]; then
   pick+=(-m 1)
@@ -34,9 +43,15 @@ if [ "$(git rev-list --parents -n 1 "$MERGE_SHA" | wc -w)" -gt 2 ]; then
   expected=("$MERGE_SHA")
 else
   commits=$(jq -r '.pull_request.commits // 0' "$GITHUB_EVENT_PATH")
+  recorded=$(jq -r '.pull_request.head.sha // ""' "$GITHUB_EVENT_PATH")
   git fetch -q origin "+refs/pull/$NUMBER/head:refs/backport/pr-head"
-  fork=$(git merge-base refs/backport/pr-head "$MERGE_SHA")
-  want=$(git diff "$fork" refs/backport/pr-head | git patch-id --stable | cut -d' ' -f1)
+  # Compare against the head this merge recorded, not whatever the ref says now.
+  if [[ ! "$recorded" =~ ^[0-9a-f]{40}$ ]] || [ "$(git rev-parse refs/backport/pr-head)" != "$recorded" ]; then
+    want=""
+  else
+    fork=$(git merge-base "$recorded" "$MERGE_SHA")
+    want=$(change_of "$fork" "$recorded")
+  fi
   range=()
   for k in 1 "$commits"; do
     [[ "$k" =~ ^[1-9][0-9]*$ ]] || continue
@@ -45,7 +60,7 @@ else
     linear=true
     for c in "${candidates[@]}"; do [ "$(git rev-list --parents -n 1 "$c" | wc -w)" -eq 2 ] || linear=false; done
     $linear || continue
-    got=$(git diff "$MERGE_SHA~$k" "$MERGE_SHA" | git patch-id --stable | cut -d' ' -f1)
+    got=$(change_of "$MERGE_SHA~$k" "$MERGE_SHA")
     if [ -n "$want" ] && [ "$got" = "$want" ]; then
       range=("$MERGE_SHA~$k..$MERGE_SHA")
       mapfile -t expected < <(git rev-list --reverse "$MERGE_SHA~$k..$MERGE_SHA")
@@ -53,7 +68,7 @@ else
     fi
   done
   if [ ${#range[@]} -eq 0 ]; then
-    gh pr comment "$NUMBER" --repo "$REPO" --body "$(printf 'No automatic backport: the complete change of #%s on `main` could not be established (neither %s nor the last %s commit(s) on `main` match the pull request'"'"'s diff), and picking part of it would be wrong. Cherry-pick it onto %s by hand (`git cherry-pick -x`), naming the fixed issue and `Backport of #%s` in the description.' "$NUMBER" "$MERGE_SHA" "$commits" "$(printf '`release/%s` ' "${lines[@]}")" "$NUMBER")"
+    gh pr comment "$NUMBER" --repo "$REPO" --body "$(printf 'No automatic backport: the complete change of #%s on `main` could not be established (neither %s nor the last %s commit(s) on `main` are exactly the pull request'"'"'s change at the head it merged), and picking part of it would be wrong. Cherry-pick it onto %s by hand (`git cherry-pick -x`), naming the fixed issue and `Backport of #%s` in the description.' "$NUMBER" "$MERGE_SHA" "$commits" "$(printf '`release/%s` ' "${lines[@]}")" "$NUMBER")"
     gh pr edit "$NUMBER" --repo "$REPO" --add-label backport-conflict
     echo "::warning::backport of #$NUMBER refused: its complete change on main could not be established"
     exit 0
@@ -76,13 +91,28 @@ for line in "${lines[@]}"; do
   git fetch -q origin "$base"
   if git ls-remote --exit-code --heads origin "$branch" >/dev/null; then
     # A branch with no pull request: an earlier run pushed and then failed to open it. Resume
-    # only when the branch is exactly the expected picks on the line; never rewrite it.
+    # only when the branch is exactly a fresh cherry-pick onto the line's current head, commit by
+    # commit (parents and trees, not just messages); never rewrite it.
     git fetch -q origin "+refs/heads/$branch:refs/backport/existing"
-    mapfile -t found < <(git log --reverse --format=%B%x00 "refs/remotes/origin/$base..refs/backport/existing" |
-      tr '\0' '\n' | sed -n 's/^(cherry picked from commit \([0-9a-f]\{40\}\))$/\1/p')
-    count=$(git rev-list --count "refs/remotes/origin/$base..refs/backport/existing")
-    if [ "$count" -ne ${#expected[@]} ] || [ "${found[*]}" != "${expected[*]}" ]; then
-      gh pr comment "$NUMBER" --repo "$REPO" --body "Backport to \`$base\` stopped: the branch \`$branch\` exists without a pull request and is not the expected cherry-pick of #$NUMBER, so it was left as it is. Check it and open the pull request by hand, or delete the branch and re-add the \`backport:$line\` label."
+    line_head=$(git rev-parse "refs/remotes/origin/$base")
+    mapfile -t have < <(git rev-list --reverse --first-parent "$line_head..refs/backport/existing")
+    same=false
+    if [ ${#have[@]} -eq ${#expected[@]} ] && [ "$(git rev-parse "${have[0]}^")" = "$line_head" ] &&
+      [ "$(git rev-list --count "$line_head..refs/backport/existing")" -eq ${#have[@]} ]; then
+      git checkout -q --detach "$line_head"
+      if git cherry-pick "${pick[@]}" "${range[@]}" >/dev/null 2>&1; then
+        mapfile -t fresh < <(git rev-list --reverse "$line_head..HEAD")
+        same=true
+        for i in "${!have[@]}"; do
+          [ "$(git rev-list --parents -n 1 "${have[$i]}" | wc -w)" -eq 2 ] || same=false
+          [ "$(git rev-parse "${have[$i]}^{tree}")" = "$(git rev-parse "${fresh[$i]}^{tree}")" ] || same=false
+        done
+      else
+        git cherry-pick --abort >/dev/null 2>&1 || true
+      fi
+    fi
+    if ! $same; then
+      gh pr comment "$NUMBER" --repo "$REPO" --body "Backport to \`$base\` stopped: the branch \`$branch\` exists without a pull request and is not exactly a fresh cherry-pick of #$NUMBER onto \`$base\` (its contents differ, or the line has moved), so it was left as it is. Check it and open the pull request by hand, or delete the branch and re-add the \`backport:$line\` label."
       gh pr edit "$NUMBER" --repo "$REPO" --add-label backport-conflict
       echo "::warning::$branch exists but is not the expected backport"
       continue

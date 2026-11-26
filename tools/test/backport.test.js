@@ -112,6 +112,7 @@ describe("tools/backport.sh", () => {
           title: "fix: two",
           body: "Fixes #12",
           commits: over.COMMITS ?? 1,
+          head: { sha: over.HEAD_SHA ?? git(origin, "rev-parse", "refs/pull/1300/head") },
           labels: labels.map((name) => ({ name })),
         },
       }),
@@ -140,7 +141,7 @@ describe("tools/backport.sh", () => {
     });
   };
   // A pull request branch from main, squash-merged: one commit on main with the same change.
-  const merged = (extra) => {
+  const merged = (extra, content = "one\nTWO\nthree\n") => {
     git(origin, "checkout", "-q", "-b", "pr");
     commit(origin, "app.txt", "one\nTWO\nthree\n", "fix: two, first try");
     commit(origin, "app.txt", "one\nTWO\nthree\n\n", "fix: two, review");
@@ -148,9 +149,8 @@ describe("tools/backport.sh", () => {
     git(origin, "update-ref", "refs/pull/1300/head", "pr");
     git(origin, "checkout", "-q", "main");
     git(origin, "branch", "-q", "-D", "pr");
-    writeFileSync(join(origin, "app.txt"), "one\nTWO\nthree\n");
     if (extra) writeFileSync(join(origin, "extra.txt"), extra);
-    const sha = commit(origin, "app.txt", "one\nTWO\nthree\n", "fix: two (#1300)");
+    const sha = commit(origin, "app.txt", content, "fix: two (#1300)");
     git(clone, "fetch", "-q", "origin", "main");
     return sha;
   };
@@ -217,6 +217,46 @@ describe("tools/backport.sh", () => {
     expect(calls).toContain("pr edit 1300 --repo o/r --add-label backport-conflict");
   });
 
+  it("refuses a change on main that differs from the pull request only in whitespace", () => {
+    const result = run(merged(undefined, "one\nTWO \nthree\n"), ["backport:0.9"], { COMMITS: 3 });
+    expect(result.status, result.stderr).toBe(0);
+    expect(git(origin, "branch", "--list", "backport/*")).toBe("");
+    expect(readFileSync(log, "utf8")).toMatch(/pr comment 1300 [\s\S]*could not be established/);
+  });
+
+  it("refuses when the pull request head is not the one the merge recorded", () => {
+    const sha = merged();
+    const result = run(sha, ["backport:0.9"], { COMMITS: 3, HEAD_SHA: "a".repeat(40) });
+    expect(result.status, result.stderr).toBe(0);
+    expect(git(origin, "branch", "--list", "backport/*")).toBe("");
+    expect(readFileSync(log, "utf8")).not.toContain("pr create");
+  });
+
+  it("does not trust a branch whose messages claim the picks but whose contents differ", () => {
+    const sha = merged();
+    git(origin, "checkout", "-q", "-b", "backport/1300-0.9", "release/0.9");
+    writeFileSync(join(origin, "app.txt"), "one\nsomething else\nthree\n");
+    git(origin, "add", "-A");
+    git(
+      origin,
+      "-c",
+      "user.name=t",
+      "-c",
+      "user.email=t@t",
+      "commit",
+      "-qm",
+      `fix: two\n\n(cherry picked from commit ${sha})`,
+    );
+    const forged = git(origin, "rev-parse", "HEAD");
+    git(origin, "checkout", "-q", "main");
+    const result = run(sha, ["backport:0.9"], { COMMITS: 3 });
+    expect(result.status, result.stderr).toBe(0);
+    expect(git(origin, "rev-parse", "refs/heads/backport/1300-0.9")).toBe(forged);
+    const calls = readFileSync(log, "utf8");
+    expect(calls).not.toContain("pr create");
+    expect(calls).toMatch(/pr comment 1300 [\s\S]*not exactly a fresh cherry-pick/);
+  });
+
   it("opens exactly one pull request when an earlier run pushed but failed to open it", () => {
     const sha = merged();
     writeFileSync(join(work, "fail-once"), "");
@@ -243,7 +283,7 @@ describe("tools/backport.sh", () => {
     expect(git(origin, "rev-parse", "refs/heads/backport/1300-0.9")).toBe(foreign);
     const calls = readFileSync(log, "utf8");
     expect(calls).not.toContain("pr create");
-    expect(calls).toMatch(/pr comment 1300 [\s\S]*is not the expected cherry-pick/);
+    expect(calls).toMatch(/pr comment 1300 [\s\S]*not exactly a fresh cherry-pick/);
   });
 
   it("opens nothing on a conflict and says so on the original pull request", () => {
