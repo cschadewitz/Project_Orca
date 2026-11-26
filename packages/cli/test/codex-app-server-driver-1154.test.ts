@@ -81,14 +81,14 @@ describe("the option as config sees it", () => {
 });
 
 describe("every entry point refuses the session before anything starts", () => {
-  it("the session factory, on this machine: the driver is not built yet", async () => {
+  it("the session factory, on this machine: the route is not qualified yet", async () => {
     const open = vi.fn();
     const factory = makeSessionFactory({ configDir: root, storeDir: ".orca" }, open);
     const { host, spawned } = watchedHost();
     const error = (await factory({ host, agent: codex(), cwd: root }).catch((e: unknown) => e)) as OrcaError;
     expect(error.code).toBe("NOT_SUPPORTED");
     expect(error.message).toBe(
-      "agent codex has driver: codex-app-server, but ORCA does not answer Codex's approval asks (#1159) yet. " +
+      "agent codex has driver: codex-app-server, but the route is not qualified yet (#1165). " +
         "ORCA refuses the session; remove driver, and set command back to the ACP adapter (for example codex-acp) " +
         "if it names the Codex CLI, to run Codex through its ACP adapter.",
     );
