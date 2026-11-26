@@ -15,7 +15,9 @@
  * Every failure is thrown, never exited on, so the temporary daemon is always stopped and the
  * scratch directory always removed before the exit code is set. Waiting for the hello has one
  * deadline, and each request within it its own timeout, so a daemon that accepts a connection
- * and never answers cannot hold the check open.
+ * and never answers cannot hold the check open. A daemon that cannot be started fails the check
+ * as such, and one whose stop is not confirmed within a bounded wait after SIGKILL is reported
+ * as that, never waited on forever.
  */
 import { spawn, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -25,6 +27,17 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** Whether `promise` settles within `ms`; the timer never outlives the answer. */
+async function within(promise, ms) {
+  let timer;
+  const late = new Promise((ok) => (timer = setTimeout(() => ok(false), ms)));
+  try {
+    return await Promise.race([promise.then(() => true), late]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 /** A check the bundle failed: not retried. */
 class Refused extends Error {}
@@ -42,11 +55,21 @@ function freePort() {
 
 /**
  * Run the checks on the bundle in `dir`. Resolves when they pass, rejects with what failed.
- * `tmp` is where the scratch directory goes; `helloMs` and `requestMs` bound the hello.
+ * `tmp` is where the scratch directory goes; `helloMs` and `requestMs` bound the hello, `stopMs`
+ * and `killMs` the waits for the daemon to stop after SIGTERM and after SIGKILL. `start` spawns
+ * the daemon (a stand-in in tests).
  */
 export async function smokeBundle(
   dir,
-  { tmp = tmpdir(), helloMs = 60_000, requestMs = 5_000, say = (line) => process.stdout.write(`${line}\n`) } = {},
+  {
+    tmp = tmpdir(),
+    helloMs = 60_000,
+    requestMs = 5_000,
+    stopMs = 10_000,
+    killMs = 5_000,
+    start = spawn,
+    say = (line) => process.stdout.write(`${line}\n`),
+  } = {},
 ) {
   const inside = JSON.parse(readFileSync(join(dir, "orca-server.json"), "utf8"));
   const contract = JSON.parse(readFileSync(join(dir, "release-compatibility.json"), "utf8"));
@@ -96,15 +119,23 @@ export async function smokeBundle(
     const port = await freePort();
     const workspace = join(scratch, "serve");
     mkdirSync(workspace);
-    const child = spawn(node, [entry, "--cwd", workspace, "serve", "--port", String(port)], {
+    const child = start(node, [entry, "--cwd", workspace, "serve", "--port", String(port)], {
       env,
       stdio: ["ignore", "ignore", "pipe"],
     });
     let stderr = "";
-    child.stderr.on("data", (chunk) => (stderr = (stderr + chunk).slice(-8192)));
-    const exited = new Promise((ok) => child.once("exit", () => ok(true)));
+    child.stderr?.on("data", (chunk) => (stderr = (stderr + chunk).slice(-8192)));
+    // Ended: it exited, or it never started (a failed spawn emits `error`, not `exit`).
     let gone = false;
-    void exited.then(() => (gone = true));
+    let failedStart;
+    const ended = new Promise((ok) => {
+      child.once("exit", () => ok());
+      child.once("error", (error) => {
+        failedStart ??= error;
+        ok();
+      });
+    }).then(() => (gone = true));
+    let failure;
     try {
       const hello = await waitForHello({
         port,
@@ -113,7 +144,10 @@ export async function smokeBundle(
         helloMs,
         requestMs,
         gone: () => gone,
-        stderr: () => stderr,
+        why: () =>
+          failedStart
+            ? `the daemon could not start: ${failedStart.message}`
+            : `the daemon exited before it said hello:\n${stderr}`,
       });
       if (hello.processId !== child.pid)
         throw new Refused(`hello is from process ${hello.processId}, not ${child.pid}`);
@@ -124,16 +158,21 @@ export async function smokeBundle(
       if (missing.length) throw new Refused(`the daemon is missing ${missing.join(", ")}`);
       if (!(hello.methods ?? []).includes("maintenance")) throw new Refused("the daemon has no admission barrier");
       say(`hello from ${inside.version} (protocol ${hello.protocol.major}.${hello.protocol.minor}) on port ${port}`);
-    } finally {
-      if (!gone) {
-        child.kill();
-        const stopped = await Promise.race([exited, sleep(10_000).then(() => false)]);
-        if (!stopped) {
-          child.kill("SIGKILL");
-          await exited;
+    } catch (error) {
+      failure = error;
+    }
+    // Stop it, each wait bounded: SIGTERM, then SIGKILL, then report a stop never confirmed.
+    if (!gone) {
+      child.kill();
+      if (!(await within(ended, stopMs))) {
+        child.kill("SIGKILL");
+        if (!(await within(ended, killMs))) {
+          const unstopped = `the daemon (process ${child.pid}) did not confirm it stopped after SIGKILL`;
+          failure = new Refused(failure ? `${failure.message}; and ${unstopped}` : unstopped);
         }
       }
     }
+    if (failure) throw failure;
   } finally {
     rmSync(scratch, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
   }
@@ -141,11 +180,11 @@ export async function smokeBundle(
 }
 
 /** The daemon's hello, asked until it answers or the deadline passes. */
-async function waitForHello({ port, workspace, contract, helloMs, requestMs, gone, stderr }) {
+async function waitForHello({ port, workspace, contract, helloMs, requestMs, gone, why }) {
   const deadline = Date.now() + helloMs;
   let last;
   while (Date.now() < deadline) {
-    if (gone()) throw new Refused(`the daemon exited before it said hello:\n${stderr()}`);
+    if (gone()) throw new Refused(why());
     try {
       const token = readFileSync(join(workspace, "auth", "local-client.token"), "utf8").trim();
       const response = await fetch(`http://127.0.0.1:${port}/rpc`, {

@@ -15,6 +15,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
+import { EventEmitter } from "node:events";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { smokeBundle } from "../deploy/server-bundle-smoke.mjs";
@@ -24,6 +25,7 @@ const contract = JSON.parse(readFileSync(new URL("../../release-compatibility.js
 const ENTRY = `
 import { createServer } from "node:http";
 import { mkdirSync, writeFileSync } from "node:fs";
+import { EventEmitter } from "node:events";
 import { join } from "node:path";
 const args = process.argv.slice(2);
 if (args[0] === "--version") { console.log("9.9.9"); process.exit(0); }
@@ -113,5 +115,40 @@ it.skipIf(process.platform === "win32")(
     expect(Date.now() - started).toBeLessThan(15_000);
     expectCleanedUp();
     expect(existsSync(pidfile)).toBe(true);
+  },
+);
+
+it.skipIf(process.platform === "win32")("fails a daemon that cannot be started, and cleans up", async () => {
+  const start = () => {
+    const child = new EventEmitter();
+    child.kill = () => true;
+    setImmediate(() => child.emit("error", new Error("spawn EACCES")));
+    return child;
+  };
+  await expect(smokeBundle(bundle, { ...quiet, tmp: scratch, start })).rejects.toThrow(
+    "the daemon could not start: spawn EACCES",
+  );
+  expect(readdirSync(scratch)).toEqual([]);
+});
+
+it.skipIf(process.platform === "win32")(
+  "reports a daemon that never confirms it stopped instead of waiting on it, and cleans up",
+  async () => {
+    const signals = [];
+    const start = () => {
+      const child = new EventEmitter();
+      child.pid = 424242;
+      child.kill = (signal = "SIGTERM") => signals.push(signal);
+      return child;
+    };
+    const started = Date.now();
+    await expect(
+      smokeBundle(bundle, { ...quiet, tmp: scratch, start, helloMs: 500, requestMs: 200, stopMs: 200, killMs: 200 }),
+    ).rejects.toThrow(
+      /no hello within 500 ms.*; and the daemon \(process 424242\) did not confirm it stopped after SIGKILL/s,
+    );
+    expect(signals).toEqual(["SIGTERM", "SIGKILL"]);
+    expect(Date.now() - started).toBeLessThan(10_000);
+    expect(readdirSync(scratch)).toEqual([]);
   },
 );
