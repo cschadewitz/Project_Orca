@@ -4,15 +4,18 @@
  *
  * **Not reachable from a run yet.** The session factory, the ACP launch and delegation still
  * refuse `driver: codex-app-server` (`codex-app-server.ts`) until ORCA's policy answers Codex's
- * asks (#1159) and the thread's configuration is verified (#1160). Until then this opens a
- * session only for a caller that names the thread's approval policy and sandbox itself.
+ * asks (#1159). Until then this opens a session only for a caller that names the thread's
+ * approval policy and sandbox itself.
  *
  * - **Open:** the user's Codex CLI started as `codex app-server` on ORCA's own host
  *   (`codexAppServerLaunch`, secrets delivered as for any agent), the pinned handshake, the
  *   login check (`account/read`), then `thread/start` with the given approval policy and
- *   sandbox and the reviewer `user`. The session is refused, and the process stopped, when the
- *   thread comes back with another reviewer, another approval policy or another working
- *   directory: ORCA never lets `auto_review` or `guardian_subagent` decide an ask.
+ *   sandbox and the reviewer `user`, which are also the process's session flags. The session is
+ *   refused, and the process stopped, when the thread comes back with another reviewer,
+ *   approval policy, sandbox or working directory, when its sandbox could write a path ORCA
+ *   protects, or when Codex's effective config (read before and after the thread starts) is not
+ *   ORCA's (`codex-app-server-config.ts`, #1160): ORCA never lets `auto_review` or
+ *   `guardian_subagent` decide an ask.
  * - **Turns:** `turn/start` per prompt; the turn ends on Codex's `turn/completed` for that turn
  *   (`completed` → `end_turn`, `interrupted` → `cancelled`, `failed` → an error with Codex's
  *   message). Cancel, abort and timeout send `turn/interrupt`; a turn Codex does not end within
@@ -61,6 +64,14 @@ import type { TurnPlanStep } from "./codex-protocol/0.171.0/v2/TurnPlanStep.js";
 import type { ThreadTokenUsage } from "./codex-protocol/0.171.0/v2/ThreadTokenUsage.js";
 import { processCleanup } from "./process-cleanup.js";
 import {
+  codexConfigCheck,
+  codexSessionFlags,
+  codexWritableRoots,
+  codexWritableRootsProblem,
+  type CodexThreadPolicy,
+  type CodexVerifiedConfig,
+} from "./codex-app-server-config.js";
+import {
   checkSecretUse,
   ENV_SECRET_DELIVERY,
   planSessionSecrets,
@@ -77,18 +88,22 @@ import {
   type TurnResult,
 } from "./session.js";
 
-/** The approval policy and sandbox a caller gives the thread. `never` and full access are not offered. */
-export interface CodexThreadPolicy {
-  approvalPolicy: "untrusted" | "on-request";
-  sandbox: "read-only" | "workspace-write";
-}
-
 export interface OpenCodexAppServerSessionOptions {
   host: AgentHost;
   agent: AgentSpec;
   cwd: string;
-  /** The thread's approval policy and sandbox. Required: there is no default until #1160. */
+  /**
+   * The thread's approval policy and sandbox (`never` and full access are not offered), set as
+   * session flags and thread parameters and verified against Codex's effective config.
+   */
   thread: CodexThreadPolicy;
+  /**
+   * Paths no writable root of the thread may overlap: ORCA's config directory and sidecars.
+   * The session is refused when the sandbox Codex reports could write one.
+   */
+  protectedPaths?: readonly string[];
+  /** Called with what ORCA verified of Codex's config, on open and after each restart. */
+  onVerifiedConfig?: (config: CodexVerifiedConfig) => void;
   env?: Record<string, string>;
   secrets?: SecretsConfig | undefined;
   authorizeSecretUse?: AuthorizeSecretUse | undefined;
@@ -240,6 +255,9 @@ export const CODEX_SESSION_METHODS = [
   "thread/resume",
   "thread/turns/list",
   "model/list",
+  "config/read",
+  "configRequirements/read",
+  "hooks/list",
 ] as const;
 
 /** The notifications the session reads; anything else Codex sends is ignored. */
@@ -263,6 +281,12 @@ const APPROVAL_ASKS: Readonly<Record<string, unknown>> = {
 };
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+
+/** The sandbox a thread reports for each mode ORCA asks for. */
+const SANDBOX_TYPES: Record<CodexThreadPolicy["sandbox"], string> = {
+  "read-only": "readOnly",
+  "workspace-write": "workspaceWrite",
+};
 
 /** Paths compared as the host resolves them, links followed, when they exist. */
 function samePath(a: string, b: string): boolean {
@@ -592,8 +616,15 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
       throw redactError(error, values);
     });
 
-  const launch = await codexAppServerLaunch(agent, { cwd: opts.cwd, env: { ...process.env, ...(opts.env ?? {}) } });
+  const launch = await codexAppServerLaunch(agent, {
+    cwd: opts.cwd,
+    env: { ...process.env, ...(opts.env ?? {}) },
+    sessionFlags: codexSessionFlags(opts.thread),
+  });
   const spec: AgentSpec = { ...secretPlan.agent, command: launch.command, args: launch.args };
+  /** The `$TMPDIR` Codex sees, which a workspace-write sandbox lets it write unless excluded. */
+  const fromAgent = agent.env.TMPDIR;
+  const tmpdir = opts.env?.TMPDIR ?? (typeof fromAgent === "string" ? fromAgent : process.env.TMPDIR);
   // Everything logged passes the session's secret values through redaction first: a stderr
   // tail or a provider message can carry them.
   const logger = redactingLogger(
@@ -839,11 +870,34 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
     if (t.approvalsReviewer !== "user") throw refuse("approvals reviewer", t.approvalsReviewer);
     if (t.approvalPolicy !== opts.thread.approvalPolicy) throw refuse("approval policy", t.approvalPolicy);
     if (typeof t.cwd !== "string" || !samePath(t.cwd, opts.cwd)) throw refuse("working directory", t.cwd);
+    const sandbox = isObject(t.sandbox) ? t.sandbox.type : undefined;
+    const roots = codexWritableRoots(t.sandbox, opts.cwd, tmpdir);
+    if (roots === undefined || sandbox !== SANDBOX_TYPES[opts.thread.sandbox]) throw refuse("sandbox", sandbox);
+    const overlap = codexWritableRootsProblem(roots, opts.protectedPaths ?? []);
+    if (overlap)
+      throw new OrcaError("NOT_SUPPORTED", `agent ${agent.id}: ${overlap}. ORCA refuses the session.`, {
+        agentId: agent.id,
+      });
     return {
       id: thread.id,
       model: typeof t.model === "string" ? t.model : undefined,
       effort: typeof t.reasoningEffort === "string" ? t.reasoningEffort : null,
     };
+  };
+  /**
+   * What Codex will run with on `c`, read back and checked (`codexConfigCheck`): before a thread
+   * is started or resumed, and again on the thread, since starting a workspace-write thread has
+   * Codex trust the project and load its config.
+   */
+  const verifyConfig = async (c: Connection, thread?: string) => {
+    const config = await c.client.request("config/read", { includeLayers: true, cwd: opts.cwd });
+    const requirements = await c.client.request("configRequirements/read", undefined);
+    const hooks = await c.client.request("hooks/list", thread ? { threadId: thread } : { cwds: [opts.cwd] });
+    return codexConfigCheck(agent.id, opts.thread, { config, requirements, hooks });
+  };
+  const recordConfig = (verified: CodexVerifiedConfig) => {
+    logger.info("Codex's effective config verified", { ...verified });
+    opts.onVerifiedConfig?.(verified);
   };
   /** `thread/resume` of `want` on `c`, with ORCA's policy, history left to `thread/turns/list`. */
   const resumeOn = async (c: Connection, want: string) =>
@@ -863,7 +917,9 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
   let effort: string | null = null;
   let continuity: CodexSessionContinuity = { mode: "fresh", reason: "new" };
   conn = await connect(false, () => undefined);
+  let verified: CodexVerifiedConfig;
   try {
+    await verifyConfig(conn);
     let opened: ReturnType<typeof acceptThread> | undefined;
     if (opts.resumeThreadId) {
       try {
@@ -893,6 +949,7 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
       opened = acceptThread("thread/start", await conn.client.request("thread/start", params));
       threadId = opened.id;
     }
+    verified = await verifyConfig(conn, threadId);
     model = opened.model;
     effort = opened.effort;
     configOptions = await readConfigOptions(conn.client, model, effort, logger);
@@ -907,6 +964,7 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
     );
   }
   opts.onSessionContinuity?.(continuity);
+  recordConfig(verified);
 
   const cancelGraceMs = opts.cancelGraceMs ?? agent.cancelGraceMs;
   let terminating: Promise<void> | undefined;
@@ -998,13 +1056,21 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
     let c: Connection | undefined;
     try {
       c = await connect(true, stopped);
+      // A config that no longer holds is not a crash to retry: the session stops.
+      const refused = (error: unknown): never => {
+        breakSession(error instanceof OrcaError ? error : new OrcaError("AGENT_PROTOCOL", String(error)));
+        throw error;
+      };
+      await verifyConfig(c).catch(refused);
       const resumed = await resumeOn(c, threadId);
+      const reverified = await verifyConfig(c, threadId).catch(refused);
       const late = stopped();
       if (late) throw late;
       conn = c;
       lost = undefined;
       model = resumed.model ?? model;
       logger.info("Codex app-server restarted on the same thread", { threadId, crashes: crashes.length });
+      recordConfig(reverified);
       return c;
     } catch (error) {
       // A replacement that failed or was cancelled is stopped, and has to be seen gone like an

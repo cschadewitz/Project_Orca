@@ -58,8 +58,7 @@ export function codexAppServerRefused(
 ): OrcaError | undefined {
   if (!codexAppServerRequested(agent)) return undefined;
   const why = {
-    "session-factory":
-      "ORCA does not answer Codex's approval asks (#1159) or verify the config Codex runs with (#1160) yet",
+    "session-factory": "ORCA does not answer Codex's approval asks (#1159) yet",
     "non-local-host": `it runs on ${host?.type ?? "another"} host ${host?.id ?? "(unknown)"}, and the driver runs only on ORCA's own machine for now (#1166)`,
     launch: "ORCA's ACP launch would start the Codex CLI as an ACP agent, and this driver is not ACP",
     "remote-delegation": "it is an orca-daemon agent, and the driver applies to agents ORCA starts itself",
@@ -91,7 +90,12 @@ export interface CodexAppServerLaunch {
  */
 export async function codexAppServerLaunch(
   agent: Pick<AgentSpec, "id" | "command" | "args" | "env">,
-  options: { cwd: string; env?: Readonly<Record<string, string | undefined>> },
+  options: {
+    cwd: string;
+    env?: Readonly<Record<string, string | undefined>>;
+    /** `-c key=value` session flags, placed before the subcommand. */
+    sessionFlags?: readonly string[];
+  },
 ): Promise<CodexAppServerLaunch> {
   const fromAgent = agent.env.PATH;
   const path = typeof fromAgent === "string" ? fromAgent : (options.env ?? process.env).PATH;
@@ -104,7 +108,11 @@ export async function codexAppServerLaunch(
         `. Install Codex (npm install -g @openai/codex) or set command to the path of its codex executable.`,
       { agentId: agent.id, command: agent.command },
     );
-  return { command: found, args: [...agent.args, CODEX_APP_SERVER_SUBCOMMAND], env: agent.env };
+  return {
+    command: found,
+    args: [...agent.args, ...(options.sessionFlags ?? []), CODEX_APP_SERVER_SUBCOMMAND],
+    env: agent.env,
+  };
 }
 
 /**

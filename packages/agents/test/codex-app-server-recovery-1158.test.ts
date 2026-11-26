@@ -17,6 +17,7 @@ import {
   type CodexSessionContinuity,
   type SessionUpdateEvent,
 } from "../src/index.js";
+import { CONFIG_ANSWERS, configRead, WRITE_SANDBOX } from "./codex-config-fixture.js";
 
 const CWD = process.cwd();
 const INIT = { userAgent: "orca/0.171.0 (test)", codexHome: "/h/.codex", platformFamily: "unix", platformOs: "linux" };
@@ -41,13 +42,14 @@ const thread = (id: string, over: Record<string, unknown> = {}) => ({
   cwd: CWD,
   approvalPolicy: "on-request",
   approvalsReviewer: "user",
-  sandbox: { type: "workspaceWrite" },
+  sandbox: WRITE_SANDBOX,
   reasoningEffort: null,
   ...over,
 });
 
 const BASE: Record<string, Responder> = {
   initialize: () => INIT,
+  ...CONFIG_ANSWERS,
   "account/read": () => ({ account: { type: "apiKey" }, requiresOpenaiAuth: true }),
   "thread/start": () => thread("thr_1"),
   "thread/resume": (msg) => thread(msg.params!["threadId"] as string),
@@ -152,6 +154,9 @@ const open = (host: AgentHost, more: Partial<Parameters<typeof openCodexAppServe
 /** Let the session see a crash. */
 const settle = () => new Promise((r) => setTimeout(r, 10));
 
+/** The config checks around a thread's start or resume (#1160). */
+const CHECKS = ["config/read", "configRequirements/read", "hooks/list"];
+
 const methods = (p: Proc) => p.received.map((m) => m.method).filter(Boolean);
 
 describe("an app-server that exits", () => {
@@ -172,7 +177,15 @@ describe("an app-server that exits", () => {
     await expect(session.prompt("one")).rejects.toMatchObject({ code: "AGENT_TRANSPORT" });
     await expect(session.prompt("two")).resolves.toMatchObject({ stopReason: "end_turn" });
     expect(s.spawnAgent).toHaveBeenCalledTimes(2);
-    expect(methods(s.procs[1]!)).toEqual(["initialize", "initialized", "account/read", "thread/resume", "turn/start"]);
+    expect(methods(s.procs[1]!)).toEqual([
+      "initialize",
+      "initialized",
+      "account/read",
+      ...CHECKS,
+      "thread/resume",
+      ...CHECKS,
+      "turn/start",
+    ]);
     expect(s.procs[1]!.received.find((m) => m.method === "thread/resume")?.params).toEqual({
       threadId: "thr_1",
       cwd: CWD,
@@ -386,6 +399,23 @@ describe("an app-server that exits", () => {
     await session.close();
   });
 
+  it("stops the session, rather than retrying, when the replacement's config no longer holds (#1160)", async () => {
+    const s = scriptedHost((i) => ({
+      ...BASE,
+      ...(i === 1 ? { "config/read": () => configRead({ sandbox_mode: "danger-full-access" }) } : {}),
+    }));
+    const session = await open(s.host);
+    s.procs[0]!.crash();
+    await settle();
+    const error = (await session.prompt("go").catch((e: unknown) => e)) as OrcaError;
+    expect(error.code).toBe("NOT_SUPPORTED");
+    expect(error.message).toContain('Codex would run with sandbox_mode = "danger-full-access"');
+    expect(methods(s.procs[1]!)).not.toContain("thread/resume");
+    expect(s.procs[1]!.kill).toHaveBeenCalled();
+    await expect(session.prompt("again")).rejects.toBe(error);
+    expect(s.spawnAgent).toHaveBeenCalledTimes(2);
+  });
+
   it("stops the session after the crash budget, waiting the backoff before each restart", async () => {
     const sleep = vi.fn(async () => {});
     // every app-server after the first exits as soon as its thread is resumed
@@ -496,9 +526,11 @@ describe("resuming a thread", () => {
       "initialize",
       "initialized",
       "account/read",
+      ...CHECKS,
       "thread/resume",
       "thread/turns/list",
       "thread/turns/list",
+      ...CHECKS,
       "model/list",
     ]);
     expect(s.procs[0]!.received.find((m) => m.method === "thread/resume")?.params).toMatchObject({
