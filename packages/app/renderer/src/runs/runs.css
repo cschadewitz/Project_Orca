@@ -23,14 +23,15 @@
 
 .orca-runs__filters {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
   padding: var(--space-2) var(--space-4);
   border-bottom: var(--stroke-hairline) solid var(--border-hairline);
 }
 .orca-runs__text {
-  flex: 1;
-  min-width: 0;
+  flex: 1 1 24ch;
+  min-width: 16ch;
   max-width: 44ch;
 }
 /* The status trigger's disclosure: the crumb separator turned a quarter, the same trick
@@ -40,7 +41,9 @@
   margin-left: var(--space-1);
   transform: rotate(90deg);
 }
-/* The count sits at the trailing edge, away from the two controls. */
+/* The count sits at the trailing edge, away from the two controls. The bar wraps rather than
+   running off the window (#1193): at 150% zoom or in a narrow window the view switch and the
+   count move to a second line instead of past the right edge, where nothing could reach them. */
 .orca-runs__count {
   margin-left: auto;
   white-space: nowrap;
@@ -58,18 +61,25 @@
    default and the property is one person's override of it. */
 .orca-runs__split {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto var(--pane-runs-detail, var(--panel-width));
+  /* The detail's default is panel-width, but never more than two fifths of the surface: in a
+     narrow window or at 150% zoom a fixed 420px left the tree a third of the room and the run
+     titles none of it (#1193). Never under the pane floor either, so the detail stays usable. */
+  grid-template-columns: minmax(0, 1fr) auto var(
+      --pane-runs-detail,
+      clamp(var(--pane-min-side), 40%, var(--panel-width))
+    );
   flex: 1;
   min-height: 0;
 }
 /* A grid of rows rather than a flex column, for the boundary's sake: the tree's share of this
    column was `flex: 2` against the timeline's `flex: 3`, and a ratio is not something a length
-   can override. As tracks the default ratio is the same 2:3, and a dragged height is a first
+   can override. As tracks the default ratio is 3:2 — the tree's 2:3 until #1193, which left a
+   900px window eight rows of runs over an empty timeline — and a dragged height is a first
    track that reads the property instead — the fallback is the whole `minmax()`, so the fraction
    keeps the floor of zero a `flex` item had and cannot be pushed out by a deep tree. */
 .orca-runs__left {
   display: grid;
-  grid-template-rows: var(--pane-runs-tree, minmax(0, 2fr)) auto minmax(0, 3fr);
+  grid-template-rows: var(--pane-runs-tree, minmax(0, 3fr)) auto minmax(0, 2fr);
   /* One column, and it is the column's width - never its content's. Left implicit, the track
      is `auto`, whose floor is the widest row's min-content: tree rows do not wrap (rule 9), so
      a detail pane dragged wide pushed this column past its own track and the tree's rows,
@@ -141,6 +151,26 @@
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+/* The title is the last column to give way (#1193). Below the widths here the agent column
+   goes first, then the duration, so a row keeps at least twenty characters of its title —
+   about 13em of mono — rather than dropping the title to keep the metadata. The tree is the
+   container, so a dragged split counts the same as a narrow window or a zoomed one. */
+.orca-runs__tree {
+  container: runs-tree / inline-size;
+}
+@container runs-tree (max-width: 40em) {
+  .orca-runs__name {
+    min-width: 13em;
+  }
+  .orca-runs__agent {
+    display: none;
+  }
+}
+@container runs-tree (max-width: 30em) {
+  .orca-runs__dur {
+    display: none;
+  }
 }
 /* A step that never ran has no status, and its placeholder holds the status column open by
    exactly what an aligned chip takes, so the name and everything after it stay in their

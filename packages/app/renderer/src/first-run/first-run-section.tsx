@@ -401,9 +401,9 @@ export function FirstRunSection(): JSX.Element | null {
           stays read-only.
         </Text>
         <Text style="caption" as="p">
-          The harmless sample has no agent or provider credentials. Its completion verifies local launch only. The #420
-          coding task and a real local-agent run require separate tool, sign-in, cost, transmission, permission and
-          stop-limit review in Config. No real agent starts from setup.
+          The harmless sample has no agent or provider credentials. Its completion verifies local launch only. The
+          beta-first-job-v1 coding task and a real local-agent run require separate tool, sign-in, cost, transmission,
+          permission and stop-limit review in Config. No real agent starts from setup.
         </Text>
       </footer>
     </section>

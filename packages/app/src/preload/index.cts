@@ -382,6 +382,10 @@ const bridge: OrcaBridge = {
     saveJudgedRule: (params) => call("orca:permissions.saveJudgedRule", params),
     judgeStatus: () => call("orca:judge.status", {}),
   },
+  remotes: {
+    list: () => call("orca:remotes.list", {}),
+    enroll: (params) => call("orca:remotes.enroll", params),
+  },
   notifications: {
     // The one channel the main process pushes on rather than answers on. Each renderer
     // listener gets its own `ipcRenderer` listener so that unsubscribing one cannot silence

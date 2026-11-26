@@ -280,7 +280,8 @@ export class SqliteEventStore extends BaseEventStore {
     return {
       events,
       verifyUnchanged: async () => {
-        if (digest(await read()) !== expected) throw new OrcaError("RUN_STATE", "Event observation history changed");
+        if (digest(await read()) !== expected)
+          throw new OrcaError("RUN_STATE", "Event observation history changed", { reason: "observation-changed" });
       },
     };
   }

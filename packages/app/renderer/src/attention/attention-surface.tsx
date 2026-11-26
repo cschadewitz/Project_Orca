@@ -63,6 +63,7 @@ import { PermissionCard } from "./permission-card.js";
 import { tierOf } from "./items.js";
 import type { AttentionFeed } from "./use-attention.js";
 import { useControls, type Controls } from "./use-controls.js";
+import { NoDaemonView } from "../first-run/no-daemon-view.js";
 import "./attention.css";
 
 export interface AttentionSurfaceProps {
@@ -75,6 +76,8 @@ export interface AttentionSurfaceProps {
    * nowhere is worse than one that is not there.
    */
   onOpenRun?: (runId: string) => void;
+  /** Open Config, where Project setup says why the app's own daemon is not running (#1192). */
+  onOpenConfig?: () => void;
   /**
    * The waiting list and the failures. Held by the chrome rather than by this surface, for
    * the reason the count is: the title bar shows the same number on every screen, so the
@@ -84,7 +87,7 @@ export interface AttentionSurfaceProps {
   feed: AttentionFeed;
 }
 
-export function AttentionSurface({ connection, onOpenRun, feed }: AttentionSurfaceProps): JSX.Element {
+export function AttentionSurface({ connection, onOpenRun, onOpenConfig, feed }: AttentionSurfaceProps): JSX.Element {
   const { state, reload, answered } = feed;
   const controls = useControls({ onAnswered: answered, withAnswer: feed.revisions?.withAnswer });
   const writability = useWritability();
@@ -178,12 +181,7 @@ export function AttentionSurface({ connection, onOpenRun, feed }: AttentionSurfa
         action={{ label: "Try again", onClick: reload }}
       />
     ) : (
-      <StateView
-        kind="disconnected"
-        title="No daemon to ask"
-        body="Start one with orca serve, then try again."
-        action={{ label: "Try again", onClick: reload }}
-      />
+      <NoDaemonView title="No daemon to ask" onRetry={reload} {...(onOpenConfig ? { onOpenConfig } : {})} />
     );
   }
 

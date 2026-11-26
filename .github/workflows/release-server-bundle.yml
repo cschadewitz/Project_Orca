@@ -6,7 +6,8 @@
 # interrupted run recovers by itself. Nothing here needs a person or a stored key.
 #
 #   resolve  the release vVERSION exists, targets SOURCE_SHA (a final still a draft, an rc
-#            already published), and SOURCE_SHA is on main. Main's tooling only.
+#            already published), and SOURCE_SHA is on its protected line release/X.Y. Main's
+#            tooling only.
 #   build    builds SOURCE_SHA (its own lockfile and toolchain) and assembles
 #            orca-server-VERSION-linux-x64.tar.xz with tools/deploy/server-bundle.py, plus the
 #            SHA-256 manifest. Read-only token, no OIDC.

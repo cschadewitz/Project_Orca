@@ -16,6 +16,8 @@
  * "and what is it working on", and a claim is the only record of that which outlives a step.
  * They are projected by `ReadModel` so there is one `ClaimView` in the daemon and not two.
  */
+import { statSync } from "node:fs";
+import { delimiter, isAbsolute, join } from "node:path";
 import type { AgentRegistry, AgentHealth } from "@orca/agents";
 import { describeError, resolveCapabilities, secretRefs, type Clock } from "@orca/core";
 import type { Orchestrator } from "@orca/engine";
@@ -179,5 +181,46 @@ function agentView(health: AgentHealth, registry: AgentRegistry): AgentView {
     ...(health.lastSeenAt === undefined ? {} : { lastSeenAt: health.lastSeenAt }),
     ...(health.roundTripMs === undefined ? {} : { roundTripMs: health.roundTripMs }),
     ...(health.lastError ? { lastError: health.lastError } : {}),
+    ...(spec && hostType === "local" && commandMissing(spec.command, spec.env)
+      ? { commandMissing: true as const }
+      : {}),
   };
+}
+
+/**
+ * What is at `path`: a regular file, certainly nothing usable (no entry, a non-directory in
+ * the way, or an entry that is not a file), or `unknown` when the path could not be looked
+ * at (permissions, a symlink loop, anything else). Only `absent` lets an agent be called
+ * missing.
+ */
+function probe(path: string): "file" | "absent" | "unknown" {
+  try {
+    return statSync(path).isFile() ? "file" : "absent";
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code === "ENOENT" || code === "ENOTDIR" ? "absent" : "unknown";
+  }
+}
+
+/**
+ * Whether a local agent's command names nothing on this host (#1200): an absolute path with no
+ * file there, or a bare name found on no directory of the agent's `PATH` (its own `env.PATH`
+ * when the config sets one as a literal, else this daemon's). A relative path resolves against
+ * a run's workspace, which an agent read does not have, so it is never reported, and neither
+ * is an empty command: both are left to the handshake. Only "certainly missing" is said: a
+ * candidate that could not be looked at keeps the agent `unknown`, and a command that is there
+ * may still fail to start, which the handshake reports as `down`.
+ */
+function commandMissing(command: string, env: Record<string, unknown>): boolean {
+  if (command === "") return false;
+  if (isAbsolute(command)) return probe(command) === "absent";
+  if (/[\\/]/.test(command)) return false;
+  const path = typeof env.PATH === "string" ? env.PATH : (process.env.PATH ?? "");
+  const extensions =
+    process.platform === "win32" ? ["", ...(process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";")] : [""];
+  for (const dir of path.split(delimiter)) {
+    if (dir === "") continue;
+    for (const extension of extensions) if (probe(join(dir, command + extension)) !== "absent") return false;
+  }
+  return true;
 }

@@ -27,8 +27,9 @@ Closing it proposes the release.
 3. When the work is done, **close the milestone**. `release-prepare.yml` checks that no
    issue in it is still open, takes the highest bump label, computes the next version, and
    opens a `release: vX.Y.Z` pull request that bumps `package.json`, renders the fragments
-   into a dated changelog section and deletes them. A new minor's pull request targets
-   `main`; a patch's targets its release line `release/X.Y` ([Release lines](#release-lines)).
+   into a dated changelog section and deletes them. The pull request targets the version's
+   release line `release/X.Y`, which a new minor's first candidate creates from `main`
+   ([Release lines](#release-lines)).
 4. Review that pull request. Its body is the release body verbatim — to change the notes,
    edit `CHANGELOG.md` on the release branch.
 5. **Merge it.** `release-publish.yml` re-runs `ci.yml`'s full check path against the
@@ -54,12 +55,13 @@ than before it. Only `ci.yml`'s coverage thresholds are left out: they are `main
 ratchets, and the push the merge makes still runs them in `ci.yml`, without gating the tag.
 `tools/test/release-workflow.test.js` fails if the release job's order, production flag,
 retry acceptance or worker bound drift from `ci.yml`'s. If `release-publish.yml` fails,
-the version bump is on `main` with no tag against it — fix forward, then run **Release (publish)** from the Actions tab against
-`main` (or the fixed commit). It publishes whatever version that commit's `package.json`
+the version bump is on the release line with no tag against it — fix forward, then run
+**Release (publish)** from the Actions tab (workflow from `main`) against the line's head (or
+the fixed commit on it). It publishes whatever version that commit's `package.json`
 holds, through the same checks, builds and tag step, and refuses if the tag already
 exists. Re-running the failed run is not the same thing: a re-run uses the workflow files
 of the commit it first ran on, so a fix to the workflows never reaches it; and closing the
-milestone again cannot help, since `prepare` refuses to bump to a version `main` already
+milestone again cannot help, since `prepare` refuses to bump to a version the line already
 carries. Giving `release-prepare.yml` a personal
 access token instead of `GITHUB_TOKEN` would move the checks back onto the PR, at the cost
 of a token to store and rotate; that trade is only worth making if `main` ever gains
@@ -82,8 +84,9 @@ the release id from the job summary, `SHA` the commit and `V` the version:
 
 1. **Automatic** while the repository variable `ORCA_RELEASE_AUTO_SIGN` is `true` (off by
    default): the same run's `sign` job dispatches **Windows signed (spike)** from `main` with
-   `source_sha` set to `SHA` (while `main` still matches it outside notes, docs and
-   workflows; later product drift on `main` makes the source check refuse it). Dispatching
+   `source_sha` set to `SHA` (while the release line still matches it outside notes, docs and
+   workflows; later product drift on the line makes the source check refuse it, and merges
+   to `main` never do). Dispatching
    changes no protection: the signed run still waits on whatever the `windows-signing`
    environment requires. Removing its required reviewer is a separate setting (the owner
    chose no reviewer, main only, on 2026-11-21).
@@ -216,7 +219,8 @@ unexpected assets.
 | `orca-server-X.Y.Z-linux-x64.manifest.json.sigstore.json` | The manifest's Sigstore bundle: a keyless cosign signature with its short-lived certificate and transparency-log entry. |
 
 **Release (server bundle)** (`release-server-bundle.yml`) produces them, unattended, from
-`main`: it confirms the release `vX.Y.Z` targets the commit and the commit is on `main`, builds
+`main`: it confirms the release `vX.Y.Z` targets the commit and the commit is on the version's
+protected line `release/X.Y` (`release-lane.js on-lane`, through the API), builds
 that commit, assembles the archive (`tools/deploy/server-bundle.py`, deterministic for its
 inputs), signs the manifest with `cosign sign-blob` using the job's GitHub OIDC identity (no
 key exists anywhere to store, rotate or leak), stages the signed files with
@@ -411,18 +415,41 @@ unsigned CI output and its notes must say not to install that output.
 
 ## Release lines
 
-A patch ships what was chosen for it, not whatever `main` holds. `main` is where all work
-merges, including the next minor's; each minor then gets a long-lived, protected **line
-branch** `release/X.Y`, and every patch of it is cut from that branch.
+A release ships what was chosen for it, not whatever `main` holds. `main` is where all work
+merges, including the next minor's and unscheduled work; each minor gets a long-lived,
+protected **line branch** `release/X.Y`, and every release of that minor, its `.0` and the
+`.0`'s candidates included, is cut from that branch.
 
-**One lane per version** (`tools/release-lane.js`, used by prepare, publish and signing alike):
+**One lane per version** (`tools/release-lane.js`, used by prepare, publish, signing and the
+server bundle alike):
 
 | Version | Only lane |
 | --- | --- |
-| `X.Y.0` and its candidates (`X.Y.0-rc.N`) | `main` |
+| `X.Y.0` and its candidates (`X.Y.0-rc.N`) | `release/X.Y`, cut from `main` when the first of them is prepared |
 | `X.Y.Z`, Z > 0, and its candidates | `release/X.Y`, and only while it is protected |
 
-A patch commit on `main`, or a `.0` commit on a line, is refused. A line counts as protected
+A release commit that is not on its line is refused.
+
+**The cut.** Preparing a new minor's first candidate (or its `.0`, if it has none) creates
+`release/X.Y` from `main`'s head and opens the release pull request against it; the
+`release/0.*` ruleset protects the new branch from its first push. From that moment `main`
+takes the next minor's work, and no merge to `main` changes what `X.Y.0` ships, stales a
+signing source or needs anyone to hold. A fix that the candidate needs merges to `main` first
+and is then cherry-picked into the line, as for a patch. Until `vX.Y.0` is tagged the line is
+**stabilizing**: the guard accepts issues in the `X.Y.0` milestone (with the `release:minor`
+or `release:major` label they ship with) as well as patch milestones. Once the `.0` is tagged,
+only patch milestones count.
+
+**Candidate to final.** The same `X.Y.0` milestone, reopened and closed again, prepares the
+next candidate (pin `Release: vX.Y.0-rc.N`) or the final. The final needs no pin: a candidate
+is finalized by its own bump, so `0.9.0-rc.1` with `release:minor` labels gives `0.9.0`, from the
+existing line, whether the milestone's title is `0.9.0` or anything else and whether or not
+`main` has recorded the candidate yet. Prepare decides the version, the line and any cut first
+(`tools/release-plan.js`), and pushes nothing until that passes. It refuses to cut a new minor
+while an older minor's line is still stabilizing (cut, with no `.0` tagged), so a milestone
+closed early cannot cut `0.10` from a `main` that already holds work the `0.9.0` final does not.
+A **Release (prepare)** dispatch with `dry_run` reports that decision for any milestone, open
+or closed, and writes nothing. A line counts as protected
 when the rules API reports, for that branch, a pull request requirement, no force pushes, no
 deletion, both `check (node 24)` and `release line check` as required checks that only GitHub
 Actions may satisfy, and branches kept up to date before merging; prepare, publish and signing all check that before they open, build or sign anything from a line.
@@ -433,10 +460,19 @@ Dry runs are unchanged: they rehearse any ref and never tag, sign or feed.
 | `main` | everything, including the next minor's work | feature and fix pull requests |
 | `release/X.Y` | the `X.Y` line: its patches only | fix and backport pull requests, and the line's release pull requests |
 
-**Getting a fix onto a line.** Merge the fix to `main` as usual, then cherry-pick it onto
-`release/X.Y` in a pull request whose description names the issue (`Fixes #N`, plus `Backport
-of #PR` when it is a copy). The issue must be in a patch milestone of that line (`0.7.1`). A
-fix for code that only exists on the line goes straight to the line the same way.
+**Getting a fix onto a line.** Merge the fix to `main` as usual with a `backport:X.Y` label
+(before or after the merge). **Backport** (`backport.yml`, `tools/backport.js`) cherry-picks the
+pull request's complete change (its merge commit, its squash commit, or every commit of a
+rebase merge, matched against the pull request's own diff) onto `release/X.Y` in the branch `backport/<pr>-X.Y` and opens a pull request into
+the line named `[X.Y] <title>`, whose description says `Backport of #PR` and repeats the
+original's `Fixes #N` lines, and asks Cal to review it. The issue must be in a milestone of
+that line (`0.7.1`, or `X.Y.0` while the line is stabilizing), so the release line guard passes
+it. A cherry-pick that does not apply opens nothing: the original pull request gets a comment
+listing the conflicting files and the `backport-conflict` label, and its owner cherry-picks by
+hand into a pull request with the same description. The same happens when the complete change
+cannot be established, and when a `backport/<pr>-X.Y` branch exists without a pull request but
+is not exactly the expected picks; a branch that is gets its pull request opened on the rerun. A fix for code that only exists on the
+line goes straight to the line the same way.
 
 **What keeps minor work off a line.** Two gates, both automatic:
 
@@ -494,11 +530,13 @@ and nothing merges it automatically. A rerun never pushes over that branch: the 
 on a newer `main`) is reused with its pull request, and an edit or a different change stops the
 run with nothing changed. Publish-final hands over to the feed first; the notes handover runs
 whether or not that worked, so neither can suppress the other. `main`'s
-`package.json` keeps the last minor it released, so the next minor is still computed from it.
+`package.json` keeps the last minor it released, so the next minor is still computed from it:
+for a new minor, or a candidate of it, the same pull request raises `main`'s `package.json`
+version to the released one when `main` is behind (a patch never changes it).
 
-**Lines stop at 0.7 for now.** From 0.8 on a release must carry the signed server bundle, which
-is built and signed only from `main`, so `release-lane.js` refuses a patch of 0.8 or later
-before anything runs, rather than failing halfway through a release.
+**The server bundle on a line.** From 0.8 on a release must carry the signed server bundle.
+It is still built and signed by `main`'s `release-server-bundle.yml` (its signing identity is
+that file on `main`), from the release commit, which must be on the version's protected line.
 
 **Which workflow copy runs.** Merging a line's release pull request runs the line branch's
 own `release-publish.yml` (a `pull_request` event uses the base branch's files); its lane checks
@@ -517,11 +555,9 @@ required check):
 4. Rehearse with a **Release (publish)** dry run of the release pull request's head, then
    retarget that pull request to the line, update its branch, and merge it.
 
-**Not yet covered.** A minor's candidates are still cut from `main`; cutting `release/X.Y` at
-the first candidate, automatic backport pull requests from a label, and publishing a patch of
+**Not yet covered.** Publishing a patch of
 an older line after a newer minor is Latest (publish-final and the upgrade check compare with
-Latest) are later work, as is building and signing the server bundle from a line, which 0.8
-patches need.
+Latest), are later work.
 
 **What the repository needs once.** A ruleset on `release/0.*` (and `release/1.*` when there is
 one), not on the `release/vX.Y.Z` pull request heads: pull requests only, no force pushes or
@@ -561,8 +597,15 @@ The point is that a pull request creates a file instead of editing a shared list
 pull requests in flight cannot conflict over the changelog — and a dropped fragment is a
 missing file rather than a lost merge. `changelog.d/README.md` is the reference.
 
-`prepare` renders the fragments into the dated section and deletes them, so the deletions
-land in the `release: vX.Y.Z` pull request beside the section they became. Nothing else
+Fragments for work behind an incubating flag live in `changelog.d/incubating/<flag>/`, which
+`prepare` does not read; `node tools/release.js promote <flag>` moves them up when the flag is
+promoted (docs/WORKSTREAMS.md).
+
+`prepare` renders the fragments into the dated section. For a final it deletes them, so the
+deletions land in the `release: vX.Y.Z` pull request beside the section they became. A
+candidate (`X.Y.Z-rc.N`) keeps them: each candidate's section shows everything since the last
+final, and the final renders them all once more and consumes them, so no fragment has to be
+re-added before a final. Nothing else
 reads `changelog.d/`: `notes <version>` quotes the committed `CHANGELOG.md`, which is what
 `release-publish.yml` publishes.
 
@@ -645,16 +688,23 @@ runners with `main`'s tooling, not the ref's. The assets are checked by a separa
 with a read-only token, that checks out `main`'s workflow revision, validates the version and
 commit, and treats the artifacts as data. A ref from before the upgrade launch check reports it as not applicable.
 
-A real (non-dry-run) release refuses any commit that is not on `main`, and a manual one must
-also be dispatched with `main`'s workflow: its publish job runs the released commit's own
-tooling with a write token, so that commit has to be reviewed. Any commit on `main`
-qualifies, so fixing forward after a failed publish still works.
+A real (non-dry-run) release refuses any commit that is not on its version's protected line,
+and a manual one must also be dispatched with `main`'s workflow: its publish job runs the
+released commit's own tooling with a write token, so that commit has to be reviewed. Any
+commit on that line qualifies, so fixing forward after a failed publish still works.
 
 Use it before merging a release pull request, or to try a risky change through the
 release graph before it lands. A failure costs nothing, unlike a failed `release-publish`
-after merge, which leaves a bump on `main` with no tag. Dry runs before #950 left a
+after merge, which leaves a bump on the line with no tag. Dry runs before #950 left a
 `vX.Y.Z-dryrun.N (dry run)` draft each; newer ones leave none. Learned from T3 Code's preview release train (#863).
 
+
+A rehearsal skips the lane gate a real release applies, so it also reports what that gate
+would say about the rehearsed ref (`release-lane.js rehearse`, `main`'s copy): accepted (on its
+protected line), a preflight pass for a release pull request head up to date with its protected
+line (ancestry and protection only: the merged pull request, its exact-head line check and the
+same-tree requirement are checked at publication, not here), or refused with the reason. It never fails the rehearsal. Together with a **Release (prepare)**
+`dry_run`, that rehearses a candidate-to-final path end to end without writing anything.
 ## Doing it by hand
 
 The workflow is a wrapper around `tools/release.js`, which is offline and has no

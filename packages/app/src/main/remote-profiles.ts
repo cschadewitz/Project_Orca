@@ -23,6 +23,7 @@ import { ServerPathSchema } from "@orca/protocol";
 import {
   ConnectionProfileSchema,
   CredentialSlots,
+  DEFAULT_SERVER_COMMAND,
   forgetPin,
   tunnelKeyIdentity,
   pinState,
@@ -600,7 +601,15 @@ export class RemoteProfiles {
     const existing = profiles.find((p) => p.id === id);
     if (requested && !existing) throw new ConnectionRefusal("That profile no longer exists.");
     if (existing) this.assertIdle(id, "editing");
-    const profile = ConnectionProfileSchema.parse({ ...fields, id });
+    // A server command left empty is the default, saved as such (#1207), except on a profile
+    // that already omits it: one saved before 0.8.1, whose server answers to `orca` and keeps
+    // doing so until someone enters another command.
+    const keepsLegacy = existing !== undefined && existing.serverCommand === undefined;
+    const profile = ConnectionProfileSchema.parse({
+      ...fields,
+      ...(fields.serverCommand === undefined && !keepsLegacy ? { serverCommand: DEFAULT_SERVER_COMMAND } : {}),
+      id,
+    });
     if (existing) {
       const otherServer = serverKey(existing) !== serverKey(profile) || existing.remotePort !== profile.remotePort;
       const otherIssue =

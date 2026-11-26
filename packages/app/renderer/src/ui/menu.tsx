@@ -186,11 +186,44 @@ const rectOf = (element: Element): Rect => {
   return { top, left, width, height };
 };
 
-const measureInDocument: MenuMeasurer = (trigger, menu) => ({
-  trigger: rectOf(trigger),
-  menu: rectOf(menu),
-  viewport: { width: window.innerWidth, height: window.innerHeight },
-});
+/**
+ * The part of the window the menu can be seen in: the window, cut down to the nearest
+ * ancestor of the trigger that clips its overflow. A menu is positioned inside its anchor, so
+ * a scrolling pane around the trigger clips it as surely as the window edge does; measured
+ * against the window alone, Launch work's workflow menu "fitted" and was cut off by the
+ * pane it opened in (#1112).
+ */
+function visibleArea(trigger: Element): Rect & { scrolls: boolean } {
+  let scrolls = false;
+  let top = 0;
+  let left = 0;
+  let right = window.innerWidth;
+  let bottom = window.innerHeight;
+  for (let node = trigger.parentElement; node; node = node.parentElement) {
+    const style = getComputedStyle(node);
+    if (style.overflowX === "visible" && style.overflowY === "visible") continue;
+    const box = node.getBoundingClientRect();
+    // happy-dom measures every box as zero: nothing there to clip against.
+    if (box.width === 0 && box.height === 0) continue;
+    if (/auto|scroll/.test(style.overflowY)) scrolls = true;
+    top = Math.max(top, box.top);
+    left = Math.max(left, box.left);
+    right = Math.min(right, box.left + box.width);
+    bottom = Math.min(bottom, box.top + box.height);
+  }
+  return { top, left, width: Math.max(0, right - left), height: Math.max(0, bottom - top), scrolls };
+}
+
+const measureInDocument: MenuMeasurer = (trigger, menu) => {
+  const area = visibleArea(trigger);
+  const at = rectOf(trigger);
+  return {
+    trigger: { ...at, top: at.top - area.top, left: at.left - area.left },
+    menu: rectOf(menu),
+    viewport: { width: area.width, height: area.height },
+    scrolls: area.scrolls,
+  };
+};
 
 /** The items of `menu` that the arrow keys visit — disabled ones are shown but skipped. */
 function itemsOf(menu: Element): HTMLElement[] {
@@ -394,6 +427,14 @@ export function Menu({
     return () => window.removeEventListener("resize", update);
   }, [open, measure]);
 
+  /* Inside a scrolling pane, bring the whole placed menu into view: a menu taller than the
+     room on either side of its trigger was cut off by the pane, out of reach (#1112). The pane
+     scrolls by what is missing and nothing more; where the menu already fits this does
+     nothing. After placement, so it scrolls for the side the menu ended up on. */
+  useLayoutEffect(() => {
+    if (open) list.current?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+  }, [open, placement]);
+
   /* A press outside dismisses. `setOpen` rather than `close`: focus is already on its way
      to whatever was clicked, and pulling it back to the trigger would fight the person. */
   useEffect(() => {
@@ -484,7 +525,9 @@ export function Menu({
                   </span>
                 ) : null}
                 {item.labelId === undefined ? (
-                  <span>{item.label}</span>
+                  <span className="orca-menu__label" title={item.label}>
+                    {item.label}
+                  </span>
                 ) : (
                   /* The name is the part that gives way; the token keeps its width, because
                      two runs with one name are told apart by nothing else. With no name, the
