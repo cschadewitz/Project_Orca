@@ -139,7 +139,7 @@ const QUOTED = [
       "Choose a prepared Git project",
       "Choose a separate empty app workspace",
       "Choose a parent for a new private app workspace",
-      "Review selection",
+      "Choose folder",
     ],
   ],
   ["packages/app/renderer/src/config/configuration-studio-surface.tsx", ["Launch work"]],

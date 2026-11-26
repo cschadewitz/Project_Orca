@@ -1062,8 +1062,8 @@ const firstRun = new FirstRunSetup({
             ? "Choose a parent for a new private app workspace"
             : "Choose a separate empty app workspace",
       properties: ["openDirectory" as const],
-      // Neutral, because the Linux portal (GTK on Ubuntu 24.04) ignores the label and says "Open":
-      // no setup text names the button, and "Choose folder" and "Open" both read right there (#1200).
+      // Neutral, because the Linux portal (GTK on Ubuntu 24.04) ignores the label and says "Open",
+      // and "Choose folder" and "Open" both read right there (#1200). The setup guide names both.
       buttonLabel: "Choose folder",
     };
     const window = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
