@@ -876,6 +876,8 @@ export class SshTunnel {
   execStreaming(
     command: readonly string[],
     onLine: (stream: "stdout" | "stderr", line: string) => void,
+    /** Written to the command's stdin, which then ends: a program for `python3 -` (#1236). */
+    input?: string,
   ): RemoteCommand {
     if (this.closed || !this.hops) throw new TunnelRefusal("closed");
     if (this.stateNow.phase === "failed") throw new TunnelRefusal(this.stateNow.refusal);
@@ -891,7 +893,8 @@ export class SshTunnel {
     }
     this.commands.add(child);
     child.once("exit", () => this.commands.delete(child));
-    child.stdin?.end();
+    child.stdin?.on("error", () => {});
+    child.stdin?.end(input);
     return runRemote(child, onLine);
   }
 

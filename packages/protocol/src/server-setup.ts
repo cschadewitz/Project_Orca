@@ -28,6 +28,7 @@ import {
   pinState,
   TunnelRefusal,
   type ConnectionProfile,
+  type RemoteCommand,
   type RemoteResult,
   type SshTunnelOptions,
 } from "./remote-access.js";
@@ -335,6 +336,12 @@ export interface SetupTunnel {
   exec(command: readonly string[], timeoutMs?: number, input?: string): Promise<RemoteResult>;
   /** Copy a local file to the server (`SshTunnel.upload`, #1234); needed only to push a bundle. */
   upload?(localPath: string, remotePath: string, timeoutMs?: number): Promise<void>;
+  /** Follow a command line by line (`SshTunnel.execStreaming`); needed only to sign an agent in (#1236). */
+  execStreaming?(
+    command: readonly string[],
+    onLine: (stream: "stdout" | "stderr", line: string) => void,
+    input?: string,
+  ): RemoteCommand;
   close(): Promise<void>;
   readonly pinnedKeys: string | undefined;
 }
