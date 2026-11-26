@@ -2,7 +2,7 @@
  * `remotes.list` and `remotes.enroll` (#1206, protocol 2.13): delegation remotes enrolled by the
  * daemon that owns the workspace.
  *
- * `orca remote enroll` writes the enrollment files from a separate CLI process, which a
+ * `orca-cli remote enroll` writes the enrollment files from a separate CLI process, which a
  * workspace the desktop app set up in first-run refuses ("First-run mutation requires owned
  * daemon admission"): only the daemon the app launched holds that workspace's writer fence. This
  * is the same enrollment run inside that daemon. It takes the same enrollment lock, makes the
@@ -154,7 +154,7 @@ export function remotesModel(source: RemotesSource): RemotesModel {
         if (token === undefined)
           throw new OrcaError(
             "CONFIG_INVALID",
-            "That is not an ORCA credential. Paste the token, or the whole output of `orca auth issue <name> --preset client --json` on the remote.",
+            "That is not an ORCA credential. Paste the token, or the whole output of `orca-cli auth issue <name> --preset client --json` on the remote (its serverCommand).",
           );
         saveToken = true;
       }

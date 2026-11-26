@@ -330,7 +330,13 @@ it("installs the .deb and launches it sandboxed on a restricted GitHub-hosted ru
   expect(run).toContain("grep -q '^orca-desktop ' /sys/kernel/security/apparmor/profiles");
   // The screen reader is installed first and must come through untouched.
   expect(run).toContain("apt-get install -y -q --no-install-recommends orca\n");
-  expect(run.match(/test "\$\(reader\)" = "\$before"/g)).toHaveLength(2);
+  expect(run.match(/test "\$\(reader\)" = "\$before"/g)).toHaveLength(3);
+  // The CLI (#1207): the package's own /usr/bin/orca-cli reaches this build beside the screen
+  // reader, and goes with the package.
+  expect(run).toContain("test \"$(dpkg -S /usr/bin/orca-cli)\" = 'orca-desktop: /usr/bin/orca-cli'");
+  expect(run).toContain('test "$(orca-cli --version)" = "$VERSION"');
+  expect(run).toContain("test ! -e /usr/bin/orca-cli");
+  expect(step.env.VERSION).toBe("${{ steps.version.outputs.version }}");
   expect(run).toContain('test "$(dpkg-deb -f "$deb" Package)" = orca-desktop');
   // Numeric modes, special bits included, in the payload and once installed.
   expect(run).toContain("m.mode & 0o7000");

@@ -4,6 +4,7 @@
  */
 import { assertNoUnownedFirstRunMutation } from "@orca/protocol/first-run-fence";
 import { firstRunRequiresExplicitContinuationRecovery } from "../first-run-recovery-fence.js";
+import { continuationRecoveryLog } from "../continuation-recovery-log.js";
 import {
   assertClosedUpdateCommand,
   isClosedUpdateBootstrap,
@@ -1335,11 +1336,17 @@ async function serveDaemon(ctx: CommandContext, installedPluginRelease?: Install
     throw error;
   }
   let recoveringContinuations: Promise<void> | undefined;
+  // One line per change of state, never one per 5 s tick (#1197): the first failure says
+  // why, the same failure again says nothing, and a pass after a failure says it cleared.
+  const recoveryLog = continuationRecoveryLog(app.logger);
   const recoverContinuations = () => {
     if (!daemon.recoverContinuations || recoveringContinuations) return;
     recoveringContinuations = daemon
       .recoverContinuations()
-      .catch(() => app.logger.warn("Continuation recovery requires explicit attention"))
+      .then(
+        () => recoveryLog.passed(),
+        (error: unknown) => recoveryLog.failed(error),
+      )
       .finally(() => {
         recoveringContinuations = undefined;
       });

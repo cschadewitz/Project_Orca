@@ -215,6 +215,17 @@ test.afterAll(async () => {
   if (userData) await rm(userData, { recursive: true, force: true });
 });
 
+test("the real application menu binds Ctrl+Q to Quit (#1209)", async () => {
+  // Read from the menu Electron actually built, not the template: the `quit` role has no
+  // default accelerator on Windows, so the binding has to survive `buildFromTemplate`.
+  const quit = await app.evaluate(({ Menu }) => {
+    const items = (Menu.getApplicationMenu()?.items ?? []).flatMap((item) => item.submenu?.items ?? []);
+    const found = items.filter((item) => item.role?.toLowerCase() === "quit");
+    return found.map((item) => item.accelerator ?? null);
+  });
+  expect(quit).toEqual(["CmdOrCtrl+Q"]);
+});
+
 test("the window comes up on the built renderer with a bridge in it", async () => {
   expect(await page.title()).toBe("ORCA");
 
