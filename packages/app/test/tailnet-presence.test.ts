@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from "vitest";
 import type { TailnetRead, TailnetSnapshot } from "@orca/protocol/tailnet";
-import { TailnetPresenceWatch, type PresenceSnapshot } from "../src/main/tailnet-presence.js";
+import { shownBindings, TailnetPresenceWatch, type PresenceSnapshot } from "../src/main/tailnet-presence.js";
 
 const snapshot = (online: boolean): TailnetSnapshot => ({
   peers: [
@@ -103,6 +103,29 @@ describe("tailnet presence", () => {
     r.watch.watch(2, false);
     expect(r.cleared).toBe(1);
     expect(r.watch.snapshot).toEqual({});
+  });
+
+  it("reads again at once when the machines on screen change, only while watched", async () => {
+    const r = rig();
+    r.watch.refresh();
+    await r.settle();
+    expect(r.reads).toBe(0);
+    r.watch.watch(1, true);
+    await r.settle();
+    r.watch.refresh();
+    await r.settle();
+    expect(r.reads).toBe(2);
+  });
+
+  it("covers only the tailnet profiles whose machines are on screen", () => {
+    const lab = { node: "nBuild1", name: "build-1.example-tailnet.ts.net" };
+    const other = { node: "nOther", name: "other.example-tailnet.ts.net" };
+    expect(
+      shownBindings(
+        [{ id: "lab", tailnet: lab }, { id: "other", tailnet: other }, { id: "plain" }],
+        ["bundled", "profile:lab", "profile:plain"],
+      ),
+    ).toEqual([{ id: "lab", tailnet: lab }]);
   });
 
   it("says nothing without a running client", async () => {

@@ -1,6 +1,6 @@
 /**
- * Tailnet presence for the Machines view (#1230): for each saved profile bound to a tailnet
- * node, whether that node is online, read from this computer's Tailscale client without opening
+ * Tailnet presence for the Machines view (#1230): for each profile on the view's screen that is
+ * bound to a tailnet node, whether that node is online, read from this computer's Tailscale client without opening
  * any ssh connection.
  *
  * It reads only while some window shows the Machines view: the first watcher starts a read and
@@ -22,13 +22,27 @@ export type PresenceSnapshot = Record<string, TailnetPresence>;
 export interface TailnetPresenceOptions {
   /** One read of the local tailnet (`readTailnet`); never throws. */
   read: () => Promise<TailnetRead>;
-  /** The saved profiles bound to a tailnet node, read fresh each time. */
+  /** The profiles the view shows that are bound to a tailnet node, read fresh each time. */
   bindings: () => readonly { id: string; tailnet: TailnetBinding }[];
   /** Called with every new snapshot, for the watchers. */
   onChange: (snapshot: PresenceSnapshot) => void;
   intervalMs?: number;
   setInterval?: (run: () => void, ms: number) => unknown;
   clearInterval?: (handle: unknown) => void;
+}
+
+/**
+ * The bindings presence is read for: only the profiles bound to a node whose machine is on the
+ * view's screen (`profile:<id>` keys), never every saved tailnet profile.
+ */
+export function shownBindings(
+  profiles: readonly { id: string; tailnet?: TailnetBinding | undefined }[],
+  machineKeys: readonly string[],
+): { id: string; tailnet: TailnetBinding }[] {
+  const shown = new Set(machineKeys);
+  return profiles.flatMap((profile) =>
+    profile.tailnet && shown.has(`profile:${profile.id}`) ? [{ id: profile.id, tailnet: profile.tailnet }] : [],
+  );
 }
 
 export class TailnetPresenceWatch {
@@ -52,6 +66,11 @@ export class TailnetPresenceWatch {
     else this.watchers.delete(watcher);
     if (before === 0 && this.watchers.size > 0) this.start();
     else if (before > 0 && this.watchers.size === 0) this.stop();
+  }
+
+  /** The profiles on screen changed: read again now, while a window watches. */
+  refresh(): void {
+    if (this.watchers.size > 0) void this.poll();
   }
 
   close(): void {

@@ -56,11 +56,3 @@ export function presenceText(presence: MachinePresence): string {
       return "Its tailnet name is now another machine's";
   }
 }
-
-/**
- * Whether the tailnet's word replaces the connection's reason: a machine that is not live and
- * that the tailnet says is not there shows that, instead of a connect timeout.
- */
-export function presenceExplains(machine: FleetMachine, presence: MachinePresence | undefined): boolean {
-  return presence !== undefined && presence.kind !== "online" && machine.state !== "live" && machine.state !== "file";
-}

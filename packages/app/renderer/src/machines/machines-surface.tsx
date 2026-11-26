@@ -45,7 +45,6 @@ import {
   fleetSummary,
   isStale,
   machineProfileId,
-  presenceExplains,
   presenceText,
   slotsLabel,
   type MachinePresence,
@@ -287,7 +286,9 @@ function MachineSection({
           )}
         </Text>
       )}
-      {machine.reason !== undefined && !presenceExplains(machine, presence) && (
+      {/* Beside the connection's own reason, never in place of it: that may be a refusal to sign
+          in or a different machine, which the tailnet knows nothing about. */}
+      {machine.reason !== undefined && (
         <Text style="caption" as="p" className="orca-machine__reason">
           {machine.reason}
         </Text>

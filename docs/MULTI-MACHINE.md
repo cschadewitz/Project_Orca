@@ -97,7 +97,7 @@ more of them read-only. See [daemon connections](daemon-connection.md#watching-s
    16). For a machine added from your tailnet, the surface also says whether it is online
    there, read from this computer's Tailscale client every 30 seconds while the surface is open
    and never over ssh. An offline machine says "Offline on your tailnet" and when it was last
-   seen, instead of a connection timeout. This is a hint only: whether the app is connected
+   seen, beside why the connection failed. This is a hint only: whether the app is connected
    still comes from the ssh connection (#1230).
 
 Limits: the daemons do not talk to each other, and a run never moves between them. Choose
