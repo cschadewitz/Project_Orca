@@ -64,6 +64,19 @@ import type { TurnPlanStep } from "./codex-protocol/0.171.0/v2/TurnPlanStep.js";
 import type { ThreadTokenUsage } from "./codex-protocol/0.171.0/v2/ThreadTokenUsage.js";
 import { processCleanup } from "./process-cleanup.js";
 import {
+  codexAccountContinuity,
+  codexAccountIdentity,
+  codexAccountSwitched,
+  codexLimitBucket,
+  codexRateLimitsProblem,
+  codexSignedOut,
+  codexUsageLimitFailure,
+  mergeCodexRateLimits,
+  type CodexAccountIdentity,
+  type CodexAccountStatus,
+  type CodexRateLimits,
+} from "./codex-app-server-account.js";
+import {
   codexConfigCheck,
   codexSessionFlags,
   codexWritableRoots,
@@ -104,6 +117,14 @@ export interface OpenCodexAppServerSessionOptions {
   protectedPaths?: readonly string[];
   /** Called with what ORCA verified of Codex's config, on open and after each restart. */
   onVerifiedConfig?: (config: CodexVerifiedConfig) => void;
+  /** Called with the account Codex runs on, at open and whenever Codex reports it changed (#1164). */
+  onAccount?: (account: CodexAccountStatus) => void;
+  /**
+   * Called with Codex's usage limits whenever it reports them, merged with what was known
+   * (#1164); `null` when what was reported no longer holds (the account is being read again, or a
+   * new app-server took over). No limits are reported while the account is unconfirmed or refused.
+   */
+  onRateLimits?: (limits: CodexRateLimits | null) => void;
   env?: Record<string, string>;
   secrets?: SecretsConfig | undefined;
   authorizeSecretUse?: AuthorizeSecretUse | undefined;
@@ -167,6 +188,10 @@ interface Connection {
   proc: AgentProcessHandle;
   client: CodexAppServerClient;
   cleanup: () => Promise<void>;
+  /** The account Codex reported at the handshake, or at its latest re-read. */
+  account: CodexAccountIdentity;
+  /** Codex sent `account/updated` that ORCA has not re-read the account for yet. */
+  accountUpdated?: boolean;
 }
 
 /** Provider errors can carry private context: report only the failed recovery boundary, as the ACP route does. */
@@ -258,6 +283,7 @@ export const CODEX_SESSION_METHODS = [
   "config/read",
   "configRequirements/read",
   "hooks/list",
+  "account/rateLimits/read",
 ] as const;
 
 /** The notifications the session reads; anything else Codex sends is ignored. */
@@ -270,6 +296,8 @@ const HANDLED_NOTIFICATIONS = new Set([
   "turn/plan/updated",
   "thread/tokenUsage/updated",
   "turn/completed",
+  "account/updated",
+  "account/rateLimits/updated",
 ]);
 
 /** Asks that are approvals, declined until ORCA's policy answers them (#1159). */
@@ -469,10 +497,19 @@ export function codexPlanUpdate(plan: readonly TurnPlanStep[]): acp.SessionUpdat
 }
 
 /** What a finished turn tells ORCA. */
-export function codexStopReason(agentId: string, turn: unknown): acp.StopReason {
+export function codexStopReason(
+  agentId: string,
+  turn: unknown,
+  reported: readonly CodexRateLimits[] = [],
+): acp.StopReason {
   const t = isObject(turn) ? turn : {};
   if (t.status === "completed") return "end_turn";
   if (t.status === "interrupted") return "cancelled";
+  const limited =
+    t.status === "failed" && isObject(t.error)
+      ? codexUsageLimitFailure(agentId, t.error.codexErrorInfo, reported)
+      : undefined;
+  if (limited) throw limited;
   const error = isObject(t.error) && typeof t.error.message === "string" ? t.error.message : undefined;
   throw new OrcaError(
     "AGENT_PROTOCOL",
@@ -577,6 +614,8 @@ interface ActiveTurn {
   /** Agent message items that streamed deltas, so their completion does not repeat the text. */
   streamed: Set<string>;
   cancelReason?: string;
+  /** Waiting on an account re-read, before any turn/start: a cancel ends the wait, nothing else. */
+  waking?: () => void;
   grace?: ReturnType<typeof setTimeout>;
   /** The turn already failed (the cancel grace ran out, or the connection ended). */
   failed?: boolean;
@@ -641,6 +680,41 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
   let active: ActiveTurn | undefined;
   /** Set once the session cannot take another prompt: Codex may still be running a turn. */
   let broken: OrcaError | undefined;
+  /** The account the session started on, which every later answer is compared to. */
+  const sessionAccount: { identity?: CodexAccountIdentity } = {};
+  /**
+   * Set while Codex reports the user signed out or on another account, or while ORCA could not
+   * confirm the account after Codex reported a change: new turns are refused.
+   */
+  let accountProblem: OrcaError | undefined;
+  /** The account re-read in progress after `account/updated`; new turns wait for it. */
+  let accountCheck: Promise<void> | undefined;
+  /** Bumped per account re-read, so only the latest answer counts. */
+  let accountReads = 0;
+  /**
+   * Codex's usage limits per bucket (`limitId`), for the live connection and account only, each
+   * with the sequence number of its last update so a stale read never overwrites a newer one.
+   */
+  const limitBuckets = new Map<string, { limits: CodexRateLimits; seq: number }>();
+  let limitSeq = 0;
+  /**
+   * Each snapshot as Codex sent it, unmerged, with its sequence number: the evidence a failed turn
+   * is read against, so a window known only from before the turn never names its failure.
+   */
+  let limitReports: { seq: number; snapshot: unknown }[] = [];
+  /** A new account or process: what was known of its usage limits no longer holds. */
+  const forgetLimits = () => {
+    accountGen++;
+    const published = limitBuckets.size > 0;
+    limitBuckets.clear();
+    limitReports = [];
+    if (published) opts.onRateLimits?.(null);
+  };
+  /**
+   * Bumped when the account is read again or a new process is installed: a usage-limit read
+   * begun before it describes another account or process, and is dropped.
+   */
+  let accountGen = 0;
   /** The live app-server; undefined after it exited, until the next prompt restarts it. */
   let conn: Connection | undefined;
   /** The connection that exited last, whose process the restart waits on. */
@@ -685,6 +759,155 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
     if (problem) throw new PayloadProblem(problem);
   };
 
+  /**
+   * A usage-limit snapshot from `c` into its bucket. A read (`read`) is dropped when the account
+   * or process changed since it began, or Codex updated the bucket since; it is never evidence
+   * about a turn, since finishing during one says nothing of when Codex measured it.
+   */
+  const applyLimits = (c: Connection, snapshot: unknown, read?: { since: number; gen: number }) => {
+    if (conn !== c) return;
+    if (read && read.gen !== accountGen) return;
+    // While the account is being read again, or is refused, no one's usage is reported.
+    if (pendingAccountCheck() || accountProblem) return;
+    const since = read?.since;
+    const bucket = codexLimitBucket({ limitId: (snapshot as { limitId: string | null }).limitId ?? null });
+    const previous = limitBuckets.get(bucket);
+    if (since !== undefined && previous && previous.seq > since) return;
+    const limits = mergeCodexRateLimits(previous?.limits, snapshot);
+    limitBuckets.set(bucket, { limits, seq: ++limitSeq });
+    if (!read) limitReports.push({ seq: limitSeq, snapshot });
+    opts.onRateLimits?.(limits);
+  };
+  /**
+   * What Codex reported after sequence number `since`, per bucket, merging only those reports:
+   * nothing known from before counts. Older reports are dropped, since only one turn runs at a time.
+   */
+  const limitsSince = (since: number) => {
+    limitReports = limitReports.filter((r) => r.seq > since);
+    const byBucket = new Map<string, CodexRateLimits>();
+    for (const { snapshot } of limitReports) {
+      const bucket = codexLimitBucket({ limitId: (snapshot as { limitId: string | null }).limitId ?? null });
+      byBucket.set(bucket, mergeCodexRateLimits(byBucket.get(bucket), snapshot));
+    }
+    return [...byBucket.values()];
+  };
+
+  /**
+   * Read `c`'s account again after Codex reported it changed, as `c.account`. `undefined` when the
+   * read failed: no answer in time, a refusal, or the connection lost.
+   */
+  const rereadAccount = async (c: Connection): Promise<CodexAccountIdentity | undefined> => {
+    c.accountUpdated = false;
+    let answer: unknown;
+    try {
+      answer = await c.client.request("account/read", CODEX_ACCOUNT_READ_PARAMS);
+    } catch {
+      return undefined;
+    }
+    const now = codexAccountIdentity(answer);
+    if (!now) {
+      c.client.closeOnProtocolError("an account/read answer with a shape ORCA does not know");
+      return undefined;
+    }
+    c.account = now;
+    return now;
+  };
+  /** Whether `now` may run turns for a session that started on `then`; its refusal otherwise. */
+  const accountRefusal = (now: CodexAccountIdentity, then: CodexAccountIdentity): OrcaError | undefined => {
+    if (now.signedOut) return codexSignedOut(agent.id);
+    const continuity = codexAccountContinuity(now, then);
+    if (continuity === "different") return codexAccountSwitched(agent.id);
+    if (continuity === "unverifiable")
+      logger.info("Codex reports no account id for this kind of login, so ORCA cannot confirm it is the same account", {
+        kind: now.status.kind,
+      });
+    return undefined;
+  };
+  /**
+   * After Codex reports the account changed on the live connection: new turns wait for the
+   * re-read, and are refused while the user is signed out, on another account, or the account
+   * could not be confirmed. Only the latest re-read counts; usage limits start over.
+   */
+  /** The account re-read in progress, read anew each time (it changes across awaits). */
+  const pendingAccountCheck = () => accountCheck;
+  const recheckAccount = (c: Connection) => {
+    const read = ++accountReads;
+    // What was reported of the usage limits, and any read begun before this, may describe an
+    // account that is gone.
+    forgetLimits();
+    const check = (async () => {
+      const then = sessionAccount.identity;
+      const now = await rereadAccount(c);
+      if (read !== accountReads || !then) return;
+      if (!now) {
+        // A lost connection is the restart's to deal with: it reads the account again.
+        accountProblem = c.client.closed
+          ? undefined
+          : new OrcaError(
+              "NOT_SUPPORTED",
+              `agent ${agent.id}: Codex reported its account changed, and ORCA could not read it again. ORCA ` +
+                `starts no new turn until it can; start a new session.`,
+              { agentId: agent.id, reason: "codex-account-unconfirmed" },
+            );
+        return;
+      }
+      accountProblem = accountRefusal(now, then);
+      logger.info("Codex reported its account changed", {
+        kind: now.status.kind,
+        planType: now.status.planType,
+        refused: accountProblem?.details?.["reason"] ?? null,
+      });
+      opts.onAccount?.(now.status);
+    })();
+    const gen = accountGen;
+    accountCheck = check.finally(() => {
+      if (accountCheck === settled) accountCheck = undefined;
+    });
+    const settled = accountCheck;
+    // Allowed again: its usage limits are read anew, bound to this check. Chained on it, so no
+    // other update can come in between; and refused by readRateLimits once anything moved.
+    void settled.then(() => readRateLimits(c, gen));
+    return settled;
+  };
+  /**
+   * Codex's usage limits, read once a ChatGPT login is in place (Codex answers no other login):
+   * in the background, since the read goes to OpenAI, and only as diagnostics. Every bucket Codex
+   * answers with is kept apart, and none overwrites an update Codex sent after the read began.
+   */
+  const readRateLimits = async (c: Connection, gen = accountGen) => {
+    // Only for the live connection's confirmed, allowed account, as of `gen`.
+    const current = () => conn === c && gen === accountGen && !pendingAccountCheck() && !accountProblem;
+    if (!current() || c.account.status.kind !== "chatgpt") return;
+    const read = { since: limitSeq, gen };
+    let answer: unknown;
+    try {
+      answer = await c.client.request(
+        "account/rateLimits/read",
+        { excludeResetCreditDetails: true },
+        { timeoutMs: 10_000 },
+      );
+    } catch (error) {
+      logger.debug("Codex reported no usage limits", {
+        code: error instanceof CodexRpcError || error instanceof OrcaError ? error.code : "unknown",
+      });
+      return;
+    }
+    // Begun before the account was read again or another app-server took over: dropped unread.
+    if (!current()) return;
+    const a = isObject(answer) ? answer : {};
+    const byId = a.rateLimitsByLimitId;
+    const snapshots =
+      byId === null || byId === undefined ? [a.rateLimits] : isObject(byId) ? Object.values(byId) : [undefined];
+    for (const snapshot of snapshots) {
+      const problem = codexRateLimitsProblem(snapshot);
+      if (problem) {
+        c.client.closeOnProtocolError(`an account/rateLimits/read answer with ${problem}`);
+        return;
+      }
+    }
+    for (const snapshot of snapshots) applyLimits(c, snapshot, read);
+  };
+
   const onNotification = (method: string, params: unknown) => {
     if (!isObject(params)) {
       if (HANDLED_NOTIFICATIONS.has(method)) throw new PayloadProblem("params that are not an object");
@@ -721,6 +944,21 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
       case "thread/tokenUsage/updated":
         check(codexTokenUsageProblem(params.tokenUsage));
         opts.onTokenUsage?.(params.tokenUsage as ThreadTokenUsage);
+        return;
+      case "account/rateLimits/updated":
+        check(codexRateLimitsProblem(params.rateLimits));
+        if (conn) applyLimits(conn, params.rateLimits);
+        return;
+      case "account/updated":
+        check(
+          optionalString(params.authMode) && optionalString(params.planType) && optionalString(params.reason)
+            ? undefined
+            : "an account update whose auth mode, plan or reason is not a string",
+        );
+        // Signed out: no new turn until Codex reports an account again.
+        if (params.authMode === null) accountProblem = codexSignedOut(agent.id);
+        // Before the session is open there is no account to compare yet: the open re-reads it.
+        if (conn && sessionAccount.identity) void recheckAccount(conn);
         return;
       case "turn/completed": {
         const turn = params.turn;
@@ -813,6 +1051,8 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
     const client: CodexAppServerClient = new CodexAppServerClient(stdioLineTransport(proc.stdio()), {
       requestTimeoutMs: opts.requestTimeoutMs ?? 30_000,
       onNotification: (method, params) => {
+        // Noted for a connection not yet live too: it is not published until it is re-read.
+        if (method === "account/updated") c.accountUpdated = true;
         if (conn !== c) return;
         try {
           onNotification(method, params);
@@ -839,8 +1079,19 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
         orcaVersion: opts.orcaVersion ?? "0.0.0",
         requiredMethods: CODEX_SESSION_METHODS,
       });
-      const login = codexLoginRefused(agent.id, await client.request("account/read", CODEX_ACCOUNT_READ_PARAMS));
+      const answer = await client.request("account/read", CODEX_ACCOUNT_READ_PARAMS);
+      const login = codexLoginRefused(agent.id, answer);
       if (login) throw login;
+      const account = codexAccountIdentity(answer);
+      if (!account)
+        throw new OrcaError(
+          "AGENT_PROTOCOL",
+          `agent ${agent.id}: Codex answered account/read with a shape ORCA does not know`,
+          {
+            agentId: agent.id,
+          },
+        );
+      c.account = account;
       return c;
     } catch (error) {
       client.close("closed after a refused open");
@@ -986,8 +1237,31 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
       c.proc.exited,
     );
   }
+  // An account update during the open: the session starts on the account Codex reports now.
+  while (conn.accountUpdated) {
+    const now = await rereadAccount(conn);
+    const refusal = !now
+      ? new OrcaError(
+          "AGENT_TRANSPORT",
+          `agent ${agent.id}: Codex reported its account changed during the open, and ORCA could not read it again`,
+          { agentId: agent.id },
+        )
+      : now.signedOut
+        ? codexSignedOut(agent.id)
+        : undefined;
+    if (refusal) {
+      closing = true;
+      conn.client.close("closed after a refused open");
+      await conn.cleanup().catch(() => undefined);
+      throw refusal;
+    }
+  }
   opts.onSessionContinuity?.(continuity);
   recordConfig(verified);
+  sessionAccount.identity = conn.account;
+  logger.info("Codex account", { kind: conn.account.status.kind, planType: conn.account.status.planType });
+  opts.onAccount?.(conn.account.status);
+  void readRateLimits(conn);
 
   const cancelGraceMs = opts.cancelGraceMs ?? agent.cancelGraceMs;
   let terminating: Promise<void> | undefined;
@@ -1088,16 +1362,38 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
         if (error instanceof OrcaError && configRefusals.has(error)) breakSession(error);
         throw error;
       };
+      // The account the replacement runs on, re-read if Codex reported a change since: another
+      // account than the session started on stops the session, before the thread is resumed on it
+      // and again before the replacement is published.
+      const checkAccount = async (live: Connection) => {
+        while (live.accountUpdated)
+          if (!(await rereadAccount(live)))
+            refused(
+              new OrcaError("AGENT_TRANSPORT", `agent ${agent.id}: ORCA could not read the restarted Codex's account`),
+            );
+        const switched = sessionAccount.identity ? accountRefusal(live.account, sessionAccount.identity) : undefined;
+        if (switched) refused(configRefusal(switched));
+      };
       await verifyConfig(c).catch(refused);
+      // The synchronous `accountUpdated` test right before thread/resume is sent (and below, right
+      // before the replacement is published) fences any update Codex sent during the awaits.
+      await checkAccount(c);
+      while (c.accountUpdated) await checkAccount(c);
       const resumed = await resumeOn(c, threadId).catch(refused);
       const reverified = await verifyConfig(c, threadId).catch(refused);
+      await checkAccount(c);
+      while (c.accountUpdated) await checkAccount(c);
       const late = stopped();
       if (late) throw late;
       conn = c;
       lost = undefined;
+      // A new process: usage limits start over, and the account is the one just confirmed.
+      forgetLimits();
+      accountProblem = undefined;
       model = resumed.model ?? model;
       logger.info("Codex app-server restarted on the same thread", { threadId, crashes: crashes.length });
       recordConfig(reverified);
+      void readRateLimits(c);
       return c;
     } catch (error) {
       // A replacement that failed or was cancelled is stopped, and has to be seen gone like an
@@ -1129,6 +1425,11 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
     const turn = active;
     if (!turn || turn.cancelReason) return;
     turn.cancelReason = reason;
+    // Still waiting on an account re-read: no turn was started, and none will be.
+    if (turn.waking) {
+      turn.waking();
+      return;
+    }
     // While the app-server restarts there is no turn yet: the replacement is stopped where it
     // is, and the prompt ends cancelled.
     const c = conn;
@@ -1180,6 +1481,9 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
             `agent ${agent.id}: the Codex app-server driver takes text prompts only, not ${other.type}`,
           );
         const started = clock.now();
+        // Only limits Codex reports during this turn can name the window a failure ran into.
+        const limitsAtStart = limitSeq;
+        limitReports = [];
         let turn!: ActiveTurn;
         const ended = new Promise<unknown>((resolve, reject) => {
           turn = {
@@ -1211,13 +1515,32 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
           ? setTimeout(() => requestCancel(`turn timed out after ${options.timeoutMs}ms`), options.timeoutMs)
           : undefined;
         try {
-          // The last app-server exited: a new one on the same thread first.
-          let c = conn;
-          if (!c) {
+          // The account gate, passed with no await between it and turn/start going out: a pending
+          // account re-read holds the turn until it answers, under the prompt's cancel and
+          // deadline (once either fires, no turn/start goes out). After a restart the gate runs
+          // again, since the replacement's handoff to this prompt is itself an await.
+          let c: Connection;
+          for (;;) {
+            for (let check = pendingAccountCheck(); check && !turn.cancelReason; check = pendingAccountCheck()) {
+              const woken = new Promise<void>((r) => (turn.waking = r));
+              await Promise.race([check, woken]);
+              delete turn.waking;
+            }
+            if (turn.cancelReason) return { stopReason: "cancelled", durationMs: clock.now() - started };
+            const brokenSince = isBroken();
+            if (brokenSince) throw brokenSince;
+            if (accountProblem) throw accountProblem;
+            if (closing) throw new OrcaError("RUN_STATE", "the session is closed");
+            const live = conn;
+            if (live) {
+              c = live;
+              break;
+            }
+            // The last app-server exited: a new one on the same thread first.
             const r = restart(turn);
             restarting = r;
             try {
-              c = await r;
+              await r;
             } catch (error) {
               // Cancelled while it restarted: no turn was started.
               if (error instanceof RestartCancelled)
@@ -1262,7 +1585,10 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
             void c.client.request("turn/interrupt", { threadId, turnId }).catch(() => undefined);
           }
           const finished = await ended;
-          return { stopReason: codexStopReason(agent.id, finished), durationMs: clock.now() - started };
+          return {
+            stopReason: codexStopReason(agent.id, finished, limitsSince(limitsAtStart)),
+            durationMs: clock.now() - started,
+          };
         } finally {
           if (timer) clearTimeout(timer);
           if (turn.grace) clearTimeout(turn.grace);

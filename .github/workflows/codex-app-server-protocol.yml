@@ -23,11 +23,13 @@ on:
       - packages/agents/src/codex-app-server-client.ts
       - packages/agents/src/codex-app-server-session.ts
       - packages/agents/src/codex-app-server-config.ts
+      - packages/agents/src/codex-app-server-account.ts
       - packages/agents/src/host.ts
       - packages/agents/test/codex-app-server-real-1156.test.ts
       - packages/cli/test/codex-app-server-session-real-1157.test.ts
       - packages/cli/test/codex-app-server-recovery-real-1158.test.ts
       - packages/cli/test/codex-app-server-config-real-1160.test.ts
+      - packages/cli/test/codex-app-server-account-real-1164.test.ts
       - packages/cli/test/codex-model-stand-in.ts
       - tools/codex-protocol.mjs
       - tools/test/codex-protocol-1156.test.js
@@ -125,6 +127,7 @@ jobs:
             packages/cli/test/codex-app-server-session-real-1157.test.ts \
             packages/cli/test/codex-app-server-recovery-real-1158.test.ts \
             packages/cli/test/codex-app-server-config-real-1160.test.ts \
+            packages/cli/test/codex-app-server-account-real-1164.test.ts \
             --reporter=default --reporter=json --outputFile="$RUNNER_TEMP/protocol.json"
           # The suites skip their Codex tests without ORCA_CODEX_BIN; here every test has to have run.
           node -e '

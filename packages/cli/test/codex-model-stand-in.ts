@@ -20,6 +20,11 @@ export interface ModelStandIn {
   tools: Set<string>;
   /** Every tool output Codex sent back, as it sent it. */
   outputs: string[];
+  /**
+   * While set, every model request is answered as OpenAI answers a login whose usage limit is
+   * reached: 429 `usage_limit_reached` with the `x-codex-primary-*` headers (#1164).
+   */
+  usageLimit?: { usedPercent: number; windowMinutes: number; resetsAt: number };
 }
 
 /** The script a user message is, when its text starts with `SCRIPT:`. */
@@ -45,6 +50,26 @@ export function modelStandIn(): Promise<ModelStandIn> {
       if (!req.url?.includes("/responses")) {
         res.writeHead(200, { "content-type": "application/json" });
         res.end(JSON.stringify({ object: "list", data: [] }));
+        return;
+      }
+      if (standIn.usageLimit) {
+        const { usedPercent, windowMinutes, resetsAt } = standIn.usageLimit;
+        res.writeHead(429, {
+          "content-type": "application/json",
+          "x-codex-primary-used-percent": String(usedPercent),
+          "x-codex-primary-window-minutes": String(windowMinutes),
+          "x-codex-primary-reset-at": String(resetsAt),
+        });
+        res.end(
+          JSON.stringify({
+            error: {
+              type: "usage_limit_reached",
+              message: "The usage limit has been reached",
+              resets_at: resetsAt,
+              limit_window_minutes: windowMinutes,
+            },
+          }),
+        );
         return;
       }
       const request = JSON.parse(body) as {
@@ -102,15 +127,12 @@ export function modelStandIn(): Promise<ModelStandIn> {
       res.end();
     });
   });
+  const standIn: ModelStandIn = { server, url: "", tools, outputs: seen };
   return new Promise((resolve) =>
-    server.listen(0, "127.0.0.1", () =>
-      resolve({
-        server,
-        url: `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1`,
-        tools,
-        outputs: seen,
-      }),
-    ),
+    server.listen(0, "127.0.0.1", () => {
+      standIn.url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1`;
+      resolve(standIn);
+    }),
   );
 }
 

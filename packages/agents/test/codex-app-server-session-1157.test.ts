@@ -102,6 +102,7 @@ function scriptedHost(answers: Record<string, Responder>) {
 }
 
 const NO_ANSWER = Symbol("no answer");
+const settle = () => new Promise((r) => setTimeout(r, 20));
 
 const THREAD = (over: Record<string, unknown> = {}) => ({
   thread: { id: "thr_1" },
@@ -139,6 +140,451 @@ const open = (host: AgentHost, more: Partial<Parameters<typeof openCodexAppServe
     logger: silentLogger,
     ...more,
   });
+
+describe("account and usage limits (#1164)", () => {
+  const CHATGPT = (userId = "user-1") => ({
+    account: { type: "chatgpt", email: "someone@example.com", planType: "pro", workspaceName: null },
+    userId,
+    requiresOpenaiAuth: true,
+  });
+  const SNAPSHOT = {
+    limitId: "codex",
+    limitName: null,
+    primary: { usedPercent: 42, windowDurationMins: 300, resetsAt: 1_795_000_000 },
+    secondary: null,
+    credits: null,
+    planType: "pro",
+    rateLimitReachedType: null,
+  };
+  /** A Codex whose turns end as `end`, after playing `play`. */
+  const turns = (end: (peer: Peer, turnId: string) => void, more: Record<string, Responder> = {}) => {
+    let n = 0;
+    return {
+      ...BASE,
+      ...more,
+      "turn/start": (_msg: Msg, peer: Peer) => {
+        const turnId = `turn_${++n}`;
+        setImmediate(() => end(peer, turnId));
+        return { turn: { id: turnId, status: "inProgress" } };
+      },
+    };
+  };
+  const completed = (peer: Peer, turnId: string) =>
+    peer.notify("turn/completed", { threadId: "thr_1", turn: { id: turnId, status: "completed", error: null } });
+
+  it("reports the account at open, and reads a ChatGPT login's usage limits in the background", async () => {
+    const accounts: unknown[] = [];
+    const limits: unknown[] = [];
+    const s = scriptedHost({
+      ...BASE,
+      "account/read": () => CHATGPT(),
+      "account/rateLimits/read": () => ({ rateLimits: SNAPSHOT, rateLimitsByLimitId: null }),
+    });
+    const session = await open(s.host, { onAccount: (a) => accounts.push(a), onRateLimits: (l) => limits.push(l) });
+    expect(accounts).toEqual([{ kind: "chatgpt", planType: "pro" }]);
+    await vi.waitFor(() => expect(limits).toHaveLength(1));
+    expect(limits[0]).toEqual({
+      limitId: "codex",
+      limitName: null,
+      primary: { usedPercent: 42, windowDurationMins: 300, resetsAt: 1_795_000_000 },
+      secondary: null,
+      planType: "pro",
+      rateLimitReachedType: null,
+    });
+    expect(s.peer.received.find((m) => m.method === "account/rateLimits/read")?.params).toEqual({
+      excludeResetCreditDetails: true,
+    });
+    await session.close();
+    // an API-key login has no usage limits to read
+    const k = scriptedHost(BASE);
+    await (await open(k.host)).close();
+    expect(k.peer.received.some((m) => m.method === "account/rateLimits/read")).toBe(false);
+  });
+
+  it("names the window and its reset time when a turn ends on the usage limit", async () => {
+    const limits: unknown[] = [];
+    const s = scriptedHost(
+      turns((peer, turnId) => {
+        peer.notify("account/rateLimits/updated", {
+          rateLimits: { ...SNAPSHOT, primary: { usedPercent: 100, windowDurationMins: 300, resetsAt: 1_795_000_000 } },
+        });
+        peer.notify("turn/completed", {
+          threadId: "thr_1",
+          turn: {
+            id: turnId,
+            status: "failed",
+            error: {
+              message: "You've hit your usage limit.",
+              codexErrorInfo: "usageLimitExceeded",
+              additionalDetails: null,
+            },
+          },
+        });
+      }),
+    );
+    const session = await open(s.host, { onRateLimits: (l) => limits.push(l) });
+    const error = (await session.prompt("go").catch((e: unknown) => e)) as OrcaError;
+    expect(error.message).toContain(
+      `the usage limit of its login is reached: the 5-hour window is 100% used and resets at ${new Date(1_795_000_000_000).toISOString()}`,
+    );
+    expect(error.details).toMatchObject({ reason: "codex-usage-limit" });
+    expect(limits).toHaveLength(1);
+    // the session goes on: the next turn runs once the limit allows
+    await session.close();
+  });
+
+  it("refuses new turns while Codex reports the user signed out, and takes them again once signed in", async () => {
+    let account: unknown = { account: { type: "apiKey" }, userId: null, requiresOpenaiAuth: true };
+    const accounts: unknown[] = [];
+    const s = scriptedHost(turns(completed, { "account/read": () => account }));
+    const session = await open(s.host, { onAccount: (a) => accounts.push(a) });
+    account = { account: null, userId: null, requiresOpenaiAuth: true };
+    s.peer.notify("account/updated", { authMode: null, planType: null, reason: null });
+    await vi.waitFor(() => expect(accounts).toHaveLength(2));
+    const error = (await session.prompt("go").catch((e: unknown) => e)) as OrcaError;
+    expect(error.code).toBe("NOT_SUPPORTED");
+    expect(error.message).toContain("Codex is no longer signed in. Run `codex login`");
+    expect(s.peer.received.some((m) => m.method === "turn/start")).toBe(false);
+    account = { account: { type: "apiKey" }, userId: null, requiresOpenaiAuth: true };
+    s.peer.notify("account/updated", { authMode: "apikey", planType: null, reason: null });
+    await vi.waitFor(() => expect(accounts).toHaveLength(3));
+    await expect(session.prompt("again")).resolves.toMatchObject({ stopReason: "end_turn" });
+    await session.close();
+  });
+
+  it("refuses new turns once Codex reports another account than the session started on", async () => {
+    let account: unknown = CHATGPT("user-1");
+    const accounts: unknown[] = [];
+    const s = scriptedHost(
+      turns(completed, {
+        "account/read": () => account,
+        "account/rateLimits/read": () => ({ rateLimits: SNAPSHOT }),
+      }),
+    );
+    const session = await open(s.host, { onAccount: (a) => accounts.push(a) });
+    account = CHATGPT("user-2");
+    s.peer.notify("account/updated", { authMode: "chatgpt", planType: "pro", reason: null });
+    await vi.waitFor(() => expect(accounts).toHaveLength(2));
+    await expect(session.prompt("go")).rejects.toMatchObject({
+      code: "NOT_SUPPORTED",
+      details: { reason: "codex-account-switched" },
+    });
+    await session.close();
+  });
+
+  it("ends the session on a malformed usage-limit update or account update", async () => {
+    for (const [method, params] of [
+      ["account/rateLimits/updated", { rateLimits: { primary: { usedPercent: "full" } } }],
+      ["account/updated", { authMode: 1, planType: null, reason: null }],
+    ] as const) {
+      const s = scriptedHost(BASE);
+      const session = await open(s.host);
+      s.peer.notify(method, params);
+      await vi.waitFor(() => expect(s.kill).toHaveBeenCalled());
+      await expect(session.prompt("go")).rejects.toMatchObject({ code: "AGENT_PROTOCOL" });
+    }
+  });
+
+  const failedOnLimit = (peer: Peer, turnId: string) =>
+    peer.notify("turn/completed", {
+      threadId: "thr_1",
+      turn: {
+        id: turnId,
+        status: "failed",
+        error: { message: "limit", codexErrorInfo: "usageLimitExceeded", additionalDetails: null },
+      },
+    });
+  const window = (usedPercent: number, windowDurationMins = 300) => ({
+    usedPercent,
+    windowDurationMins,
+    resetsAt: 1_795_000_000,
+  });
+
+  it("keeps each limit bucket apart, and names no window when two buckets are at their limit", async () => {
+    const limits: ({ limitId: string | null } | null)[] = [];
+    let both = false;
+    const s = scriptedHost(
+      turns(
+        (peer, turnId) => {
+          peer.notify("account/rateLimits/updated", {
+            rateLimits: { ...SNAPSHOT, limitId: "codex", primary: window(100) },
+          });
+          if (both)
+            peer.notify("account/rateLimits/updated", {
+              rateLimits: { ...SNAPSHOT, limitId: "codex_other", primary: window(100, 60) },
+            });
+          failedOnLimit(peer, turnId);
+        },
+        {
+          "account/read": () => CHATGPT(),
+          "account/rateLimits/read": () => ({
+            rateLimits: SNAPSHOT,
+            rateLimitsByLimitId: {
+              codex: SNAPSHOT,
+              codex_other: { ...SNAPSHOT, limitId: "codex_other", primary: window(7, 60) },
+            },
+          }),
+        },
+      ),
+    );
+    const session = await open(s.host, { onRateLimits: (l) => limits.push(l) });
+    await vi.waitFor(() => expect(limits.map((l) => l?.limitId)).toEqual(["codex", "codex_other"]));
+    // one bucket at its limit during the turn names its window
+    const one = (await session.prompt("go").catch((e: unknown) => e)) as OrcaError;
+    expect(one.message).toContain("the 5-hour window is 100% used");
+    // the other bucket's update does not overwrite the first: the evidence now names two windows
+    both = true;
+    const two = (await session.prompt("again").catch((e: unknown) => e)) as OrcaError;
+    expect(two.message).toContain("Codex reported no single window at its limit for this turn");
+    expect(two.details).toMatchObject({ reason: "codex-usage-limit", window: null });
+    expect(limits.filter((l) => l?.limitId === "codex_other").at(-1)).toMatchObject({ primary: window(100, 60) });
+    await session.close();
+  });
+
+  it("names no window from before the turn", async () => {
+    const limits: unknown[] = [];
+    const s = scriptedHost(
+      turns(failedOnLimit, {
+        "account/read": () => CHATGPT(),
+        "account/rateLimits/read": () => ({ rateLimits: { ...SNAPSHOT, primary: window(100) } }),
+      }),
+    );
+    const session = await open(s.host, { onRateLimits: (l) => limits.push(l) });
+    await vi.waitFor(() => expect(limits).toHaveLength(1));
+    const error = (await session.prompt("go").catch((e: unknown) => e)) as OrcaError;
+    expect(error.message).toContain("Codex reported no single window at its limit for this turn");
+    await session.close();
+  });
+
+  it("never lets a usage-limit read overwrite an update Codex sent after it began", async () => {
+    const limits: ({ primary: unknown } | null)[] = [];
+    let readId: unknown;
+    const s = scriptedHost({
+      ...BASE,
+      "account/read": () => CHATGPT(),
+      "account/rateLimits/read": (msg) => ((readId = msg.id), NO_ANSWER),
+    });
+    const session = await open(s.host, { onRateLimits: (l) => limits.push(l) });
+    await vi.waitFor(() => expect(readId).toBeDefined());
+    s.peer.notify("account/rateLimits/updated", { rateLimits: { ...SNAPSHOT, primary: window(90) } });
+    await vi.waitFor(() => expect(limits).toHaveLength(1));
+    // the read answers late, with what Codex knew before its update
+    s.peer.say({ id: readId as number, result: { rateLimits: { ...SNAPSHOT, primary: window(10) } } });
+    await settle();
+    expect(limits).toEqual([expect.objectContaining({ primary: window(90) })]);
+    await session.close();
+  });
+
+  it("holds new turns while the account is read again, and runs them once it is the same", async () => {
+    let held: Msg | undefined;
+    let reads = 0;
+    const s = scriptedHost(
+      turns(completed, {
+        "account/read": (msg) => (++reads === 1 ? CHATGPT() : ((held = msg), NO_ANSWER)),
+      }),
+    );
+    const session = await open(s.host);
+    s.peer.notify("account/updated", { authMode: "chatgpt", planType: "pro", reason: null });
+    await vi.waitFor(() => expect(held).toBeDefined());
+    const turn = session.prompt("go");
+    await settle();
+    expect(s.peer.received.some((m) => m.method === "turn/start")).toBe(false);
+    s.peer.say({ id: held!.id as number, result: CHATGPT() });
+    await expect(turn).resolves.toMatchObject({ stopReason: "end_turn" });
+    await session.close();
+  });
+
+  it("ends a turn held on an account re-read when it is cancelled or its deadline passes, sending no turn/start", async () => {
+    const held: Msg[] = [];
+    let reads = 0;
+    const s = scriptedHost(
+      turns(completed, {
+        "account/read": (msg) => (++reads === 1 ? CHATGPT() : (held.push(msg), NO_ANSWER)),
+      }),
+    );
+    const session = await open(s.host, { cancelGraceMs: 20 });
+    s.peer.notify("account/updated", { authMode: "chatgpt", planType: "pro", reason: null });
+    await vi.waitFor(() => expect(held).toHaveLength(1));
+    const abort = new AbortController();
+    const cancelled = session.prompt("go", { signal: abort.signal });
+    await settle();
+    abort.abort("stop");
+    await expect(cancelled).resolves.toMatchObject({ stopReason: "cancelled" });
+    await expect(session.prompt("late", { timeoutMs: 30 })).resolves.toMatchObject({ stopReason: "cancelled" });
+    // past the cancel grace: the session was not stopped, and the held re-read still decides
+    await new Promise((r) => setTimeout(r, 60));
+    expect(s.peer.received.some((m) => m.method === "turn/start")).toBe(false);
+    expect(s.kill).not.toHaveBeenCalled();
+    s.peer.say({ id: held[0]!.id as number, result: CHATGPT() });
+    await expect(session.prompt("now")).resolves.toMatchObject({ stopReason: "end_turn" });
+    expect(s.peer.received.filter((m) => m.method === "turn/start")).toHaveLength(1);
+    await session.close();
+  });
+
+  it("drops a usage-limit read begun before the account was read again, unread, and reads anew", async () => {
+    const limits: unknown[] = [];
+    const reads: Msg[] = [];
+    const s = scriptedHost({
+      ...BASE,
+      "account/read": () => CHATGPT(),
+      "account/rateLimits/read": (msg) => (reads.push(msg), NO_ANSWER),
+    });
+    const session = await open(s.host, { onRateLimits: (l) => limits.push(l) });
+    await vi.waitFor(() => expect(reads).toHaveLength(1));
+    s.peer.notify("account/updated", { authMode: "chatgpt", planType: "pro", reason: null });
+    // the same account: its usage limits are read anew
+    await vi.waitFor(() => expect(reads).toHaveLength(2));
+    // the first read answers late, malformed: dropped before it is even checked
+    s.peer.say({ id: reads[0]!.id as number, result: { rateLimits: { primary: { usedPercent: "full" } } } });
+    await settle();
+    expect(limits).toEqual([]);
+    expect(s.kill).not.toHaveBeenCalled();
+    s.peer.say({ id: reads[1]!.id as number, result: { rateLimits: { ...SNAPSHOT, primary: window(30) } } });
+    await vi.waitFor(() => expect(limits).toEqual([expect.objectContaining({ primary: window(30) })]));
+    await session.close();
+  });
+
+  it("reports no usage while the account is being read again or is refused, and withdraws what it reported", async () => {
+    const limits: unknown[] = [];
+    let account: unknown = CHATGPT("user-1");
+    let hold = false;
+    let held: Msg | undefined;
+    const s = scriptedHost({
+      ...BASE,
+      "account/read": (msg) => (hold ? ((hold = false), (held = msg), NO_ANSWER) : account),
+      "account/rateLimits/read": () => ({ rateLimits: SNAPSHOT }),
+    });
+    const session = await open(s.host, { onRateLimits: (l) => limits.push(l) });
+    await vi.waitFor(() => expect(limits).toHaveLength(1));
+    // pending: what was reported is withdrawn, and updates are not reported
+    hold = true;
+    s.peer.notify("account/updated", { authMode: "chatgpt", planType: "pro", reason: null });
+    await vi.waitFor(() => expect(held).toBeTruthy());
+    s.peer.notify("account/rateLimits/updated", { rateLimits: { ...SNAPSHOT, primary: window(77) } });
+    await settle();
+    expect(limits).toEqual([expect.objectContaining({ primary: SNAPSHOT.primary }), null]);
+    // refused: another account's usage is never reported on this session
+    account = CHATGPT("user-2");
+    s.peer.say({ id: held!.id as number, result: account });
+    await expect(session.prompt("go")).rejects.toMatchObject({ details: { reason: "codex-account-switched" } });
+    s.peer.notify("account/rateLimits/updated", { rateLimits: { ...SNAPSHOT, primary: window(88) } });
+    await settle();
+    expect(limits).toHaveLength(2);
+    await session.close();
+  });
+
+  it("drops the refresh one account check scheduled once another account update came in", async () => {
+    const limits: unknown[] = [];
+    const reads: Msg[] = [];
+    const accountReads: Msg[] = [];
+    const s = scriptedHost({
+      ...BASE,
+      "account/read": (msg) => (accountReads.push(msg), accountReads.length === 3 ? NO_ANSWER : CHATGPT()),
+      "account/rateLimits/read": (msg) => (reads.push(msg), NO_ANSWER),
+    });
+    const session = await open(s.host, { onRateLimits: (l) => limits.push(l) });
+    await vi.waitFor(() => expect(reads).toHaveLength(1));
+    // the first update: confirmed at once, and its refresh is sent and held
+    s.peer.notify("account/updated", { authMode: "chatgpt", planType: "pro", reason: null });
+    await vi.waitFor(() => expect(reads).toHaveLength(2));
+    // a second update before the refresh answers: its re-read is held
+    s.peer.notify("account/updated", { authMode: "chatgpt", planType: "pro", reason: null });
+    await vi.waitFor(() => expect(accountReads).toHaveLength(3));
+    s.peer.say({ id: reads[1]!.id as number, result: { rateLimits: { ...SNAPSHOT, primary: window(99) } } });
+    await settle();
+    // no refresh goes out while the second check is pending
+    expect(reads).toHaveLength(2);
+    s.peer.say({ id: accountReads[2]!.id as number, result: CHATGPT() });
+    // the first refresh's answer stays dropped once the second check settles; the second refreshes
+    await vi.waitFor(() => expect(reads).toHaveLength(3));
+    s.peer.say({ id: reads[2]!.id as number, result: { rateLimits: { ...SNAPSHOT, primary: window(12) } } });
+    await vi.waitFor(() => expect(limits).toEqual([expect.objectContaining({ primary: window(12) })]));
+    await session.close();
+  });
+
+  it("never takes a usage-limit read that answers during a turn as evidence about it", async () => {
+    const limits: unknown[] = [];
+    let readId: unknown;
+    const s = scriptedHost(
+      turns(
+        (peer, turnId) => {
+          peer.say({ id: readId as number, result: { rateLimits: { ...SNAPSHOT, primary: window(100) } } });
+          setTimeout(() => failedOnLimit(peer, turnId), 10);
+        },
+        {
+          "account/read": () => CHATGPT(),
+          "account/rateLimits/read": (msg) => ((readId = msg.id), NO_ANSWER),
+        },
+      ),
+    );
+    const session = await open(s.host, { onRateLimits: (l) => limits.push(l) });
+    await vi.waitFor(() => expect(readId).toBeDefined());
+    const error = (await session.prompt("go").catch((e: unknown) => e)) as OrcaError;
+    expect(limits).toHaveLength(1);
+    expect(error.message).toContain("Codex reported no single window at its limit for this turn");
+    await session.close();
+  });
+
+  it("refuses new turns when the account cannot be read again, until a read succeeds", async () => {
+    let fail = false;
+    const s = scriptedHost(
+      turns(completed, {
+        "account/read": (msg, peer) => {
+          if (!fail) return CHATGPT();
+          peer.say({ id: msg.id as number, error: { code: -32603, message: "internal" } });
+          return NO_ANSWER;
+        },
+      }),
+    );
+    const session = await open(s.host);
+    fail = true;
+    s.peer.notify("account/updated", { authMode: "chatgpt", planType: "pro", reason: null });
+    await expect(session.prompt("go")).rejects.toMatchObject({
+      code: "NOT_SUPPORTED",
+      details: { reason: "codex-account-unconfirmed" },
+    });
+    expect(s.peer.received.some((m) => m.method === "turn/start")).toBe(false);
+    fail = false;
+    s.peer.notify("account/updated", { authMode: "chatgpt", planType: "pro", reason: null });
+    await vi.waitFor(() => expect(s.peer.received.filter((m) => m.method === "account/read")).toHaveLength(3));
+    await expect(session.prompt("again")).resolves.toMatchObject({ stopReason: "end_turn" });
+    await session.close();
+  });
+
+  it("refuses new turns when the account re-read times out", async () => {
+    let reads = 0;
+    const s = scriptedHost(turns(completed, { "account/read": () => (++reads === 1 ? CHATGPT() : NO_ANSWER) }));
+    const session = await open(s.host, { requestTimeoutMs: 50 });
+    s.peer.notify("account/updated", { authMode: "chatgpt", planType: "pro", reason: null });
+    await expect(session.prompt("go")).rejects.toMatchObject({ details: { reason: "codex-account-unconfirmed" } });
+    expect(s.peer.received.some((m) => m.method === "turn/start")).toBe(false);
+    await session.close();
+  });
+
+  it("reads an account update Codex sent during the open before the session starts", async () => {
+    let account: unknown = CHATGPT("user-1");
+    const accounts: unknown[] = [];
+    const answers = (after: unknown) => ({
+      ...BASE,
+      "account/read": () => account,
+      "thread/start": (_msg: Msg, peer: Peer) => {
+        account = after;
+        peer.notify("account/updated", { authMode: null, planType: null, reason: null });
+        return THREAD();
+      },
+    });
+    // signed out while the thread started: the open is refused
+    const out = scriptedHost(answers({ account: null, userId: null, requiresOpenaiAuth: true }));
+    await expect(open(out.host)).rejects.toMatchObject({ details: { reason: "codex-login-required" } });
+    // another account: the session starts on the account Codex reports now
+    account = CHATGPT("user-1");
+    const other = scriptedHost(answers(CHATGPT("user-2")));
+    const session = await open(other.host, { onAccount: (a) => accounts.push(a) });
+    expect(accounts).toHaveLength(1);
+    expect(other.peer.received.filter((m) => m.method === "account/read")).toHaveLength(2);
+    await session.close();
+  });
+});
 
 describe("Codex's config (#1160)", () => {
   const refused = async (answers: Record<string, Responder>, more: Partial<Parameters<typeof open>[1]> = {}) => {
