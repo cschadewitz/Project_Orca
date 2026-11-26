@@ -472,3 +472,60 @@ it("lists no tailnet while the flag is off, and says why Tailscale is not listed
   await screen.findByText(/Tailscale is not connected on this computer/);
   h.dispose();
 });
+
+it("lets a machine on the tailnet download the bundle itself instead of carrying it (#1234)", async () => {
+  stubMatchMedia(1200);
+  const h = harness();
+  const r = rig();
+  const view = {
+    id: "build-1",
+    name: "build-1",
+    destination: "casey@build-1.example-tailnet.ts.net",
+    remotePort: 6722,
+    tailnet: { node: "nBuild1", name: "build-1.example-tailnet.ts.net" },
+    hasCredential: false,
+    hostKeyPinned: false,
+  };
+  const profiles = {
+    list: vi.fn(async () => [view]),
+    save: vi.fn(),
+    remove: vi.fn(),
+    importCredential: vi.fn(),
+    forgetHostKey: vi.fn(),
+    useAutomaticSignIn: vi.fn(),
+    inspectServer: vi.fn(async () => ({
+      ok: true as const,
+      value: {
+        inspection: {
+          confirmation: "abcd-ef01-2345",
+          destination: view.destination,
+          account: "casey",
+          fingerprints: { server: ["ssh-ed25519 SHA256:Q2FzZXlzTGFiS2V5"] },
+          firstUse: true,
+          advertised: true as const,
+          version: "0.9.0",
+          root: "/home/casey/.local/share/orca-server",
+          current: null,
+          scope: "install-and-sign-in" as const,
+        },
+      },
+    })),
+    setUpServer: vi.fn(() => new Promise(() => {})),
+  };
+  render(
+    <h.Providers>
+      <ConnectionDialog bridge={{ ...r.bridge, profiles } as never} target={r.target} close={() => {}} />
+    </h.Providers>,
+  );
+  fireEvent.click(await screen.findByText("Set up ORCA server"));
+  const confirm = await screen.findByRole("group", { name: "Confirm server setup" });
+  expect(confirm.textContent).toContain("Your tailnet's coordination server advertises these host keys");
+  const carry = within(confirm).getByRole<HTMLInputElement>("checkbox");
+  expect(carry.checked).toBe(true);
+  fireEvent.click(carry);
+  fireEvent.click(within(confirm).getByText("Set up"));
+  await waitFor(() =>
+    expect(profiles.setUpServer).toHaveBeenCalledWith("build-1", "abcd-ef01-2345", { carryBundle: false }),
+  );
+  h.dispose();
+});

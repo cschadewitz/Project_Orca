@@ -4,3 +4,6 @@
   still checks the bundle's signature itself before installing it. Only with the explicit
   `orca-release.py stage --bundle --offline <dir>` does it use the carried cosign (only if it
   matches the pinned digest) and `trusted_root.json` (only if this release pins its digest).
+  An offline stage never falls back to downloading a missing cosign. In the desktop app, the
+  setup confirmation for a machine on your tailnet can switch carrying off, so the machine
+  downloads and verifies the bundle itself.

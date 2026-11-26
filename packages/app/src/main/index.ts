@@ -1505,7 +1505,7 @@ ipcMain.handle("orca:profiles.inspectServer", (_event, id: unknown) =>
     return inspection ? { inspection } : { setup: outcome as Exclude<typeof outcome, { kind: "inspected" }> };
   }),
 );
-ipcMain.handle("orca:profiles.setUpServer", (_event, id: unknown, confirmation: unknown) =>
+ipcMain.handle("orca:profiles.setUpServer", (_event, id: unknown, confirmation: unknown, options: unknown) =>
   profileResult(async () => {
     const valid = ProfileIdSchema.parse(id);
     if (typeof confirmation !== "string" || confirmation.length > 64)
@@ -1517,7 +1517,13 @@ ipcMain.handle("orca:profiles.setUpServer", (_event, id: unknown, confirmation: 
       confirmation,
       // A machine on the tailnet needs nothing but Tailscale (#1225): this computer carries the
       // signed bundle to it, and the host still verifies the signature (#1234).
-      ...(tailnetEnabled() && remoteProfiles.get(valid)?.tailnet ? { pushBundle: true } : {}),
+      // The person can choose the machine's own internet access instead (a root this ORCA does
+      // not pin yet, say): only an explicit `carryBundle: false` turns carrying off.
+      ...(tailnetEnabled() &&
+      remoteProfiles.get(valid)?.tailnet &&
+      !(typeof options === "object" && options !== null && "carryBundle" in options && options.carryBundle === false)
+        ? { pushBundle: true }
+        : {}),
     });
   }),
 );
