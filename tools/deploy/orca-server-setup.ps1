@@ -28,7 +28,11 @@ orca-release.py, so this script verifies and stages the bundle itself:
 3. files       `deployment.json` (written once; a re-run checks the keys this setup owns and
                adds missing ones), the operator configs (written once, never rewritten), and
                the `orca.cmd`, `orca-acp.cmd` and `orca-daemon.cmd` launchers.
-4. stage       The signed bundle the client carried (-Bundle): its manifest's signature is
+4. stage       The signed bundle: the three files the release vVERSION records (the
+               `orca-server-win-x64-run` record in its notes, which the Windows release workflow
+               writes last, so a bundle still being attached is never fetched), downloaded over
+               HTTPS and checked against those digests; or the files the client carried
+               (-Bundle). Either way its manifest's signature is
                checked with the pinned cosign against the pinned signer before a byte of the
                archive is read, the archive against the signed manifest, then it is unpacked
                (regular files under its one root only) into this run's own scratch
@@ -57,8 +61,9 @@ Nothing else it prints is meant to be read. Exit code 0, 1 (failed) or 2 (refuse
 
   powershell -NoProfile -ExecutionPolicy Bypass -File orca-server-setup.ps1 -Version X.Y.Z -Bundle DIR
 
-DIR holds the three bundle files (orca-server-X.Y.Z-win-x64.zip, its .manifest.json and
-.manifest.json.sigstore.json). With -OfflineBundle it also carries cosign-windows-amd64.exe and a
+Without -Bundle the release's own three files are downloaded. DIR, when given, holds them
+(orca-server-X.Y.Z-win-x64.zip, its .manifest.json and .manifest.json.sigstore.json). With
+-OfflineBundle it also carries cosign-windows-amd64.exe and a
 Sigstore trusted_root.json, both checked against the digests pinned here, for a host that cannot
 reach GitHub or Sigstore; otherwise the pinned cosign is downloaded once into `<root>\tools`.
 Dot-sourced (`. orca-server-setup.ps1`), it only defines its functions: tests replace one and run
@@ -87,6 +92,11 @@ $BundleSigner = "https://github.com/$BundleRepository/.github/workflows/release-
 $BundleIssuer = "https://token.actions.githubusercontent.com"
 $BundleTrigger = "workflow_dispatch"
 $BundleSchema = "orca-server-bundle/1"
+# The record the Windows release workflow writes in a release's notes once all three files are
+# attached (release-attach.sh, SERVER_PLATFORM=win-x64): the run, then the archive's, manifest's
+# and signature's digests.
+$BundleRecordToken = "orca-server-win-x64-run"
+$BundleRecordPattern = '<!-- orca-server-win-x64-run: [0-9]+ sha256:([0-9a-f]{64}) sha256:([0-9a-f]{64}) sha256:([0-9a-f]{64}) -->'
 $BundlePlatform = "win-x64"
 $BundleNode = "runtime/node.exe"
 $BundleEntry = "orca-daemon.mjs"
@@ -889,6 +899,86 @@ function Copy-Checked([string]$source, [string]$target, [long]$limit, [string]$w
   Copy-Item -LiteralPath $source -Destination $target
 }
 
+function Invoke-OrcaDownload([string]$url, [string]$target, [long]$limit, [string]$accept = "") {
+  # HTTPS only, every redirect included, bounded, and written to a file that must not exist yet.
+  [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+  for ($hop = 0; $hop -lt 10; $hop++) {
+    if (-not $url.StartsWith("https://")) { throw "Downloads must use HTTPS: $url" }
+    $request = [Net.HttpWebRequest][Net.WebRequest]::Create($url)
+    $request.AllowAutoRedirect = $false
+    $request.UserAgent = "orca-server-setup"
+    $request.Timeout = 60000
+    $request.ReadWriteTimeout = 60000
+    if ($accept) { $request.Accept = $accept }
+    try {
+      $response = $request.GetResponse()
+    } catch {
+      # An HTTP status other than 2xx arrives as a WebException carrying the response.
+      $failure = $_.Exception
+      if ($failure -is [Management.Automation.MethodInvocationException]) { $failure = $failure.InnerException }
+      if ($failure -isnot [Net.WebException] -or $null -eq $failure.Response) { throw }
+      $response = $failure.Response
+    }
+    try {
+      $code = [int]$response.StatusCode
+      if ($code -ge 300 -and $code -lt 400) {
+        $url = [string](New-Object Uri((New-Object Uri($url)), [string]$response.Headers["Location"])).AbsoluteUri
+        continue
+      }
+      if ($code -ne 200) { throw "Download failed with HTTP $code`: $url" }
+      $stream = $response.GetResponseStream()
+      $file = [IO.File]::Open($target, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+      try {
+        $buffer = New-Object byte[] 1048576
+        $total = [long]0
+        while (($read = $stream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+          $total += $read
+          if ($total -gt $limit) { throw "Download exceeds $limit bytes: $url" }
+          $file.Write($buffer, 0, $read)
+        }
+      } finally {
+        $file.Dispose()
+      }
+      return
+    } finally {
+      $response.Dispose()
+    }
+  }
+  throw "Download redirected too often: $url"
+}
+
+function Get-OrcaReleaseBundle($s, [string]$downloads) {
+  # The three files release vVERSION records, by its API record: a published release of exactly
+  # that version whose notes hold exactly one Windows bundle record, each asset at its recorded
+  # digest, and each download checked against it.
+  $names = Get-BundleNames $s.Version
+  $recordFile = Join-Path $downloads "release.json"
+  Invoke-OrcaDownload "https://api.github.com/repos/$BundleRepository/releases/tags/v$($s.Version)" $recordFile 4MB "application/vnd.github+json"
+  $published = Read-Json $recordFile
+  [IO.File]::Delete($recordFile)
+  $prerelease = $s.Version.Contains("-")
+  if ($published.draft -or [bool]$published.prerelease -ne $prerelease -or $published.tag_name -ne "v$($s.Version)") {
+    throw "Target is not a published release of that version"
+  }
+  $body = [string]$published.body
+  $records = [regex]::Matches($body, $BundleRecordPattern)
+  if ($records.Count -ne 1 -or ([regex]::Matches($body, [regex]::Escape($BundleRecordToken))).Count -ne 1) {
+    throw "Release v$($s.Version) has no complete Windows server bundle yet (no single $BundleRecordToken record); retry later"
+  }
+  $recorded = [ordered]@{
+    $names.archive = $records[0].Groups[1].Value; $names.manifest = $records[0].Groups[2].Value; $names.signature = $records[0].Groups[3].Value
+  }
+  foreach ($name in $recorded.Keys) {
+    $asset = @($published.assets | Where-Object { $_.name -eq $name }) | Select-Object -First 1
+    if ($null -eq $asset -or -not $asset.browser_download_url -or $asset.digest -ne "sha256:$($recorded[$name])") {
+      throw "Release v$($s.Version)'s $name is missing or not the recorded one; retry later"
+    }
+    $limit = if ($name -eq $names.archive) { $BundleMaxBytes } else { 4MB }
+    Invoke-OrcaDownload ([string]$asset.browser_download_url) (Join-Path $downloads $name) $limit
+    if ((Get-Sha256 (Join-Path $downloads $name)) -ne $recorded[$name]) { throw "Downloaded $name is not the recorded file" }
+  }
+}
+
 function Get-OrcaCosign($s) {
   # The pinned cosign, fetched (or taken from the carried bundle) once and re-hashed every use.
   $tools = Get-RootPath $s "tools"
@@ -902,9 +992,7 @@ function Get-OrcaCosign($s) {
         Copy-Checked (Join-Path $s.Bundle $CosignName) $partial 256MB "Pushed cosign"
         if ((Get-Sha256 $partial) -ne $CosignSha256) { throw "Pushed cosign does not match its pinned digest" }
       } else {
-        [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-        $ProgressPreference = "SilentlyContinue"
-        Invoke-WebRequest -UseBasicParsing -OutFile $partial "https://github.com/sigstore/cosign/releases/download/$CosignVersion/$CosignName"
+        Invoke-OrcaDownload "https://github.com/sigstore/cosign/releases/download/$CosignVersion/$CosignName" $partial 256MB
         if ((Get-Sha256 $partial) -ne $CosignSha256) { throw "Downloaded cosign does not match its pinned digest" }
       }
       [IO.File]::Move($partial, $path)
@@ -1063,7 +1151,6 @@ function Invoke-OrcaStage($s) {
     Send-Step "stage" "ok" "v$($s.Version) already staged and verified"
     return
   }
-  if (-not $s.Bundle) { throw "No bundle to stage: pass -Bundle with the three server bundle files" }
   # Staged into this transaction's own scratch, named in the journal first: a run cut off
   # mid-stage leaves only that, which recovery removes.
   $scratch = Join-Path $s.Root ($ScratchPrefix + [guid]::NewGuid().ToString("n").Substring(0, 12))
@@ -1075,9 +1162,13 @@ function Invoke-OrcaStage($s) {
   $stage = Join-Path $scratch "release"
   $null = [IO.Directory]::CreateDirectory($downloads)
   $null = [IO.Directory]::CreateDirectory($stage)
-  Copy-Checked (Join-Path $s.Bundle $names.manifest) (Join-Path $downloads $names.manifest) 4MB "Bundle file $($names.manifest)"
-  Copy-Checked (Join-Path $s.Bundle $names.signature) (Join-Path $downloads $names.signature) 4MB "Bundle file $($names.signature)"
-  Copy-Checked (Join-Path $s.Bundle $names.archive) (Join-Path $downloads $names.archive) $BundleMaxBytes "Bundle file $($names.archive)"
+  if ($s.Bundle) {
+    Copy-Checked (Join-Path $s.Bundle $names.manifest) (Join-Path $downloads $names.manifest) 4MB "Bundle file $($names.manifest)"
+    Copy-Checked (Join-Path $s.Bundle $names.signature) (Join-Path $downloads $names.signature) 4MB "Bundle file $($names.signature)"
+    Copy-Checked (Join-Path $s.Bundle $names.archive) (Join-Path $downloads $names.archive) $BundleMaxBytes "Bundle file $($names.archive)"
+  } else {
+    Get-OrcaReleaseBundle $s $downloads
+  }
   $manifest = Test-OrcaBundle $s $downloads
   # The exact signed bytes this release was verified from, kept in its record.
   $receipt = [ordered]@{}

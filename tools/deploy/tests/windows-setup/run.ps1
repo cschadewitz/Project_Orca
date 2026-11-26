@@ -29,8 +29,9 @@ function Invoke-Setup([string]$mode, [string]$at = $root, [string]$from = $carri
   $previous = $ErrorActionPreference
   $ErrorActionPreference = "Continue"
   try {
+    $carry = if ($from) { @("-Bundle", $from) } else { @() }
     $lines = @(& powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $wrapper -Mode $mode `
-        -Version $version -Root $at -Bundle $from @more)
+        -Version $version -Root $at @carry @more)
     $code = $LASTEXITCODE
   } finally {
     $ErrorActionPreference = $previous
@@ -106,6 +107,43 @@ try {
   Assert (-not (Get-ChildItem -Recurse -Force $base -Filter escaped.txt)) "an entry was written outside its root"
   Assert ($null -eq (Get-Task)) "a task was left behind"
   Assert (-not (Test-Path (Join-Path $evilRoot "deployment.json"))) "deployment.json was left behind"
+
+  Case "with no carried bundle, the release's recorded files are downloaded, checked against the record, and staged"
+  $feed = Join-Path $base "feed"
+  $null = New-Item -ItemType Directory -Force $feed
+  $files = @("$stem.zip", "$stem.manifest.json", "$stem.manifest.json.sigstore.json")
+  foreach ($name in $files) { Copy-Item (Join-Path $carried $name) $feed }
+  $digests = @($files | ForEach-Object { (Get-FileHash -Algorithm SHA256 (Join-Path $feed $_)).Hash.ToLowerInvariant() })
+  $publish = {
+    param([string]$body, [string[]]$assetDigests)
+    $assets = for ($i = 0; $i -lt 3; $i++) {
+      [ordered]@{ name = $files[$i]; digest = "sha256:$($assetDigests[$i])"; browser_download_url = "https://example.invalid/download/$($files[$i])" }
+    }
+    $release = [ordered]@{ draft = $false; prerelease = $Version.Contains("-"); tag_name = "v$Version"; body = $body; assets = @($assets) }
+    Set-Content -LiteralPath (Join-Path $feed "release.json") -Value (ConvertTo-Json -Depth 5 $release)
+  }
+  $record = "<!-- orca-server-win-x64-run: 4242 sha256:$($digests[0]) sha256:$($digests[1]) sha256:$($digests[2]) -->"
+  & $publish "Release notes.`n`n$record" $digests
+  $run = Invoke-Setup "fail-health" (Join-Path $base "feed-a") "" -more @("-Feed", $feed)
+  Assert-Step $run "stage" "changed" "staged from the signed bundle"
+  Assert-Step $run "cleanup" "ok"
+  Assert ($null -eq (Get-Task)) "a task was left behind"
+
+  Case "a release whose Windows bundle is not recorded yet is not fetched"
+  & $publish "Release notes, the Windows bundle still being attached." $digests
+  $run = Invoke-Setup "trust" (Join-Path $base "feed-b") "" -more @("-Feed", $feed)
+  Assert ($run.code -eq 1) "exit $($run.code), not 1"
+  Assert-Step $run "stage" "failed" "no complete Windows server bundle yet"
+  Assert-Step $run "cleanup" "ok"
+  Assert ($null -eq (Get-Task)) "a task was left behind"
+
+  Case "an asset that is not the recorded file is refused before it is used"
+  & $publish "Release notes.`n`n$record" @(("0" * 64), $digests[1], $digests[2])
+  $run = Invoke-Setup "trust" (Join-Path $base "feed-c") "" -more @("-Feed", $feed)
+  Assert ($run.code -eq 1) "exit $($run.code), not 1"
+  Assert-Step $run "stage" "failed" "missing or not the recorded one"
+  Assert-Step $run "cleanup" "ok"
+  Assert (-not (Test-Path (Join-Path $base "feed-c\releases\v$Version"))) "an unrecorded release was published"
 
   Case "a signature from no pinned signer is refused by the real pinned cosign, and the first install is put back"
   $run = Invoke-Setup "real"
