@@ -7,12 +7,15 @@
  */
 import { useEffect, useRef, useState, type JSX } from "react";
 import type {
+  LoginApprovalView,
   RemoteProfileInput,
   RemoteProfilesBridge,
   RemoteProfileView,
   ServerInspectionView,
   ServerSetupStepView,
   ServerSetupView,
+  TailnetMachinesView,
+  TailnetMachineView,
 } from "../../../src/daemon-connection.js";
 import { useTransientLayer } from "../layers-context.js";
 import { Button, Chip, ConfigField, Text, textClass } from "../ui/index.js";
@@ -29,6 +32,10 @@ interface Draft {
   serverCommand: string;
   serverConfig: string;
   readOnly: boolean;
+  /** Picked from the tailnet (#1226): bound to that node. Absent on an edit, which keeps it. */
+  tailnet?: { node: string; name: string };
+  /** An edit of a profile bound to a tailnet node: shown as such, and the binding is kept. */
+  bound?: boolean;
 }
 const EMPTY: Draft = {
   name: "",
@@ -79,8 +86,29 @@ function toInput(draft: Draft): RemoteProfileInput | string {
     ...(serverCommand ? { serverCommand } : {}),
     ...(serverConfig ? { serverConfig } : {}),
     ...(draft.readOnly ? { readOnly: true } : {}),
+    ...(draft.tailnet ? { tailnet: draft.tailnet } : {}),
   };
 }
+
+/** `user@host` with its host replaced, keeping the user the person typed. */
+export function withHost(destination: string, host: string): string {
+  const at = destination.lastIndexOf("@");
+  return at > 0 ? `${destination.slice(0, at)}@${host}` : host;
+}
+
+/** Why a machine cannot be picked, or undefined when it can. */
+export function machineUnavailable(machine: TailnetMachineView, settingUp: boolean): string | undefined {
+  if (!machine.online) return "offline";
+  if (settingUp && !machine.hostSupported) return "not Linux";
+  return undefined;
+}
+
+const TAILNET_STATE: Record<Exclude<TailnetMachinesView["state"], "running" | "off">, string> = {
+  absent: "Tailscale is not installed on this computer, so no machines from a tailnet are listed.",
+  stopped: "Tailscale is not connected on this computer, so no machines from your tailnet are listed.",
+  "signed-out": "Tailscale is signed out on this computer, so no machines from your tailnet are listed.",
+  error: "Tailscale's list of machines could not be read on this computer.",
+};
 
 /** What a setup run came to, in a sentence; `alert` when the person has something to fix. */
 export function setupSummary(
@@ -169,6 +197,8 @@ export function ConnectionProfiles({
   }>();
   /** The editor was opened by "Add a machine": saving it also sets the server up. */
   const [addingMachine, setAddingMachine] = useState(false);
+  /** Tailscale SSH waits for the person to approve a connection (#1228). */
+  const [approval, setApproval] = useState<LoginApprovalView>();
   const live = useRef(true);
   /** The armed removal row: Keep takes focus when it appears (RULES.md 17). */
   const armedRow = useRef<HTMLDivElement>(null);
@@ -179,6 +209,7 @@ export function ConnectionProfiles({
       live.current = false;
     };
   }, [profiles]);
+  useEffect(() => profiles.onLoginApproval?.(setApproval), [profiles]);
   // Esc disarms the row first, through the layer stack, before it would close the dialog.
   useTransientLayer(armed !== undefined, { name: "daemon-profile-remove", close: () => setArmed(undefined) });
   useEffect(() => {
@@ -195,6 +226,7 @@ export function ConnectionProfiles({
     const result = await action();
     if (!live.current) return;
     setWorking(false);
+    setApproval(undefined);
     if (!result.ok) {
       setError(result.message);
       return;
@@ -259,6 +291,7 @@ export function ConnectionProfiles({
             {current === profile.id ? " · connected" : ""}
           </Text>
           <div className="orca-chips">
+            {profile.tailnet && <Chip>On your tailnet</Chip>}
             <Chip>{credentialChip(profile)}</Chip>
             {profile.pendingRevocations ? (
               <Chip>
@@ -359,6 +392,7 @@ export function ConnectionProfiles({
                     serverCommand: profile.serverCommand ?? "",
                     serverConfig: profile.serverConfig ?? "",
                     readOnly: profile.readOnly ?? false,
+                    ...(profile.tailnet ? { bound: true } : {}),
                   })
                 }
               >
@@ -390,6 +424,8 @@ export function ConnectionProfiles({
         <ProfileEditor
           draft={editing}
           disabled={disabled}
+          settingUp={addingMachine}
+          {...(profiles.tailnetMachines ? { tailnetMachines: profiles.tailnetMachines } : {})}
           cancel={() => {
             setEditing(undefined);
             setAddingMachine(false);
@@ -471,6 +507,22 @@ export function ConnectionProfiles({
           ))}
         </ul>
       )}
+      {approval && (
+        <div className="orca-connection-stack" role="alert">
+          <Text style="caption" as="p">
+            Tailscale SSH is waiting for you to approve the connection to{" "}
+            {list.find((p) => p.id === approval.profileId)?.name ?? "this machine"}. The page is on{" "}
+            <span className={textClass("mono-id")}>{approval.host}</span>.
+          </Text>
+          {profiles.openLoginApproval && (
+            <div className="orca-dialog__actions">
+              <Button size="sm" tone="primary" onClick={() => void profiles.openLoginApproval?.(approval.profileId)}>
+                Open approval page
+              </Button>
+            </div>
+          )}
+        </div>
+      )}
       {error && (
         <Text style="caption" as="p" role="alert">
           {error}
@@ -510,9 +562,11 @@ function ServerConfirmation({
         Set up {name} as an ORCA server?
       </Text>
       <Text style="caption" as="p">
-        {inspection.firstUse
-          ? "This server has not been connected to before. Check that these host keys are the server's own (ssh-keygen -lf on the server) before you confirm: confirming pins them."
-          : "The server presented the host keys pinned for this profile."}
+        {inspection.advertised
+          ? "Your tailnet's coordination server advertises these host keys for this machine, and the machine presented them. Confirming pins them. Tailnet Lock does not sign them."
+          : inspection.firstUse
+            ? "This server has not been connected to before. Check that these host keys are the server's own (ssh-keygen -lf on the server) before you confirm: confirming pins them."
+            : "The server presented the host keys pinned for this profile."}
       </Text>
       <ul aria-label="Host keys">
         {fingerprints.server.map((key) => (
@@ -553,16 +607,55 @@ function ServerConfirmation({
 function ProfileEditor({
   draft: initial,
   disabled,
+  settingUp,
+  tailnetMachines,
   save,
   cancel,
 }: {
   draft: Draft;
   disabled: boolean;
+  /** Opened by Add a machine: only a machine ORCA can set up may be picked. */
+  settingUp: boolean;
+  tailnetMachines?: RemoteProfilesBridge["tailnetMachines"];
   save(this: void, draft: Draft): void;
   cancel(this: void): void;
 }): JSX.Element {
   const [draft, setDraft] = useState(initial);
-  const field = (key: keyof Omit<Draft, "id" | "readOnly">, label: string, help: string, mono = true) => (
+  const [tailnet, setTailnet] = useState<TailnetMachinesView>();
+  // Only a new profile picks a machine; an edit keeps the node it is bound to.
+  const picking = !initial.id && tailnetMachines !== undefined;
+  useEffect(() => {
+    if (!picking) return;
+    let current = true;
+    void tailnetMachines?.().then((result) => current && result.ok && setTailnet(result.value));
+    return () => {
+      current = false;
+    };
+  }, [picking, tailnetMachines]);
+  const bound = draft.tailnet !== undefined || draft.bound === true;
+  const pick = (node: string) => {
+    const machine = tailnet?.state === "running" ? tailnet.machines.find((m) => m.node === node) : undefined;
+    if (!machine) {
+      const { tailnet: _unbound, ...rest } = draft;
+      void _unbound;
+      setDraft(rest);
+      return;
+    }
+    setDraft({
+      ...draft,
+      name: draft.name.trim() ? draft.name : machine.hostName,
+      destination: withHost(draft.destination.trim(), machine.name),
+      jumpDestination: "",
+      jumpPort: "",
+      tailnet: { node: machine.node, name: machine.name },
+    });
+  };
+  const field = (
+    key: keyof Omit<Draft, "id" | "readOnly" | "tailnet" | "bound">,
+    label: string,
+    help: string,
+    mono = true,
+  ) => (
     <ConfigField label={label} path={`profiles.${key}`} help={help}>
       {(control) => (
         <input
@@ -577,12 +670,55 @@ function ProfileEditor({
   );
   return (
     <div className="orca-connection-stack" role="group" aria-label={initial.id ? "Edit profile" : "New profile"}>
+      {picking && tailnet && tailnet.state !== "off" && tailnet.state !== "running" && (
+        <Text style="caption" as="p">
+          {TAILNET_STATE[tailnet.state]}
+        </Text>
+      )}
+      {picking && tailnet?.state === "running" && (
+        <ConfigField
+          label="Machine on your tailnet"
+          path="profiles.tailnet"
+          help={
+            settingUp
+              ? "A Linux machine that runs Tailscale. With Tailscale SSH on, its host keys come from your tailnet; nothing else needs to be installed there."
+              : "Optional. The profile follows the machine if it is renamed or its address changes."
+          }
+        >
+          {(control) => (
+            <select
+              {...control}
+              className={`orca-input ${textClass("mono-id")}`}
+              value={draft.tailnet?.node ?? ""}
+              disabled={disabled}
+              onChange={(event) => pick(event.target.value)}
+            >
+              <option value="">None: enter the server</option>
+              {tailnet.machines.map((machine) => {
+                const unavailable = machineUnavailable(machine, settingUp);
+                return (
+                  <option key={machine.node} value={machine.node} disabled={unavailable !== undefined}>
+                    {machine.name}
+                    {unavailable ? ` (${unavailable})` : machine.sharedIn ? " (shared in)" : ""}
+                  </option>
+                );
+              })}
+            </select>
+          )}
+        </ConfigField>
+      )}
       {field("name", "Name", "How this daemon is named in the app.", false)}
-      {field("destination", "Server", "user@host, as you would pass it to ssh.")}
+      {field(
+        "destination",
+        "Server",
+        bound
+          ? "user@machine. The machine stays the one picked from your tailnet."
+          : "user@host, as you would pass it to ssh.",
+      )}
       {field("sshPort", "SSH port", "Leave empty for 22.")}
       {field("identityFile", "Key file", "Optional full path to a private key. Empty: the keys your SSH agent offers.")}
-      {field("jumpDestination", "Jump host", "Optional user@host to reach the server through.")}
-      {field("jumpPort", "Jump host SSH port", "Leave empty for 22.")}
+      {!bound && field("jumpDestination", "Jump host", "Optional user@host to reach the server through.")}
+      {!bound && field("jumpPort", "Jump host SSH port", "Leave empty for 22.")}
       {field("remotePort", "Daemon port", "The daemon's port on the server's loopback. Default 6722.")}
       {field(
         "serverCommand",

@@ -19,11 +19,13 @@
 import type {
   DaemonTargetSnapshot,
   FleetSnapshot,
+  LoginApprovalView,
   ProfileRemoval,
   ProfileResult,
   RemoteProfileView,
   ServerInspectionResultView,
   ServerSetupView,
+  TailnetMachinesView,
 } from "../daemon-connection.js";
 // A CommonJS file under `verbatimModuleSyntax` has no other way to spell a value import,
 // and emitting CommonJS is the whole point of this file — see the header.
@@ -264,6 +266,17 @@ const bridge: OrcaBridge = {
         ipcRenderer.invoke("orca:profiles.inspectServer", id) as Promise<ProfileResult<ServerInspectionResultView>>,
       setUpServer: (id, confirmation) =>
         ipcRenderer.invoke("orca:profiles.setUpServer", id, confirmation) as Promise<ProfileResult<ServerSetupView>>,
+      tailnetMachines: () =>
+        ipcRenderer.invoke("orca:profiles.tailnetMachines") as Promise<ProfileResult<TailnetMachinesView>>,
+      onLoginApproval: (listener) => {
+        const forward = (_event: unknown, approval: LoginApprovalView) => listener(approval);
+        ipcRenderer.on("orca:profiles.loginApproval", forward);
+        return () => {
+          ipcRenderer.off("orca:profiles.loginApproval", forward);
+        };
+      },
+      openLoginApproval: (id) =>
+        ipcRenderer.invoke("orca:profiles.openLoginApproval", id) as Promise<ProfileResult<null>>,
     },
     fleet: {
       read: () => ipcRenderer.sendSync("orca:fleet.read") as FleetSnapshot,

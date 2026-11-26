@@ -198,7 +198,7 @@ fetch. Windows parents do not issue credentials during enrollment, so save one b
 
 > **Not in a release yet.** This is built behind the incubating `tailnet-hosts` flag
 > (docs/WORKSTREAMS.md): it is off unless the process is started with
-> `ORCA_INCUBATING=tailnet-hosts`. What follows describes the command line as it stands on `main`.
+> `ORCA_INCUBATING=tailnet-hosts`. What follows describes the command line and the app as they stand on `main`.
 
 If you use [Tailscale](https://tailscale.com) (or a Headscale server), you can grow your pool of
 daemon hosts over your own tailnet. ORCA hosts nothing for this: it **reads** the Tailscale
@@ -223,6 +223,14 @@ orca-cli remote add you@build-1 --tailnet --confirm CODE  # set it up
 orca-cli remote add you@build-1 --tailnet --push-bundle --confirm CODE   # host with no internet access
 orca-cli remote enroll build-1 --tailnet                  # a remotes[] entry whose host is build-1 (setup 4)
 ```
+
+**In the desktop app:** Connect to a daemon → **Add a machine…** lists the machines on your
+tailnet. Pick one, enter the account to log in as (`you@`), and save: the app checks the machine,
+shows the host keys your tailnet advertises for it, and sets it up once you confirm, carrying the
+signed bundle over the tunnel. When Tailscale asks you to approve the login, the dialog says so
+and **Open approval page** opens it in your browser. Offline machines, and machines that are not
+Linux, cannot be picked for setup. **Add profile…** offers the same list for a machine that
+already runs a daemon.
 
 - `build-1` is the machine's name on your tailnet (its short or full MagicDNS name, or its node
   ID). The profile is bound to that machine's stable node ID: ssh dials its current Tailscale

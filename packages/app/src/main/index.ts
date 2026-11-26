@@ -78,7 +78,14 @@ import { callTemplate } from "../client/template-client.js";
 import type { TemplateMethod } from "../template-bridge.js";
 import type { WorkflowDraftMethodName } from "../workflow-draft-bridge.js";
 import { callWorkflowDraft } from "../client/workflow-draft-client.js";
-import { daemonEndpoint, type DaemonConnectionRequest, type ProfileResult } from "../daemon-connection.js";
+import {
+  daemonEndpoint,
+  type DaemonConnectionRequest,
+  type LoginApprovalView,
+  type ProfileResult,
+  type TailnetMachinesView,
+} from "../daemon-connection.js";
+import { tailnetEnabled } from "@orca/protocol/tailnet";
 import { isLoopbackDaemon, LocalDaemonToken } from "../client/auth.js";
 import { PreferencesFile } from "../preferences/preferences-file.js";
 import type { Preferences, ThemePreference } from "../preferences/schema.js";
@@ -208,6 +215,8 @@ const preferences = new PreferencesFile(join(app.getPath("userData"), "preferenc
   if (gtkTheme) process.env.GTK_THEME = gtkTheme;
 }
 /** Saved SSH profiles, their pinned host keys and sealed credentials (#874). Main only. */
+/** The last Tailscale SSH approval page each profile was sent to (#1228), already checked. */
+const loginApprovals = new Map<string, string>();
 const remoteProfiles = new RemoteProfiles({
   dir: join(app.getPath("userData"), "remote-daemons"),
   cipher: safeStorage,
@@ -215,6 +224,14 @@ const remoteProfiles = new RemoteProfiles({
   onTunnelState: (id, state) => {
     if (state.phase === "reconnecting" || state.phase === "failed")
       console.error(`ssh tunnel for profile ${id}: ${state.phase} (${state.refusal})`);
+  },
+  // Tailscale SSH check mode (#1228): the page is kept here and opened only on the person's
+  // click; the renderer learns which profile waits and the page's host, never the URL.
+  onLoginApproval: (profileId, url) => {
+    loginApprovals.set(profileId, url);
+    const approval: LoginApprovalView = { profileId, host: new URL(url).host };
+    for (const win of BrowserWindow.getAllWindows())
+      if (!win.isDestroyed()) win.webContents.send("orca:profiles.loginApproval", approval);
   },
 });
 
@@ -1498,7 +1515,39 @@ ipcMain.handle("orca:profiles.setUpServer", (_event, id: unknown, confirmation: 
       version: app.getVersion(),
       scripts: serverSetupScripts(),
       confirmation,
+      // A machine on the tailnet needs nothing but Tailscale (#1225): this computer carries the
+      // signed bundle to it, and the host still verifies the signature (#1234).
+      ...(tailnetEnabled() && remoteProfiles.get(valid)?.tailnet ? { pushBundle: true } : {}),
     });
+  }),
+);
+ipcMain.handle("orca:profiles.tailnetMachines", () =>
+  profileResult(async (): Promise<TailnetMachinesView> => {
+    const read = await remoteProfiles.tailnetMachines();
+    if (read.state !== "running") return { state: read.state, ...(read.detail ? { detail: read.detail } : {}) };
+    const { snapshot } = read;
+    return {
+      state: "running",
+      ...(snapshot.tailnetName ? { tailnetName: snapshot.tailnetName } : {}),
+      machines: snapshot.peers.map((peer) => ({
+        node: peer.nodeId,
+        name: peer.dnsName,
+        hostName: peer.hostName,
+        os: peer.os,
+        online: peer.online,
+        tailscaleSsh: peer.tailscaleSsh,
+        sharedIn: peer.sharedIn,
+        hostSupported: peer.hostSupported,
+      })),
+    };
+  }),
+);
+ipcMain.handle("orca:profiles.openLoginApproval", (_event, id: unknown) =>
+  profileResult(async () => {
+    const url = loginApprovals.get(ProfileIdSchema.parse(id));
+    if (!url) throw new ConnectionRefusal("Tailscale has not asked to approve a connection for this profile.");
+    await shell.openExternal(url);
+    return null;
   }),
 );
 /** Main reads the file the person picks; the token goes from disk to the keychain slot only. */
