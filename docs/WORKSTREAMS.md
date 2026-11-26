@@ -9,6 +9,58 @@ Releases themselves never hold `main`: every release of `X.Y`, its candidates in
 from `release/X.Y` (docs/RELEASING.md, "Release lines"), so `main` keeps taking workstream
 merges throughout an RC.
 
+## Choosing how it lands
+
+| | Incubating flag on `main` (default) | Feature branch (exception) |
+| --- | --- | --- |
+| When | Anything that can ship as dead code | An outside sign-off gates even dark code, or a store or protocol break that cannot be hidden |
+| Where work merges | `main`, small pull requests | `feature/<name>`, small pull requests |
+| Keeping current | Nothing to do | Feature sync, nightly |
+| Changelog | `changelog.d/incubating/<flag>/` | `changelog.d/` on the branch |
+| Milestone | Set on merge to the minor it rides in, `release:none` | The landing pull request takes its release's milestone |
+| Turning it on | A promotion pull request | Landing the branch |
+
+Pick the mode when the tracking issue is opened and say which in its body.
+
+## Incubating flags (the default)
+
+Unfinished work lands on `main` in small reviewed pull requests behind a flag in the registry,
+`packages/core/src/features.ts`. It ships as dead code in whatever release comes next and
+cannot disturb it; a short promotion pull request turns it on in the release that wants it.
+
+- **Register the flag** with the workstream's first pull request: kebab-case `name`, `stage:
+  "incubating"`, the tracking `issue`, and a one-line `summary`. Check it with
+  `featureEnabled("<name>")`; an unknown name throws, so a typo fails loudly.
+- **Stages.** `incubating` is off by default; only a developer or a test turns it on, with
+  `ORCA_INCUBATING=<name>` (or `all`), never from app configuration. That is a default, not an
+  access control: whoever sets a process's environment can reach it. `experimental` is off
+  unless the owner opts in (a config switch the caller passes) or `ORCA_EXPERIMENTAL` names it
+  (by name only; `all` there turns nothing on).
+  `stable` is on, and the flag and its checks are removed in the next minor.
+- **Both paths are tested.** CI's normal run covers the flag off. **Incubating**
+  (`incubating.yml`) runs the tests again with `ORCA_INCUBATING=all` whenever the registry holds
+  a flag, so the half-built path cannot rot.
+- **Changelog.** Fragments go in `changelog.d/incubating/<flag>/`, named as usual. Release
+  prepare reads only the top of `changelog.d/`, so they stay out of every release until the
+  promotion pull request runs `node tools/release.js promote <flag>`, which moves them into
+  `changelog.d/` to ship with it.
+- **Milestone and labels.** Dark pull requests take `release:none`. **Milestone on merge**
+  (`milestone-on-merge.yml`) gives any pull request merged into `main` without a milestone the
+  release it actually rides in: the earliest open minor (`X.Y.0`) whose `release/X.Y` line is
+  not cut yet, since a cut line no longer takes `main`'s merges. When that cannot be
+  established it sets nothing, and a milestone someone set is never changed. The milestone is a
+  planning assignment from the refs at merge time, not proof that the change is in a release
+  artifact.
+- **Promotion.** One pull request moves the flag to `experimental` or `stable`, runs `promote`,
+  carries the release bump label, and takes the milestone of the release that turns it on.
+
+## Nobody has to watch
+
+**Workstream report** (`workstream-report.yml`) runs weekly and edits one issue labelled
+`workstream-report`: feature branches with no commit for 14 days, incubating flags whose
+tracking issue was quiet for 30 days, and open `sync-conflict` issues. Quiet work shows up
+there instead of being remembered.
+
 ## Feature branches (`feature/<name>`)
 
 A long-lived branch is the exception, for work that cannot ship dark: an outside sign-off gates
