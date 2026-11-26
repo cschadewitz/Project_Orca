@@ -43,10 +43,26 @@ export interface CodexAskTarget {
   itemId: string;
 }
 
-/** An ask as ORCA's policy sees it, or why ORCA declines it without asking anybody. */
+/**
+ * An ask as ORCA's policy sees it, or why ORCA declines it without asking anybody. `effects` are
+ * the calls it would make, each decided on its own by the policy: one refused declines the whole
+ * ask, which Codex carries out as one. `review` is what a person is shown when the policy asks
+ * them: every effect, so the answer covers all of them.
+ */
 export type CodexAskMapping =
-  | { target: CodexAskTarget; request: acp.RequestPermissionRequest }
+  | { target: CodexAskTarget; effects: acp.RequestPermissionRequest[]; review: acp.RequestPermissionRequest }
   | { target: CodexAskTarget | undefined; refused: string };
+
+/** What a mapping needs beyond the ask itself. */
+export interface CodexAskContext {
+  /** The changes of the file change item Codex started for the ask, in the same turn. */
+  changes?: readonly FileUpdateChange[] | undefined;
+  /**
+   * Whether a directory grant's extent overlaps one of ORCA's protected paths, either way, or
+   * cannot be established (`codexWritableRootsProblem`): a reason to decline, or undefined.
+   */
+  extentProblem?: ((paths: readonly string[], access: "read" | "write") => string | undefined) | undefined;
+}
 
 const text = (lines: (string | undefined)[]): acp.ToolCallContent[] => {
   const body = lines.filter((l): l is string => !!l).join("\n");
@@ -87,10 +103,50 @@ const targetOf = (p: Record<string, unknown>): CodexAskTarget | undefined =>
     ? { threadId: p.threadId, turnId: p.turnId, itemId: p.itemId }
     : undefined;
 
+const request = (sessionId: string, toolCall: acp.ToolCallUpdate): acp.RequestPermissionRequest => ({
+  sessionId,
+  options: CODEX_ASK_OPTIONS,
+  toolCall: { status: "pending", ...toolCall },
+});
+
+/** One ask's effects, and the review a person sees: the one effect, or all of them as one call. */
+function mapped(
+  sessionId: string,
+  target: CodexAskTarget,
+  effects: acp.RequestPermissionRequest[],
+  title: string,
+  lines: (string | undefined)[],
+): CodexAskMapping {
+  if (effects.length === 1) {
+    const only = effects[0]!;
+    const content = text(lines);
+    return {
+      target,
+      effects,
+      review: content.length ? { ...only, toolCall: { ...only.toolCall, content } } : only,
+    };
+  }
+  return {
+    target,
+    effects,
+    review: request(sessionId, {
+      toolCallId: target.itemId,
+      title,
+      kind: "other",
+      locations: effects.flatMap((e) => e.toolCall.locations ?? []),
+      rawInput: { effects: effects.map((e) => ({ kind: e.toolCall.kind, title: e.toolCall.title })) },
+      content: text([...lines, ...effects.map((e) => `- ${e.toolCall.title ?? ""}`)]),
+    }),
+  };
+}
+
 function commandAsk(sessionId: string, p: Record<string, unknown>, target: CodexAskTarget): CodexAskMapping {
   const kind = p.kind ?? "command";
   if (kind !== "command" && kind !== "humanCommand" && kind !== "writeStdin")
     return { target, refused: "a command ask of a kind ORCA does not know" };
+  // Input to a running terminal, which the ask does not show: no rule about the command decides it.
+  if (kind === "writeStdin")
+    return { target, refused: "a write to a running terminal, whose input the ask does not show" };
   for (const field of ["command", "cwd", "reason", "approvalId"])
     if (!optionalString(p[field])) return { target, refused: `a command ask whose ${field} is not a string` };
   const actions = actionsProblem(p.commandActions);
@@ -99,54 +155,75 @@ function commandAsk(sessionId: string, p: Record<string, unknown>, target: Codex
   if (
     net !== undefined &&
     net !== null &&
-    !(isObject(net) && typeof net.host === "string" && typeof net.protocol === "string")
+    !(isObject(net) && typeof net.host === "string" && net.host && typeof net.protocol === "string")
   )
     return { target, refused: "a command ask whose network context ORCA does not know" };
   const command = str(p.command);
   const cwd = str(p.cwd);
   const network = isObject(net) ? { host: net.host as string, protocol: net.protocol as string } : undefined;
+  if (!command && !network) return { target, refused: "a command ask that names no command" };
   const actionLines = ((p.commandActions as CommandAction[] | null | undefined) ?? []).map(actionLine);
   const toolCallId = str(p.approvalId) ?? target.itemId;
-  // A network ask for a command: the host is what is being asked about.
-  if (network && !command)
-    return {
-      target,
-      request: {
-        sessionId,
-        options: CODEX_ASK_OPTIONS,
-        toolCall: {
-          toolCallId,
-          title: `Network access to ${network.host} (${network.protocol})`,
-          kind: "fetch",
-          status: "pending",
-          rawInput: { url: `${network.protocol}://${network.host}`, ...(cwd ? { cwd } : {}) },
-          content: text([str(p.reason), cwd ? `in ${cwd}` : undefined]),
-        },
-      },
-    };
-  const stdin = kind === "writeStdin";
-  return {
-    target,
-    request: {
-      sessionId,
-      options: CODEX_ASK_OPTIONS,
-      toolCall: {
+  const effects: acp.RequestPermissionRequest[] = [];
+  if (command)
+    effects.push(
+      request(sessionId, {
         toolCallId,
-        title: stdin ? `Write to the terminal of ${command ?? "a running command"}` : (command ?? "Run a command"),
+        title: command,
         kind: "execute",
-        status: "pending",
         // The command is the call's input, so every command rule decides it whatever its title.
-        rawInput: { command: command ?? "", ...(cwd ? { cwd } : {}), ...(stdin ? { stdin: true } : {}) },
-        content: text([
-          str(p.reason),
-          cwd ? `in ${cwd}` : undefined,
-          actionLines.length ? `Codex reads it as: ${actionLines.join("; ")}` : undefined,
-          network ? `with network access to ${network.host} (${network.protocol})` : undefined,
-        ]),
-      },
-    },
-  };
+        rawInput: { command, ...(cwd ? { cwd } : {}) },
+      }),
+    );
+  // The network access is an effect of its own: a rule about the command does not decide it.
+  if (network)
+    effects.push(
+      request(sessionId, {
+        toolCallId: command ? `${toolCallId}:network` : toolCallId,
+        title: `Network access to ${network.host} (${network.protocol})`,
+        kind: "fetch",
+        rawInput: { url: `${network.protocol}://${network.host}` },
+      }),
+    );
+  return mapped(sessionId, target, effects, command ? `${command}, with network access to ${network?.host}` : "", [
+    str(p.reason),
+    cwd ? `in ${cwd}` : undefined,
+    actionLines.length ? `Codex reads it as: ${actionLines.join("; ")}` : undefined,
+  ]);
 }
+
+/** One change of a patch as the call it is: its own kind, on every path it touches. */
+function changeEffect(sessionId: string, target: CodexAskTarget, c: FileUpdateChange, i: number) {
+  const id = `${target.itemId}:${i}`;
+  if (c.kind.type === "delete")
+    return request(sessionId, {
+      toolCallId: id,
+      title: `Delete ${c.path}`,
+      kind: "delete",
+      locations: [{ path: c.path }],
+    });
+  if (c.kind.type === "update" && c.kind.move_path)
+    return request(sessionId, {
+      toolCallId: id,
+      title: `Move ${c.path} to ${c.kind.move_path}`,
+      // Both sides: the file leaves one path and is written at the other.
+      kind: "move",
+      locations: [{ path: c.path }, { path: c.kind.move_path }],
+    });
+  return request(sessionId, {
+    toolCallId: id,
+    title: `${c.kind.type === "add" ? "Add" : "Edit"} ${c.path}`,
+    kind: "edit",
+    locations: [{ path: c.path }],
+  });
+}
+
+const changeShape = (c: unknown) =>
+  isObject(c) &&
+  typeof c.path === "string" &&
+  c.path !== "" &&
+  isObject(c.kind) &&
+  (c.kind.type === "add" || c.kind.type === "delete" || (c.kind.type === "update" && optionalString(c.kind.move_path)));
 
 function fileChangeAsk(
   sessionId: string,
@@ -160,45 +237,22 @@ function fileChangeAsk(
   if (str(p.grantRoot)) return { target, refused: "a file change ask for a write root for the rest of the session" };
   // The ask itself names no file: the change it is about is the item Codex started for it.
   if (!changes || changes.length === 0) return { target, refused: "a file change ask for no change ORCA was shown" };
-  const paths = changes.flatMap((c) => [
-    c.path,
-    ...(c.kind.type === "update" && c.kind.move_path ? [c.kind.move_path] : []),
-  ]);
-  const kind: acp.ToolKind = changes.some((c) => c.kind.type === "update" && c.kind.move_path)
-    ? "move"
-    : changes.every((c) => c.kind.type === "delete")
-      ? "delete"
-      : "edit";
-  const verb = (c: FileUpdateChange) =>
-    c.kind.type === "add"
-      ? `add ${c.path}`
-      : c.kind.type === "delete"
-        ? `delete ${c.path}`
-        : c.kind.move_path
-          ? `move ${c.path} to ${c.kind.move_path}`
-          : `edit ${c.path}`;
-  return {
-    target,
-    request: {
-      sessionId,
-      options: CODEX_ASK_OPTIONS,
-      toolCall: {
-        toolCallId: target.itemId,
-        title: changes.length === 1 ? verb(changes[0]!) : `Change ${changes.length} files`,
-        kind,
-        status: "pending",
-        locations: paths.map((path) => ({ path })),
-        rawInput: { changes: changes.map((c) => ({ path: c.path, kind: c.kind })) },
-        content: text([str(p.reason), changes.length > 1 ? changes.map(verb).join("\n") : undefined]),
-      },
-    },
-  };
+  if (!changes.every(changeShape)) return { target, refused: "a file change ORCA cannot show" };
+  const effects = changes.map((c, i) => changeEffect(sessionId, target, c, i));
+  return mapped(sessionId, target, effects, `Change ${changes.length} files`, [str(p.reason)]);
 }
 
 const pathList = (v: unknown): string[] | undefined =>
   v === undefined || v === null ? [] : Array.isArray(v) && v.every((x) => typeof x === "string") ? v : undefined;
 
-function permissionsAsk(sessionId: string, p: Record<string, unknown>, target: CodexAskTarget): CodexAskMapping {
+const optionalBoolean = (v: unknown) => v === undefined || v === null || typeof v === "boolean";
+
+function permissionsAsk(
+  sessionId: string,
+  p: Record<string, unknown>,
+  target: CodexAskTarget,
+  extentProblem: CodexAskContext["extentProblem"],
+): CodexAskMapping {
   if (!optionalString(p.reason) || !optionalString(p.cwd))
     return { target, refused: "a permissions ask whose reason or directory is not a string" };
   const profile = p.permissions;
@@ -216,48 +270,65 @@ function permissionsAsk(sessionId: string, p: Record<string, unknown>, target: C
       return { target, refused: "a permissions ask with file system entries ORCA cannot show" };
     const r = pathList(fs.read);
     const w = pathList(fs.write);
-    if (!r || !w) return { target, refused: "a permissions ask whose paths are not strings" };
+    if (!r || !w || [...r, ...w].some((x) => x === ""))
+      return { target, refused: "a permissions ask whose paths are not strings" };
     read = r;
     write = w;
   }
   const wantsNetwork = isObject(network) && network.enabled === true;
   if (!wantsNetwork && read.length === 0 && write.length === 0)
     return { target, refused: "a permissions ask for nothing ORCA can show" };
+  // A grant covers everything under each path: no part of it may reach ORCA's own files, and a
+  // path whose extent ORCA cannot establish is not granted.
+  const extent = extentProblem?.(write, "write") ?? extentProblem?.(read, "read");
+  if (extent) return { target, refused: `a permissions ask whose extent ${extent}` };
+  const effects: acp.RequestPermissionRequest[] = [
+    ...(wantsNetwork
+      ? [
+          request(sessionId, {
+            toolCallId: `${target.itemId}:network`,
+            title: "Network access for this turn",
+            kind: "fetch",
+          }),
+        ]
+      : []),
+    ...write.map((path, i) =>
+      request(sessionId, {
+        toolCallId: `${target.itemId}:write:${i}`,
+        title: `Write anything under ${path} for this turn`,
+        kind: "edit",
+        locations: [{ path }],
+      }),
+    ),
+    ...read.map((path, i) =>
+      request(sessionId, {
+        toolCallId: `${target.itemId}:read:${i}`,
+        title: `Read anything under ${path} for this turn`,
+        kind: "read",
+        locations: [{ path }],
+      }),
+    ),
+  ];
   const parts = [
     wantsNetwork ? "network access" : undefined,
     write.length ? `write access to ${write.join(", ")}` : undefined,
     read.length ? `read access to ${read.join(", ")}` : undefined,
   ].filter((x): x is string => !!x);
-  return {
-    target,
-    request: {
-      sessionId,
-      options: CODEX_ASK_OPTIONS,
-      toolCall: {
-        toolCallId: target.itemId,
-        title: `Codex asks for ${parts.join(" and ")} for this turn`,
-        // Not a kind any allow rule is written for: a rule naming no kind, or a person, decides it.
-        kind: "other",
-        status: "pending",
-        locations: [...write, ...read].map((path) => ({ path })),
-        rawInput: { permissions: { network: wantsNetwork, read, write }, ...(str(p.cwd) ? { cwd: p.cwd } : {}) },
-        content: text([str(p.reason), str(p.cwd) ? `in ${p.cwd as string}` : undefined]),
-      },
-    },
-  };
+  return mapped(sessionId, target, effects, `Codex asks for ${parts.join(" and ")} for this turn`, [
+    str(p.reason),
+    str(p.cwd) ? `in ${p.cwd as string}` : undefined,
+  ]);
 }
 
-const optionalBoolean = (v: unknown) => v === undefined || v === null || typeof v === "boolean";
-
 /**
- * Codex's ask as a permission request for ORCA's policy, or why ORCA declines it unasked. A
- * file change ask names no file: `changes` is the file change item Codex started for it.
+ * Codex's ask as the calls ORCA's policy decides, or why ORCA declines it unasked. A file change
+ * ask names no file: `ctx.changes` is the file change item Codex started for it.
  */
 export function codexAskRequest(
   sessionId: string,
   method: CodexPolicyAsk,
   params: unknown,
-  changes?: readonly FileUpdateChange[],
+  ctx: CodexAskContext = {},
 ): CodexAskMapping {
   if (!isObject(params)) return { target: undefined, refused: "an ask whose params are not an object" };
   const target = targetOf(params);
@@ -266,9 +337,9 @@ export function codexAskRequest(
     case "item/commandExecution/requestApproval":
       return commandAsk(sessionId, params, target);
     case "item/fileChange/requestApproval":
-      return fileChangeAsk(sessionId, params, target, changes);
+      return fileChangeAsk(sessionId, params, target, ctx.changes);
     case "item/permissions/requestApproval":
-      return permissionsAsk(sessionId, params, target);
+      return permissionsAsk(sessionId, params, target, ctx.extentProblem);
   }
 }
 

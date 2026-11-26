@@ -1466,6 +1466,153 @@ describe("asks through ORCA's policy (#1159)", () => {
     await session.close();
   });
 
+  it("declines a write to a running terminal unasked, whatever the policy", async () => {
+    const asked = vi.fn(async () => "accept");
+    const c = asking(() => [
+      { method: "item/commandExecution/requestApproval", params: COMMAND({ kind: "writeStdin" }) },
+    ]);
+    const s = scriptedHost(c.table);
+    const session = await open(s.host, { agent: withPolicy({ default: "allow" }), askPermission: asked });
+    await session.prompt("go");
+    expect(c.answers).toEqual([{ decision: "decline" }]);
+    expect(asked).not.toHaveBeenCalled();
+    await session.close();
+  });
+
+  it("decides a command's network access on its own, and asks a person once about both", async () => {
+    const withNetwork = COMMAND({ networkApprovalContext: { host: "example.com", protocol: "https" } });
+    // the command is allowed, its network access is not: declined
+    const allowedCommand = { rules: [{ match: { kind: "fetch" }, decision: "deny" }], default: "allow" };
+    const c = asking(() => [{ method: "item/commandExecution/requestApproval", params: withNetwork }]);
+    const s = scriptedHost(c.table);
+    const session = await open(s.host, { agent: withPolicy(allowedCommand) });
+    await session.prompt("go");
+    expect(c.answers).toEqual([{ decision: "decline" }]);
+    await session.close();
+    // both ask: one card, naming both effects
+    const asked: acp.RequestPermissionRequest[] = [];
+    const d = asking(() => [{ method: "item/commandExecution/requestApproval", params: withNetwork }]);
+    const t = scriptedHost(d.table);
+    const next = await open(t.host, {
+      agent: withPolicy({ default: "ask" }),
+      askPermission: async (req) => (asked.push(req), "accept"),
+    });
+    await next.prompt("go");
+    expect(d.answers).toEqual([{ decision: "accept" }]);
+    expect(asked).toHaveLength(1);
+    expect(JSON.stringify(asked[0]!.toolCall.content)).toContain("Network access to example.com (https)");
+    await next.close();
+  });
+
+  it("declines a patch when any one change is refused, a deletion or either side of a move", async () => {
+    const patchOf = (changes: unknown[]): Ask => ({
+      method: "item/fileChange/requestApproval",
+      params: FILE_CHANGE(),
+      before: (peer) =>
+        peer.notify("item/started", {
+          threadId: "thr_1",
+          turnId: "turn_1",
+          item: { type: "fileChange", id: "patch_1", changes, status: "inProgress" },
+        }),
+    });
+    const edit = { path: `${CWD}/src/a.ts`, kind: { type: "update", move_path: null }, diff: "" };
+    const del = { path: `${CWD}/src/b.ts`, kind: { type: "delete" }, diff: "" };
+    const moveOut = {
+      path: `${CWD}/src/c.ts`,
+      kind: { type: "update", move_path: `${CWD}/orca.permissions.json` },
+      diff: "",
+    };
+    const policy = {
+      rules: [
+        { match: { kind: "delete" }, decision: "deny" },
+        { match: { pathPrefix: "src/" }, decision: "allow" },
+      ],
+      default: "allow",
+    };
+    for (const [changes, want] of [
+      [[edit], "accept"],
+      [[edit, del], "decline"],
+      [[edit, moveOut], "decline"],
+    ] as const) {
+      const c = asking(() => [patchOf([...changes])]);
+      const s = scriptedHost(c.table);
+      const session = await open(s.host, {
+        agent: withPolicy(policy),
+        policyProtectedPaths: { readOnly: [`${CWD}/orca.permissions.json`], noAccess: [] },
+      });
+      await session.prompt("go");
+      expect(c.answers, JSON.stringify(changes)).toEqual([{ decision: want }]);
+      await session.close();
+    }
+  });
+
+  it("declines unasked a permissions grant whose extent holds ORCA's own files", async () => {
+    const asked = vi.fn(async () => "accept");
+    const c = asking(() => [
+      {
+        method: "item/permissions/requestApproval",
+        // the workspace itself, which holds the sidecar
+        params: PERMISSIONS({ permissions: { network: null, fileSystem: { read: null, write: [CWD] } } }),
+      },
+    ]);
+    const s = scriptedHost(c.table);
+    const session = await open(s.host, {
+      agent: withPolicy({ default: "allow" }),
+      askPermission: asked,
+      policyProtectedPaths: { readOnly: [`${CWD}/orca.permissions.json`], noAccess: [] },
+    });
+    await session.prompt("go");
+    expect(c.answers).toEqual([{ permissions: {}, scope: "turn" }]);
+    expect(asked).not.toHaveBeenCalled();
+    await session.close();
+  });
+
+  it("answers no ask of a turn Codex reported complete, even one a person then accepts", async () => {
+    let accept!: (answer: string) => void;
+    const asked = vi.fn(() => new Promise<string | undefined>((r) => (accept = r)));
+    const s = scriptedHost({
+      ...BASE,
+      "turn/start": (_msg, peer) => {
+        setImmediate(() =>
+          peer.say({ id: "pending", method: "item/commandExecution/requestApproval", params: COMMAND() }),
+        );
+        return { turn: { id: "turn_1", status: "inProgress" } };
+      },
+    });
+    const session = await open(s.host, { agent: withPolicy({ default: "ask" }), askPermission: asked });
+    const turn = session.prompt("go");
+    await vi.waitFor(() => expect(asked).toHaveBeenCalledTimes(1));
+    s.peer.notify("turn/completed", { threadId: "thr_1", turn: { id: "turn_1", status: "completed", error: null } });
+    accept("accept");
+    await vi.waitFor(() => expect(s.peer.received.find((m) => m.id === "pending" && !m.method)).toBeDefined());
+    expect(s.peer.received.find((m) => m.id === "pending" && !m.method)).toEqual({
+      id: "pending",
+      result: { decision: "decline" },
+    });
+    await turn;
+    // completed before turn/start answered: its ask is declined unasked
+    const early = scriptedHost({
+      ...BASE,
+      "turn/start": (msg, peer) => {
+        peer.say({ id: "early", method: "item/commandExecution/requestApproval", params: COMMAND() });
+        peer.notify("turn/completed", { threadId: "thr_1", turn: { id: "turn_1", status: "completed", error: null } });
+        setImmediate(() => peer.say({ id: msg.id, result: { turn: { id: "turn_1", status: "inProgress" } } }));
+        return NO_ANSWER;
+      },
+    });
+    const asked2 = vi.fn(async () => "accept");
+    const second = await open(early.host, { agent: withPolicy({ default: "ask" }), askPermission: asked2 });
+    await second.prompt("go");
+    await vi.waitFor(() => expect(early.peer.received.find((m) => m.id === "early" && !m.method)).toBeDefined());
+    expect(early.peer.received.find((m) => m.id === "early" && !m.method)).toEqual({
+      id: "early",
+      result: { decision: "decline" },
+    });
+    expect(asked2).not.toHaveBeenCalled();
+    await session.close();
+    await second.close();
+  });
+
   it("declines an ask about another turn or after cancel, and answers cancel when a person stops the turn", async () => {
     // another turn's ask
     const other = asking(() => [

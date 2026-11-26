@@ -992,6 +992,18 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
         })
       : undefined;
   /**
+   * Whether a directory grant reaches ORCA's own files, under it or enclosing it, or its extent
+   * cannot be established: a write may touch no protected path, a read no credential.
+   */
+  const extentProblem = (paths: readonly string[], access: "read" | "write") => {
+    const guarded = opts.policyProtectedPaths;
+    if (!guarded || paths.length === 0) return undefined;
+    return codexWritableRootsProblem(
+      paths,
+      access === "write" ? [...guarded.readOnly, ...guarded.noAccess] : guarded.noAccess,
+    );
+  };
+  /**
    * Codex's command, file change or permission ask on `c`, decided by ORCA's policy (#1159) and
    * answered once: `accept`, `decline` or `cancel`, never anything Codex would remember. Only an
    * ask about the live turn is decided; any other, and one after the turn is cancelled, is
@@ -1004,22 +1016,27 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
       return codexAskResponse(method, outcome, params);
     };
     const turn = active;
-    if (conn !== c || !turn || turn.cancelReason || closing || isBroken()) return respond("decline", "no-live-turn");
+    if (conn !== c || !turn || turn.cancelReason || turn.asks.signal.aborted || closing || isBroken())
+      return respond("decline", "no-live-turn");
     // An ask can come before turn/start has answered with the turn's id.
     if (!turn.turnId) await turn.turnIdKnown;
-    const live = () => conn === c && active === turn && !turn.cancelReason && !closing && !isBroken();
+    const live = () =>
+      conn === c && active === turn && !turn.cancelReason && !turn.asks.signal.aborted && !closing && !isBroken();
     if (!live() || !turn.turnId) return respond("decline", "no-live-turn");
     // Only a change Codex started in this very turn is what the ask is about.
     const itemId = isObject(params) && typeof params.itemId === "string" ? params.itemId : undefined;
-    const changes = itemId ? turn.fileChanges.get(`${turn.turnId}\0${itemId}`) : undefined;
-    const mapping = codexAskRequest(threadId, method, params, changes);
+    const mapping = codexAskRequest(threadId, method, params, {
+      changes: itemId ? turn.fileChanges.get(`${turn.turnId}\0${itemId}`) : undefined,
+      extentProblem,
+    });
     if (mapping.target && (mapping.target.threadId !== threadId || mapping.target.turnId !== turn.turnId))
       return respond("decline", "not-the-live-turn");
     if ("refused" in mapping) {
       logger.warn("Codex asked something ORCA declines without asking", { method, why: mapping.refused });
       return respond("decline", "refused");
     }
-    const request = mapping.request;
+    const { effects, review } = mapping;
+    const title = review.toolCall.title ?? "";
     const invocation: PermissionInvocation = {
       sessionId: id,
       turnId: turn.turnId,
@@ -1036,37 +1053,84 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
       }
       throw failure;
     };
-    let resolved: Awaited<ReturnType<typeof resolvePermission>>;
+    /** The person, shown `review` (every effect): their option, or undefined once the turn moved on. */
+    const askPerson = (said?: JudgedDecision): Promise<string | undefined> => {
+      const signal = invocation.signal;
+      if (signal.aborted) return Promise.resolve(undefined);
+      return new Promise<string | undefined>((resolve, reject) => {
+        const abort = () => resolve(undefined);
+        signal.addEventListener("abort", abort, { once: true });
+        (said ? opts.askPermission!(review, invocation, said) : opts.askPermission!(review, invocation)).then(
+          (answer) => {
+            signal.removeEventListener("abort", abort);
+            resolve(signal.aborted ? undefined : answer);
+          },
+          (error: unknown) => {
+            signal.removeEventListener("abort", abort);
+            reject(error instanceof Error ? error : new Error("permission callback failed", { cause: error }));
+          },
+        );
+      }).catch(askFailed);
+    };
+    let accepted: boolean;
     try {
       const policy = await policyForAsk();
-      resolved = await resolvePermission(policy, {
-        request,
-        signal: invocation.signal,
-        ...(opts.askPermission
-          ? {
-              ask: (req: acp.RequestPermissionRequest, said?: JudgedDecision) =>
-                (said ? opts.askPermission!(req, invocation, said) : opts.askPermission!(req, invocation)).catch(
-                  askFailed,
-                ),
-            }
-          : {}),
-        scope: evalScope,
-        ...(judged ? { judged } : {}),
-      });
+      if (effects.length === 1) {
+        // One effect: decided as on the ACP route, the person shown it with Codex's context.
+        const effect = effects[0]!;
+        const { response, decision, rule } = await resolvePermission(policy, {
+          request: effect,
+          signal: invocation.signal,
+          ...(opts.askPermission
+            ? { ask: (_req: acp.RequestPermissionRequest, said?: JudgedDecision) => askPerson(said) }
+            : {}),
+          scope: evalScope,
+          ...(judged ? { judged } : {}),
+        });
+        opts.onPermission?.({ toolCallId: effect.toolCall.toolCallId, title, decision, ...(rule ? { rule } : {}) });
+        accepted = response.outcome.outcome === "selected" && response.outcome.optionId === "accept";
+      } else {
+        // Several effects, which Codex carries out as one: each is decided by the policy on its
+        // own, any refused one declines them all, and a person is asked once, about all of them.
+        let needsPerson = false;
+        let refused = false;
+        for (const effect of effects) {
+          const { decision, rule } = await resolvePermission(policy, {
+            request: effect,
+            signal: invocation.signal,
+            scope: evalScope,
+          });
+          opts.onPermission?.({
+            toolCallId: effect.toolCall.toolCallId,
+            title: effect.toolCall.title ?? "",
+            decision,
+            ...(rule ? { rule } : {}),
+          });
+          if (decision === "ask:no-answerer") needsPerson = true;
+          else if (decision !== "allow") refused = true;
+        }
+        if (refused) accepted = false;
+        else if (!needsPerson) accepted = true;
+        else if (!opts.askPermission) {
+          opts.onPermission?.({ toolCallId: review.toolCall.toolCallId, title, decision: "ask:no-answerer" });
+          accepted = false;
+        } else {
+          const answer = await askPerson();
+          opts.onPermission?.({
+            toolCallId: review.toolCall.toolCallId,
+            title,
+            decision:
+              answer === undefined ? "ask:cancelled" : `ask:${answer === "accept" ? "allow_once" : "reject_once"}`,
+          });
+          accepted = answer === "accept";
+        }
+      }
     } catch {
-      return respond(turn.cancelReason ? "cancel" : "decline", "ask-failed", request.toolCall.title ?? "");
+      return respond(turn.cancelReason ? "cancel" : "decline", "ask-failed", title);
     }
-    const { response, decision, rule } = resolved;
-    opts.onPermission?.({
-      toolCallId: request.toolCall.toolCallId,
-      title: request.toolCall.title ?? "",
-      decision,
-      ...(rule ? { rule } : {}),
-    });
     // A person stopped the turn while it was asked: cancel. Otherwise only a live turn is allowed.
-    if (turn.cancelReason) return respond("cancel", "turn-cancelled");
-    if (!live()) return respond("decline", "turn-ended");
-    const accepted = response.outcome.outcome === "selected" && response.outcome.optionId === "accept";
+    if (turn.cancelReason) return respond("cancel", "turn-cancelled", title);
+    if (!live()) return respond("decline", "turn-ended", title);
     return codexAskResponse(method, accepted ? "accept" : "decline", params);
   };
 
@@ -1133,9 +1197,17 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
         );
         const turnId = (turn as { id: string }).id;
         if (!active) return;
-        if (active.turnId === turnId) active.done(turn);
-        // Only while this session's turn/start is still unanswered: its turn may finish first.
-        else if (active.turnId === undefined) active.finishedEarly.set(turnId, turn);
+        if (active.turnId === turnId) {
+          // Ended: no ask of it is answered from now on, before the prompt even settles.
+          active.asks.abort();
+          active.done(turn);
+        }
+        // Only while this session's turn/start is still unanswered: its turn may finish first,
+        // and then none of its asks is answered either.
+        else if (active.turnId === undefined) {
+          active.finishedEarly.set(turnId, turn);
+          active.asks.abort();
+        }
         return;
       }
       default:
