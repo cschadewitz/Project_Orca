@@ -31,7 +31,8 @@ export function codexAppServerSessionOptions(
     );
   // Directories ORCA's checks would treat as the agent's that Codex's sandbox would not.
   if (options.additionalDirectories?.length) throw refuse("additional directories");
-  if (agent.mcpServers.length > 0) throw refuse("MCP servers", "#1163");
+  // The agent's own MCP servers are carried (#1163): Codex runs them for the thread, each call
+  // asked about through ORCA's policy. ORCA's relay is the ACP route's, and refused below.
   if (options.secretDelivery && options.secretDelivery !== ENV_SECRET_DELIVERY)
     throw refuse("a secret delivery other than environment variables");
   // The ACP and hook routes' own: nothing on this route would honour them.

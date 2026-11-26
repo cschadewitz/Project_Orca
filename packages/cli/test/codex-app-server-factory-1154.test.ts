@@ -110,7 +110,6 @@ describe("the factory's Codex app-server options", () => {
   it("refuses, naming it, each option the driver does not carry yet", () => {
     const cases: [Partial<OpenSessionOptions>, RegExp][] = [
       [{ additionalDirectories: ["/other"] }, /additional directories/],
-      [{ agent: agent({ mcpServers: [{ name: "m", command: "m" }] }) }, /MCP servers yet \(#1163\)/],
       [{ secretDelivery: { ...ENV_SECRET_DELIVERY } }, /secret delivery other than environment variables/],
       [{ sessionMeta: {} as never }, /ACP session metadata/],
       [{ admission: Promise.resolve() }, /runtime admission/],
@@ -129,6 +128,12 @@ describe("the factory's Codex app-server options", () => {
     }
     // an empty list is no directory
     expect(() => codexAppServerSessionOptions(base({ additionalDirectories: [] }), "1.2.3")).not.toThrow();
+  });
+
+  it("carries the agent's own MCP servers to the session (#1163)", () => {
+    const servers = [{ name: "m", command: "m", args: ["--x"], env: { K: { secret: "s" } } }];
+    const mapped = codexAppServerSessionOptions(base({ agent: agent({ mcpServers: servers }) }), "1.2.3");
+    expect(mapped.agent.mcpServers).toEqual(servers);
   });
 
   it("accepts the options the orchestrator opens an ordinary agent session with", async () => {

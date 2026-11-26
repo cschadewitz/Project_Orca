@@ -103,8 +103,9 @@ session if any fails:
 The driver does **not** fix the hook route's known weakness: Codex's own hook runner still lets a
 call through when a hook fails to run, as in the table above, and the fail-closed line narrows
 that in the same way. No tier or scoped claim changes. The session factory still refuses the driver,
-so this route is reached only by tests until qualification (#1165). MCP servers are not offered
-on this driver yet (#1163), so MCP tool calls are not part of its acceptance cases.
+so this route is reached only by tests until qualification (#1165). Whatever the hook sees of them,
+the driver's MCP tool calls are decided through its asks (#1163): Codex asks about every one,
+and ORCA answers each through its policy as `<server>: <tool>`.
 
 ### The IPC caveat
 

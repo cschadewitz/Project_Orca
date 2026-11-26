@@ -46,12 +46,15 @@ export const configRead = (
 
 export const NO_REQUIREMENTS = { supportsIndependentSpeedModes: true, requirements: null };
 export const NO_HOOKS = { data: [{ cwd: "/", hooks: [], warnings: [], errors: [] }] };
+/** `mcpServerStatus/list` of a thread that runs no MCP server (#1163). */
+export const NO_MCP_SERVERS = { data: [], nextCursor: null };
 
 /** Responders for the three config requests, answering as a stock Codex. */
 export const CONFIG_ANSWERS = {
   "config/read": () => configRead(),
   "configRequirements/read": () => NO_REQUIREMENTS,
   "hooks/list": () => NO_HOOKS,
+  "mcpServerStatus/list": () => NO_MCP_SERVERS,
 };
 
 /**
@@ -96,4 +99,5 @@ export const HOOKED_CONFIG_ANSWERS = {
   "config/read": () => configRead({}, { config: { web_search: "disabled" } }),
   "configRequirements/read": () => NO_REQUIREMENTS,
   "hooks/list": () => ORCA_HOOK_LISTED,
+  "mcpServerStatus/list": () => NO_MCP_SERVERS,
 };

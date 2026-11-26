@@ -4,7 +4,7 @@
  * (skipped otherwise). The hook is the one the ACP route installs (#705), unchanged: the same
  * command, fail-closed line, trust hash, probe and context file, installed here through ORCA's
  * own `-c` session flags and checked with the app-server's `hooks/list`. The cases are the ACP
- * route's acceptance cases that apply to this driver (it takes no MCP servers, #1163):
+ * route's acceptance cases that apply to this driver (MCP calls have their own suite, #1163):
  *
  * - Codex lists exactly ORCA's hook, trusted, and the session opens only once the hook has
  *   blocked the startup probe in the environment that app-server gives its hooks;

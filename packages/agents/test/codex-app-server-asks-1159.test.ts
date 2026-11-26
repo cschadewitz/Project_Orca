@@ -186,7 +186,12 @@ describe("Codex asks as permission requests", () => {
         const answer = codexAskResponse(method, outcome);
         expect(JSON.stringify(answer)).not.toMatch(/ForSession|Amendment|"session"|strictAutoReview/);
         expect(answer).toEqual(
-          method === "item/permissions/requestApproval" ? { permissions: {}, scope: "turn" } : { decision: outcome },
+          method === "item/permissions/requestApproval"
+            ? { permissions: {}, scope: "turn" }
+            : method === "mcpServer/elicitation/request"
+              ? // no content and no _meta: nothing Codex keeps for a later call (#1163)
+                { action: outcome, content: null, _meta: null }
+              : { decision: outcome },
         );
       }
   });
