@@ -57,7 +57,7 @@ import { readFileSync, statSync } from "node:fs";
 import { windowIcon } from "./window-icon.js";
 import { carryLegacyUserData } from "./legacy-user-data.js";
 import { removeLegacyUpdaterCache } from "./legacy-updater-cache.js";
-import { revealWhenReady } from "./window-reveal.js";
+import { revealWarning, revealWhenReady } from "./window-reveal.js";
 import { fileURLToPath } from "node:url";
 import {
   app,
@@ -104,6 +104,7 @@ import { findBundledDaemon, startBundledDaemon } from "./daemon-process.js";
 import { StoreSwitchRestart, takeStoreSwitchRequest, writeStoreSwitchRequest } from "./store-switch.js";
 import { storeRoot, Workspace } from "./workspace.js";
 import { Fleet, alertScope, labelAlerts, type FleetTarget, type FocusedMachine } from "./fleet.js";
+import { shownBindings, TailnetPresenceWatch } from "./tailnet-presence.js";
 import { MAX_WATCHED_PROFILES } from "../preferences/schema.js";
 
 // Before anything reads or writes the settings folder: a packaged app's first launch under
@@ -714,6 +715,27 @@ function broadcast(notification: NotificationMessage): void {
 /* ---------- watched machines (#882) ---------- */
 
 /**
+ * Tailnet presence for the Machines view (#1230): read only while a window shows that view, only
+ * for the profiles on its screen, and sent only to those windows. Only with the `tailnet-hosts`
+ * flag on.
+ */
+const presenceWindows = new Map<number, Electron.WebContents>();
+const tailnetPresence = new TailnetPresenceWatch({
+  read: () => remoteProfiles.tailnetMachines(),
+  // Only the profiles the Machines view shows: the ones on the fleet's screen now.
+  bindings: () =>
+    shownBindings(
+      remoteProfiles.list(),
+      fleet.snapshot.machines.map((machine) => machine.key),
+    ),
+  onChange: (snapshot) => {
+    for (const contents of presenceWindows.values())
+      if (!contents.isDestroyed()) contents.send("orca:fleet.tailnetPresence", snapshot);
+  },
+});
+/** The machines on the fleet's screen when presence last looked. */
+let presenceKeys = "";
+/**
  * Every daemon on the Machines surface that is not the focused one: saved profiles a person
  * chose to watch, and the bundled daemon the workspace parked when focus moved elsewhere.
  * Each has its own client, stream and credential and is only ever read (`./fleet.ts`);
@@ -766,7 +788,16 @@ const fleet = new Fleet({
     connection.current.state === "live" || connection.current.state === "file"
       ? { reader: workspace.client, epoch: workspace.connectionTarget.epoch }
       : undefined,
-  onChange: (snapshot) => send("orca:fleet", snapshot),
+  onChange: (snapshot) => {
+    send("orca:fleet", snapshot);
+    // Presence covers only the machines on screen (#1230): a change to which ones are there
+    // reads it again rather than waiting for the next interval.
+    const keys = snapshot.machines.map((machine) => machine.key).join("\n");
+    if (keys !== presenceKeys) {
+      presenceKeys = keys;
+      tailnetPresence.refresh();
+    }
+  },
   onAlerts: (update) => {
     fleetAlerts = update;
     publishAlerts();
@@ -1571,9 +1602,38 @@ ipcMain.handle("orca:profiles.tailnetMachines", () =>
 ipcMain.on("orca:profiles.tailnetHosts", (event) => {
   event.returnValue = tailnetEnabled();
 });
+/** Windows whose end is already followed: each one's listeners are added once. */
+const presenceFollowed = new Set<number>();
+ipcMain.on("orca:fleet.watchTailnetPresence", (event, on: unknown) => {
+  if (!tailnetEnabled() || typeof on !== "boolean") return;
+  const contents = event.sender;
+  if (contents.isDestroyed()) return;
+  if (on && !presenceFollowed.has(contents.id)) {
+    presenceFollowed.add(contents.id);
+    // The window stops watching when it closes, crashes or leaves its page.
+    const leave = () => {
+      presenceFollowed.delete(contents.id);
+      presenceWindows.delete(contents.id);
+      tailnetPresence.watch(contents.id, false);
+      contents.removeListener("destroyed", leave);
+      contents.removeListener("render-process-gone", leave);
+      contents.removeListener("did-navigate", leave);
+    };
+    contents.on("destroyed", leave);
+    contents.on("render-process-gone", leave);
+    contents.on("did-navigate", leave);
+  }
+  if (on) presenceWindows.set(contents.id, contents);
+  else presenceWindows.delete(contents.id);
+  tailnetPresence.watch(contents.id, on);
+  if (on) contents.send("orca:fleet.tailnetPresence", tailnetPresence.snapshot);
+});
 const AgentIdSchema = z.string().regex(/^[a-z][a-z0-9-]{0,31}$/);
 ipcMain.handle("orca:profiles.hostAgents", (_event, id: unknown) =>
   profileResult(() => remoteProfiles.hostAgents(ProfileIdSchema.parse(id), serverSetupScripts())),
+);
+ipcMain.handle("orca:profiles.hostRepositories", (_event, id: unknown) =>
+  profileResult(() => remoteProfiles.hostRepositories(ProfileIdSchema.parse(id))),
 );
 ipcMain.handle("orca:profiles.installHostAgent", (_event, id: unknown, agent: unknown) =>
   profileResult(() =>
@@ -2061,8 +2121,8 @@ function createWindow(): void {
   // `ready-to-show` alone can leave the window hidden for good under Wayland (#858).
   revealWhenReady(win, {
     onReveal: (reason) => {
-      if (reason !== "ready-to-show")
-        console.warn(`[orca] window shown by the ${reason} fallback; no first paint was reported`);
+      const warning = revealWarning(reason);
+      if (warning) console.warn(warning);
     },
   });
   if (rendererUrl) {
@@ -2209,6 +2269,7 @@ app.on("will-quit", (event) => {
   );
   // Tunnels close after the workspace has let go of its client; nothing waits on them.
   agentSignIns.close();
+  tailnetPresence.close();
   void Promise.allSettled([workspaceClosed, fleet.close()]).finally(() =>
     remoteProfiles.close().catch(() => undefined),
   );

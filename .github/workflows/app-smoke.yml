@@ -244,6 +244,63 @@ jobs:
           retention-days: ${{ inputs.ref && 14 || 7 }}
           if-no-files-found: ignore
 
+  # The layout check on Windows (#1112: "at 100%, 125% and 150% scaling, on Windows and
+  # Linux"), for now the Connect to a daemon dialog only (#1284). A fresh GitHub-hosted VM: the runner's own session is the desktop and DPAPI the
+  # key store, so nothing is installed and no persistent host is touched. Its screen is
+  # 1024×768, so the larger size measured here is 1000×680 (`test/layout/desktop.ts`).
+  layout-windows:
+    name: layout check (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+          cache: ${{ inputs.caches != false && 'pnpm' || '' }}
+
+      - run: pnpm install --frozen-lockfile
+
+      # As in the Linux layout job: the binary on disk before any test's clock is running.
+      - name: Put the Electron binary on disk, rather than inside a test's timeout
+        shell: bash
+        working-directory: packages/app
+        run: node -e "console.log(require('electron'))" | tail -n 1
+
+      - name: Build
+        run: pnpm run build
+
+      - name: Layout check
+        shell: bash
+        env:
+          LAYOUT_OUT: ${{ github.workspace }}/test-results/layout-shots
+        run: |
+          set -euo pipefail
+          if ! node -e 'process.exit(require("./package.json").scripts?.["app:layout"] ? 0 : 1)'; then
+            echo "::notice title=Layout check::not applicable: this ref predates the check"
+            exit 0
+          fi
+          # Only the dialog spec, which needs no seeded daemon: seeding a workspace on Windows
+          # fails in requests.submit (#1284). Drop the file argument once that is fixed.
+          pnpm run app:layout connect-dialog.spec.ts
+
+      - name: Upload the layout check's output
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: app-layout-windows
+          path: |
+            test-results/
+            playwright-report/
+          retention-days: ${{ inputs.ref && 14 || 7 }}
+          if-no-files-found: ignore
+
   smoke:
     name: electron smoke test
     needs: runner

@@ -104,3 +104,15 @@ export function revealWhenReady(
   win.webContents.on("did-fail-load", onFailLoad);
   pending.push(timers.setTimeout(() => reveal("deadline"), deadlineMs));
 }
+
+/**
+ * What to log for how a window was shown. The after-load path is how a window appears under a
+ * Wayland compositor (above), which is every stock Ubuntu 24.04 launch, so it is not news, and
+ * printing a "fallback" warning for it on every first launch read as a fault (#1109). Only the
+ * creation deadline, where the page itself never reported loading, is worth a warning.
+ */
+export function revealWarning(reason: RevealReason): string | undefined {
+  return reason === "deadline"
+    ? "[orca] window shown by the deadline fallback; the page did not report loading or a first paint"
+    : undefined;
+}

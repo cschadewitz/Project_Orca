@@ -59,6 +59,12 @@ const LINE = PANE_GEOMETRY["pane-step"];
 export interface CanvasViewOptions {
   /** The keyboard scope the canvas owns, where `+`, `-`, `0` and the pans are registered. */
   scope: ShortcutScope;
+  /**
+   * Start fitted when the drawing is larger than the viewport at 100% (#1112): a wide graph
+   * opened at rest showed its first few nodes and nothing to say there was more. Once, on the
+   * first measurement; after that the view is the person's.
+   */
+  fitOnOpen?: boolean;
   /** The drawing's extent in its own px, margin included: what fit fits and a wheel scrolls over. */
   content: Size;
   /** How far one ⇧-arrow press pans, in screen px. */
@@ -97,6 +103,7 @@ export function useCanvasView({
   content,
   panStep,
   measure = measureElement,
+  fitOnOpen = false,
 }: CanvasViewOptions): CanvasViewHandle {
   const [element, setElement] = useState<HTMLDivElement | null>(null);
   const [state, setState] = useState<{ view: CanvasView; eased: boolean }>({ view: REST, eased: false });
@@ -130,6 +137,14 @@ export function useCanvasView({
     resize?.observe(element);
     return () => resize?.disconnect();
   }, [element]);
+
+  const opened = useRef(false);
+  useLayoutEffect(() => {
+    if (!fitOnOpen || opened.current) return;
+    if (viewport.width <= 0 || viewport.height <= 0 || content.width <= 0 || content.height <= 0) return;
+    opened.current = true;
+    if (content.width > viewport.width || content.height > viewport.height) commit(fitView(content, viewport), false);
+  }, [fitOnOpen, viewport, content, commit]);
 
   /* ---------- the actions ---------- */
 

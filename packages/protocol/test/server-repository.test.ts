@@ -11,6 +11,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { CourierTransport } from "../src/server-courier.js";
 import {
   bundleRepository,
+  hostRepositories,
   hostRepositoryPaths,
   localGit,
   pushRepository,
@@ -236,6 +237,95 @@ describe("pushRepository", () => {
     const host = server({ setUp: false });
     await expect(push(repo(), host.transport)).rejects.toThrow(/not an ORCA server yet/);
     expect(host.commands).toHaveLength(1);
+  });
+});
+
+describe("hostRepositories", () => {
+  it("lists what pushes put there, with a checkout of their own, and changes nothing", async () => {
+    const local = repo();
+    const host = server();
+    expect(await hostRepositories(host.transport)).toEqual([]);
+    git(local, "branch", "release/1.2");
+    await push(local, host.transport, "app", ["refs/heads/main", "refs/heads/release/1.2"]);
+    await push(repo("other\n"), host.transport, "tools");
+    const before = host.commands.length;
+    expect(await hostRepositories(host.transport)).toEqual([
+      {
+        name: "app",
+        checkout: `${host.root}/checkouts/app`,
+        branches: ["refs/heads/main", "refs/heads/release/1.2"],
+        workspace: {
+          provider: "git-worktree",
+          repo: `${host.root}/checkouts/app`,
+          baseBranch: "refs/heads/main",
+          fetchRemote: "origin",
+          allowedRefs: ["refs/heads/main", "refs/heads/release/1.2"],
+        },
+      },
+      {
+        name: "tools",
+        checkout: `${host.root}/checkouts/tools`,
+        branches: ["refs/heads/main"],
+        workspace: {
+          provider: "git-worktree",
+          repo: `${host.root}/checkouts/tools`,
+          baseBranch: "refs/heads/main",
+          fetchRemote: "origin",
+          allowedRefs: ["refs/heads/main"],
+        },
+      },
+    ]);
+    const listing = host.commands.slice(before);
+    expect(listing.some((command) => ["sh", "bash", "-c"].includes(command[0]!))).toBe(false);
+    for (const word of ["fetch", "merge", "clone", "init", "mkdir"])
+      expect(listing.some((command) => command.includes(word))).toBe(false);
+  });
+
+  it("leaves out a checkout of another repository, a plain directory, and directories that are links", async () => {
+    const local = repo();
+    const host = server();
+    await push(local, host.transport, "app");
+    // A checkout whose origin is elsewhere.
+    rmSync(join(host.root, "checkouts/app"), { recursive: true, force: true });
+    git(host.root, "clone", "-q", repo("someone else's\n"), join(host.root, "checkouts/app"));
+    // A directory named like a hub that is not one.
+    mkdirSync(join(host.root, "repos/plain.git"));
+    mkdirSync(join(host.root, "checkouts/plain"));
+    expect(await hostRepositories(host.transport)).toEqual([]);
+
+    // Its repositories directory is a link out of the server root: nothing is listed from it.
+    const linked = server();
+    await push(local, linked.transport, "app");
+    const outside = tmp();
+    rmSync(join(linked.root, "repos"), { recursive: true, force: true });
+    symlinkSync(outside, join(linked.root, "repos"));
+    expect(await hostRepositories(linked.transport)).toEqual([]);
+  });
+
+  it("starts work from the branch the checkout has, not one only a later push named", async () => {
+    const local = repo();
+    const host = server();
+    await push(local, host.transport, "app");
+    git(local, "checkout", "-q", "-b", "feature");
+    commit(local, "feature\n");
+    // Only the new branch: the bare repository's HEAD now names it, the checkout stays on main.
+    await push(local, host.transport, "app");
+    expect(git(`${host.root}/repos/app.git`, "symbolic-ref", "HEAD")).toBe("refs/heads/feature");
+    const [listed] = await hostRepositories(host.transport);
+    expect(listed!.workspace).toMatchObject({
+      baseBranch: "refs/heads/main",
+      allowedRefs: ["refs/heads/feature", "refs/heads/main"],
+    });
+
+    // A checkout on no branch of its own gives no workspace settings, with why.
+    git(`${host.root}/checkouts/app`, "checkout", "-q", "--detach");
+    const [detached] = await hostRepositories(host.transport);
+    expect(detached).not.toHaveProperty("workspace");
+    expect(detached!.problem).toMatch(/not on a branch/);
+  });
+
+  it("refuses a machine that is not set up yet", async () => {
+    await expect(hostRepositories(server({ setUp: false }).transport)).rejects.toThrow(RepositoryRefused);
   });
 });
 
