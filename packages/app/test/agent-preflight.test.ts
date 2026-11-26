@@ -1,9 +1,15 @@
 /** Portable synthetic files and Mach-O bytes; never invokes a provider or reads credentials. */
+import { createHash } from "node:crypto";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
-import { afterEach, expect, it } from "vitest";
-import { machOArchitectureMismatch, inspectLocalTool } from "../src/main/first-run/agent-preflight.js";
+import { afterEach, describe, expect, it } from "vitest";
+import {
+  codexPin,
+  machOArchitectureMismatch,
+  inspectLocalTool,
+  type PinFile,
+} from "../src/main/first-run/agent-preflight.js";
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -141,4 +147,129 @@ it("names OpenCode's ACP route only for its acp subcommand (#710)", async () => 
   expect((await inspectLocalTool({ id: "oc", command: opencode, env: {} })).evidence.configuredRoute).toBe(
     "unverified",
   );
+});
+it("for driver codex-app-server, compares the executable's bytes with the pinned Codex builds without running it", async () => {
+  const { createHash } = await import("node:crypto");
+  const f = await fixture();
+  const command = join(f.bin, "codex");
+  const sentinel = join(f.root, "not-executed");
+  const bytes = `#!/bin/sh\nprintf 'executed' > '${sentinel}'\n`;
+  await writeFile(command, bytes);
+  await chmod(command, 0o700);
+  const sha = createHash("sha256").update(bytes).digest("hex");
+  const agent = { id: "codex", command, driver: "codex-app-server", env: {} };
+  const pinned = await inspectLocalTool(agent, { target: "test-x64", pins: { "9.9.9": { "test-x64": sha } } });
+  expect(pinned).toMatchObject({
+    state: "handshake-required",
+    evidence: {
+      configuredRoute: "codex-app-server-candidate",
+      codexPin: { state: "pinned", version: "9.9.9" },
+      support: "unknown",
+      signIn: "unknown",
+    },
+  });
+  // the same bytes on another platform, or other bytes, are not pinned
+  expect(
+    (
+      await inspectLocalTool(agent, {
+        target: "other-x64",
+        pins: { "9.9.9": { "test-x64": sha, "other-x64": "0".repeat(64) } },
+      })
+    ).evidence,
+  ).toMatchObject({ codexPin: { state: "unpinned" } });
+  expect((await inspectLocalTool(agent, { target: "linux-x64" })).evidence).toMatchObject({
+    codexPin: { state: "unpinned" },
+  });
+  await expect(readFile(sentinel)).rejects.toMatchObject({ code: "ENOENT" });
+  expect(JSON.stringify(pinned)).not.toContain(f.root);
+  // a missing Codex reports missing, with no pin claim
+  const missing = await inspectLocalTool({ ...agent, command: join(f.bin, "nope") });
+  expect(missing.state).toBe("missing");
+  expect(missing.evidence.codexPin).toBeUndefined();
+  // without the driver, a command named codex gets no pin check
+  expect((await inspectLocalTool({ id: "codex", command, env: {} })).evidence.codexPin).toBeUndefined();
+});
+it("bounds the Codex pin check, and skips it where ORCA pinned no build", async () => {
+  const { createHash } = await import("node:crypto");
+  const f = await fixture();
+  const command = join(f.bin, "codex");
+  const bytes = "x".repeat(4096);
+  await writeFile(command, bytes);
+  await chmod(command, 0o700);
+  const sha = createHash("sha256").update(bytes).digest("hex");
+  const pins = { "9.9.9": { "test-x64": sha } };
+  const agent = { id: "codex", command, driver: "codex-app-server", env: {} };
+  const pinOf = async (codex: Parameters<typeof inspectLocalTool>[1]) =>
+    (await inspectLocalTool(agent, codex)).evidence.codexPin;
+  // within its bounds, it matches
+  expect(await pinOf({ target: "test-x64", pins, maxBytes: 4096, timeoutMs: 10_000 })).toEqual({
+    state: "pinned",
+    version: "9.9.9",
+  });
+  // a file past the size bound is not read, and is not called pinned
+  expect(await pinOf({ target: "test-x64", pins, maxBytes: 4095 })).toEqual({ state: "unreadable" });
+  // a platform with no pin is not read at all
+  expect(await pinOf({ target: "plan9-mips", pins })).toEqual({ state: "no-platform-pin" });
+  // the executable is still reported found in each case
+  expect((await inspectLocalTool(agent, { target: "test-x64", pins, maxBytes: 1 })).state).toBe("handshake-required");
+});
+
+describe("the Codex pin check's deadline", () => {
+  const bytes = Buffer.from("pinned bytes");
+  const sha = createHash("sha256").update(bytes).digest("hex");
+  const pins = { "9.9.9": { "test-x64": sha } };
+  const stat = { size: bytes.length, ino: 1, mtimeMs: 1, ctimeMs: 1 };
+  /** A file whose reads answer from `bytes`, each one held until `gate` lets it through. */
+  const fakeFile = (gate: (n: number) => Promise<void>, statGate: () => Promise<void> = async () => {}) => {
+    let reads = 0;
+    const file: PinFile = {
+      stat: async () => (await statGate(), stat),
+      read: async (buffer, offset, length, position) => {
+        await gate(reads++);
+        const n = Math.max(0, Math.min(length, bytes.length - position));
+        bytes.copy(buffer, offset, position, position + n);
+        return { bytesRead: n };
+      },
+    };
+    return { file, reads: () => reads };
+  };
+
+  it("answers pinned when the reads finish in time", async () => {
+    const f = fakeFile(async () => {});
+    expect(await codexPin(f.file, "test-x64", { pins, timeoutMs: 1_000 })).toEqual({
+      pin: { state: "pinned", version: "9.9.9" },
+      abandoned: false,
+    });
+  });
+
+  it("gives up on a read that never answers, at the deadline, and leaves the descriptor to the caller", async () => {
+    const f = fakeFile(() => new Promise<void>(() => {}));
+    const started = Date.now();
+    expect(await codexPin(f.file, "test-x64", { pins, timeoutMs: 50 })).toEqual({
+      pin: { state: "unreadable" },
+      abandoned: true,
+    });
+    expect(Date.now() - started).toBeLessThan(2_000);
+  });
+
+  it("gives up on a stat that never answers", async () => {
+    const f = fakeFile(
+      async () => {},
+      () => new Promise<void>(() => {}),
+    );
+    expect((await codexPin(f.file, "test-x64", { pins, timeoutMs: 50 })).pin).toEqual({ state: "unreadable" });
+  });
+
+  it("never turns a read that answers after the deadline into a result", async () => {
+    let release!: () => void;
+    const late = new Promise<void>((r) => (release = r));
+    // the first read is held past the deadline; the EOF read after it would complete the hash
+    const f = fakeFile((n) => (n === 0 ? late : Promise.resolve()));
+    const answer = await codexPin(f.file, "test-x64", { pins, timeoutMs: 30 });
+    expect(answer).toEqual({ pin: { state: "unreadable" }, abandoned: true });
+    release();
+    await new Promise((r) => setTimeout(r, 20));
+    // the work saw the deadline and read no further
+    expect(f.reads()).toBe(1);
+  });
 });

@@ -507,12 +507,14 @@ The route claims no support tier.
 
 A second way to talk to Codex (#1154, tracking #1189): instead of starting the `codex-acp`
 adapter, ORCA is to start the user's installed Codex CLI as `codex app-server` and speak its
-protocol directly. `command` then names the Codex CLI, `codex` on the agent's `PATH` or a path
-to it; ORCA appends the `app-server` subcommand after the agent's own `args`:
+protocol directly. `command` then names the Codex native binary of a pinned version (an npm
+install's `codex` command is a Node script, which ORCA does not start; see below); ORCA appends
+the `app-server` subcommand after the agent's own `args`. Setup, the first-run review and what
+the driver does not fix are on [its own page](agents/codex-app-server.md):
 
 ```yaml
   - id: codex
-    command: codex
+    command: /path/to/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex
     driver: codex-app-server
 ```
 

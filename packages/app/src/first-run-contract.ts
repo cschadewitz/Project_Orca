@@ -12,6 +12,8 @@ export interface FirstRunAgentCheck {
       | "copilot-cli-acp-candidate"
       | "opencode-acp-candidate"
       | "cline-acp-candidate"
+      /** The agent names `driver: codex-app-server` (#1167): experimental, refused for sessions until qualified. */
+      | "codex-app-server-candidate"
       | "unverified";
     readonly support: "unknown";
     readonly version: "unknown";
@@ -19,6 +21,15 @@ export interface FirstRunAgentCheck {
     readonly acp: "not-checked";
     readonly signIn: "unknown";
     readonly exactCommand: "unsupported";
+    /**
+     * For `driver: codex-app-server` only (#1167): whether the executable's bytes are a Codex
+     * native build ORCA pinned for this platform, by digest; nothing is executed. `unreadable`
+     * when its bytes could not be read to the end within the check's bounds, or changed while
+     * read; `no-platform-pin` when ORCA pinned no build for this platform (nothing is read).
+     */
+    readonly codexPin?:
+      | { readonly state: "pinned"; readonly version: string }
+      | { readonly state: "unpinned" | "unreadable" | "no-platform-pin" };
   };
 }
 export interface FirstRunReview {

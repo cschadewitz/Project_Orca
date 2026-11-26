@@ -78,6 +78,7 @@ ORCA has not verified that the judge's decisions or advice reach you in a Codex 
 
 - With Codex's experimental hook (`nativeToolHook: experimental`), a call ORCA would ask you about is blocked, because Codex cannot pause a call for a person from a hook. No ask is shown, so there is nothing for the judge's advice to go with.
 - In Codex's default adapter mode, Codex's own review decides its approval requests. That review is a separate model call, not ORCA's judge, and it does not hand the decision to ORCA's ask.
+- On the experimental app-server driver (`driver: codex-app-server`, refused for sessions until it is qualified), ORCA's ask is reached and the judge advises on commands only; a session that asks for the judge on edits or MCP calls is refused. See [Codex through its app-server](agents/codex-app-server.md).
 
 Opting Codex in to the hook is not evidence that the judge is available for it. ORCA adds no other route and loosens no approval to fill this gap.
 

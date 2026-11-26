@@ -168,6 +168,15 @@ The other direction is equally unavailable: T3 Code cannot drive ORCA either, be
 has no ACP client. If T3 ever adds ACP agents as a provider, `orca acp` plugs in unchanged
 — no work needed on ORCA's side.
 
+## Codex through its app-server (experimental, not yet available)
+
+ORCA can also talk to Codex without the ACP adapter: with `driver: codex-app-server` it is to
+start the user's installed Codex CLI as `codex app-server` and speak Codex's own protocol, on the
+user's own `codex login` (#1154). The route is experimental. ORCA refuses every session that asks
+for it until it is qualified, and it runs only on ORCA's own machine (#1166). It is neither the
+default nor a guard. What it needs and what it does not fix:
+[Codex through its app-server](agents/codex-app-server.md).
+
 ## Remote agents over SSH
 
 `hosts[]` entries of `type: ssh` run agents on another machine:
