@@ -96,7 +96,8 @@ These are separate dimensions:
   milestone planning is requested; preserve existing assignments unless asked to
   change them. A ship group or dependency does not assign a version or milestone.
   One automatic exception: a pull request merged into `main` without a milestone gets
-  the earliest open minor it ships in (Milestone on merge, docs/WORKSTREAMS.md).
+  the minor it ships in, the earliest open one whose line is not cut yet (Milestone on
+  merge, docs/WORKSTREAMS.md).
 
 The template's ship-group text is a proposal, not an automatic GitHub label. Select
 the matching label in GitHub when triaging; if it does not exist, agree on the name

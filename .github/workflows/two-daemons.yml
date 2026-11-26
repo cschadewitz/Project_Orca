@@ -17,6 +17,7 @@ on:
       - packages/testing/machine/**
       - packages/testing/test/two-daemons.test.ts
       - packages/cli/test/delegation-883.test.ts
+      - packages/cli/test/remote-enroll-app-workspace-1206.test.ts
       - packages/cli/test/delegation-machines-885.test.ts
       # What a daemon runs: shared schemas (agents, remotes), the store (admissions, receipts,
       # locks) and the engine (slots, orchestrator), plus how the bundle is built and locked.
@@ -81,11 +82,12 @@ jobs:
         # a server update (#879) run over a profile's ssh, and catalog MCP servers (#337) given to
         # an agent on the SSH host only after their command is found there.
         run: pnpm exec vitest run packages/testing/test/two-daemons.test.ts packages/agents/test/secrets-ssh-native-336.test.ts packages/app/test/server-update-ssh.test.ts packages/engine/test/capabilities-ssh-native-337.test.ts
-      # A parent daemon delegating steps to the other over the same sshd (#883).
+      # A parent daemon delegating steps to the other over the same sshd (#883), and a first-run
+      # app workspace enrolling its remote through its own daemon (#1206).
       - name: Delegation over loopback ssh
         env:
           ORCA_REQUIRE_SSHD: "1"
-        run: pnpm exec vitest run packages/cli/test/delegation-883.test.ts
+        run: pnpm exec vitest run packages/cli/test/delegation-883.test.ts packages/cli/test/remote-enroll-app-workspace-1206.test.ts
 
   machines:
     name: two machines in containers

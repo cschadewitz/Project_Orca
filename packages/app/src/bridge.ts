@@ -57,6 +57,9 @@ import type {
   PermissionsSaveJudgedRuleParams,
   PermissionsSaveJudgedRuleResult,
   JudgeStatusResult,
+  RemotesEnrollParams,
+  RemotesEnrollResult,
+  RemotesListResult,
   DaemonCapability,
   DecisionsDecideParams,
   DecisionsDecideResult,
@@ -556,6 +559,15 @@ export interface OrcaBridge {
      * Read-only; offered only when the daemon lists `judge.status`.
      */
     judgeStatus?: () => Promise<BridgeResult<JudgeStatusResult>>;
+  };
+  /**
+   * Delegation remotes (protocol 2.13, #1206): the configured remotes with their enrollment, and
+   * enrollment through the daemon that owns the workspace, which is the route a workspace set up
+   * in first-run admits. Offered only when the daemon lists `remotes.list` and `remotes.enroll`.
+   */
+  remotes?: {
+    list: () => Promise<BridgeResult<RemotesListResult>>;
+    enroll: (params: RemotesEnrollParams) => Promise<BridgeResult<RemotesEnrollResult>>;
   };
   /** Optional until the integration owner registers the typed template IPC dispatcher. */
   templates?: TemplateBridge;

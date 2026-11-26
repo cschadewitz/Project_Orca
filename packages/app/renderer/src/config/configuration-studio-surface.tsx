@@ -18,6 +18,7 @@ import { RawView } from "./raw-view.js";
 import { CapabilityPreview } from "./capability-preview-view.js";
 import { PermissionsView } from "./permissions-view.js";
 import { PreferencesSection } from "./preferences-section.js";
+import { RemotesSection } from "./remotes-section.js";
 import { StorageSection } from "./storage-section.js";
 import { JudgeSetup } from "./judge-setup.js";
 import { agentPolicies } from "./config-model.js";
@@ -384,6 +385,8 @@ export function ConfigurationStudioSurface({
         )}
         {/* Where the plain-language rule judge's setup stands (#701); offered only by a daemon that lists it. */}
         <JudgeSetup />
+        {/* Delegation remotes this daemon enrolls (#1206); offered only by a daemon that lists them. */}
+        <RemotesSection />
         <StorageSection />
         <PreferencesSection surfaces={SURFACES.map((surface) => ({ id: surface.id, label: surface.label }))} />
       </div>

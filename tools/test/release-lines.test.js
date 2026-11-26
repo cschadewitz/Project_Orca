@@ -56,6 +56,31 @@ describe("the branch a version is cut from", () => {
   });
 });
 
+describe("preparing a candidate and its final", () => {
+  const header = "# Changelog\n\nIntro.\n\n## Unreleased\n\nPending entries live in changelog.d/.\n\n";
+  const setup = () => {
+    writeFileSync(join(work, "package.json"), `${JSON.stringify({ name: "orca", version: "0.8.0" }, null, 2)}\n`);
+    writeFileSync(join(work, "CHANGELOG.md"), header);
+    mkdirSync(join(work, "changelog.d"));
+    writeFileSync(join(work, "changelog.d", "README.md"), "# Changelog fragments\n");
+    writeFileSync(join(work, "changelog.d", "12-crash.fixed.md"), "- **app:** no crash\n");
+  };
+  const fragment = () => existsSync(join(work, "changelog.d", "12-crash.fixed.md"));
+
+  it("keeps the fragments for a candidate, so the final renders them again, then consumes them", () => {
+    setup();
+    release(work, "prepare", "0.9.0-rc.1");
+    expect(fragment()).toBe(true);
+    expect(readFileSync(join(work, "CHANGELOG.md"), "utf8")).toMatch(/## 0\.9\.0-rc\.1 [\s\S]*no crash/);
+    writeFileSync(join(work, "changelog.d", "14-hang.fixed.md"), "- **app:** no hang\n");
+    release(work, "prepare", "0.9.0");
+    expect(fragment()).toBe(false);
+    const final = release(work, "notes", "0.9.0");
+    expect(final).toContain("no crash");
+    expect(final).toContain("no hang");
+  });
+});
+
 describe("recording a line release on main", () => {
   const header = "# Changelog\n\nIntro.\n\n## Unreleased\n\nPending entries live in changelog.d/.\n\n";
   const section = (version, body) => `## ${version} - 2026-11-22\n\n### Fixed\n\n- ${body}\n`;

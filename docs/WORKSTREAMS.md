@@ -44,8 +44,9 @@ cannot disturb it; a short promotion pull request turns it on in the release tha
   `changelog.d/` to ship with it.
 - **Milestone and labels.** Dark pull requests take `release:none`. **Milestone on merge**
   (`milestone-on-merge.yml`) gives any pull request merged into `main` without a milestone the
-  earliest open minor (`X.Y.0`), the release it actually rides in; a milestone someone set is
-  never changed.
+  release it actually rides in: the earliest open minor (`X.Y.0`) whose `release/X.Y` line is
+  not cut yet, since a cut line no longer takes `main`'s merges. When that cannot be
+  established it sets nothing, and a milestone someone set is never changed.
 - **Promotion.** One pull request moves the flag to `experimental` or `stable`, runs `promote`,
   carries the release bump label, and takes the milestone of the release that turns it on.
 

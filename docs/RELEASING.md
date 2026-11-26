@@ -565,8 +565,11 @@ Fragments for work behind an incubating flag live in `changelog.d/incubating/<fl
 `prepare` does not read; `node tools/release.js promote <flag>` moves them up when the flag is
 promoted (docs/WORKSTREAMS.md).
 
-`prepare` renders the fragments into the dated section and deletes them, so the deletions
-land in the `release: vX.Y.Z` pull request beside the section they became. Nothing else
+`prepare` renders the fragments into the dated section. For a final it deletes them, so the
+deletions land in the `release: vX.Y.Z` pull request beside the section they became. A
+candidate (`X.Y.Z-rc.N`) keeps them: each candidate's section shows everything since the last
+final, and the final renders them all once more and consumes them, so no fragment has to be
+re-added before a final. Nothing else
 reads `changelog.d/`: `notes <version>` quotes the committed `CHANGELOG.md`, which is what
 `release-publish.yml` publishes.
 
