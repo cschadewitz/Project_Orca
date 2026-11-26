@@ -36,12 +36,14 @@ even dark code, or the change breaks the store format or protocol and cannot be 
   the `sync-conflict` label, lists the files for the workstream's owner, and the next clean sync
   closes it.
 - **Unattended merging needs the ruleset.** The workflow merges only when the repository
-  variable `FEATURE_SYNC_AUTO_MERGE` is `true` and the feature branch's active rules require a
-  pull request and an up-to-date (strict) `check (node 24)`; it reads them before every merge
-  and otherwise leaves the pull request for a person. Right before merging it also reads the
-  feature branch again and skips the merge if it moved since the check; the strict policy makes
-  GitHub refuse a merge if it moves after that. Set the variable only after the ruleset exists,
-  so the merge gate and the ruleset are two layers, not one.
+  variable `FEATURE_SYNC_AUTO_MERGE` is `true` and, read before every merge, one active ruleset
+  on the feature branch requires a pull request and `check (node 24)` from GitHub Actions
+  (app 15368) under the strict policy, with no bypass actors. The bypass list is visible only to
+  a token that can administer rulesets; if the release App's token cannot read it, the ruleset
+  counts as unverified and sync pull requests wait for a person. Right before merging it also
+  reads the feature branch again and skips the merge if it moved since the check; between that
+  read and the merge, the strict, unbypassable rule is what makes GitHub refuse a merge onto a
+  moved branch. Set the variable only after that ruleset exists.
 - **Landing.** One pull request from `feature/<name>` into `main` when the gate opens. Its
   changelog fragments live in `changelog.d/` on the branch and arrive with it; the landing pull
   request takes the target release's milestone.

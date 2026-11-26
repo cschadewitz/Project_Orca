@@ -65,20 +65,34 @@ candidate_problem() {
 # would turn `false` into the fallback): number, head, cross-repository, author is a bot, labels.
 PR_FIELDS='if length == 0 then "" else .[0] | [(.number | tostring), .headRefOid, (.isCrossRepository | tostring), (.author.is_bot | tostring), ([.labels[]?.name] | join(",") | if . == "" then "-" else . end)] | join(" ") end'
 
-# ruleset_problem BRANCH: prints why BRANCH's active rules do not enforce what unattended merging
-# relies on, and fails: a pull request, `check (node 24)` from GitHub Actions as a required
-# check, and the strict (up to date with the base) policy, so a feature branch that moves after
-# the check cannot take the merge; succeeds silently when they do.
+# GitHub Actions' app id: the required check must come from it, not from any app that can post
+# a check run of the same name.
+ACTIONS_APP_ID=15368
+
+# ruleset_problem BRANCH: prints why BRANCH is not protected the way unattended merging relies
+# on, and fails; succeeds silently when it is. It needs one active ruleset on BRANCH that
+# requires a pull request and `check (node 24)` from GitHub Actions under the strict (up to
+# date with the base) policy, with no bypass actors at all, so no credential, the merging one
+# included, can merge past it. A ruleset whose bypass list cannot be read counts as unverified.
 ruleset_problem() {
-  local rules
+  local rules id ruleset
   if ! rules=$(gh api "repos/$REPO/rules/branches/$1" 2>/dev/null); then
     echo "its rules could not be read"; return 1
   fi
-  jq -e 'any(.[]; .type == "pull_request")' <<<"$rules" >/dev/null || { echo "its rules do not require a pull request"; return 1; }
-  jq -e --arg c "$REQUIRED_CHECK" 'any(.[]; .type == "required_status_checks"
-      and .parameters.strict_required_status_checks_policy == true
-      and any(.parameters.required_status_checks[]; .context == $c))' <<<"$rules" >/dev/null ||
-    { echo "its rules do not require an up-to-date \`$REQUIRED_CHECK\`"; return 1; }
+  for id in $(jq -r --arg c "$REQUIRED_CHECK" --argjson app "$ACTIONS_APP_ID" '
+      .[] | select(.type == "required_status_checks"
+        and .parameters.strict_required_status_checks_policy == true
+        and any(.parameters.required_status_checks[]; .context == $c and .integration_id == $app))
+      | .ruleset_id // empty' <<<"$rules" | sort -u); do
+    ruleset=$(gh api "repos/$REPO/rulesets/$id" 2>/dev/null) || continue
+    if jq -e '.enforcement == "active"
+        and (.bypass_actors | type == "array" and length == 0)
+        and any(.rules[]; .type == "pull_request")' <<<"$ruleset" >/dev/null; then
+      return 0
+    fi
+  done
+  echo "no active ruleset with no bypass actors requires a pull request and an up-to-date \`$REQUIRED_CHECK\` from GitHub Actions (or its bypass list could not be read)"
+  return 1
 }
 
 # conflict_issue NAME: the open sync-conflict issue for feature/NAME, or empty.

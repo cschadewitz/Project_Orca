@@ -24,6 +24,10 @@ const jq = (json) => {
 };
 if (args[0] === "pr" && args[1] === "list") process.stdout.write(jq(process.env.PRS || "[]") + "\\n");
 else if (args[0] === "api" && args[1].includes("/rules/branches/")) process.stdout.write(jq(process.env.RULES || "[]"));
+else if (args[0] === "api" && args[1].includes("/rulesets/")) {
+  if (!process.env.RULESET) process.exit(1);
+  process.stdout.write(jq(process.env.RULESET));
+}
 else if (args[0] === "api" && args[1].includes("/git/ref/heads/")) process.stdout.write(jq(JSON.stringify({ object: { sha: process.env.FEATURE_REF } })));
 else if (args[0] === "api" && args[1].includes("/actions/runs")) process.stdout.write(jq(process.env.RUNS || '{"workflow_runs":[]}'));
 else if (args[0] === "api") process.stdout.write(jq(process.env.CHECKS || '{"check_runs":[]}'));
@@ -118,19 +122,32 @@ describe("tools/feature-sync.sh", () => {
         labels: labels.map((name) => ({ name })),
       },
     ]);
-  // The feature branch's active rules, as the ruleset provides them.
-  const rules = (strict = true, contexts = ["check (node 24)"]) =>
+  // The feature branch's active rules, and the ruleset (id 7) they come from.
+  const rules = (strict = true, contexts = ["check (node 24)"], app = 15368) =>
     JSON.stringify([
-      { type: "pull_request", parameters: {} },
+      { type: "pull_request", ruleset_id: 7, parameters: {} },
       {
         type: "required_status_checks",
+        ruleset_id: 7,
         parameters: {
           strict_required_status_checks_policy: strict,
-          required_status_checks: contexts.map((context) => ({ context, integration_id: 15368 })),
+          required_status_checks: contexts.map((context) => ({ context, integration_id: app })),
         },
       },
     ]);
-  const ruled = () => ({ RULES: rules(), FEATURE_REF: git(origin, "rev-parse", "refs/heads/feature/sdk") });
+  const ruleset = (over = {}) =>
+    JSON.stringify({
+      id: 7,
+      enforcement: "active",
+      bypass_actors: [],
+      rules: [{ type: "pull_request" }, { type: "required_status_checks" }],
+      ...over,
+    });
+  const ruled = () => ({
+    RULES: rules(),
+    RULESET: ruleset(),
+    FEATURE_REF: git(origin, "rev-parse", "refs/heads/feature/sdk"),
+  });
   // A ci.yml pull_request run for #12 at `sha`, and its check runs.
   const ciRun = (sha, over = {}) =>
     JSON.stringify({
@@ -221,7 +238,15 @@ describe("tools/feature-sync.sh", () => {
     expect(attempt({ RULES: "[]" })).not.toContain(merge);
     expect(attempt({ RULES: rules(false) })).not.toContain(merge);
     expect(attempt({ RULES: rules(true, ["lint"]) })).not.toContain(merge);
-    expect(readFileSync(join(work, "summary"), "utf8")).toContain("do not require an up-to-date");
+    // The check must be bound to GitHub Actions, and nobody may bypass the ruleset.
+    expect(attempt({ RULES: rules(true, ["check (node 24)"], 999) })).not.toContain(merge);
+    const bypass = [{ actor_id: 1, actor_type: "Integration", bypass_mode: "always" }];
+    expect(attempt({ RULESET: ruleset({ bypass_actors: bypass }) })).not.toContain(merge);
+    expect(attempt({ RULESET: ruleset({ enforcement: "evaluate" }) })).not.toContain(merge);
+    // A bypass list the token cannot see is unverified, as is a ruleset that cannot be read.
+    expect(attempt({ RULESET: ruleset({ bypass_actors: undefined }) })).not.toContain(merge);
+    expect(attempt({ RULESET: "" })).not.toContain(merge);
+    expect(readFileSync(join(work, "summary"), "utf8")).toContain("no active ruleset with no bypass actors");
     // The feature branch advanced after the run fetched it: the checked tree is no longer proof.
     expect(attempt({ FEATURE_REF: "b".repeat(40) })).not.toContain(merge);
     expect(readFileSync(join(work, "summary"), "utf8")).toContain("moved since sync #12 was checked");
