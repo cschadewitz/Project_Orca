@@ -14,9 +14,12 @@ on the server to run it. It works only under the server root the setup made,
                           every tarball must hash to its sha512 there. Only then is each one
                           unpacked, member by member: one top directory, regular files and
                           directories only, canonical relative paths, no path twice, bounded
-                          in entries and bytes. Into a staging directory that becomes
-                          `agents/<agent>/<version>` in one rename, with a record of every file
-                          (path, mode, size, sha256) beside it in `agents/<agent>/<version>.json`.
+                          in entries and bytes. Into a staging directory holding the tree
+                          (`files/`) and its record (`install.json`: every file's path, mode,
+                          size and sha256), which becomes `agents/<agent>/<version>` in one
+                          rename: there is never a tree without its record. Installs of one
+                          agent hold `agents/<agent>/.install.lock`, so they never overlap; a
+                          staging directory an interrupted install left is removed under it.
                           An install already there is accepted only if it is exactly this lock
                           entry and its tree is exactly its record; nothing else is replaced.
   status                  One line: each known agent's verified installed versions, any that
@@ -27,7 +30,7 @@ on the server to run it. It works only under the server root the setup made,
                           is written by the agent, on this server, in `agents/<agent>/home`.
 
 Nothing installed is run (status, sign-in) unless its tree is exactly its record, every
-directory from the root down is this account's own and closed to other writers, and the
+directory from the home down is this account's own and closed to other writers, and the
 profile is closed to everyone else (0700). npm never runs here, and no install script of any
 package runs. Each agent's profile (`CODEX_HOME`, `COPILOT_HOME`) is its own directory under the
 server root, never the account's everyday one. It prints `orca-agents: {json}` lines; anything
@@ -35,6 +38,8 @@ else is the agent's own output. No third-party modules.
 """
 import argparse
 import base64
+import errno
+import fcntl
 import hashlib
 import json
 import os
@@ -58,6 +63,7 @@ INTEGRITY = re.compile(r"^sha512-[A-Za-z0-9+/]{86}==$")
 # A member's path inside a package: relative, no control character or backslash (with no empty,
 # `.` or `..` component and already in normal form, checked beside it).
 MEMBER = re.compile(r"^[^/\x00-\x1f\x7f\\][^\x00-\x1f\x7f\\]*$")
+RECORD = "install.json"
 TARBALL_LIMIT = 1 << 30
 UNPACKED_LIMIT = 4 << 30
 try:
@@ -140,6 +146,15 @@ def server_root():
     resolved = root.resolve(strict=True)
     if resolved != root or resolved.stat().st_uid != os.geteuid():
         raise Refused(f"{root} is not the ORCA server's own directory.")
+    # Every directory from the home down to the root: this account's own, and no other account
+    # can replace anything in it (a parent writable by others could swap what is below it).
+    path = home
+    for part in [None, *Path(ROOT_FROM_HOME).parts]:
+        if part is not None:
+            path = path / part
+        info = os.lstat(path)
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o022:
+            raise Refused(f"{path} can be changed by other accounts: the ORCA server's directory must not be.")
     return root
 
 
@@ -275,11 +290,14 @@ def evidence_text(agent, version, packages, tree):
 def verified_install(root, lock, agent, version):
     """The install of `agent` `version` as recorded, or a Refused saying why it cannot be used."""
     agent_dir = root / "agents" / agent
-    target, evidence = agent_dir / version, agent_dir / f"{version}.json"
+    target = agent_dir / version
+    evidence, files = target / RECORD, target / "files"
     own_directory(root / "agents", create=False)
     own_directory(agent_dir, create=False)
     if not own_directory(target, create=False):
         raise Refused(f"{agent} {version} is not installed.")
+    if not own_directory(files, create=False) or sorted(os.listdir(target)) != sorted([RECORD, "files"]):
+        raise Refused(f"{target} is not an install of ORCA's own.")
     info = os.lstat(evidence) if os.path.lexists(evidence) else None
     if info is None or not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o022:
         raise Refused(f"{target} has no install record of its own.")
@@ -294,12 +312,37 @@ def verified_install(root, lock, agent, version):
     if not isinstance(recorded, dict) or recorded.get("agent") != agent or recorded.get("version") != version \
             or recorded.get("packages") != [list(p) for p in packages]:
         raise Refused(f"{target} was installed from other packages than this ORCA pins.")
-    if recorded.get("tree") != tree_record(target):
+    if recorded.get("tree") != tree_record(files):
         raise Refused(f"{target} has changed since it was installed.")
-    binary = target / AGENTS[agent]["binary"]
+    binary = files / AGENTS[agent]["binary"]
     if binary.is_symlink() or not binary.is_file() or not os.access(binary, os.X_OK):
         raise Refused(f"{target} has no executable {agent}.")
     return target, binary
+
+
+class install_lock:
+    """`agents/<agent>/.install.lock`, held exclusively for one install; refused while another holds it."""
+
+    def __init__(self, agent_dir, agent):
+        self.path, self.agent, self.fd = agent_dir / ".install.lock", agent, None
+
+    def __enter__(self):
+        self.fd = os.open(self.path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+        info = os.fstat(self.fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid():
+            os.close(self.fd)
+            raise Refused(f"{self.path} is not the install lock of the ORCA server's own.")
+        try:
+            fcntl.flock(self.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as error:
+            os.close(self.fd)
+            if error.errno in (errno.EAGAIN, errno.EACCES, errno.EWOULDBLOCK):
+                raise Refused(f"Another install of {self.agent} is running on this server. Nothing was changed.")
+            raise
+        return self
+
+    def __exit__(self, *_):
+        os.close(self.fd)
 
 
 def install(scratch_arg):
@@ -328,49 +371,54 @@ def install(scratch_arg):
     private_profile(profile, create=True)
     target = agent_dir / version
     done = {"step": "install", "agent": agent, "version": version, "dir": str(target), "home": str(profile),
-            "binary": str(target / AGENTS[agent]["binary"])}
-    if os.path.lexists(target) or os.path.lexists(agent_dir / f"{version}.json"):
+            "binary": str(target / "files" / AGENTS[agent]["binary"])}
+    with install_lock(agent_dir, agent):
+        if os.path.lexists(target):
+            try:
+                verified_install(root, lock, agent, version)
+            except Refused as why:
+                raise Refused(f"{target} holds another install of {agent} {version}: {why} Nothing was changed.")
+            emit({**done, "result": "ok"})
+            return
+        if not hasattr(tarfile, "data_filter"):
+            raise Refused("This server's Python cannot unpack archives safely (it needs 3.8.17, 3.9.17, 3.10.12, "
+                          "3.11.4 or later).")
+        # Holding the lock, no other install is running: a staging directory here is one an
+        # interrupted install left. Only this program makes them, by this prefix.
+        for name in os.listdir(agent_dir):
+            leftover = agent_dir / name
+            if name.startswith(".staging-") and not leftover.is_symlink() and leftover.is_dir():
+                shutil.rmtree(leftover, ignore_errors=True)
+        staging = Path(tempfile.mkdtemp(prefix=".staging-", dir=agent_dir))
         try:
-            verified_install(root, lock, agent, version)
-        except Refused as why:
-            raise Refused(f"{target} holds another install of {agent} {version}: {why} Nothing was changed.")
-        emit({**done, "result": "ok"})
-        return
-    if not hasattr(tarfile, "data_filter"):
-        raise Refused("This server's Python cannot unpack archives safely (it needs 3.8.17, 3.9.17, 3.10.12, "
-                      "3.11.4 or later).")
-    staging = Path(tempfile.mkdtemp(prefix=".staging-", dir=agent_dir))
-    evidence = agent_dir / f"{version}.json"
-    published = False
-    try:
-        seen, budget = set(), [ENTRY_LIMIT, UNPACKED_LIMIT]
-        for package in sorted(packages, key=lambda p: p["path"].count("/")):
-            destination = staging / package["path"]
-            if package["path"] in seen:
-                raise Refused(f"{package['path']} is written twice.")
-            destination.mkdir(parents=True, exist_ok=True)
-            unpack(scratch / package["file"], destination, package["path"], seen, budget)
-        staged_binary = staging / AGENTS[agent]["binary"]
-        if staged_binary.is_symlink() or not staged_binary.is_file():
-            raise Refused(f"The carried {agent} has no executable at {AGENTS[agent]['binary']}.")
-        staged_binary.chmod(0o755)
-        for dirpath, _, _ in os.walk(staging):
-            os.chmod(dirpath, 0o755)
-        text = evidence_text(agent, version, [[p["path"], p["integrity"]] for p in packages], tree_record(staging))
-        partial = agent_dir / f".{version}.json.{os.getpid()}"
-        fd = os.open(partial, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
-        with os.fdopen(fd, "w") as stream:
-            stream.write(text)
-        os.rename(staging, target)
-        published = True
-        os.rename(partial, evidence)
-    except BaseException:
-        if not published:
+            files = staging / "files"
+            files.mkdir()
+            seen, budget = set(), [ENTRY_LIMIT, UNPACKED_LIMIT]
+            for package in sorted(packages, key=lambda p: p["path"].count("/")):
+                destination = files / package["path"]
+                if package["path"] in seen:
+                    raise Refused(f"{package['path']} is written twice.")
+                destination.mkdir(parents=True, exist_ok=True)
+                unpack(scratch / package["file"], destination, package["path"], seen, budget)
+            staged_binary = files / AGENTS[agent]["binary"]
+            if staged_binary.is_symlink() or not staged_binary.is_file():
+                raise Refused(f"The carried {agent} has no executable at {AGENTS[agent]['binary']}.")
+            staged_binary.chmod(0o755)
+            for dirpath, _, _ in os.walk(staging):
+                os.chmod(dirpath, 0o755)
+            text = evidence_text(agent, version, [[p["path"], p["integrity"]] for p in packages], tree_record(files))
+            fd = os.open(staging / RECORD, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+            with os.fdopen(fd, "w") as stream:
+                stream.write(text)
+            # One rename publishes the tree with its record. Under the lock nothing else makes
+            # `target`; it was absent above, and rename does not replace a non-empty directory.
+            if os.path.lexists(target):
+                raise Refused(f"{target} appeared during the install. Nothing was changed.")
+            os.rename(staging, target)
+        except BaseException:
             shutil.rmtree(staging, ignore_errors=True)
-        for leftover in agent_dir.glob(f".{version}.json.*"):
-            leftover.unlink()
-        raise
-    emit({**done, "result": "changed"})
+            raise
+        emit({**done, "result": "changed"})
 
 
 def installed(root, lock, agent):

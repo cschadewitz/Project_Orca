@@ -412,7 +412,7 @@ export function hostAgentSettings(installed: HostAgentInstalled): string {
       "  - id: codex",
       `    name: ${agent.name}`,
       `    command: ${root}/current/runtime/bin/node`,
-      `    args: [${installed.dir}/node_modules/@agentclientprotocol/codex-acp/dist/index.js]`,
+      `    args: [${installed.dir}/files/node_modules/@agentclientprotocol/codex-acp/dist/index.js]`,
       "    env:",
       `      CODEX_HOME: ${installed.home}`,
     ].join("\n");

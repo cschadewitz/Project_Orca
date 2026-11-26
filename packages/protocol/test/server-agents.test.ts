@@ -179,7 +179,7 @@ describe("installing an agent on the server", () => {
       result: "changed",
       dir: `${host.root}/agents/copilot/1.0.114`,
       home: `${host.root}/agents/copilot/home`,
-      binary: `${host.root}/agents/copilot/1.0.114/${COPILOT}/copilot`,
+      binary: `${host.root}/agents/copilot/1.0.114/files/${COPILOT}/copilot`,
     });
     expect(readFileSync(first.binary, "utf8")).toBe(FAKE_COPILOT);
     expect(lstatSync(first.home).mode & 0o777).toBe(0o700);
@@ -228,7 +228,7 @@ describe("installing an agent on the server", () => {
       ["package/package.json", "{}"],
     ]);
     await expect(install(host, other)).rejects.toThrow(/another install of copilot 1\.0\.114/);
-    expect(readFileSync(`${host.root}/agents/copilot/1.0.114/${COPILOT}/copilot`, "utf8")).toBe(FAKE_COPILOT);
+    expect(readFileSync(`${host.root}/agents/copilot/1.0.114/files/${COPILOT}/copilot`, "utf8")).toBe(FAKE_COPILOT);
   });
 
   it("never runs, reports or reuses an install that changed since it was installed", async () => {
@@ -269,7 +269,9 @@ describe("installing an agent on the server", () => {
     const host = server();
     const made = copilotPackages([["package/copilot", FAKE_COPILOT], ...extra] as [string, string | null][]);
     await expect(install(host, made)).rejects.toThrow(error);
-    expect(readdirSync(`${host.root}/agents/copilot`).filter((name) => name !== "home")).toEqual([]);
+    expect(
+      readdirSync(`${host.root}/agents/copilot`).filter((name) => name !== "home" && name !== ".install.lock"),
+    ).toEqual([]);
   });
 
   it("refuses a package with more entries than the limit, before unpacking any", async () => {
@@ -282,7 +284,46 @@ describe("installing an agent on the server", () => {
       { entryLimit: 4 },
     );
     await expect(install(host, made)).rejects.toThrow(/more than 4 entries/);
-    expect(readdirSync(`${host.root}/agents/copilot`).filter((name) => name !== "home")).toEqual([]);
+    expect(
+      readdirSync(`${host.root}/agents/copilot`).filter((name) => name !== "home" && name !== ".install.lock"),
+    ).toEqual([]);
+  });
+
+  it("never overlaps installs of one agent, and removes what an interrupted one left", async () => {
+    const host = server();
+    const made = copilotPackages();
+    mkdirSync(`${host.root}/agents/copilot/.staging-interrupted/files`, { recursive: true, mode: 0o755 });
+    // Another install holds the lock: this one is refused and changes nothing.
+    const holder = spawn("python3", [
+      "-c",
+      "import fcntl, os, sys, time\nfd = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT, 0o600)\nfcntl.flock(fd, fcntl.LOCK_EX)\nprint('held', flush=True)\ntime.sleep(60)",
+      `${host.root}/agents/copilot/.install.lock`,
+    ]);
+    await new Promise((resolve) => holder.stdout.once("data", resolve));
+    try {
+      await expect(install(host, made)).rejects.toThrow(/Another install of copilot is running/);
+      expect(existsSync(`${host.root}/agents/copilot/1.0.114`)).toBe(false);
+    } finally {
+      holder.kill();
+      await new Promise((resolve) => holder.once("close", resolve));
+    }
+    expect((await install(host, made)).result).toBe("changed");
+    expect(readdirSync(`${host.root}/agents/copilot`).sort()).toEqual([".install.lock", "1.0.114", "home"]);
+    expect(readdirSync(`${host.root}/agents/copilot/1.0.114`).sort()).toEqual(["files", "install.json"]);
+  });
+
+  it.each([
+    ["the server root", ".local/share/orca-server"],
+    ["a directory above it", ".local/share"],
+  ])("refuses when %s can be changed by other accounts", async (_, relative) => {
+    const host = server();
+    chmodSync(join(host.home, relative), 0o777);
+    try {
+      await expect(install(host)).rejects.toThrow(/can be changed by other accounts/);
+      expect(existsSync(`${host.root}/agents`)).toBe(false);
+    } finally {
+      chmodSync(join(host.home, relative), 0o755);
+    }
   });
 
   it("refuses a machine that is not set up yet", async () => {
