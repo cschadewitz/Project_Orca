@@ -26,6 +26,7 @@ export * from "./codex-exec-gate-session.js";
 export * from "./codex-app-server.js";
 export * from "./codex-app-server-client.js";
 export * from "./codex-app-server-session.js";
+export * from "./codex-app-server-config.js";
 export * from "./host-ipc-inventory.js";
 export * from "./providers/index.js";
 export * from "./agent-profiles/index.js";

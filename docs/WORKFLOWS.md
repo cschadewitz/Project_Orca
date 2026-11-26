@@ -522,8 +522,8 @@ signs in, never asks Codex to refresh a token and never reads Codex's credential
 Codex that needs a login and reports none is to be refused with "run `codex login`".
 
 **Every session that asks for it is refused today**, before anything starts: the session driver
-exists, but ORCA does not yet answer Codex's approval asks (#1159) or verify the config Codex
-runs with (#1160), it runs only on ORCA's own machine (#1166), and config rejects it on an
+exists, but ORCA does not yet answer Codex's approval asks (#1159), it runs only on ORCA's
+own machine (#1166), and config rejects it on an
 `orca-daemon` agent and together with `nativeToolHook` or `codexExecGate`. Nothing falls back to
 the ACP adapter: to run Codex through it, remove `driver` (or set `driver: acp`, the default)
 and set `command` back to the adapter (for example `codex-acp`), since `codex` itself is not an
@@ -537,9 +537,33 @@ refuses a session whose Codex reports another version, or whose protocol lacks a
 session needs. The **Codex app-server protocol** workflow regenerates the types from the pinned
 Codex and fails on any drift.
 
+ORCA sets the thread's approval policy (`untrusted` or `on-request`), the reviewer `user` and
+the sandbox (`read-only` or `workspace-write`; never full access) as session flags
+(`codex -c approval_policy=… app-server`) and as thread parameters, then reads back what Codex
+will run with (`config/read`, `configRequirements/read`, `hooks/list`), before the thread starts
+and again on it. The session is refused, naming the setting and where it comes from, when:
+
+- a `config.toml` in force (user, project, system or managed) sets the approval policy,
+  reviewer or sandbox to anything else, or a managed layer overrides ORCA's value;
+- managed requirements do not allow ORCA's approval policy or sandbox;
+- Codex's config adds an MCP server, or Codex would run any hook (ORCA's own hook is not
+  offered on this driver);
+- the thread comes back with another sandbox, or one whose writable roots (the working
+  directory, extra roots, `/tmp` and `$TMPDIR` unless excluded) overlap a path ORCA protects.
+
+What ORCA verified (the three settings, the layer each came from, which layers were in force,
+and whether managed requirements were present) is logged with the session. No other config
+value reaches a log or an error: a setting is repeated only when it is one of Codex's known
+values, and anything else is summarized. A path ORCA cannot resolve (a link it cannot follow,
+a `..` segment) is refused rather than guessed. ORCA's `thread/start` names no working
+directory (the app-server already runs in it), because Codex records a named directory as a
+trusted project in the user's own `config.toml` when the sandbox can write it; ORCA leaves the
+user's Codex profile unchanged.
+
 When the app-server exits under a session, the running turn fails, an ask it raised is never
 answered, and the next prompt starts a new app-server on the same thread (`thread/resume`, held
-to the same reviewer, approval policy and working directory as the open). After three exits or
+to the same checks of the thread and of Codex's config as the open; a config that no longer
+holds stops the session). After three exits or
 failed restarts within five minutes, waiting 0, 1 and 2 seconds before the restarts, the
 session stops. A protocol error, a turn that outlives the cancel grace, or a `turn/start` whose
 outcome is unknown stops the session at once. A session can also resume a thread by id: its

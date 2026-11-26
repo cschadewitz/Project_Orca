@@ -19,6 +19,7 @@ import {
   type AgentProcessHandle,
   type SessionUpdateEvent,
 } from "../src/index.js";
+import { CONFIG_ANSWERS, configRead, NO_HOOKS, WRITE_SANDBOX } from "./codex-config-fixture.js";
 
 const CWD = process.cwd();
 const INIT = {
@@ -112,13 +113,14 @@ const THREAD = (over: Record<string, unknown> = {}) => ({
   instructionSources: [],
   approvalPolicy: "on-request",
   approvalsReviewer: "user",
-  sandbox: { type: "workspaceWrite" },
+  sandbox: WRITE_SANDBOX,
   reasoningEffort: "low",
   ...over,
 });
 
 const BASE: Record<string, Responder> = {
   initialize: () => INIT,
+  ...CONFIG_ANSWERS,
   "account/read": () => ({ account: { type: "apiKey" }, userId: null, requiresOpenaiAuth: true }),
   "thread/start": () => THREAD(),
   "model/list": () => MODELS,
@@ -138,22 +140,145 @@ const open = (host: AgentHost, more: Partial<Parameters<typeof openCodexAppServe
     ...more,
   });
 
+describe("Codex's config (#1160)", () => {
+  const refused = async (answers: Record<string, Responder>, more: Partial<Parameters<typeof open>[1]> = {}) => {
+    const s = scriptedHost({ ...BASE, ...answers });
+    const error = (await open(s.host, more).catch((e: unknown) => e)) as OrcaError;
+    expect(s.kill).toHaveBeenCalled();
+    return { s, error };
+  };
+
+  it("refuses a user config.toml that sets another approval policy before any thread starts", async () => {
+    const { s, error } = await refused({
+      "config/read": () =>
+        configRead(
+          {},
+          {
+            layers: [
+              { name: { type: "sessionFlags" }, version: "v", config: {}, disabledReason: null },
+              {
+                name: { type: "user", file: "/h/.codex/config.toml", profile: null },
+                version: "v",
+                config: { approval_policy: "never" },
+                disabledReason: null,
+              },
+            ],
+          },
+        ),
+    });
+    expect(error.code).toBe("NOT_SUPPORTED");
+    expect(error.message).toContain('the user config.toml (/h/.codex/config.toml) sets approval_policy = "never"');
+    expect(s.peer.received.some((m) => m.method === "thread/start")).toBe(false);
+  });
+
+  it("checks again on the thread, and refuses a hook the started thread would run", async () => {
+    const { s, error } = await refused({
+      "hooks/list": (msg) =>
+        msg.params?.["threadId"]
+          ? { data: [{ cwd: CWD, hooks: [{ eventName: "preToolUse", source: "project", enabled: true }] }] }
+          : NO_HOOKS,
+    });
+    expect(error.message).toContain("Codex would run the hook preToolUse (project)");
+    expect(s.peer.received.some((m) => m.method === "thread/start")).toBe(true);
+    expect(s.peer.received.some((m) => m.method === "model/list")).toBe(false);
+  });
+
+  it("refuses a thread whose sandbox is not the one ORCA asked for", async () => {
+    const { error } = await refused({
+      "thread/start": () => THREAD({ sandbox: { type: "readOnly", networkAccess: false } }),
+    });
+    expect(error.message).toMatch(/Codex started the thread with sandbox "readOnly", not what ORCA asked for/);
+    const full = await refused({ "thread/start": () => THREAD({ sandbox: { type: "dangerFullAccess" } }) });
+    expect(full.error.message).toMatch(/sandbox "dangerFullAccess"/);
+  });
+
+  it("refuses a thread that could write a path ORCA protects", async () => {
+    const { error } = await refused({}, { protectedPaths: [`${CWD}/.orca`] });
+    expect(error.code).toBe("NOT_SUPPORTED");
+    expect(error.message).toContain(`the thread could write ${CWD}, which overlaps ORCA's protected ${CWD}/.orca`);
+    const s = scriptedHost({
+      ...BASE,
+      "thread/start": () => THREAD({ sandbox: { ...WRITE_SANDBOX, excludeSlashTmp: true, excludeTmpdirEnvVar: true } }),
+    });
+    const session = await open(s.host, { protectedPaths: ["/tmp/orca-sidecar"] });
+    await session.close();
+  });
+
+  it("records what it verified, and logs no config value beyond it", async () => {
+    const SECRET = "sk-orca-1160-sentinel";
+    const records: unknown[] = [];
+    const logger = {
+      log: (...a: unknown[]) => void records.push(a),
+      debug: (...a: unknown[]) => void records.push(a),
+      info: (...a: unknown[]) => void records.push(a),
+      warn: (...a: unknown[]) => void records.push(a),
+      error: (...a: unknown[]) => void records.push(a),
+      child: () => logger,
+    };
+    const verified: unknown[] = [];
+    const s = scriptedHost({
+      ...BASE,
+      "config/read": () =>
+        configRead({}, { config: { mcp_servers: { off: { env: { TOKEN: SECRET }, enabled: false } } } }),
+    });
+    const session = await open(s.host, { logger, onVerifiedConfig: (c) => verified.push(c) });
+    expect(verified).toEqual([
+      expect.objectContaining({
+        approvalPolicy: "on-request",
+        approvalsReviewer: "user",
+        sandbox: "workspace-write",
+        origins: { approval_policy: "sessionFlags", approvals_reviewer: "sessionFlags", sandbox_mode: "sessionFlags" },
+      }),
+    ]);
+    expect(JSON.stringify(records)).toContain("Codex's effective config verified");
+    expect(JSON.stringify(records)).not.toContain(SECRET);
+    await session.close();
+  });
+});
+
 describe("opening a session", () => {
   it("handshakes, checks the login, and starts the thread with reviewer user and the given policy", async () => {
     const s = scriptedHost(BASE);
     const session = await open(s.host);
     expect(session.acpSessionId).toBe("thr_1");
     const methods = s.peer.received.map((m) => m.method);
-    expect(methods.slice(0, 5)).toEqual(["initialize", "initialized", "account/read", "thread/start", "model/list"]);
+    expect(methods.slice(0, 11)).toEqual([
+      "initialize",
+      "initialized",
+      "account/read",
+      // what Codex will run with, checked before the thread starts and again on it
+      "config/read",
+      "configRequirements/read",
+      "hooks/list",
+      "thread/start",
+      "config/read",
+      "configRequirements/read",
+      "hooks/list",
+      "model/list",
+    ]);
+    const lists = s.peer.received.filter((m) => m.method === "hooks/list").map((m) => m.params);
+    expect(lists).toEqual([{ cwds: [CWD] }, { threadId: "thr_1" }]);
+    expect(s.peer.received.find((m) => m.method === "config/read")?.params).toEqual({ includeLayers: true, cwd: CWD });
     expect(s.peer.received.find((m) => m.method === "account/read")?.params).toEqual({});
+    // no cwd: the process runs in it, and a named cwd has Codex record the project as trusted
     expect(s.peer.received.find((m) => m.method === "thread/start")?.params).toEqual({
-      cwd: CWD,
       approvalPolicy: "on-request",
       approvalsReviewer: "user",
       sandbox: "workspace-write",
     });
-    // the launch is the agent's command with app-server after its arguments
-    expect(s.spawnAgent.mock.calls[0]![0]).toMatchObject({ command: process.execPath, args: ["app-server"] });
+    // the launch is the agent's command, ORCA's policy as session flags, then app-server
+    expect(s.spawnAgent.mock.calls[0]![0]).toMatchObject({
+      command: process.execPath,
+      args: [
+        "-c",
+        'approval_policy="on-request"',
+        "-c",
+        'approvals_reviewer="user"',
+        "-c",
+        'sandbox_mode="workspace-write"',
+        "app-server",
+      ],
+    });
     await session.close();
     expect(s.peer.received.at(-1)).toMatchObject({ method: "thread/unsubscribe", params: { threadId: "thr_1" } });
     expect(s.kill).toHaveBeenCalled();

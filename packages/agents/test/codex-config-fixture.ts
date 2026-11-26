@@ -1,0 +1,53 @@
+/** What a stock Codex 0.171.0 answers for ORCA's config checks (#1160), as the real one did. */
+export const WRITE_SANDBOX = {
+  type: "workspaceWrite",
+  writableRoots: [],
+  networkAccess: false,
+  excludeTmpdirEnvVar: false,
+  excludeSlashTmp: false,
+};
+
+const SESSION_FLAGS = { name: { type: "sessionFlags" }, version: "sha256:flags" };
+
+/** `config/read` with ORCA's session flags in force and nothing else set. */
+export const configRead = (
+  policy: { approval_policy?: unknown; approvals_reviewer?: unknown; sandbox_mode?: unknown } = {},
+  more: { config?: Record<string, unknown>; origins?: Record<string, unknown>; layers?: unknown[] } = {},
+) => {
+  const flags = {
+    approval_policy: "on-request",
+    approvals_reviewer: "user",
+    sandbox_mode: "workspace-write",
+    ...policy,
+  };
+  return {
+    config: { ...flags, mcp_servers: {}, ...more.config },
+    origins: {
+      approval_policy: SESSION_FLAGS,
+      approvals_reviewer: SESSION_FLAGS,
+      sandbox_mode: SESSION_FLAGS,
+      ...more.origins,
+    },
+    layers: more.layers ?? [
+      // as the real Codex answers: no disabledReason at all on a layer in force
+      { name: { type: "sessionFlags" }, version: "sha256:flags", config: flags },
+      {
+        name: { type: "user", file: "/home/u/.codex/config.toml", profile: null },
+        version: "v",
+        config: {},
+        disabledReason: null,
+      },
+      { name: { type: "system", file: "/etc/codex/config.toml" }, version: "v", config: {}, disabledReason: null },
+    ],
+  };
+};
+
+export const NO_REQUIREMENTS = { supportsIndependentSpeedModes: true, requirements: null };
+export const NO_HOOKS = { data: [{ cwd: "/", hooks: [], warnings: [], errors: [] }] };
+
+/** Responders for the three config requests, answering as a stock Codex. */
+export const CONFIG_ANSWERS = {
+  "config/read": () => configRead(),
+  "configRequirements/read": () => NO_REQUIREMENTS,
+  "hooks/list": () => NO_HOOKS,
+};
