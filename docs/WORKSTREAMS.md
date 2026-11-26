@@ -48,7 +48,7 @@ cannot disturb it; a short promotion pull request turns it on in the release tha
   (`milestone-on-merge.yml`) gives any pull request merged into `main` without a milestone the
   release it actually rides in: the earliest open minor (`X.Y.0`) whose `release/X.Y` line is
   not cut yet, since a cut line no longer takes `main`'s merges. When that cannot be
-  established it sets nothing, and a milestone someone set is never changed The milestone is a
+  established it sets nothing, and a milestone someone set is never changed. The milestone is a
   planning assignment from the refs at merge time, not proof that the change is in a release
   artifact.
 - **Promotion.** One pull request moves the flag to `experimental` or `stable`, runs `promote`,
