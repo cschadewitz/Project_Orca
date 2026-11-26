@@ -572,6 +572,7 @@ function Test-OrcaExisting($s) {
     if ((Test-Present $path) -and -not (Test-PlainFile $path)) { Refuse "$path is not a plain file this setup wrote. Repair it by hand." }
   }
   $null = Get-ExistingManifest $s
+  Test-OrcaTaskIdentity $s
   $current = Get-RootPath $s "current.txt"
   if (Test-Present $current) {
     $selected = [IO.File]::ReadAllText($current).Trim()
@@ -614,12 +615,59 @@ function Exit-OrcaFence($s) {
 }
 
 function Get-TaskXml {
-  # The task as rollback restores it, without its registration record, which registering it
-  # again rewrites.
+  # The task as rollback registers it again: all of it, its description (and so the setup's
+  # ownership marker) included.
   $task = Get-OurTask
   if ($null -eq $task) { return $null }
-  $xml = [string](Export-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName)
-  return ($xml -replace '(?s)<RegistrationInfo>.*?</RegistrationInfo>', '<RegistrationInfo />')
+  return [string](Export-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName)
+}
+
+function Get-TaskShape($xml) {
+  # For comparing a task with what it was: its whole definition but the registration date,
+  # which registering the same definition again may rewrite.
+  if ($null -eq $xml) { return $null }
+  return ([string]$xml -replace '(?s)<Date>.*?</Date>', '')
+}
+
+function Get-Sid([string]$account) {
+  if ($account -match '^S-1-') { return $account }
+  return (New-Object Security.Principal.NTAccount($account)).Translate([Security.Principal.SecurityIdentifier]).Value
+}
+
+function Get-TaskDrift($s, $task) {
+  # Why the managed task is not one of the two definitions this setup registers, as to who it
+  # runs as, with what privilege and when; $null when it is one. An identity or privilege this
+  # setup did not give it is never reused or replaced: it is refused for the person to look at.
+  try {
+    $runsAs = Get-Sid ([string]$task.Principal.UserId)
+  } catch {
+    return "it runs as $($task.Principal.UserId), which is not an account here"
+  }
+  if ($runsAs -ne [Security.Principal.WindowsIdentity]::GetCurrent().User.Value) { return "it runs as $($task.Principal.UserId), not $(Get-Account)" }
+  if ([string]$task.Principal.RunLevel -ne "Limited") { return "it runs with $($task.Principal.RunLevel) privileges, not Limited" }
+  $triggers = @($task.Triggers)
+  if ($triggers.Count -ne 1) { return "it has $($triggers.Count) triggers, not one" }
+  $kind = $triggers[0].CimClass.CimClassName
+  $logon = [string]$task.Principal.LogonType
+  if ($kind -eq "MSFT_TaskBootTrigger" -and $logon -eq "S4U") { return $null }
+  if ($kind -eq "MSFT_TaskLogonTrigger" -and $logon -eq "Interactive") {
+    try {
+      if ((Get-Sid ([string]$triggers[0].UserId)) -eq $runsAs) { return $null }
+    } catch {
+      $null = $_
+    }
+    return "it starts at the logon of $($triggers[0].UserId), not of $(Get-Account)"
+  }
+  return "it starts on $kind with logon type $logon, which this setup never registers"
+}
+
+function Test-OrcaTaskIdentity($s) {
+  # Read only, before any change: the managed task, if there is one, is still as this setup
+  # registered it as to identity, privilege and trigger.
+  $task = Get-OurTask
+  if (-not (Test-OurTask $task) -or (Get-TaskRoot $task) -ne $s.Root) { return }
+  $drift = Get-TaskDrift $s $task
+  if ($drift) { Refuse "The scheduled task $TaskPath$TaskName changed since this setup registered it: $drift. Check it, and remove it by hand to set up again." }
 }
 
 function Get-OrcaState($s) {
@@ -701,7 +749,7 @@ function Restore-OrcaState($s, $before, $staging) {
   }
   $now = Get-OrcaState $s
   if ($now.active -and -not $before.active) { & $attempt "stop" { Stop-OrcaDaemon $s } }
-  if ($now.task -cne $before.task) {
+  if ((Get-TaskShape $now.task) -cne (Get-TaskShape $before.task)) {
     & $attempt "scheduled task" {
       if ($null -eq $before.task) { Unregister-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -Confirm:$false }
       else { $null = Register-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -Xml $before.task -Force }
@@ -730,9 +778,14 @@ function Restore-OrcaState($s, $before, $staging) {
   foreach ($name in $OwnedFiles) {
     if ($after.files.$name -cne $before.files.$name) { $problems.Add("$name is not back as it was") }
   }
-  if ($after.task -cne $before.task) { $problems.Add("the scheduled task is not back as it was") }
+  if ((Get-TaskShape $after.task) -cne (Get-TaskShape $before.task)) { $problems.Add("the scheduled task is not back as it was") }
+  # Restored, it is this setup's again, for this directory: the next run accepts it as such.
+  if ($null -ne $before.task -and -not ((Test-OurTask (Get-OurTask)) -and (Get-TaskRoot (Get-OurTask)) -eq $s.Root)) {
+    $problems.Add("the scheduled task is not this setup's for $($s.Root) again")
+  }
   if ($after.current -cne $before.current) { $problems.Add("current.txt is not back as it was") }
   if ($after.active -and -not $before.active) { $problems.Add("the daemon is still running") }
+  if ($before.active -and -not $after.active) { $problems.Add("the daemon is not running again") }
   return , $problems
 }
 
@@ -1052,12 +1105,14 @@ function New-OrcaTaskDefinition($s, [bool]$atStartup) {
 }
 
 function Test-TaskCurrent($s, $task) {
-  # Ours, for this root, running this root's launcher as this account.
+  # Ours, for this root, running this root's launcher, as this account with limited privilege,
+  # at boot (S4U) or at its logon (interactive): one of the two definitions this setup registers.
   if (-not (Test-OurTask $task) -or (Get-TaskRoot $task) -ne $s.Root) { return $false }
-  $wanted = (New-OrcaTaskDefinition $s $true).Actions[0]
+  if (Get-TaskDrift $s $task) { return $false }
+  $wanted = New-OrcaTaskDefinition $s $true
   $action = $task.Actions[0]
-  return $action.Execute -eq $wanted.Execute -and $action.Arguments -eq $wanted.Arguments -and
-  [string]$task.Description -eq [string](New-OrcaTaskDefinition $s $true).Description
+  return $action.Execute -eq $wanted.Actions[0].Execute -and $action.Arguments -eq $wanted.Actions[0].Arguments -and
+  [string]$task.Description -eq [string]$wanted.Description
 }
 
 function Install-OrcaTask($s) {

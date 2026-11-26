@@ -169,6 +169,43 @@ try {
   Assert ($run.code -eq 0) "exit $($run.code)"
   Assert-Step $run "start" "repaired" "healthy"
 
+  Case "a failed repair registers the managed task back as it was, still this setup's, still running"
+  $xml = [string](Export-ScheduledTask -TaskPath "\ORCA\" -TaskName "orca-server")
+  # Same owner, identity and trigger, another action: a repair registers it again.
+  $drifted = $xml.Replace("</Arguments>", " </Arguments>")
+  Assert ($drifted -ne $xml) "the task has no arguments to change"
+  $null = Register-ScheduledTask -TaskPath "\ORCA\" -TaskName "orca-server" -Xml $drifted -Force
+  $run = Invoke-Setup "fail-health"
+  Assert ($run.code -eq 1) "exit $($run.code), not 1"
+  Assert-Step $run "task" "changed"
+  Assert-Step $run "cleanup" "ok"
+  $restored = Get-Task
+  Assert ($restored.Actions[0].Arguments.EndsWith(" ")) "the task was not put back as it was: $($restored.Actions[0].Arguments)"
+  Assert ([string]$restored.Description -like "orca-server-setup:*") "the restored task lost its owner: $($restored.Description)"
+  Assert ([string]$restored.State -eq "Running") "the restored task is $($restored.State)"
+  $run = Invoke-Setup "trust" -more @("-Inspect")
+  Assert ($run.code -eq 0) "inspect after the rollback exits $($run.code)"
+  $run = Invoke-Setup "trust"
+  Assert ($run.code -eq 0) "exit $($run.code)"
+  Assert-Step $run "task" "changed"
+  Assert ((Get-Step $run "start").detail -match "healthy") "the repaired task's daemon is not healthy"
+  Assert (-not (Get-Task).Actions[0].Arguments.EndsWith(" ")) "the repair did not register the task again"
+
+  Case "a managed task whose privilege changed is refused, not reused, with the same action and description"
+  $xml = [string](Export-ScheduledTask -TaskPath "\ORCA\" -TaskName "orca-server")
+  $task = Get-Task
+  $task.Principal.RunLevel = "Highest"
+  $null = Register-ScheduledTask -TaskPath "\ORCA\" -TaskName "orca-server" -InputObject $task -Force
+  try {
+    Assert ([string](Get-Task).Principal.RunLevel -eq "Highest") "the test could not raise the task's privilege"
+    $run = Invoke-Setup "trust"
+    Assert ($run.code -eq 2) "exit $($run.code), not 2"
+    Assert-Step $run "existing" "refused" "Highest privileges"
+    Assert ([string](Get-Task).Principal.RunLevel -eq "Highest") "the refused task was changed"
+  } finally {
+    $null = Register-ScheduledTask -TaskPath "\ORCA\" -TaskName "orca-server" -Xml $xml -Force
+  }
+
   Case "a setup confirmed as a first install refuses a repair, and changes nothing"
   $run = Invoke-Setup "trust" -more @("-ExpectCurrent", "none")
   Assert ($run.code -eq 2) "exit $($run.code), not 2"
