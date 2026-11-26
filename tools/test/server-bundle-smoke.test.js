@@ -138,7 +138,7 @@ it.skipIf(process.platform === "win32")(
     const start = () => {
       const child = new EventEmitter();
       child.pid = 424242;
-      child.kill = (signal = "SIGTERM") => signals.push(signal);
+      child.kill = (signal) => signals.push(signal);
       return child;
     };
     const started = Date.now();
@@ -149,6 +149,37 @@ it.skipIf(process.platform === "win32")(
     );
     expect(signals).toEqual(["SIGTERM", "SIGKILL"]);
     expect(Date.now() - started).toBeLessThan(10_000);
+    expect(readdirSync(scratch)).toEqual([]);
+  },
+);
+
+it.skipIf(process.platform === "win32")(
+  "escalates past a signal that could not be delivered to a live daemon, and lets go of it",
+  async () => {
+    const signals = [];
+    let unref = false;
+    let destroyed = false;
+    const start = () => {
+      const child = new EventEmitter();
+      child.pid = 434343;
+      child.stderr = Object.assign(new EventEmitter(), { destroy: () => (destroyed = true) });
+      child.unref = () => (unref = true);
+      child.kill = (signal) => {
+        signals.push(signal);
+        // What Node does when the signal cannot be delivered: `error` on a child that has a pid.
+        setImmediate(() => child.emit("error", new Error(`kill EPERM (${signal})`)));
+        return false;
+      };
+      return child;
+    };
+    await expect(
+      smokeBundle(bundle, { ...quiet, tmp: scratch, start, helloMs: 500, requestMs: 200, stopMs: 200, killMs: 200 }),
+    ).rejects.toThrow(
+      /no hello within 500 ms.*; and the daemon \(process 434343\) did not confirm it stopped after SIGKILL \(kill EPERM \(SIGTERM\); kill EPERM \(SIGKILL\)\)/s,
+    );
+    expect(signals).toEqual(["SIGTERM", "SIGKILL"]);
+    expect(destroyed).toBe(true);
+    expect(unref).toBe(true);
     expect(readdirSync(scratch)).toEqual([]);
   },
 );

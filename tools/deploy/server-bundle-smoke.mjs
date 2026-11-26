@@ -125,14 +125,19 @@ export async function smokeBundle(
     });
     let stderr = "";
     child.stderr?.on("data", (chunk) => (stderr = (stderr + chunk).slice(-8192)));
-    // Ended: it exited, or it never started (a failed spawn emits `error`, not `exit`).
+    // Ended: it exited, or it never started. A failed spawn emits `error` and has no pid; an
+    // `error` on a started child (a signal that could not be delivered) says nothing about
+    // whether it still runs, and only its observed exit confirms that it stopped.
     let gone = false;
     let failedStart;
+    const signalErrors = [];
     const ended = new Promise((ok) => {
       child.once("exit", () => ok());
-      child.once("error", (error) => {
-        failedStart ??= error;
-        ok();
+      child.on("error", (error) => {
+        if (child.pid === undefined) {
+          failedStart ??= error;
+          ok();
+        } else signalErrors.push(error.message);
       });
     }).then(() => (gone = true));
     let failure;
@@ -163,12 +168,23 @@ export async function smokeBundle(
     }
     // Stop it, each wait bounded: SIGTERM, then SIGKILL, then report a stop never confirmed.
     if (!gone) {
-      child.kill();
+      const signal = (name) => {
+        try {
+          child.kill(name);
+        } catch (error) {
+          signalErrors.push(error instanceof Error ? error.message : String(error));
+        }
+      };
+      signal("SIGTERM");
       if (!(await within(ended, stopMs))) {
-        child.kill("SIGKILL");
+        signal("SIGKILL");
         if (!(await within(ended, killMs))) {
-          const unstopped = `the daemon (process ${child.pid}) did not confirm it stopped after SIGKILL`;
+          const errors = signalErrors.length ? ` (${signalErrors.join("; ")})` : "";
+          const unstopped = `the daemon (process ${child.pid}) did not confirm it stopped after SIGKILL${errors}`;
           failure = new Refused(failure ? `${failure.message}; and ${unstopped}` : unstopped);
+          // Nothing of it may keep this process open past the last deadline.
+          child.stderr?.destroy();
+          child.unref?.();
         }
       }
     }
