@@ -521,6 +521,10 @@ it("binds each Windows server bundle run to its version and commit, separately f
   expect(script).toContain("echo release-server-bundle-windows.yml");
   for (const job of ["sign", "verify"]) expect(script).toContain(`"${file.jobs[job].name}"`);
   expect(file.jobs.verify["runs-on"]).toMatch(/^windows-/);
+  // The build runs the release commit's code in the default branch's context: no shared cache.
+  const node = file.jobs.build.steps.find((step) => step.uses?.startsWith("actions/setup-node@"));
+  expect(node.with["package-manager-cache"]).toBe(false);
+  expect(node.with.cache).toBeUndefined();
   expect(file.jobs.attach.name).toBe(
     "windows server bundle receipt: release ${{ needs.resolve.outputs.id }} v${{ inputs.version }} ${{ inputs.source_sha }} ${{ needs.verify.outputs.receipt }}",
   );

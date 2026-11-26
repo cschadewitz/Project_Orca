@@ -5,7 +5,9 @@
 # the Linux bundle; a reconcile every 6 hours dispatches it again for any release on a version
 # line newer than Latest that has no Windows record, so an interrupted run recovers by itself.
 # It is optional on a release while Windows hosts are incubating: release-attach.sh publishes a
-# final without it, but never with only part of it or without its receipt. Nothing here needs
+# final without it, or with all of it and its receipt; an attach interrupted before its record
+# leaves files nothing vouched for, which publishing removes (and only those) before it goes on
+# without the Windows bundle. Nothing here needs
 # a person or a stored key.
 #
 #   resolve  the release vVERSION exists, targets SOURCE_SHA, and SOURCE_SHA is on its protected
@@ -98,6 +100,7 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
+          package-manager-cache: false
 
       - run: pnpm install --frozen-lockfile
         env:

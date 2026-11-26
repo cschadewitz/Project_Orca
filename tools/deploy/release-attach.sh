@@ -824,6 +824,25 @@ case "${1:-}" in
       arm_records=$(head -n1 <<<"$arm_records")
     fi
     json=$(validate "$id" "$sha" "$version" "$records" "$arm_records" >/dev/null && gh api "repos/$REPO/releases/$id") || exit 1
+    # An interrupted Windows server bundle attach (#1238): some or all of its files and no record
+    # at all. Nothing has vouched for them, and the attach and this publish share one queue, so
+    # nothing is still writing them. Only those files are removed, each after a fresh read that
+    # the draft is unchanged and still has no Windows record, and the final publishes without
+    # the optional Windows bundle. A recorded one is never removed: it must be complete and
+    # proven by its receipt below, or the publish stops.
+    if SP=win-x64 server_applies "$version" &&
+      [[ "$(SP=win-x64 server_state "$(jq -r '.body // ""' <<<"$json")")" == none ]]; then
+      for name in $(SP=win-x64 server_names "$version"); do
+        stale=$(jq -r --arg n "$name" '[.assets[] | select(.name == $n) | .id] | .[0] // ""' <<<"$json")
+        [[ -n "$stale" ]] || continue
+        fresh=$(validate "$id" "$sha" "$version" "$records" "$arm_records" >/dev/null && gh api "repos/$REPO/releases/$id") || exit 1
+        [[ "$(SP=win-x64 server_state "$(jq -r '.body // ""' <<<"$fresh")")" == none ]] ||
+          fail "release $id gained a Windows server bundle record; nothing removed"
+        gh api -X DELETE "repos/$REPO/releases/assets/$stale" >/dev/null
+        note "Removed $name, left by an interrupted Windows server bundle attach with no record, from release $id; it publishes without the Windows bundle."
+      done
+      json=$(validate "$id" "$sha" "$version" "$records" "$arm_records" >/dev/null && gh api "repos/$REPO/releases/$id") || exit 1
+    fi
     digests() { jq -r --arg d "$deb_name" --arg e "$exe_name" --arg a "$arm_name" '[(.assets | length), ([.assets[] | select(.name == $d) | .digest] | .[0] // ""), ([.assets[] | select(.name == $e) | .digest] | .[0] // ""), ([.assets[] | select(.name == $a) | .digest] | .[0] // "")] | map(tostring) | join(" ")'; }
     # The installers, plus from the 0.8 line the server bundle's three files and its receipt.
     count=$([[ -n "$arm" ]] && echo 3 || echo 2) server="" with="" win=""

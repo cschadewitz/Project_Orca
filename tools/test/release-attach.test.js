@@ -1388,14 +1388,50 @@ describe.skipIf(process.platform === "win32")("release-attach.sh", () => {
       });
 
       it.each([
-        [
-          "its files but no record",
-          (st) => {
-            withWindows(st);
-            st.releases[0].body = st.releases[0].body.replace(`\n\n${winRecord()}`, "");
-          },
-          "has no Windows server bundle record",
-        ],
+        ["all of its files", () => true],
+        ["only part of its files", (file) => !file.name.endsWith(".manifest.json.sigstore.json")],
+      ])("removes %s left by an interrupted attach with no record, and publishes without it", (_label, keep) => {
+        const f = setup();
+        ready(f);
+        f.edit((st) => {
+          withWindows(st);
+          st.releases[0].body = st.releases[0].body.replace(`\n\n${winRecord()}`, "");
+          st.releases[0].assets = st.releases[0].assets.filter(
+            (a) => !a.name.includes("-win-x64.") || !a.name.startsWith("orca-server-") || keep(a),
+          );
+        });
+        const before = f.writes().length;
+        const result = publishEarly(f);
+        expect(result.status, result.stderr).toBe(0);
+        const r = f.state().releases[0];
+        expect(r.draft).toBe(false);
+        expect(r.assets.filter((a) => a.name.startsWith("orca-server-") && a.name.includes("-win-x64."))).toEqual([]);
+        expect(r.assets).toHaveLength(6);
+        const deletes = f
+          .writes()
+          .slice(before)
+          .filter((w) => w[0] === "delete");
+        expect(deletes.map((w) => w[1]).sort()).toEqual(
+          WIN.filter(keep)
+            .map((a) => String(a.id))
+            .sort(),
+        );
+      });
+
+      it("never removes a recorded Windows bundle, even an incomplete one", () => {
+        const f = setup();
+        ready(f);
+        f.edit((st) => {
+          withWindows(st);
+          st.releases[0].assets = st.releases[0].assets.filter((a) => !a.name.endsWith("-win-x64.zip"));
+        });
+        const result = publishEarly(f);
+        expect(result.status).not.toBe(0);
+        expect(f.writes().filter((w) => w[0] === "delete")).toEqual([]);
+        expect(f.state().releases[0].draft).toBe(true);
+      });
+
+      it.each([
         [
           "a record but only part of its files",
           (st) => {

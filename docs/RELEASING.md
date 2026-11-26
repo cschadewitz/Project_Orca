@@ -283,7 +283,14 @@ server commands of `release-attach.sh` work on it with `SERVER_PLATFORM=win-x64`
 
 While Windows hosts incubate, the Windows bundle is **optional** on a release: a final is
 published without it, or with all three files, their record and its receipt, never with only
-part of it. Release (publish final) checks that receipt exactly as it checks the Linux one. A
+part of it. Release (publish final) checks that receipt exactly as it checks the Linux one.
+An attach interrupted before it wrote its record leaves some or all of the Windows files with
+no record: nothing vouched for them, and since that attach and publishing share one queue,
+nothing is still writing them. Publishing removes exactly those files (each after a fresh read
+that the draft still has no Windows record) and publishes without the Windows bundle, so an
+interrupted attach never holds up a final. A **recorded** Windows bundle is never removed: if
+its files or receipt do not match, publishing stops, and the fix is by hand as for the Linux
+bundle. A
 Windows bundle that arrives after the final is published is not attached (a final is only
 written while it is a draft); the next release carries one.
 
