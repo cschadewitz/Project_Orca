@@ -199,7 +199,7 @@ describe("the Windows launcher and PATH edit", () => {
 it("gives new app profiles orca-cli, keeps an omitted command meaning orca, and installs both names", () => {
   const protocol = read("packages/protocol/src/remote-access.ts");
   expect(protocol).toContain('export const DEFAULT_SERVER_COMMAND = "orca-cli";');
-  expect(protocol).toContain('export const LEGACY_SERVER_COMMAND = "orca";');
+  expect(protocol).toContain('export const LEGACY_SERVER_COMMAND = "orca";'); // rename-keep: an omitted command keeps naming the old CLI
   const cli = JSON.parse(read("packages/cli/package.json"));
   expect(cli.bin).toEqual({ orca: "./dist/main.js", "orca-cli": "./dist/main.js" });
   // An omitted command resolves to the legacy name only, through the one constant, never a literal.
