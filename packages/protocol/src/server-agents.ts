@@ -2,7 +2,7 @@
  * Install and sign in agents on a managed server from the client (#1236), Node-only like
  * `server-courier`: the server needs no npm, no registry access and no terminal.
  *
- * This computer downloads the pinned npm tarballs for the agent (`HOST_AGENT_PACKAGES`, each
+ * This computer downloads the pinned npm tarballs for the agent (`HOST_AGENT_LOCK`, each
  * checked against npm's sha512 integrity, and kept in a cache here so a second server needs no
  * download), carries them over the profile's pinned ssh into a courier directory, and
  * `tools/deploy/orca-host-agents.py`, sent as `python3 -` like the setup, checks them again and
@@ -29,7 +29,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { HOST_AGENT_PACKAGES, type HostAgentPackage } from "./host-agents-lock.js";
+import { HOST_AGENT_LOCK, type HostAgentPackage } from "./host-agents-lock.js";
 import type { RemoteCommand } from "./remote-access.js";
 import {
   CourierRefused,
@@ -44,6 +44,8 @@ import {
 
 /** The program the server runs, as shipped: `server-setup/` in a packaged app, `tools/deploy/` in a checkout. */
 export const HOST_AGENTS_SCRIPT = "orca-host-agents.py";
+/** The reviewed lock it checks every carried package against, shipped beside it. */
+export const HOST_AGENTS_LOCK_FILE = "host-agents.lock.json";
 
 /** What this ORCA can put on a server, by agent id. */
 export interface HostAgent {
@@ -55,8 +57,18 @@ export interface HostAgent {
 }
 
 export const HOST_AGENTS: Readonly<Record<string, HostAgent>> = {
-  codex: { id: "codex", name: "Codex", version: "0.171.0", loginOrigins: ["https://auth.openai.com"] },
-  copilot: { id: "copilot", name: "GitHub Copilot CLI", version: "1.0.114", loginOrigins: ["https://github.com"] },
+  codex: {
+    id: "codex",
+    name: "Codex",
+    version: HOST_AGENT_LOCK.codex!.version,
+    loginOrigins: ["https://auth.openai.com"],
+  },
+  copilot: {
+    id: "copilot",
+    name: "GitHub Copilot CLI",
+    version: HOST_AGENT_LOCK.copilot!.version,
+    loginOrigins: ["https://github.com"],
+  },
 };
 
 /** Thrown when an agent cannot be installed or signed in; the server says what changed, if anything. */
@@ -71,9 +83,15 @@ export function hostAgent(id: string): HostAgent {
   return agent;
 }
 
-/** `orca-host-agents.py`, from the directory the setup's scripts are in. */
-export function hostAgentsProgram(dir: string): string {
-  return readFileSync(join(dir, HOST_AGENTS_SCRIPT), "utf8");
+/**
+ * `orca-host-agents.py`, from the directory the setup's scripts are in, with the lock shipped
+ * beside it embedded ahead of it: the server checks what was carried against this lock, never
+ * against the carried list alone. `testing` replaces the lock and lowers the entry limit.
+ */
+export function hostAgentsProgram(dir: string, testing?: { lock?: string; entryLimit?: number }): string {
+  const lock = testing?.lock ?? readFileSync(join(dir, HOST_AGENTS_LOCK_FILE), "utf8");
+  const limit = testing?.entryLimit === undefined ? "" : `ENTRY_LIMIT = ${Math.trunc(testing.entryLimit)}\n`;
+  return `EMBEDDED_LOCK = "${Buffer.from(lock).toString("base64")}"\n${limit}${readFileSync(join(dir, HOST_AGENTS_SCRIPT), "utf8")}`;
 }
 
 const TARBALL_LIMIT = 1024 ** 3;
@@ -109,7 +127,7 @@ export interface PrepareHostAgentOptions {
  */
 export async function prepareHostAgent(id: string, options: PrepareHostAgentOptions): Promise<PreparedHostAgent> {
   const agent = hostAgent(id);
-  const packages = options.packages ?? HOST_AGENT_PACKAGES[agent.id] ?? [];
+  const packages = options.packages ?? HOST_AGENT_LOCK[agent.id]?.packages ?? [];
   if (!packages.length) throw new HostAgentRefused(`No packages are pinned for ${agent.name}.`);
   mkdirSync(options.cacheDir, { recursive: true, mode: 0o700 });
   const dir = mkdtempSync(join(tmpdir(), "orca-host-agent-"));
@@ -246,9 +264,13 @@ export async function installHostAgent(
 /** One agent's state on the server. */
 export interface HostAgentStatus {
   agent: string;
-  /** Installed versions, oldest first. */
+  /** The pinned version, when it is installed exactly as recorded. */
   versions: string[];
+  /** Other versions found there, which this ORCA does not run. */
+  others: string[];
   signedIn: "yes" | "no" | "unknown";
+  /** Why the pinned version there cannot be used (changed since install, say). */
+  problem?: string;
 }
 
 /** Every known agent's state on the server, from one run of the program there. */
@@ -261,15 +283,17 @@ export async function hostAgentStatus(transport: HostAgentTransport, program: st
   if (ran.code !== 0 || !list) throw new HostAgentRefused("The server could not report its agents.");
   return list.flatMap((item): HostAgentStatus[] => {
     if (!item || typeof item !== "object") return [];
-    const { agent, versions, signedIn } = item as Record<string, unknown>;
+    const { agent, versions, others, signedIn, problem } = item as Record<string, unknown>;
     if (typeof agent !== "string" || !Object.hasOwn(HOST_AGENTS, agent)) return [];
+    const list = (value: unknown) =>
+      Array.isArray(value) ? value.filter((v): v is string => typeof v === "string" && /^\d+\.\d+\.\d+$/.test(v)) : [];
     return [
       {
         agent,
-        versions: Array.isArray(versions)
-          ? versions.filter((v): v is string => typeof v === "string" && /^\d+\.\d+\.\d+$/.test(v))
-          : [],
+        versions: list(versions),
+        others: list(others),
         signedIn: signedIn === "yes" || signedIn === "no" ? signedIn : "unknown",
+        ...(typeof problem === "string" ? { problem: problem.slice(0, 2000) } : {}),
       },
     ];
   });

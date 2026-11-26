@@ -292,9 +292,14 @@ orca-cli remote agent status you@build-1 --tailnet
 `install` downloads the agent's pinned npm packages on this computer (the versions ORCA's
 acceptance runs use, each checked against npm's sha512 integrity, and kept in
 `~/.cache/orca/courier/agents/` so the next host needs no download), copies them over the host
-key `remote add` pinned, and the host checks them again and unpacks them into
-`~/.local/share/orca-server/agents/<agent>/<version>`. No package's install script runs, and an
-install already at that version is accepted only if it is exactly the same packages. The
+key `remote add` pinned. On the host, the program ORCA sends checks the carried list against the
+package lock shipped with this ORCA (`tools/deploy/host-agents.lock.json`), not against what was
+carried, and every tarball against its sha512 there. It unpacks them member by member (one
+package directory, plain files and directories only, no path twice, bounded in entries and
+bytes) into `~/.local/share/orca-server/agents/<agent>/<version>`, and records every file it
+wrote. No package's install script runs. Nothing installed is reused, reported as installed or
+run (status, sign-in) unless it is still exactly that record, owned by the account and closed
+to other writers, with the profile closed to other accounts. The
 command prints the `agents:` entry for the server's `orca.config.yaml`. Each agent gets its own
 profile on the host, `~/.local/share/orca-server/agents/<agent>/home` (`CODEX_HOME`,
 `COPILOT_HOME`), never the account's everyday one.

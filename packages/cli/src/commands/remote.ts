@@ -456,7 +456,7 @@ async function agentCommand(ctx: CommandContext, action: string, destination: st
           ctx.out(
             `${HOST_AGENTS[item.agent]!.name}: ${
               item.versions.length ? `installed ${item.versions.join(", ")}` : "not installed"
-            }; signed in: ${item.signedIn}`,
+            }; signed in: ${item.signedIn}${item.problem ? `. Not usable: ${item.problem}` : ""}`,
           );
       return 0;
     } finally {

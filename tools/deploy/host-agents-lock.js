@@ -1,7 +1,10 @@
 #!/usr/bin/env node
 /**
- * Regenerate the pinned agent packages a managed server can be given (#1236):
- * `packages/protocol/src/host-agents-lock.ts`. Run it after changing a version below, and review
+ * Regenerate the pinned agent packages a managed server can be given (#1236): one reviewed lock,
+ * written twice from the same data. `tools/deploy/host-agents.lock.json` is what the server-side
+ * program (`orca-host-agents.py`) checks every carried package against; it ships beside it.
+ * `packages/protocol/src/host-agents-lock.ts` is what the client downloads and carries. A test
+ * holds the two equal. Run this after changing a version below, and review
  * the diff: every tarball and its sha512 integrity come from npm's own lockfile resolution for
  * the server's one platform (Linux x64, glibc), so the client installs exactly this list there
  * and npm never runs on the server.
@@ -14,16 +17,18 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-/** The versions the acceptance workflows pin; change them together. */
+/** The versions the acceptance workflows pin; change them together. `version` names the install. */
 const AGENTS = {
-  codex: ["@agentclientprotocol/codex-acp@2.9.0", "@openai/codex@0.171.0"],
-  copilot: ["@github/copilot-linux-x64@1.0.114"],
+  codex: { version: "0.171.0", specs: ["@agentclientprotocol/codex-acp@2.9.0", "@openai/codex@0.171.0"] },
+  copilot: { version: "1.0.114", specs: ["@github/copilot-linux-x64@1.0.114"] },
 };
 
-const out = join(dirname(fileURLToPath(import.meta.url)), "../../packages/protocol/src/host-agents-lock.ts");
+const here = dirname(fileURLToPath(import.meta.url));
+const out = join(here, "../../packages/protocol/src/host-agents-lock.ts");
+const json = join(here, "host-agents.lock.json");
 const matches = (list, value) => !list || list.includes(value);
 const lock = {};
-for (const [id, specs] of Object.entries(AGENTS)) {
+for (const [id, { version, specs }] of Object.entries(AGENTS)) {
   const dir = mkdtempSync(join(tmpdir(), "orca-host-agents-"));
   try {
     writeFileSync(join(dir, "package.json"), '{"name":"orca-host-agent","private":true}\n');
@@ -43,7 +48,7 @@ for (const [id, specs] of Object.entries(AGENTS)) {
       { cwd: dir, stdio: ["ignore", "ignore", "inherit"] },
     );
     const { packages } = JSON.parse(readFileSync(join(dir, "package-lock.json"), "utf8"));
-    lock[id] = Object.entries(packages)
+    const list = Object.entries(packages)
       .filter(
         ([path, pkg]) => path && matches(pkg.os, "linux") && matches(pkg.cpu, "x64") && matches(pkg.libc, "glibc"),
       )
@@ -53,10 +58,15 @@ for (const [id, specs] of Object.entries(AGENTS)) {
         return { path, version: pkg.version, tarball: pkg.resolved, integrity: pkg.integrity };
       })
       .sort((a, b) => a.path.localeCompare(b.path));
+    lock[id] = { version, packages: list };
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 }
+writeFileSync(
+  json,
+  JSON.stringify({ schema: "orca-host-agents-lock/1", platform: "linux-x64", agents: lock }, null, 2) + "\n",
+);
 writeFileSync(
   out,
   `/**
@@ -72,7 +82,13 @@ export interface HostAgentPackage {
   integrity: string;
 }
 
-export const HOST_AGENT_PACKAGES: Readonly<Record<string, readonly HostAgentPackage[]>> = ${JSON.stringify(lock, null, 2)};
+export interface HostAgentLock {
+  /** The install's version: the agent's own. */
+  version: string;
+  packages: readonly HostAgentPackage[];
+}
+
+export const HOST_AGENT_LOCK: Readonly<Record<string, HostAgentLock>> = ${JSON.stringify(lock, null, 2)};
 `,
 );
-execFileSync("npx", ["prettier", "--write", out], { stdio: "inherit" });
+execFileSync("npx", ["prettier", "--write", out, json], { stdio: "inherit" });
