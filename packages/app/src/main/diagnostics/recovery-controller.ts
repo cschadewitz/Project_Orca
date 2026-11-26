@@ -205,6 +205,7 @@ export class RecoveryController {
         ? { lastSaveOutcome: this.lastSaveOutcome, saveAdmittedBeforeRevocation: this.saveAdmittedBeforeRevocation }
         : {}),
       ...(this.preparedReport ? { activeExportHandle: this.preparedReport.handle } : {}),
+      ...(this.noStorage ? { platformStorage: false as const } : {}),
     };
   }
   async setEnabled(enabled: boolean, scopeVersion: number): Promise<DiagnosticsResult<DiagnosticsStatus>> {

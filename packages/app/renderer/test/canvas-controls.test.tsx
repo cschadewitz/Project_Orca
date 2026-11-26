@@ -65,7 +65,13 @@ afterEach(() => {
 });
 
 /** The canvas the viewer mounts, with the surface's selection and expansion around it. */
-function Canvas({ workflow = AI_SDLC }: { workflow?: WorkflowView }): JSX.Element {
+function Canvas({
+  workflow = AI_SDLC,
+  size = VIEWPORT,
+}: {
+  workflow?: WorkflowView;
+  size?: typeof VIEWPORT;
+}): JSX.Element {
   const [selected, setSelected] = useState<string | undefined>(undefined);
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
   return (
@@ -82,21 +88,28 @@ function Canvas({ workflow = AI_SDLC }: { workflow?: WorkflowView }): JSX.Elemen
         })
       }
       label={`${workflow.name} graph`}
-      measure={() => VIEWPORT}
+      measure={() => size}
     />
   );
 }
 
-async function mount(): Promise<{ viewport: HTMLElement; scene: HTMLElement; controls: HTMLElement }> {
+async function mount({ atRest = true, size = VIEWPORT } = {}): Promise<{
+  viewport: HTMLElement;
+  scene: HTMLElement;
+  controls: HTMLElement;
+}> {
   const { Providers } = h;
   render(
     <Providers>
-      <Canvas />
+      <Canvas size={size} />
     </Providers>,
   );
   const viewport = screen.getByRole("listbox", { name: `${AI_SDLC.name} graph` });
   // The keys are registered from an effect; one empty act lets every press below meet them.
   await act(async () => {});
+  // ai-sdlc is wider than the canvas, so it opens fitted (#1112); the tests of the controls
+  // start from rest, which is `0`.
+  if (atRest) press(viewport, "0", "Digit0");
   return {
     viewport,
     scene: viewport.querySelector<HTMLElement>(".orca-wfcanvas__scene")!,
@@ -142,6 +155,18 @@ function wheel(target: HTMLElement, init: WheelInit): boolean {
 }
 
 describe("the zoom controls", () => {
+  /* #1112: a wide graph opened at 100% showed its first few nodes and nothing to say there was
+     more. It opens fitted; a graph that fits at 100% opens at rest. */
+  it("opens a graph wider than the canvas fitted, and one that fits at rest", async () => {
+    const wide = await mount({ atRest: false });
+    expect(wide.scene.style.transform).toBe(transformOf(fitView(contentOf(AI_SDLC), VIEWPORT)));
+    cleanup();
+
+    const roomy = { width: contentOf(AI_SDLC).width + 100, height: contentOf(AI_SDLC).height + 100 };
+    const fits = await mount({ atRest: false, size: roomy });
+    expect(fits.scene.style.transform).toBe(transformOf(REST));
+  });
+
   it("are the same zoom as the keys: a click and a press move one state, about the canvas's middle", async () => {
     const { viewport, scene, controls } = await mount();
     const middle = { x: VIEWPORT.width / 2, y: VIEWPORT.height / 2 };
