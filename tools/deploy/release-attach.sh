@@ -838,6 +838,11 @@ case "${1:-}" in
         fresh=$(validate "$id" "$sha" "$version" "$records" "$arm_records" >/dev/null && gh api "repos/$REPO/releases/$id") || exit 1
         [[ "$(SP=win-x64 server_state "$(jq -r '.body // ""' <<<"$fresh")")" == none ]] ||
           fail "release $id gained a Windows server bundle record; nothing removed"
+        # The same asset, still under that name, and the only one with it: anything else changed
+        # the draft since the first read, so nothing is removed.
+        [[ "$(jq -r --arg n "$name" '[.assets[] | select(.name == $n) | .id | tostring] | join(" ")' <<<"$fresh")" == "$stale" &&
+          "$(jq -r --arg i "$stale" '[.assets[] | select((.id | tostring) == $i) | .name] | join(" ")' <<<"$fresh")" == "$name" ]] ||
+          fail "release $id's $name changed since it was read; nothing removed"
         gh api -X DELETE "repos/$REPO/releases/assets/$stale" >/dev/null
         note "Removed $name, left by an interrupted Windows server bundle attach with no record, from release $id; it publishes without the Windows bundle."
       done

@@ -87,6 +87,12 @@ if (method === "DELETE" && (m = path.match(/^releases\/assets\/(\d+)$/))) {
     log(["patch", m[1], ...Object.keys(fields)]);
   } else {
     state.reads = (state.reads || 0) + 1;
+    // FAKE_RENAME_AT_READ=k:ID:NAME renames asset ID on the k-th read, as a maintainer editing
+    // the draft between two of the script's reads would.
+    if (process.env.FAKE_LOG_READS) log(["read", m[1], state.reads]);
+    const rename = (process.env.FAKE_RENAME_AT_READ || "").split(":");
+    if (rename.length === 3 && String(state.reads) === rename[0])
+      for (const a of r.assets) if (String(a.id) === rename[1]) a.name = rename[2];
     if (String(state.reads) === process.env.FAKE_PUBLISH_AT_READ) {
       r.draft = false;
       r.published_at = "2026-11-21T22:00:00Z";
@@ -1416,6 +1422,43 @@ describe.skipIf(process.platform === "win32")("release-attach.sh", () => {
             .map((a) => String(a.id))
             .sort(),
         );
+      });
+
+      it("removes nothing when an unrecorded Windows file changed since it was read", () => {
+        const unrecorded = () => {
+          const f = setup();
+          ready(f);
+          f.edit((st) => {
+            withWindows(st);
+            st.releases[0].body = st.releases[0].body.replace(`\n\n${winRecord()}`, "");
+          });
+          return f;
+        };
+        // Where the fresh read before the first delete falls: the last read of the draft before
+        // that delete, in an undisturbed run.
+        const probe = unrecorded();
+        const before = probe.writes().length;
+        expect(
+          probe.run(WIN_ATTACH, ["publish", "7", "0.8.0", SHA, DEB.digest, probe.digest], { FAKE_LOG_READS: "1" })
+            .status,
+        ).toBe(0);
+        const log = probe.writes().slice(before);
+        const fresh = log
+          .slice(
+            0,
+            log.findIndex((w) => w[0] === "delete"),
+          )
+          .findLast((w) => w[0] === "read")[2];
+        // At exactly that read a maintainer renames the zip's asset to another Windows name,
+        // which every other check still accepts.
+        const f = unrecorded();
+        const result = f.run(WIN_ATTACH, ["publish", "7", "0.8.0", SHA, DEB.digest, f.digest], {
+          FAKE_RENAME_AT_READ: `${fresh}:${WIN[0].id}:${WIN[1].name}`,
+        });
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("changed since it was read; nothing removed");
+        expect(f.writes().filter((w) => w[0] === "delete")).toEqual([]);
+        expect(f.state().releases[0].draft).toBe(true);
       });
 
       it("never removes a recorded Windows bundle, even an incomplete one", () => {
