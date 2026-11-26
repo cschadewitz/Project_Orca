@@ -33,6 +33,7 @@ export default defineConfig({
       "@orca/protocol/tailnet": src("protocol", "tailnet"),
       "@orca/protocol/server-courier": src("protocol", "server-courier"),
       "@orca/protocol/server-repository": src("protocol", "server-repository"),
+      "@orca/protocol/server-agents": src("protocol", "server-agents"),
       "@orca/protocol": pkg("protocol"),
       "@orca/daemon": pkg("daemon"),
       "@orca/design": pkg("design"),

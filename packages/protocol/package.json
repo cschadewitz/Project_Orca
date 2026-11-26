@@ -38,6 +38,10 @@
       "types": "./dist/server-repository.d.ts",
       "import": "./dist/server-repository.js"
     },
+    "./server-agents": {
+      "types": "./dist/server-agents.d.ts",
+      "import": "./dist/server-agents.js"
+    },
     "./tailnet": {
       "types": "./dist/tailnet.d.ts",
       "import": "./dist/tailnet.js"

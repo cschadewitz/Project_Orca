@@ -280,6 +280,34 @@ name a pushed `gitRef`. To set them from this computer, connect the app to the m
 and use Config > Raw: Validate and review, Save reviewed changes, then Apply saved
 configuration.
 
+**Installing and signing in agents there** (#1236). The host needs no npm, no access to the npm
+registry and no terminal:
+
+```sh
+orca-cli remote agent install you@build-1 --tailnet --agent codex      # or copilot
+orca-cli remote agent login you@build-1 --tailnet --agent codex
+orca-cli remote agent status you@build-1 --tailnet
+```
+
+`install` downloads the agent's pinned npm packages on this computer (the versions ORCA's
+acceptance runs use, each checked against npm's sha512 integrity, and kept in
+`~/.cache/orca/courier/agents/` so the next host needs no download), copies them over the host
+key `remote add` pinned, and the host checks them again and unpacks them into
+`~/.local/share/orca-server/agents/<agent>/<version>`. No package's install script runs, and an
+install already at that version is accepted only if it is exactly the same packages. The
+command prints the `agents:` entry for the server's `orca.config.yaml`. Each agent gets its own
+profile on the host, `~/.local/share/orca-server/agents/<agent>/home` (`CODEX_HOME`,
+`COPILOT_HOME`), never the account's everyday one.
+
+`login` runs the agent's own sign-in on the host with no terminal, so it uses a device code: the
+command prints the agent's sign-in page (only a link on that agent's own sign-in site is shown)
+and the code, and you approve it in your browser here. The agent writes its credential on the
+host; no key or token goes from this computer to the host. Whether your agent plan allows the
+same account on several machines is between you and its provider. Codex (`codex login
+--device-auth`) and GitHub Copilot CLI (`copilot login --device-code`) are supported; Claude
+Code's sign-in asks for a code to be pasted back, which comes later. The host needs `python3`
+3.8.17, 3.9.17, 3.10.12, 3.11.4 or later, for safe unpacking.
+
 **Policy notes.** The default tailnet policy lets you SSH to machines you own. If you tag a host
 (for example `tag:orca-server`), it leaves `autogroup:self`, so add a narrow SSH rule for your
 own devices and the account ORCA logs in as. Avoid broad `autogroup:member` rules.

@@ -63,11 +63,11 @@ extraResources:
     to: daemon
     filter:
       - "**/*.mjs"
-  # Server setup (#881): the app sends these two to a machine it makes an ORCA server, so
-  # they are this build's own, never fetched.
+  # Server setup (#881): the app sends these to a machine it makes an ORCA server (and, for
+  # agents there, #1236), so they are this build's own, never fetched.
   - from: ../../tools/deploy
     to: server-setup
-    filter: ["orca-server-setup.py", "orca-release.py"]
+    filter: ["orca-server-setup.py", "orca-release.py", "orca-host-agents.py"]
 
 # Both architectures on every platform that has two. A desktop artifact that only runs on
 # the architecture the runner happened to have is the bug this spells out to avoid: GitHub's

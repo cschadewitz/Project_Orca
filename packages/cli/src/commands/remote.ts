@@ -22,7 +22,9 @@
  * and the host keys the tailnet advertises are what ssh checks the server against (#1227).
  * `--push-bundle` carries the signed bundle from this computer for a host with no internet
  * access (#1234). `orca remote push-repo` puts a repository on such a server from this computer,
- * through the host key `remote add` pinned (#1235).
+ * through the host key `remote add` pinned (#1235). `orca remote agent install|status|login`
+ * installs a pinned agent there from this computer and signs it in with the agent's own device
+ * code, approved in this computer's browser (#1236).
  */
 import { existsSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
@@ -57,7 +59,7 @@ import {
   type ReadTailnetOptions,
   type TailnetPeer,
 } from "@orca/protocol/tailnet";
-import { dropCourier, prepareCourier, pushCourier, type CourierFetch } from "@orca/protocol/server-courier";
+import { dropCourier, httpsFetch, prepareCourier, pushCourier, type CourierFetch } from "@orca/protocol/server-courier";
 import {
   bundleRepository,
   localGit,
@@ -68,6 +70,17 @@ import {
   workspaceSnippet,
   type LocalGit,
 } from "@orca/protocol/server-repository";
+import {
+  hostAgent,
+  hostAgentSettings,
+  hostAgentsProgram,
+  hostAgentStatus,
+  HostAgentRefused,
+  HOST_AGENTS,
+  installHostAgent,
+  prepareHostAgent,
+  signInHostAgent,
+} from "@orca/protocol/server-agents";
 import { readOrcaVersion } from "../version.js";
 import type { CommandContext } from "./index.js";
 import { remoteEnrollCommand } from "./remote-enroll.js";
@@ -121,10 +134,11 @@ export async function remoteCommand(
   if (ctx.positionals[0] === "enroll") return remoteEnrollCommand(ctx);
   const [sub, destination, ...extra] = ctx.positionals;
   if (sub === "push-repo" && destination && !extra.length) return pushRepoCommand(ctx, destination, deps);
+  if (sub === "agent" && destination && extra.length === 1) return agentCommand(ctx, destination, extra[0]!, deps);
   if (sub !== "add" || !destination || extra.length)
     throw new OrcaError(
       "CONFIG_INVALID",
-      "usage: orca remote add [user@]host [--tailnet] [--ssh-port N] [--identity FILE] [--port N] [--push-bundle] [--confirm CODE], orca remote push-repo [user@]host [--tailnet] [--repo DIR] [--name NAME] [--ref REF]..., or orca remote enroll <id> [--host-key SHA256:... | --tailnet]",
+      "usage: orca remote add [user@]host [--tailnet] [--ssh-port N] [--identity FILE] [--port N] [--push-bundle] [--confirm CODE], orca remote push-repo [user@]host [--tailnet] [--repo DIR] [--name NAME] [--ref REF]..., orca remote agent install|status|login [user@]host [--tailnet] [--agent ID], or orca remote enroll <id> [--host-key SHA256:... | --tailnet]",
     );
   const scripts = deps.scripts ?? setupScripts();
   if (!scripts)
@@ -356,6 +370,100 @@ async function pushRepoCommand(ctx: CommandContext, destination: string, deps: R
     }
   } catch (error) {
     if (error instanceof RepositoryRefused) throw new OrcaError("CONFIG_INVALID", error.message);
+    throw error;
+  }
+}
+
+/**
+ * `orca remote agent install|status|login [user@]host --agent ID` (#1236): on a server `remote
+ * add` set up, over its pinned ssh only. `install` carries the agent's pinned packages from
+ * this computer (downloaded once, then from the cache) and prints the server config that runs
+ * it; `login` runs the agent's own sign-in there and prints its link and code to approve in a
+ * browser here; `status` lists each agent's installed versions and whether it is signed in.
+ */
+async function agentCommand(ctx: CommandContext, action: string, destination: string, deps: RemoteDeps) {
+  if (!tailnetEnabled(deps.tailnet?.features))
+    throw new OrcaError("CONFIG_INVALID", "orca remote agent is not available in this build.");
+  if (!["install", "status", "login"].includes(action))
+    throw new OrcaError("CONFIG_INVALID", "usage: orca remote agent install|status|login [user@]host [--agent ID]");
+  const scripts = deps.scripts ?? setupScripts();
+  if (!scripts) throw new OrcaError("CONFIG_INVALID", "orca remote agent runs from a source checkout.");
+  // `--agent` may be given more than once for other commands; here it names exactly one.
+  const agentValue = ctx.flags.agent;
+  const agentFlag = Array.isArray(agentValue) ? (agentValue.length === 1 ? agentValue[0] : undefined) : agentValue;
+  if (action !== "status" && typeof agentFlag !== "string")
+    throw new OrcaError("CONFIG_INVALID", `--agent names the agent: ${Object.keys(HOST_AGENTS).join(" or ")}.`);
+  try {
+    const agent = action === "status" ? undefined : hostAgent(agentFlag as string);
+    const program = hostAgentsProgram(scripts);
+    const { base } = await profileFor(ctx, destination, deps);
+    // Only through a host key `remote add` already pinned, as for push-repo.
+    const make = deps.tunnel ?? ((options: ConstructorParameters<typeof SshTunnel>[0]) => new SshTunnel(options));
+    const tunnel = make({ ...base, pinnedOnly: true });
+    const transport = {
+      exec: (command: readonly string[], timeoutMs?: number, input?: string) => tunnel.exec(command, timeoutMs, input),
+      upload: (path: string, remotePath: string, timeoutMs?: number) => {
+        if (!tunnel.upload) throw new OrcaError("CONFIG_INVALID", "This connection cannot copy files to the server.");
+        return tunnel.upload(path, remotePath, timeoutMs);
+      },
+    };
+    try {
+      if (agent && action === "install") {
+        ctx.err(`Getting ${agent.name} ${agent.version} ready on this computer.`);
+        const prepared = await prepareHostAgent(agent.id, {
+          fetch: deps.courierFetch ?? httpsFetch,
+          cacheDir: join(deps.cacheDir ?? cacheDir(), "agents"),
+        });
+        try {
+          await tunnel.open();
+          ctx.err(`Copying it to ${destination}.`);
+          const installed = await installHostAgent(transport, prepared, program);
+          if (ctx.flags.json) ctx.out(JSON.stringify(installed));
+          else {
+            ctx.out(
+              installed.result === "ok"
+                ? `${agent.name} ${installed.version} was already installed at ${installed.dir}.`
+                : `Installed ${agent.name} ${installed.version} at ${installed.dir}.`,
+            );
+            ctx.out("To run it there, add this to the server's orca.config.yaml, then apply it:");
+            ctx.out(hostAgentSettings(installed));
+            ctx.out(`Then sign it in: orca remote agent login ${destination} --agent ${agent.id}`);
+          }
+          return 0;
+        } finally {
+          rmSync(prepared.dir, { recursive: true, force: true });
+        }
+      }
+      await tunnel.open();
+      if (agent) {
+        if (!tunnel.execStreaming)
+          throw new OrcaError("CONFIG_INVALID", "This connection cannot follow a sign-in on the server.");
+        const stream = tunnel.execStreaming.bind(tunnel);
+        ctx.err(`Starting ${agent.name}'s sign-in on ${destination}.`);
+        await signInHostAgent(stream, agent.id, program, (prompt) => {
+          if (prompt.url && prompt.code)
+            ctx.err(`Open ${prompt.url} in your browser and enter the code ${prompt.code}, then wait here.`);
+          else if (prompt.url) ctx.err(`Open ${prompt.url} in your browser to sign in, then wait here.`);
+          else ctx.err(`Enter the code ${prompt.code} where ${agent.name} asks for it, then wait here.`);
+        });
+        ctx.out(`${agent.name} is signed in on ${destination}.`);
+        return 0;
+      }
+      const status = await hostAgentStatus(transport, program);
+      if (ctx.flags.json) ctx.out(JSON.stringify(status));
+      else
+        for (const item of status)
+          ctx.out(
+            `${HOST_AGENTS[item.agent]!.name}: ${
+              item.versions.length ? `installed ${item.versions.join(", ")}` : "not installed"
+            }; signed in: ${item.signedIn}`,
+          );
+      return 0;
+    } finally {
+      await tunnel.close();
+    }
+  } catch (error) {
+    if (error instanceof HostAgentRefused) throw new OrcaError("CONFIG_INVALID", error.message);
     throw error;
   }
 }
