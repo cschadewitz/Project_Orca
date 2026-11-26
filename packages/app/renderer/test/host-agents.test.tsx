@@ -41,7 +41,23 @@ function bridge(agents: HostAgentView[]) {
   return { profiles, prompt: (view: AgentSignInView) => prompt?.(view), finish: () => finishSignIn?.() };
 }
 
-const codex: HostAgentView = { agent: "codex", name: "Codex", version: "0.171.0", installed: false, signedIn: "no" };
+const codex: HostAgentView = {
+  agent: "codex",
+  name: "Codex",
+  version: "0.171.0",
+  installed: false,
+  signedIn: "no",
+  signIn: "device-code",
+};
+const claude: HostAgentView = {
+  agent: "claude",
+  name: "Claude Code",
+  version: "0.109.1",
+  installed: true,
+  signedIn: "unknown",
+  signIn: "yourself",
+  signInCommand: "CLAUDE_CONFIG_DIR=/home/a/.local/share/orca-server/agents/claude/home /home/a/claude auth login",
+};
 
 it("installs an agent and shows the server config that runs it", async () => {
   const rig = bridge([codex]);
@@ -78,4 +94,13 @@ it("says why an install that changed cannot be used, and offers nothing to run i
   expect(await screen.findByText(/not usable \(It has changed since it was installed\.\)/)).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Install" })).toBeNull();
   expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
+});
+
+it("offers no sign-in for Claude Code, and shows the command to run on the machine instead", async () => {
+  const rig = bridge([claude]);
+  render(<HostAgents profiles={rig.profiles} profileId="lab" name="Lab" />);
+  expect(await screen.findByText(/Claude Code 0\.109\.1: installed, you sign it in yourself/)).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
+  expect(screen.getByLabelText("Sign-in command for claude").textContent).toBe(claude.signInCommand);
+  expect(rig.profiles.signInHostAgent).not.toHaveBeenCalled();
 });

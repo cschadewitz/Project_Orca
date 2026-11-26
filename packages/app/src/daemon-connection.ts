@@ -166,6 +166,13 @@ export interface HostAgentView {
   signedIn: "yes" | "no" | "unknown";
   /** Why the install there cannot be used, when it is there but changed. */
   problem?: string;
+  /**
+   * `device-code`: Sign in runs the agent's own sign-in there. `yourself`: the person signs it
+   * in on that machine (Claude Code); ORCA never takes part.
+   */
+  signIn: "device-code" | "yourself";
+  /** For `yourself`, once installed: what to run on that machine to sign it in. */
+  signInCommand?: string;
 }
 
 /** An agent's sign-in on a server waits for the person (#1236): the page's host and the code to enter. */

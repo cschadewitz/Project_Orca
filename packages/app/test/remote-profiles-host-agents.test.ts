@@ -98,8 +98,23 @@ describe("agents on a profile's server", () => {
       const { profiles, opened, pin } = store();
       pin();
       await expect(profiles.hostAgents("lab", scripts)).resolves.toEqual([
-        { agent: "codex", name: "Codex", version: "0.171.0", installed: false, signedIn: "no" },
-        { agent: "copilot", name: "GitHub Copilot CLI", version: "1.0.114", installed: false, signedIn: "no" },
+        { agent: "codex", name: "Codex", version: "0.171.0", installed: false, signedIn: "no", signIn: "device-code" },
+        {
+          agent: "copilot",
+          name: "GitHub Copilot CLI",
+          version: "1.0.114",
+          installed: false,
+          signedIn: "no",
+          signIn: "device-code",
+        },
+        {
+          agent: "claude",
+          name: "Claude Code",
+          version: "0.109.1",
+          installed: false,
+          signedIn: "no",
+          signIn: "yourself",
+        },
       ]);
       expect(opened[0]).toMatchObject({ pinnedOnly: true });
     },
@@ -111,10 +126,22 @@ describe("agents on a profile's server", () => {
     await expect(off.profiles.hostAgents("lab", scripts)).rejects.toThrow(/not available in this build/);
     const unpinned = store();
     await expect(unpinned.profiles.hostAgents("lab", scripts)).rejects.toThrow(/Set up the ORCA server/);
-    await expect(unpinned.profiles.installHostAgent("lab", "claude", scripts)).rejects.toThrow(
-      /No agent called claude/,
+    await expect(unpinned.profiles.installHostAgent("lab", "gemini", scripts)).rejects.toThrow(
+      /No agent called gemini/,
     );
     expect([...off.opened, ...unpinned.opened]).toEqual([]);
+  });
+});
+
+describe("Claude Code on a profile's server", () => {
+  it("offers no sign-in: refused before any connection, even with the profile ready", async () => {
+    const { profiles, opened, pin } = store();
+    pin();
+    await expect(profiles.signInHostAgent("lab", "claude", scripts, () => {})).rejects.toThrow(
+      /does not sign Claude Code in/,
+    );
+    expect(() => profiles.signInOffered("claude")).toThrow(/does not sign Claude Code in/);
+    expect(opened).toEqual([]);
   });
 });
 

@@ -74,7 +74,11 @@ describe("orca remote agent", () => {
     await expect(remoteCommand(context, { tunnel, tailnet: ON })).resolves.toBe(0);
     expect(opened[0]).toMatchObject({ pinnedOnly: true });
     expect(opened[0]!.knownHostsFile).toMatch(/known_hosts\/casey-lab$/);
-    expect(lines).toEqual(["Codex: not installed; signed in: no", "GitHub Copilot CLI: not installed; signed in: no"]);
+    expect(lines).toEqual([
+      "Claude Code: not installed; signed in: no",
+      "Codex: not installed; signed in: no",
+      "GitHub Copilot CLI: not installed; signed in: no",
+    ]);
   });
 
   it("is not available with the flag off, and needs one named agent to install or sign in", async () => {
@@ -86,8 +90,22 @@ describe("orca remote agent", () => {
       /--agent names the agent/,
     );
     await expect(
-      remoteCommand(ctx(["agent", "install", "casey@lab"], { agent: ["claude"] }).context, { tunnel, tailnet: ON }),
-    ).rejects.toThrow(/No agent called claude/);
+      remoteCommand(ctx(["agent", "install", "casey@lab"], { agent: ["gemini"] }).context, { tunnel, tailnet: ON }),
+    ).rejects.toThrow(/No agent called gemini/);
     expect(opened).toHaveLength(0);
+  });
+
+  it("refuses to sign Claude Code in before any profile, connection or prompt", async () => {
+    let made = 0;
+    const tunnel = () => {
+      made += 1;
+      throw new Error("no connection may be made");
+    };
+    const run = ctx(["agent", "login", "casey@lab"], { agent: ["claude"] });
+    await expect(remoteCommand(run.context, { tunnel, tailnet: ON })).rejects.toThrow(
+      /ORCA does not sign Claude Code in/,
+    );
+    expect(made).toBe(0);
+    expect(run.errs).toEqual([]);
   });
 });

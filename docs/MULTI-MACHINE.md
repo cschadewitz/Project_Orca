@@ -284,7 +284,7 @@ configuration.
 registry and no terminal:
 
 ```sh
-orca-cli remote agent install you@build-1 --tailnet --agent codex      # or copilot
+orca-cli remote agent install you@build-1 --tailnet --agent codex      # or copilot, or claude
 orca-cli remote agent login you@build-1 --tailnet --agent codex
 orca-cli remote agent status you@build-1 --tailnet
 ```
@@ -302,21 +302,27 @@ run (status, sign-in) unless it is still exactly that record, owned by the accou
 to other writers, with the profile closed to other accounts. The
 command prints the `agents:` entry for the server's `orca.config.yaml`. Each agent gets its own
 profile on the host, `~/.local/share/orca-server/agents/<agent>/home` (`CODEX_HOME`,
-`COPILOT_HOME`), never the account's everyday one.
+`COPILOT_HOME`, `CLAUDE_CONFIG_DIR`), never the account's everyday one.
 
 `login` runs the agent's own sign-in on the host with no terminal, so it uses a device code: the
 command prints the agent's sign-in page (only a link on that agent's own sign-in site is shown)
 and the code, and you approve it in your browser here. The agent writes its credential on the
 host; no key or token goes from this computer to the host. Whether your agent plan allows the
 same account on several machines is between you and its provider. Codex (`codex login
---device-auth`) and GitHub Copilot CLI (`copilot login --device-code`) are supported; Claude
-Code's sign-in asks for a code to be pasted back, which comes later. The host needs `python3`
+--device-auth`) and GitHub Copilot CLI (`copilot login --device-code`) are supported.
+
+Claude Code is installed the same way (the `claude-agent-acp` adapter, with the unmodified
+Claude Code binary its SDK ships), but ORCA never signs it in: `login` refuses it. You sign it
+in yourself, with your own account, on the host: `install` and `status` print the one command to
+run there (over `tailscale ssh`, say), which runs its own `auth login` with its profile. ORCA
+never reads what it writes, so `status` reports its sign-in as unknown. The host needs `python3`
 3.8.17, 3.9.17, 3.10.12, 3.11.4 or later, for safe unpacking.
 
 In the app, the same is under **Agents** on the machine's profile in the connection dialog. It
 lists each agent with its pinned version, whether it is installed and signed in (or why an
 install is not usable), with **Install** and **Sign in**. During a sign-in it shows the code and
-the sign-in page's host, and **Open sign-in page** opens that page in your browser.
+the sign-in page's host, and **Open sign-in page** opens that page in your browser. For Claude
+Code there is no **Sign in**: it shows the command to run on the machine instead.
 
 **Policy notes.** The default tailnet policy lets you SSH to machines you own. If you tag a host
 (for example `tag:orca-server`), it leaves `autogroup:self`, so add a narrow SSH rule for your

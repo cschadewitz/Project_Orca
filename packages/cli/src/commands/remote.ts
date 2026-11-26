@@ -73,6 +73,7 @@ import {
 import {
   hostAgent,
   hostAgentSettings,
+  hostAgentSignInCommand,
   hostAgentsProgram,
   hostAgentStatus,
   HostAgentRefused,
@@ -380,6 +381,8 @@ async function pushRepoCommand(ctx: CommandContext, destination: string, deps: R
  * this computer (downloaded once, then from the cache) and prints the server config that runs
  * it; `login` runs the agent's own sign-in there and prints its link and code to approve in a
  * browser here; `status` lists each agent's installed versions and whether it is signed in.
+ * Claude Code is never signed in by ORCA: the person runs its own sign-in on the server, with
+ * the command `install` and `status` print.
  */
 async function agentCommand(ctx: CommandContext, action: string, destination: string, deps: RemoteDeps) {
   if (!tailnetEnabled(deps.tailnet?.features))
@@ -395,6 +398,11 @@ async function agentCommand(ctx: CommandContext, action: string, destination: st
     throw new OrcaError("CONFIG_INVALID", `--agent names the agent: ${Object.keys(HOST_AGENTS).join(" or ")}.`);
   try {
     const agent = action === "status" ? undefined : hostAgent(agentFlag as string);
+    // Refused before any profile, connection or prompt: ORCA offers no sign-in for it.
+    if (agent && action === "login" && agent.signIn === "yourself")
+      throw new HostAgentRefused(
+        `ORCA does not sign ${agent.name} in. Sign it in on ${destination} yourself: orca remote agent status ${destination} names the command to run there.`,
+      );
     const program = hostAgentsProgram(scripts);
     const { base } = await profileFor(ctx, destination, deps);
     // Only through a host key `remote add` already pinned, as for push-repo.
@@ -427,7 +435,14 @@ async function agentCommand(ctx: CommandContext, action: string, destination: st
             );
             ctx.out("To run it there, add this to the server's orca.config.yaml, then apply it:");
             ctx.out(hostAgentSettings(installed));
-            ctx.out(`Then sign it in: orca remote agent login ${destination} --agent ${agent.id}`);
+            const yourself = hostAgentSignInCommand(installed);
+            if (agent.signIn === "yourself")
+              ctx.out(
+                `Then sign it in yourself on ${destination} (ORCA does not take part)${
+                  yourself ? `, by running there: ${yourself}` : ": orca remote agent status names the command."
+                }`,
+              );
+            else ctx.out(`Then sign it in: orca remote agent login ${destination} --agent ${agent.id}`);
           }
           return 0;
         } finally {
@@ -456,7 +471,9 @@ async function agentCommand(ctx: CommandContext, action: string, destination: st
           ctx.out(
             `${HOST_AGENTS[item.agent]!.name}: ${
               item.versions.length ? `installed ${item.versions.join(", ")}` : "not installed"
-            }; signed in: ${item.signedIn}${item.problem ? `. Not usable: ${item.problem}` : ""}`,
+            }; signed in: ${item.signedIn}${item.problem ? `. Not usable: ${item.problem}` : ""}${
+              item.signInCommand ? `. Sign it in yourself by running this on the server: ${item.signInCommand}` : ""
+            }`,
           );
       return 0;
     } finally {
