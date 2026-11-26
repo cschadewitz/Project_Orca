@@ -460,10 +460,19 @@ Dry runs are unchanged: they rehearse any ref and never tag, sign or feed.
 | `main` | everything, including the next minor's work | feature and fix pull requests |
 | `release/X.Y` | the `X.Y` line: its patches only | fix and backport pull requests, and the line's release pull requests |
 
-**Getting a fix onto a line.** Merge the fix to `main` as usual, then cherry-pick it onto
-`release/X.Y` in a pull request whose description names the issue (`Fixes #N`, plus `Backport
-of #PR` when it is a copy). The issue must be in a patch milestone of that line (`0.7.1`). A
-fix for code that only exists on the line goes straight to the line the same way.
+**Getting a fix onto a line.** Merge the fix to `main` as usual with a `backport:X.Y` label
+(before or after the merge). **Backport** (`backport.yml`, `tools/backport.js`) cherry-picks the
+pull request's complete change (its merge commit, its squash commit, or every commit of a
+rebase merge, matched against the pull request's own diff) onto `release/X.Y` in the branch `backport/<pr>-X.Y` and opens a pull request into
+the line named `[X.Y] <title>`, whose description says `Backport of #PR` and repeats the
+original's `Fixes #N` lines, and asks Cal to review it. The issue must be in a milestone of
+that line (`0.7.1`, or `X.Y.0` while the line is stabilizing), so the release line guard passes
+it. A cherry-pick that does not apply opens nothing: the original pull request gets a comment
+listing the conflicting files and the `backport-conflict` label, and its owner cherry-picks by
+hand into a pull request with the same description. The same happens when the complete change
+cannot be established, and when a `backport/<pr>-X.Y` branch exists without a pull request but
+is not exactly the expected picks; a branch that is gets its pull request opened on the rerun. A fix for code that only exists on the
+line goes straight to the line the same way.
 
 **What keeps minor work off a line.** Two gates, both automatic:
 
@@ -546,7 +555,7 @@ required check):
 4. Rehearse with a **Release (publish)** dry run of the release pull request's head, then
    retarget that pull request to the line, update its branch, and merge it.
 
-**Not yet covered.** Automatic backport pull requests from a label, and publishing a patch of
+**Not yet covered.** Publishing a patch of
 an older line after a newer minor is Latest (publish-final and the upgrade check compare with
 Latest), are later work.
 
