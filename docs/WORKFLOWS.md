@@ -521,8 +521,9 @@ configured, sets no Codex variable of its own (so Codex reads the usual `CODEX_H
 signs in, never asks Codex to refresh a token and never reads Codex's credential files. A
 Codex that needs a login and reports none is to be refused with "run `codex login`".
 
-**Every session that asks for it is refused today**, before anything starts: the driver is not
-built yet (#1157), it runs only on ORCA's own machine (#1166), and config rejects it on an
+**Every session that asks for it is refused today**, before anything starts: the session driver
+exists, but ORCA does not yet answer Codex's approval asks (#1159) or verify the config Codex
+runs with (#1160), it runs only on ORCA's own machine (#1166), and config rejects it on an
 `orca-daemon` agent and together with `nativeToolHook` or `codexExecGate`. Nothing falls back to
 the ACP adapter: to run Codex through it, remove `driver` (or set `driver: acp`, the default)
 and set `command` back to the adapter (for example `codex-acp`), since `codex` itself is not an

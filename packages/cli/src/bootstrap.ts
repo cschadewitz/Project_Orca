@@ -356,8 +356,8 @@ export function makeSessionFactory(
     ));
   return async (options: Parameters<SessionFactory>[0]) => {
     const bound = { ...options, permissionFiles, protectedPaths };
-    // The Codex app-server driver (#1154): its own route, which refuses every session until the
-    // driver is built (#1157), and on any host but this one (#1166). Nothing falls back to ACP.
+    // The Codex app-server driver (#1154): its own route, which refuses every session until ORCA
+    // answers Codex's asks (#1159) and verifies its config (#1160), and on any host but this one (#1166). Nothing falls back to ACP.
     const driverRefused =
       options.host.spec.type !== "local"
         ? codexAppServerRefused(options.agent, "non-local-host", options.host.spec)
