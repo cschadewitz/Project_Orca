@@ -1,1 +1,1 @@
-Desktop: an agent or other change saved in Config no longer stops the workspace from reopening. Saving now binds the saved configuration for reopening, and if a workspace does not reopen, the first screen says why and opens Config instead of telling you to run `orca serve`.
+- **app:** A change saved in Config, such as a new agent, no longer stops the workspace from reopening. Saving now binds the saved configuration for reopening, and if a workspace does not reopen, the first screen says why and opens Config instead of telling you to run `orca serve`.
