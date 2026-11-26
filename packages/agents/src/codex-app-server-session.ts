@@ -70,6 +70,8 @@ import {
   codexAskRequest,
   codexAskResponse,
   isCodexPolicyAsk,
+  codexEnvironmentForeign,
+  codexEnvironmentProblem,
   type CodexAskOutcome,
   type CodexPolicyAsk,
 } from "./codex-app-server-asks.js";
@@ -229,6 +231,8 @@ interface Connection {
   account: CodexAccountIdentity;
   /** Codex sent `account/updated` that ORCA has not re-read the account for yet. */
   accountUpdated?: boolean;
+  /** Codex reported a thread on this connection connected to an environment other than `local`. */
+  foreignEnvironment?: boolean;
 }
 
 /** Provider errors can carry private context: report only the failed recovery boundary, as the ACP route does. */
@@ -335,6 +339,7 @@ const HANDLED_NOTIFICATIONS = new Set([
   "turn/completed",
   "account/updated",
   "account/rateLimits/updated",
+  "thread/environment/connected",
 ]);
 
 /** Codex's legacy (v1) approvals, which a v2 thread does not send: declined. */
@@ -1190,6 +1195,10 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
     }
     if (threadId && typeof params.threadId === "string" && params.threadId !== threadId) return;
     switch (method) {
+      // Fenced on the connection (see connect); here only its payload is checked.
+      case "thread/environment/connected":
+        check(codexEnvironmentProblem(params));
+        return;
       case "item/agentMessage/delta":
         check(isString(params.itemId) && isString(params.delta) ? undefined : "a delta without its item id and text");
         active?.streamed.add(params.itemId as string);
@@ -1345,6 +1354,17 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
       onNotification: (method, params) => {
         // Noted for a connection not yet live too: it is not published until it is re-read.
         if (method === "account/updated") c.accountUpdated = true;
+        // ORCA's checks read this machine's filesystem: a thread Codex connects anywhere else
+        // (or a connection report ORCA cannot read) fences this connection, whether it is live,
+        // opening or a replacement being resumed (#1154).
+        if (method === "thread/environment/connected" && codexEnvironmentForeign(params)) {
+          c.foreignEnvironment = true;
+          if (conn === c && open) {
+            const error = foreignEnvironmentRefusal();
+            active?.fail(error);
+            breakSession(error);
+          }
+        }
         if (conn !== c) return;
         try {
           onNotification(method, params);
@@ -1445,6 +1465,13 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
    * Refusals of what Codex would run with: its config, or the sandbox a thread came back with.
    * On a restart these stop the session; a request that failed or was cut short is not one.
    */
+  function foreignEnvironmentRefusal() {
+    return new OrcaError(
+      "NOT_SUPPORTED",
+      `agent ${agent.id}: Codex connected a thread to an environment other than this machine, whose filesystem ORCA's checks do not read; ORCA stops the session`,
+      { agentId: agent.id, reason: "codex-foreign-environment" },
+    );
+  }
   const configRefusals = new WeakSet<object>();
   const configRefusal = (error: OrcaError) => {
     configRefusals.add(error);
@@ -1487,11 +1514,28 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
   let effort: string | null = null;
   let continuity: CodexSessionContinuity = { mode: "fresh", reason: "new" };
   conn = await connect(false, () => undefined);
+  /**
+   * Stop the opening app-server and fail the open: the failure carries the process's exit, so a
+   * caller can wait for it when the stop could not be confirmed.
+   */
+  const refuseOpen = async (error: unknown): Promise<never> => {
+    const c = conn!;
+    closing = true;
+    c.client.close("closed after a refused open");
+    await c.cleanup().catch(() => undefined);
+    throw withStartupTermination(
+      redactError(error instanceof Error ? error : new Error(String(error)), values),
+      c.proc.exited,
+    );
+  };
   let verified: CodexVerifiedConfig;
   try {
     await verifyConfig(conn);
     let opened: ReturnType<typeof acceptThread> | undefined;
     if (opts.resumeThreadId) {
+      // The environment fence, synchronously before the thread is resumed (and below, before
+      // it is started, and before the session is published).
+      if (conn.foreignEnvironment) throw foreignEnvironmentRefusal();
       try {
         opened = await resumeOn(conn, opts.resumeThreadId);
         threadId = opened.id;
@@ -1523,6 +1567,7 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
         ...startPolicy,
         ...(agent.defaultModel ? { model: agent.defaultModel } : {}),
       };
+      if (conn.foreignEnvironment) throw foreignEnvironmentRefusal();
       opened = acceptThread("thread/start", await conn.client.request("thread/start", params));
       threadId = opened.id;
     }
@@ -1531,14 +1576,7 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
     effort = opened.effort;
     configOptions = await readConfigOptions(conn.client, model, effort, logger);
   } catch (error) {
-    const c = conn;
-    closing = true;
-    c.client.close("closed after a refused open");
-    await c.cleanup().catch(() => undefined);
-    throw withStartupTermination(
-      redactError(error instanceof Error ? error : new Error(String(error)), values),
-      c.proc.exited,
-    );
+    return refuseOpen(error);
   }
   // An account update during the open: the session starts on the account Codex reports now.
   while (conn.accountUpdated) {
@@ -1552,13 +1590,11 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
       : now.signedOut
         ? codexSignedOut(agent.id)
         : undefined;
-    if (refusal) {
-      closing = true;
-      conn.client.close("closed after a refused open");
-      await conn.cleanup().catch(() => undefined);
-      throw refusal;
-    }
+    if (refusal) return refuseOpen(refusal);
   }
+  // From here to the session's publication nothing is awaited: this is the last fence for an
+  // environment connection Codex reported during the open, the account re-reads included.
+  if (conn.foreignEnvironment) return refuseOpen(foreignEnvironmentRefusal());
   opts.onSessionContinuity?.(continuity);
   recordConfig(verified);
   sessionAccount.identity = conn.account;
@@ -1682,10 +1718,14 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
       // before the replacement is published) fences any update Codex sent during the awaits.
       await checkAccount(c);
       while (c.accountUpdated) await checkAccount(c);
+      // And the same synchronous fence for an environment connection, before the resume and
+      // right before the replacement is published.
+      if (c.foreignEnvironment) refused(configRefusal(foreignEnvironmentRefusal()));
       const resumed = await resumeOn(c, threadId).catch(refused);
       const reverified = await verifyConfig(c, threadId).catch(refused);
       await checkAccount(c);
       while (c.accountUpdated) await checkAccount(c);
+      if (c.foreignEnvironment) refused(configRefusal(foreignEnvironmentRefusal()));
       const late = stopped();
       if (late) throw late;
       conn = c;

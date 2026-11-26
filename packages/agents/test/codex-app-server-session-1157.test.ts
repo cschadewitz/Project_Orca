@@ -14,6 +14,7 @@ import {
   codexStopReason,
   LocalHost,
   openCodexAppServerSession,
+  startupTermination,
   stripShellPrefix,
   wrapAgentProcess,
   type AgentHost,
@@ -1307,7 +1308,7 @@ describe("asks through ORCA's policy (#1159)", () => {
     turnId: "turn_1",
     itemId: "call_1",
     startedAtMs: 1,
-    environmentId: null,
+    environmentId: "local",
     command: "/bin/bash -lc 'cat src/a.ts'",
     cwd: CWD,
     reason: "to read the file",
@@ -1618,6 +1619,121 @@ describe("asks through ORCA's policy (#1159)", () => {
       expect(c.answers, JSON.stringify(changes)).toEqual([{ decision: want }]);
       await session.close();
     }
+  });
+
+  describe("bound to this machine's environment", () => {
+    const connected = (environmentId: unknown) => (peer: Peer) =>
+      peer.notify("thread/environment/connected", { threadId: "thr_1", environmentId });
+
+    it("declines unasked a command in another of Codex's environments", async () => {
+      const asked = vi.fn(async () => "accept");
+      const c = asking(() => [
+        { method: "item/commandExecution/requestApproval", params: COMMAND({ environmentId: "local" }) },
+        { method: "item/commandExecution/requestApproval", params: COMMAND({ environmentId: "devbox" }) },
+        { method: "item/commandExecution/requestApproval", params: COMMAND({ environmentId: 7 }) },
+      ]);
+      const s = scriptedHost(c.table);
+      const session = await open(s.host, { agent: withPolicy({ default: "allow" }), askPermission: asked });
+      await session.prompt("go");
+      expect(c.answers).toEqual([{ decision: "accept" }, { decision: "decline" }, { decision: "decline" }]);
+      expect(asked).not.toHaveBeenCalled();
+      await session.close();
+    });
+
+    it("keeps going when Codex reports this machine's environment", async () => {
+      const c = asking(() => [
+        { method: "item/commandExecution/requestApproval", params: COMMAND(), before: connected("local") },
+      ]);
+      const s = scriptedHost(c.table);
+      const session = await open(s.host, { agent: withPolicy({ default: "allow" }) });
+      await session.prompt("go");
+      expect(c.answers).toEqual([{ decision: "accept" }]);
+      await session.close();
+    });
+
+    it("stops the session when Codex connects the thread to another environment mid-turn", async () => {
+      const s = scriptedHost({
+        ...BASE,
+        "turn/start": (_msg, peer) => {
+          setImmediate(() => connected("devbox")(peer));
+          return { turn: { id: "turn_1", status: "inProgress" } };
+        },
+      });
+      const session = await open(s.host);
+      await expect(session.prompt("go")).rejects.toThrow(/environment other than this machine/);
+      await expect(session.prompt("again")).rejects.toThrow(/environment other than this machine/);
+      await vi.waitFor(() => expect(s.kill).toHaveBeenCalled());
+    });
+
+    it("refuses the open when Codex connected the thread to another environment while it opened", async () => {
+      const s = scriptedHost({
+        ...BASE,
+        "thread/start": (_msg, peer) => (connected("devbox")(peer), THREAD()),
+      });
+      await expect(open(s.host)).rejects.toMatchObject({ details: { reason: "codex-foreign-environment" } });
+      expect(s.peer.received.map((m) => m.method)).not.toContain("turn/start");
+      expect(s.kill).toHaveBeenCalled();
+    });
+
+    it("refuses the open on a connection reported during its account re-read, keeping the exit", async () => {
+      let reads = 0;
+      const s = scriptedHost({
+        ...BASE,
+        "account/read": (msg, peer) => {
+          // the second read is the re-read the account update below calls for
+          if (++reads === 2) connected("devbox")(peer);
+          return BASE["account/read"]!(msg, peer);
+        },
+        "thread/start": (_msg, peer) => (
+          peer.notify("account/updated", { authMode: "apikey", planType: null, reason: null }),
+          THREAD()
+        ),
+      });
+      s.kill.mockImplementation(() => undefined);
+      const error = await open(s.host, { exitGraceMs: 10 }).then(
+        () => expect.unreachable("the session opened"),
+        (e: unknown) => e as OrcaError,
+      );
+      expect(reads).toBe(2);
+      expect(error.details).toMatchObject({ reason: "codex-foreign-environment" });
+      expect(s.peer.received.map((m) => m.method)).not.toContain("turn/start");
+      // the stop was not seen to finish: the exit stays attached for whoever waits on it
+      expect(startupTermination(error)).toBeInstanceOf(Promise);
+      expect(s.kill.mock.calls.map((c) => (c as unknown[])[0])).toEqual(["SIGTERM", "SIGKILL"]);
+    });
+
+    it("does not resume a thread on a connection already fenced", async () => {
+      const s = scriptedHost({
+        ...BASE,
+        "account/read": (msg, peer) => (connected("devbox")(peer), BASE["account/read"]!(msg, peer)),
+      });
+      await expect(open(s.host, { resumeThreadId: "thr_old" })).rejects.toMatchObject({
+        details: { reason: "codex-foreign-environment" },
+      });
+      const sent = s.peer.received.map((m) => m.method);
+      expect(sent).not.toContain("thread/resume");
+      expect(sent).not.toContain("thread/start");
+    });
+
+    it("stops on another thread's connection, or a report it cannot read", async () => {
+      for (const params of [
+        { threadId: "thr_sub", environmentId: "devbox" },
+        { threadId: "thr_1" },
+        { environmentId: "local" },
+      ]) {
+        const s = scriptedHost({
+          ...BASE,
+          "turn/start": (_msg, peer) => {
+            setImmediate(() => peer.notify("thread/environment/connected", params));
+            return { turn: { id: "turn_1", status: "inProgress" } };
+          },
+        });
+        const session = await open(s.host);
+        await expect(session.prompt("go"), JSON.stringify(params)).rejects.toMatchObject({
+          details: { reason: "codex-foreign-environment" },
+        });
+      }
+    });
   });
 
   it("declines a permissions grant unasked, whatever the policy", async () => {

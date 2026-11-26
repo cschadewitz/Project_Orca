@@ -142,8 +142,15 @@ function commandAsk(sessionId: string, p: Record<string, unknown>, target: Codex
   // Input to a running terminal, which the ask does not show: no rule about the command decides it.
   if (kind === "writeStdin")
     return { target, refused: "a write to a running terminal, whose input the ask does not show" };
-  for (const field of ["command", "cwd", "reason", "approvalId"])
+  for (const field of ["command", "cwd", "reason", "approvalId", "environmentId"])
     if (!optionalString(p[field])) return { target, refused: `a command ask whose ${field} is not a string` };
+  // ORCA's checks read this machine's filesystem: a command in another of Codex's environments
+  // is not one they can decide.
+  if (!isCodexLocalEnvironment(p.environmentId))
+    return {
+      target,
+      refused: "a command in a Codex environment other than this machine, which ORCA's checks do not read",
+    };
   const actions = actionsProblem(p.commandActions);
   if (actions) return { target, refused: `a command ask with ${actions}` };
   const net = p.networkApprovalContext;
@@ -265,6 +272,32 @@ function fileChangeAsk(
 function permissionsAsk(target: CodexAskTarget): CodexAskMapping {
   return { target, refused: "a grant for the rest of the turn, which ORCA's one-call policy cannot decide" };
 }
+
+/**
+ * Codex's id for the environment on the machine it runs on: every command ask the pinned Codex
+ * (0.171.0) sends for a local command names it. Anything else, absent and null included, is
+ * not positive evidence of this machine, whose filesystem ORCA's protected-path and rule
+ * checks read, so it is not decided as one.
+ */
+export const CODEX_LOCAL_ENVIRONMENT_ID = "local";
+export const isCodexLocalEnvironment = (id: unknown): boolean => id === CODEX_LOCAL_ENVIRONMENT_ID;
+
+/** What is wrong with a `thread/environment/connected` payload, or undefined when it names a thread and an environment. */
+export function codexEnvironmentProblem(params: unknown): string | undefined {
+  if (!isObject(params)) return "params that are not an object";
+  if (typeof params.threadId !== "string" || !params.threadId) return "an environment connection without its thread";
+  if (typeof params.environmentId !== "string") return "an environment connection without its id";
+  return undefined;
+}
+
+/**
+ * Whether a `thread/environment/connected` fences the connection: a connection of any thread
+ * on it (subagent threads act under the same checks) to an environment other than `local`, or
+ * a report ORCA cannot read.
+ */
+export const codexEnvironmentForeign = (params: unknown): boolean =>
+  codexEnvironmentProblem(params) !== undefined ||
+  !isCodexLocalEnvironment((params as { environmentId: unknown }).environmentId);
 
 /**
  * Codex's ask as the calls ORCA's policy decides, or why ORCA declines it unasked. A file change

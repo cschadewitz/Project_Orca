@@ -603,7 +603,10 @@ cancelled, writes to a running terminal (whose input the ask does not show), ask
 root for the rest of the session, or carries something ORCA cannot show is declined without
 asking anybody; an ask still open when a person stops the turn is answered `cancel`. Codex's
 legacy v1 approvals are declined, and questions and MCP elicitations are
-refused (#1170).
+refused (#1170). ORCA's checks read this machine's filesystem, so a command ask that does not
+name Codex's `local` environment is declined without asking anybody, and when Codex connects
+any thread to another environment (or reports a connection ORCA cannot read), the session
+stops, or its open or restart is refused before the thread takes a prompt.
 
 When the app-server exits under a session, the running turn fails, an ask it raised is never
 answered, and the next prompt starts a new app-server on the same thread (`thread/resume`, held
