@@ -9,13 +9,12 @@
  * left alone with the reason. Nothing is
  * written until the person reviews, saves and applies the draft as with any other edit.
  *
- * A report belongs to the connection it was read on: its epoch and profile. It is shown, and
- * staged, only while the connection and the draft's target are still that one.
+ * The report is bound to the connection it was read on (see `useServerReport`).
  */
-import { useEffect, useState, type JSX } from "react";
-import type { DaemonTargetSnapshot, HostAgentView } from "../../../src/daemon-connection.js";
+import type { JSX } from "react";
+import type { HostAgentView } from "../../../src/daemon-connection.js";
 import { Button, Text } from "../ui/index.js";
-import { useConfigurationStudio } from "./configuration-studio-context.js";
+import { useServerReport } from "./server-report.js";
 import type { EditIntent } from "./structured-form/contracts.js";
 
 type Entry = NonNullable<HostAgentView["entry"]>;
@@ -85,56 +84,14 @@ function managedBy(existing: Record<string, unknown> & { env: Record<string, unk
   );
 }
 
-/** The agents a server reported, with the connection they were read on. */
-interface Report {
-  epoch: number;
-  profileId: string;
-  agents: HostAgentView[];
-}
-
-/** Whether `report` still belongs to the connection now, and to the draft's target. */
-function current(report: Report | undefined, now: DaemonTargetSnapshot | undefined, targetEpoch: number | undefined) {
-  return (
-    !!report &&
-    !!now?.profile &&
-    report.epoch === now.epoch &&
-    report.profileId === now.profile.id &&
-    report.epoch === targetEpoch
-  );
-}
-
 export function HostAgentsSection(): JSX.Element | null {
-  const studio = useConfigurationStudio();
-  const connection = window.orca.daemonConnection;
-  const profiles = connection?.profiles;
-  const [snapshot, setSnapshot] = useState(() => connection?.read());
-  const [report, setReport] = useState<Report>();
-  const [, setTick] = useState(0);
-  useEffect(() => connection?.subscribe(setSnapshot), [connection]);
-  useEffect(() => studio?.subscribe(() => setTick((n) => n + 1)), [studio]);
-  const epoch = snapshot?.epoch;
-  const profileId = snapshot?.profile?.id;
-  useEffect(() => {
-    setReport(undefined);
-    if (epoch === undefined || !profileId || !profiles?.hostAgents) return;
-    let live = true;
-    void profiles.hostAgents(profileId).then((result) => {
-      // A reply for an earlier connection, even to the same profile, is not this one's.
-      const now = connection?.read();
-      if (live && result.ok && now?.epoch === epoch && now.profile?.id === profileId)
-        setReport({ epoch, profileId, agents: result.value });
-    });
-    return () => {
-      live = false;
-    };
-  }, [epoch, profileId, profiles, connection]);
-  const profile = snapshot?.profile;
-  if (!profile || !studio || !current(report, snapshot, studio.target.epoch)) return null;
-  const installed = report!.agents.filter((agent) => agent.installed && agent.entry);
+  const { studio, profile, report, stillCurrent } = useServerReport((profiles) => profiles.hostAgents);
+  if (!studio || !profile || !report) return null;
+  const installed = report.filter((agent) => agent.installed && agent.entry);
   if (!installed.length) return null;
   const add = (entry: Entry) => {
     // Checked again at the click: the connection, the report and the draft's target are one.
-    if (!current(report, connection?.read(), studio.target.epoch)) return;
+    if (!stillCurrent()) return;
     const plan = agentEntryPlan(studio.value, entry);
     if (plan.kind === "add" || plan.kind === "update") studio.edit(plan.edits);
   };

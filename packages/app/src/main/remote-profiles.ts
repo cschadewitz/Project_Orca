@@ -55,6 +55,7 @@ import {
   type HostAgentLoginPrompt,
   type HostAgentPackage,
 } from "@orca/protocol/server-agents";
+import { hostRepositories, RepositoryRefused, type HostRepository } from "@orca/protocol/server-repository";
 
 /** What agent work was checked against when it began (#1236). */
 interface AgentTarget {
@@ -1012,6 +1013,21 @@ export class RemoteProfiles {
         };
       });
     });
+  }
+
+  /**
+   * The repositories pushes put on the profile's managed server (#1235), each with a checkout a
+   * daemon there can work in. Read over a pinned-only connection, changing nothing; only with
+   * the `tailnet-hosts` flag on.
+   */
+  async hostRepositories(id: string): Promise<HostRepository[]> {
+    return this.agentWork(id, (target) =>
+      this.withAgentTunnel(target, (tunnel) =>
+        hostRepositories(tunnel).catch((error: unknown) => {
+          throw error instanceof RepositoryRefused ? new ConnectionRefusal(error.message) : error;
+        }),
+      ),
+    );
   }
 
   /**

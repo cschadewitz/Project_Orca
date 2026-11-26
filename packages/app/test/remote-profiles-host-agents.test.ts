@@ -4,7 +4,7 @@
  * `orca-host-agents.py` really reports there. Installing real agents is covered in
  * `packages/protocol/test/server-agents.test.ts`.
  */
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -86,7 +86,7 @@ function store(features: { env: Record<string, string> } = ON, rig: Rig = {}) {
     mkdirSync(join(dir, "known_hosts"), { recursive: true });
     writeFileSync(join(dir, "known_hosts", "lab"), "lab ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAAAA\n");
   };
-  return { profiles, opened, pin, dir };
+  return { profiles, opened, pin, dir, home };
 }
 
 describe("agents on a profile's server", () => {
@@ -131,6 +131,59 @@ describe("agents on a profile's server", () => {
     );
     expect([...off.opened, ...unpinned.opened]).toEqual([]);
   });
+});
+
+describe("repositories on a profile's server", () => {
+  it.skipIf(process.platform === "win32")(
+    "lists what pushes put there over a pinned-only connection, only with the flag on and the server set up",
+    async () => {
+      const { profiles, opened, pin, home } = store();
+      pin();
+      await expect(profiles.hostRepositories("lab")).resolves.toEqual([]);
+      const env = {
+        ...process.env,
+        GIT_AUTHOR_NAME: "t",
+        GIT_AUTHOR_EMAIL: "t@example.invalid",
+        GIT_COMMITTER_NAME: "t",
+        GIT_COMMITTER_EMAIL: "t@example.invalid",
+        GIT_CONFIG_GLOBAL: "/dev/null",
+        GIT_CONFIG_NOSYSTEM: "1",
+      };
+      const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, env });
+      const local = temp();
+      git(local, "init", "-q", "-b", "main");
+      writeFileSync(join(local, "README.md"), "one\n");
+      git(local, "add", ".");
+      git(local, "commit", "-q", "-m", "one");
+      const root = join(home, ".local/share/orca-server");
+      mkdirSync(join(root, "repos"));
+      mkdirSync(join(root, "checkouts"));
+      git(root, "clone", "-q", "--bare", local, join(root, "repos/app.git"));
+      git(root, "clone", "-q", join(root, "repos/app.git"), join(root, "checkouts/app"));
+      await expect(profiles.hostRepositories("lab")).resolves.toEqual([
+        {
+          name: "app",
+          checkout: join(root, "checkouts/app"),
+          branches: ["refs/heads/main"],
+          workspace: {
+            provider: "git-worktree",
+            repo: join(root, "checkouts/app"),
+            baseBranch: "refs/heads/main",
+            fetchRemote: "origin",
+            allowedRefs: ["refs/heads/main"],
+          },
+        },
+      ]);
+      expect(opened.every((options) => options.pinnedOnly)).toBe(true);
+
+      const off = store({ env: {} });
+      off.pin();
+      await expect(off.profiles.hostRepositories("lab")).rejects.toThrow(/not available in this build/);
+      const unpinned = store();
+      await expect(unpinned.profiles.hostRepositories("lab")).rejects.toThrow(/Set up the ORCA server/);
+      expect([...off.opened, ...unpinned.opened]).toEqual([]);
+    },
+  );
 });
 
 describe("Claude Code on a profile's server", () => {
