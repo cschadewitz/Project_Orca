@@ -76,6 +76,10 @@ $case = 0
 function Case([string]$title) { $script:case++; Write-Host "`n[$script:case] $title" }
 
 try {
+  Case "the download policy: HTTPS redirects only, a size bound, one deadline over the whole download, no signed query shown"
+  & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "download.ps1") | ForEach-Object { Write-Host "  $_" }
+  Assert ($LASTEXITCODE -eq 0) "the download checks failed"
+
   Case "an archive entry outside its root is refused before anything is unpacked, and the run is put back"
   $evil = Join-Path $base "evil"
   $null = New-Item -ItemType Directory -Force $evil

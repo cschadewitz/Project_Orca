@@ -41,7 +41,7 @@ if ($mode -like "drive-*") {
 }
 if ($script:feed) {
   function Invoke-OrcaDownload {
-    param([string]$url, [string]$target, [long]$limit, [string]$accept)
+    param([string]$url, [string]$target, [long]$limit, [int]$seconds, [string]$accept)
     if (-not $url.StartsWith("https://")) { throw "Downloads must use HTTPS: $url" }
     $name = if ($url -like "https://api.github.com/repos/*/releases/tags/*") { "release.json" } else { $url.Split("/")[-1] }
     $source = Join-Path $script:feed $name

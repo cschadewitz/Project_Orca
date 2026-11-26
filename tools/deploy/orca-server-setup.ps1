@@ -31,7 +31,8 @@ orca-release.py, so this script verifies and stages the bundle itself:
 4. stage       The signed bundle: the three files the release vVERSION records (the
                `orca-server-win-x64-run` record in its notes, which the Windows release workflow
                writes last, so a bundle still being attached is never fetched), downloaded over
-               HTTPS and checked against those digests; or the files the client carried
+               HTTPS (each within its deadline: 2 minutes for the record, the manifest and the
+               signature, 30 for the archive, 15 for cosign) and checked against those digests; or the files the client carried
                (-Bundle). Either way its manifest's signature is
                checked with the pinned cosign against the pinned signer before a byte of the
                archive is read, the archive against the signed manifest, then it is unpacked
@@ -102,6 +103,10 @@ $BundleNode = "runtime/node.exe"
 $BundleEntry = "orca-daemon.mjs"
 $BundleMaxBytes = 512MB
 $BundleMaxUnpacked = 1536MB
+# Each download finishes within its deadline in all, so a stalled server holds the fence no longer.
+$DownloadSmallSeconds = 120
+$DownloadArchiveSeconds = 1800
+$DownloadCosignSeconds = 900
 # The cosign the Windows release workflow verifies with, checked against this digest every use.
 $CosignVersion = "v3.1.4"
 $CosignName = "cosign-windows-amd64.exe"
@@ -899,52 +904,96 @@ function Copy-Checked([string]$source, [string]$target, [long]$limit, [string]$w
   Copy-Item -LiteralPath $source -Destination $target
 }
 
-function Invoke-OrcaDownload([string]$url, [string]$target, [long]$limit, [string]$accept = "") {
-  # HTTPS only, every redirect included, bounded, and written to a file that must not exist yet.
-  [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-  for ($hop = 0; $hop -lt 10; $hop++) {
-    if (-not $url.StartsWith("https://")) { throw "Downloads must use HTTPS: $url" }
-    $request = [Net.HttpWebRequest][Net.WebRequest]::Create($url)
-    $request.AllowAutoRedirect = $false
-    $request.UserAgent = "orca-server-setup"
-    $request.Timeout = 60000
-    $request.ReadWriteTimeout = 60000
-    if ($accept) { $request.Accept = $accept }
-    try {
-      $response = $request.GetResponse()
-    } catch {
-      # An HTTP status other than 2xx arrives as a WebException carrying the response.
-      $failure = $_.Exception
-      if ($failure -is [Management.Automation.MethodInvocationException]) { $failure = $failure.InnerException }
-      if ($failure -isnot [Net.WebException] -or $null -eq $failure.Response) { throw }
-      $response = $failure.Response
+function Get-OrcaUrlLabel([string]$url) {
+  # Where a download goes, for a message: scheme, host and path only. A release asset's redirect
+  # carries temporary signed query parameters, which never reach a log.
+  try { return (New-Object Uri($url)).GetLeftPart([UriPartial]::Path) } catch { return "an address that is not a URL" }
+}
+
+function Open-OrcaResponse([string]$url, [int]$timeout, [string]$accept) {
+  # One request, no redirect followed, answered within $timeout milliseconds. An HTTP status other
+  # than 2xx comes back as its response too.
+  $request = [Net.HttpWebRequest][Net.WebRequest]::Create($url)
+  $request.AllowAutoRedirect = $false
+  $request.UserAgent = "orca-server-setup"
+  $request.Timeout = $timeout
+  $request.ReadWriteTimeout = $timeout
+  if ($accept) { $request.Accept = $accept }
+  try {
+    return $request.GetResponse()
+  } catch {
+    $failure = $_.Exception
+    if ($failure -is [Management.Automation.MethodInvocationException]) { $failure = $failure.InnerException }
+    if ($failure -isnot [Net.WebException] -or $null -eq $failure.Response) {
+      # Named by its kind only: a .NET message may quote the whole address.
+      $kind = if ($failure -is [Net.WebException]) { [string]$failure.Status } else { $failure.GetType().Name }
+      throw "Download failed ($kind): $(Get-OrcaUrlLabel $url)"
     }
-    try {
-      $code = [int]$response.StatusCode
-      if ($code -ge 300 -and $code -lt 400) {
-        $url = [string](New-Object Uri((New-Object Uri($url)), [string]$response.Headers["Location"])).AbsoluteUri
-        continue
-      }
-      if ($code -ne 200) { throw "Download failed with HTTP $code`: $url" }
-      $stream = $response.GetResponseStream()
-      $file = [IO.File]::Open($target, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
-      try {
-        $buffer = New-Object byte[] 1048576
-        $total = [long]0
-        while (($read = $stream.Read($buffer, 0, $buffer.Length)) -gt 0) {
-          $total += $read
-          if ($total -gt $limit) { throw "Download exceeds $limit bytes: $url" }
-          $file.Write($buffer, 0, $read)
-        }
-      } finally {
-        $file.Dispose()
-      }
-      return
-    } finally {
-      $response.Dispose()
-    }
+    return $failure.Response
   }
-  throw "Download redirected too often: $url"
+}
+
+function Invoke-OrcaDownload([string]$url, [string]$target, [long]$limit, [int]$seconds, [string]$accept = "") {
+  # HTTPS only, every redirect included, at most $limit bytes, written to a file that must not
+  # exist yet, and finished within $seconds in all (redirects, waits and the transfer together),
+  # so a stalled or trickling server never holds the setup's fence past that. A download that
+  # fails leaves no file behind.
+  [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+  $deadline = [long]$seconds * 1000
+  $clock = [Diagnostics.Stopwatch]::StartNew()
+  $created = $false
+  try {
+    for ($hop = 0; $hop -lt 10; $hop++) {
+      $label = Get-OrcaUrlLabel $url
+      if (-not $url.StartsWith("https://")) { throw "Downloads must use HTTPS: $label" }
+      $left = $deadline - $clock.ElapsedMilliseconds
+      if ($left -le 0) { throw "Download did not finish within $seconds seconds: $label" }
+      $response = Open-OrcaResponse $url ([int][Math]::Min(60000, $left)) $accept
+      try {
+        $code = [int]$response.StatusCode
+        if ($code -ge 300 -and $code -lt 400) {
+          $location = [string]$response.Headers["Location"]
+          if (-not $location) { throw "Download redirected nowhere: $label" }
+          $url = [string](New-Object Uri((New-Object Uri($url)), $location)).AbsoluteUri
+          continue
+        }
+        if ($code -ne 200) { throw "Download failed with HTTP $code`: $label" }
+        $stream = $response.GetResponseStream()
+        $file = [IO.File]::Open($target, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+        $created = $true
+        try {
+          $buffer = New-Object byte[] 1048576
+          $total = [long]0
+          while ($true) {
+            $left = $deadline - $clock.ElapsedMilliseconds
+            if ($left -le 0) { throw "Download did not finish within $seconds seconds: $label" }
+            # Each read waits at most what is left of the deadline.
+            if ($stream.CanTimeout) { $stream.ReadTimeout = [int][Math]::Min(60000, $left) }
+            try {
+              $read = $stream.Read($buffer, 0, $buffer.Length)
+            } catch {
+              if ($clock.ElapsedMilliseconds -ge $deadline) { throw "Download did not finish within $seconds seconds: $label" }
+              throw "Download broke off: $label"
+            }
+            if ($read -le 0) { break }
+            $total += $read
+            if ($total -gt $limit) { throw "Download exceeds $limit bytes: $label" }
+            $file.Write($buffer, 0, $read)
+          }
+        } finally {
+          $file.Dispose()
+        }
+        if ($clock.ElapsedMilliseconds -gt $deadline) { throw "Download did not finish within $seconds seconds: $label" }
+        return
+      } finally {
+        $response.Dispose()
+      }
+    }
+    throw "Download redirected too often: $label"
+  } catch {
+    if ($created -and [IO.File]::Exists($target)) { [IO.File]::Delete($target) }
+    throw
+  }
 }
 
 function Get-OrcaReleaseBundle($s, [string]$downloads) {
@@ -953,7 +1002,7 @@ function Get-OrcaReleaseBundle($s, [string]$downloads) {
   # digest, and each download checked against it.
   $names = Get-BundleNames $s.Version
   $recordFile = Join-Path $downloads "release.json"
-  Invoke-OrcaDownload "https://api.github.com/repos/$BundleRepository/releases/tags/v$($s.Version)" $recordFile 4MB "application/vnd.github+json"
+  Invoke-OrcaDownload "https://api.github.com/repos/$BundleRepository/releases/tags/v$($s.Version)" $recordFile 4MB $DownloadSmallSeconds "application/vnd.github+json"
   $published = Read-Json $recordFile
   [IO.File]::Delete($recordFile)
   $prerelease = $s.Version.Contains("-")
@@ -973,8 +1022,8 @@ function Get-OrcaReleaseBundle($s, [string]$downloads) {
     if ($null -eq $asset -or -not $asset.browser_download_url -or $asset.digest -ne "sha256:$($recorded[$name])") {
       throw "Release v$($s.Version)'s $name is missing or not the recorded one; retry later"
     }
-    $limit = if ($name -eq $names.archive) { $BundleMaxBytes } else { 4MB }
-    Invoke-OrcaDownload ([string]$asset.browser_download_url) (Join-Path $downloads $name) $limit
+    $limit, $seconds = if ($name -eq $names.archive) { $BundleMaxBytes, $DownloadArchiveSeconds } else { 4MB, $DownloadSmallSeconds }
+    Invoke-OrcaDownload ([string]$asset.browser_download_url) (Join-Path $downloads $name) $limit $seconds
     if ((Get-Sha256 (Join-Path $downloads $name)) -ne $recorded[$name]) { throw "Downloaded $name is not the recorded file" }
   }
 }
@@ -992,7 +1041,7 @@ function Get-OrcaCosign($s) {
         Copy-Checked (Join-Path $s.Bundle $CosignName) $partial 256MB "Pushed cosign"
         if ((Get-Sha256 $partial) -ne $CosignSha256) { throw "Pushed cosign does not match its pinned digest" }
       } else {
-        Invoke-OrcaDownload "https://github.com/sigstore/cosign/releases/download/$CosignVersion/$CosignName" $partial 256MB
+        Invoke-OrcaDownload "https://github.com/sigstore/cosign/releases/download/$CosignVersion/$CosignName" $partial 256MB $DownloadCosignSeconds
         if ((Get-Sha256 $partial) -ne $CosignSha256) { throw "Downloaded cosign does not match its pinned digest" }
       }
       [IO.File]::Move($partial, $path)
