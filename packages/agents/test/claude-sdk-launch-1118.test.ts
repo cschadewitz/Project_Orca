@@ -55,6 +55,15 @@ exit 9
   return path;
 }
 
+function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 const LOGGED_IN = `echo '{"loggedIn":true,"authMethod":"oauth_token","apiProvider":"firstParty"}'; exit 0`;
 
 describe("config (#1118)", () => {
@@ -233,6 +242,57 @@ describe.runIf(posix)("login (#1118)", () => {
     await expect(
       claudeSdkPreflight({ agent: agent({ command: cancelled }), cwd: dir, baseEnv: {}, signal: controller.signal }),
     ).rejects.toThrow(/was cancelled/);
+  });
+
+  it("settles a killed probe in bounded time even when a descendant holds its output open", async () => {
+    const pidFile = join(dir, "descendant.pid");
+    const SIGNED_IN = `echo '{"loggedIn":true}'`;
+    // The descendant inherits standard output, so the pipe stays open after the probe dies.
+    const holder = await fakeClaude(
+      join(dir, "holder"),
+      `${SIGNED_IN}; sleep 30 & echo $! > "${pidFile}"; exec sleep 30`,
+    );
+    for (const how of ["deadline", "cancel"] as const) {
+      const controller = new AbortController();
+      if (how === "cancel") setTimeout(() => controller.abort(), 300);
+      const started = Date.now();
+      await expect(
+        claudeSdkPreflight({
+          agent: agent({ command: holder }),
+          cwd: dir,
+          baseEnv: {},
+          timeoutMs: how === "deadline" ? 300 : 20_000,
+          signal: controller.signal,
+        }),
+        how,
+      ).rejects.toThrow(how === "deadline" ? /did not answer in time/ : /was cancelled/);
+      expect(Date.now() - started, how).toBeLessThan(5_000);
+      // The probe's own process group was killed, the descendant with it.
+      const pid = Number((await readFile(pidFile, "utf8")).trim());
+      await expect.poll(() => alive(pid), { timeout: 3_000 }).toBe(false);
+    }
+  });
+
+  it("spawns nothing for an already-cancelled signal", async () => {
+    const marker = join(dir, "started");
+    const bin = await fakeClaude(join(dir, "claude"), LOGGED_IN, `touch "${marker}"`);
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      claudeSdkPreflight({ agent: agent({ command: bin }), cwd: dir, baseEnv: {}, signal: controller.signal }),
+    ).rejects.toThrow(/--version was cancelled/);
+    await expect(readFile(marker)).rejects.toThrow();
+  });
+
+  it("requires --version to exit 0", async () => {
+    const bin = await fakeClaude(
+      join(dir, "claude"),
+      LOGGED_IN,
+      `if [ "$1" = "--version" ]; then echo "2.1.332 (Claude Code)"; exit 1; fi`,
+    );
+    await expect(claudeSdkPreflight({ agent: agent({ command: bin }), cwd: dir, baseEnv: {} })).rejects.toThrow(
+      /--version exited with 1/,
+    );
   });
 
   it("keeps none of the CLI's own text in an error or the result", async () => {

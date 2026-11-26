@@ -200,11 +200,12 @@ export async function claudeSdkPreflight(options: ClaudeSdkPreflightOptions): Pr
   const version = await run(["--version"]);
   // Only the version number is kept from what the CLI printed: `command` is configurable, so
   // its output is untrusted and none of its text reaches an error or a log.
-  const versionNumber = completed(version) ? CLI_VERSION.exec(version.stdout.trim())?.[0] : undefined;
+  const versionOk = completed(version) && version.code === 0;
+  const versionNumber = versionOk ? CLI_VERSION.exec(version.stdout.trim())?.[0] : undefined;
   if (versionNumber === undefined)
     throw new OrcaError(
       "AGENT_TRANSPORT",
-      `agent ${agent.id}: ${executable} --version ${completed(version) ? "printed no Claude Code version" : describeFailure(version)}; ` +
+      `agent ${agent.id}: ${executable} --version ${versionOk ? "printed no Claude Code version" : describeFailure(version)}; ` +
         `it is not a Claude Code ORCA can run.`,
       { agentId: agent.id, executable, ...failureDetails(version) },
     );
@@ -295,33 +296,73 @@ interface BoundedResult {
 }
 
 /**
+ * After ORCA kills a probe, how long it waits for the pipe to close before settling anyway. A
+ * descendant that inherited standard output can hold the pipe open after the probe is gone.
+ */
+export const PROBE_KILL_SETTLE_MS = 1_000;
+
+/**
  * Run `file` with a deadline, a cancellation signal and an output cap, each of which kills it
  * and is reported by its own flag. Standard error goes nowhere: none of the CLI's text is kept.
+ *
+ * Bounded whatever the probe does: an already-cancelled signal spawns nothing; on POSIX the
+ * probe gets its own process group and a kill is sent to the whole group; once killed, the
+ * promise settles when the pipe closes or `PROBE_KILL_SETTLE_MS` later, whichever is first, with
+ * the pipe destroyed. It owns only the processes it started; nothing here is a session.
  */
 function runBounded(
   file: string,
   args: string[],
   o: { cwd: string; env: Record<string, string>; timeoutMs: number; signal?: AbortSignal | undefined },
 ): Promise<BoundedResult> {
+  if (o.signal?.aborted)
+    return Promise.resolve({
+      code: null,
+      signal: null,
+      stdout: "",
+      timedOut: false,
+      aborted: true,
+      overLimit: false,
+    });
   return new Promise((resolveResult) => {
     const flags = { timedOut: false, aborted: false, overLimit: false };
     const chunks: Buffer[] = [];
     let bytes = 0;
     let settled = false;
+    let killed = false;
+    let exit: { code: number | null; signal: NodeJS.Signals | null } | undefined;
+    let settleTimer: NodeJS.Timeout | undefined;
+    const group = process.platform !== "win32";
     const child = spawn(file, args, {
       cwd: o.cwd,
       env: o.env,
       stdio: ["ignore", "pipe", "ignore"],
       windowsHide: true,
+      detached: group,
     });
+    const finish = (r: Omit<BoundedResult, "timedOut" | "aborted" | "overLimit" | "stdout">) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(deadline);
+      clearTimeout(settleTimer);
+      o.signal?.removeEventListener("abort", onAbort);
+      child.stdout.destroy();
+      const clean = !killed && r.spawnError === undefined;
+      resolveResult({ ...r, ...flags, stdout: clean ? Buffer.concat(chunks).toString("utf8") : "" });
+    };
     const kill = () => {
+      if (killed) return;
+      killed = true;
       try {
-        child.kill("SIGKILL");
+        if (group && child.pid !== undefined) process.kill(-child.pid, "SIGKILL");
+        else child.kill("SIGKILL");
       } catch {
         // Already gone.
       }
+      child.stdout.destroy();
+      settleTimer = setTimeout(() => finish(exit ?? { code: null, signal: null }), PROBE_KILL_SETTLE_MS);
     };
-    const timer = setTimeout(() => {
+    const deadline = setTimeout(() => {
       flags.timedOut = true;
       kill();
     }, o.timeoutMs);
@@ -329,16 +370,7 @@ function runBounded(
       flags.aborted = true;
       kill();
     };
-    if (o.signal?.aborted) onAbort();
-    else o.signal?.addEventListener("abort", onAbort, { once: true });
-    const finish = (r: Omit<BoundedResult, "timedOut" | "aborted" | "overLimit" | "stdout">) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      o.signal?.removeEventListener("abort", onAbort);
-      const clean = !flags.timedOut && !flags.aborted && !flags.overLimit && r.spawnError === undefined;
-      resolveResult({ ...r, ...flags, stdout: clean ? Buffer.concat(chunks).toString("utf8") : "" });
-    };
+    o.signal?.addEventListener("abort", onAbort, { once: true });
     child.stdout.on("data", (chunk: Buffer) => {
       bytes += chunk.length;
       if (bytes > MAX_OUTPUT_BYTES) {
@@ -348,10 +380,17 @@ function runBounded(
       }
       chunks.push(chunk);
     });
+    // A destroyed pipe may report an error; the flags already say why.
+    child.stdout.on("error", () => undefined);
     child.on("error", (e: NodeJS.ErrnoException) => {
       finish({ code: null, signal: null, spawnError: /^[A-Z0-9_]{1,40}$/.test(e.code ?? "") ? e.code! : "UNKNOWN" });
     });
-    child.on("close", (code, signal) => finish({ code, signal }));
+    child.on("exit", (code, signal) => {
+      exit = { code, signal };
+      // Killed: the pipe may never close (a descendant holds it); do not wait on it.
+      if (killed) finish(exit);
+    });
+    child.on("close", (code, signal) => finish(exit ?? { code, signal }));
   });
 }
 
