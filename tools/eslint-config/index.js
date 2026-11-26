@@ -37,7 +37,14 @@ const appImportBoundary = {
 export default tseslint.config(
   {
     // packages/design/src/tokens.ts is generated; its formatting is the generator's.
-    ignores: ["**/dist/**", "coverage/**", "**/*.tsbuildinfo", "packages/design/src/tokens.ts"],
+    ignores: [
+      "**/dist/**",
+      "coverage/**",
+      "**/*.tsbuildinfo",
+      "packages/design/src/tokens.ts",
+      // Generated from a pinned Codex by tools/codex-protocol.mjs and checked byte for byte (#1156).
+      "packages/agents/src/codex-protocol/**",
+    ],
   },
   js.configs.recommended,
   tseslint.configs.recommendedTypeChecked,

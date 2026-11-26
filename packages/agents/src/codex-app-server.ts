@@ -66,7 +66,8 @@ export function codexAppServerRefused(
   return new OrcaError(
     "NOT_SUPPORTED",
     `agent ${agent.id} has driver: codex-app-server, but ${why}. ORCA refuses the session; ` +
-      `remove driver to run Codex through its ACP adapter.`,
+      `remove driver, and set command back to the ACP adapter (for example codex-acp) if it names the Codex CLI, ` +
+      `to run Codex through its ACP adapter.`,
     { agentId: agent.id, ...(host ? { host: host.id } : {}) },
   );
 }

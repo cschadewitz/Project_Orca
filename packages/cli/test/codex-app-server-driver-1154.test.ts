@@ -89,7 +89,8 @@ describe("every entry point refuses the session before anything starts", () => {
     expect(error.code).toBe("NOT_SUPPORTED");
     expect(error.message).toBe(
       "agent codex has driver: codex-app-server, but ORCA does not run Codex on this driver yet (#1157). " +
-        "ORCA refuses the session; remove driver to run Codex through its ACP adapter.",
+        "ORCA refuses the session; remove driver, and set command back to the ACP adapter (for example codex-acp) " +
+        "if it names the Codex CLI, to run Codex through its ACP adapter.",
     );
     expect(open).not.toHaveBeenCalled();
     expect(spawned).not.toHaveBeenCalled();
