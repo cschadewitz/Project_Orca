@@ -6,6 +6,7 @@
  */
 import { readFileSync } from "node:fs";
 import { expect, it } from "vitest";
+import { UPDATER_CACHE } from "../src/main/legacy-updater-cache.js";
 
 const read = (relative: string) => readFileSync(new URL(relative, import.meta.url), "utf8");
 
@@ -13,6 +14,8 @@ it("removes the updater cache electron-builder names after the package", () => {
   const { name } = JSON.parse(read("../package.json")) as { name: string };
   const cache = `${name.replace(/[/\\:*?"<>|]/g, "").toLowerCase()}-updater`;
   expect(cache).toBe("@orcaapp-updater");
+  // The app's first renamed launch tells the old cache from its own by this name.
+  expect(UPDATER_CACHE).toBe(cache);
   const nsh = read("../build/installer.nsh");
   expect(nsh).toContain(`RMDir /r "$LOCALAPPDATA\\${cache}"`);
   // Never during an update, which runs the uninstaller with --updated.

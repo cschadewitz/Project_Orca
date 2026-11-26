@@ -56,6 +56,7 @@ import { basename, dirname, join } from "node:path";
 import { readFileSync, statSync } from "node:fs";
 import { windowIcon } from "./window-icon.js";
 import { carryLegacyUserData } from "./legacy-user-data.js";
+import { removeLegacyUpdaterCache } from "./legacy-updater-cache.js";
 import { revealWhenReady } from "./window-reveal.js";
 import { fileURLToPath } from "node:url";
 import {
@@ -115,6 +116,8 @@ if (app.isPackaged) {
     console.error(`settings from the previous app name were not copied: ${(error as Error).message}`);
   }
 }
+// The Windows updater's cache under the pre-rename name is nobody's now; remove it once.
+if (app.isPackaged && process.platform === "win32") removeLegacyUpdaterCache(process.env.LOCALAPPDATA);
 
 // Mount synchronously before producers. Selected workspace/configuration roots are
 // enrolled before their first producer; replacement activation remains held below.
