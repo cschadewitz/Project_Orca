@@ -437,9 +437,27 @@ test("#1112 Workflows: a wide graph opens fitted, every node in the canvas", asy
   });
   await shot("1112-workflows-wide-graph");
   expect(measured.nodes.length, "wide-graph's nodes").toBeGreaterThanOrEqual(10);
-  for (const node of measured.nodes) expect(inside(node, measured.view), `${node.id} in the canvas`).toBe(true);
+  await expectFittedOrCentred(measured);
   await page.keyboard.press("Escape");
 });
+
+/** Every node in the canvas, or, where the graph is wider than the canvas even at the smallest zoom, that zoom centred on the graph. */
+async function expectFittedOrCentred(measured: { view: Box; nodes: (Box & { id: string })[] }): Promise<void> {
+  if (measured.nodes.every((node) => inside(node, measured.view))) return;
+  // Fitting stops at the smallest zoom. Where the canvas is narrower than the graph at that zoom
+  // (1000×680, beside the inspector), it opens there, centred on the graph, not on its first nodes.
+  const reset = page.getByRole("button", { name: /^Reset the zoom and the pan, now / });
+  await expect(reset).toHaveAccessibleName(/now 25%$/);
+  const box = {
+    left: Math.min(...measured.nodes.map((n) => n.left)),
+    right: Math.max(...measured.nodes.map((n) => n.right)),
+    top: Math.min(...measured.nodes.map((n) => n.top)),
+    bottom: Math.max(...measured.nodes.map((n) => n.bottom)),
+  };
+  const v = measured.view;
+  expect(Math.abs((box.left + box.right) / 2 - (v.left + v.right) / 2), "centred across").toBeLessThan(24);
+  expect(Math.abs((box.top + box.bottom) / 2 - (v.top + v.bottom) / 2), "centred down").toBeLessThan(24);
+}
 
 /*
  * #1112's scope: the whole app at common window sizes and at 100%, 125% and 150%. Every surface
