@@ -65,6 +65,7 @@ import type { ThreadStartParams } from "./codex-protocol/0.171.0/v2/ThreadStartP
 import type { TurnPlanStep } from "./codex-protocol/0.171.0/v2/TurnPlanStep.js";
 import type { ThreadTokenUsage } from "./codex-protocol/0.171.0/v2/ThreadTokenUsage.js";
 import { processCleanup } from "./process-cleanup.js";
+import { CODEX_VERIFIED_IMAGES, codexImageTarget, codexVersionForImage, ownChildImageDigest } from "./codex-image.js";
 import type { FileUpdateChange } from "./codex-protocol/0.171.0/v2/FileUpdateChange.js";
 import {
   codexAskRequest,
@@ -202,6 +203,10 @@ export interface OpenCodexAppServerSessionOptions {
    * sends it anything, so the caller can redact them from what the run records.
    */
   onSecretValues?: (values: readonly string[]) => void;
+  /** For tests: how the image of the app-server ORCA started is attested (#1162). */
+  imageDigest?: (pid: number | undefined) => Promise<{ sha256: string } | { error: string }>;
+  /** For tests: this machine's `<platform>-<arch>`, the key of the verified images. */
+  imageTarget?: string;
 }
 
 /** As `SessionContinuity` on the ACP route: the thread was resumed, or a new one started. */
@@ -238,6 +243,8 @@ interface Connection {
   accountUpdated?: boolean;
   /** Codex reported a thread on this connection connected to an environment other than `local`. */
   foreignEnvironment?: boolean;
+  /** The verified Codex version whose image ORCA attested for this process (#1162). */
+  imageVersion?: string;
 }
 
 /** Provider errors can carry private context: report only the failed recovery boundary, as the ACP route does. */
@@ -735,6 +742,23 @@ function codexStartupFailure(
   });
 }
 
+/** ORCA refuses a Codex it cannot attest as a verified build for this machine (#1162). */
+function codexImageRefusal(
+  agentId: string,
+  target: string,
+  why: string,
+  details: Record<string, unknown> = {},
+): OrcaError {
+  const verified = Object.keys(CODEX_VERIFIED_IMAGES).filter((v) => CODEX_VERIFIED_IMAGES[v]![target] !== undefined);
+  return new OrcaError(
+    "NOT_SUPPORTED",
+    `agent ${agentId}: ${why}` +
+      (verified.length ? `. ORCA verified Codex ${verified.join(", ")} for ${target}` : "") +
+      `. ORCA does not start this session.`,
+    { agentId, reason: "codex-image-unverified", platform: target, ...details },
+  );
+}
+
 /**
  * Open a Codex app-server session. Refused unless the spec asks for the driver and the host is
  * ORCA's own; every failure after the process starts stops it, with its exit attached.
@@ -760,6 +784,11 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
       { agentId: agent.id },
     );
   if (opts.requireContextRecovery && !opts.resumeThreadId?.trim()) throw codexRecoveryFailure("missing-thread-id");
+  // ORCA runs only a Codex build it verified for this machine, attested from the process it
+  // starts (#1162); a machine with no verified build is refused before anything starts.
+  const imageTarget = opts.imageTarget ?? codexImageTarget();
+  if (!Object.values(CODEX_VERIFIED_IMAGES).some((images) => images[imageTarget] !== undefined))
+    throw codexImageRefusal(agent.id, imageTarget, `ORCA has no verified Codex build for ${imageTarget}`);
 
   const secretPlan = planSessionSecrets(opts.host, agent, opts.secrets);
   await checkSecretUse(secretPlan, opts.host, agent.id, opts.authorizeSecretUse);
@@ -1366,6 +1395,31 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
         if (replacement) breakSession(refusal);
         return fail(refusal);
       }
+    // The image of the process ORCA just started, read before ORCA sends it anything: a build
+    // ORCA did not verify is stopped before any thread starts, and a restart into one ends the
+    // session (#1162). The digest comes from the kernel's view of the child, never from a path
+    // or a version the process reports.
+    const image = await (opts.imageDigest ?? ownChildImageDigest)(proc.pid);
+    const imageVersion = "sha256" in image ? codexVersionForImage(image.sha256, imageTarget) : undefined;
+    if (imageVersion === undefined) {
+      // A process that exited before its image could be read gets the startup diagnosis it
+      // would have had at the handshake (a restart counts it as a crash, as before): ORCA never
+      // talks to it either way.
+      const exit = "error" in image ? await exitedWithin(proc.exited, STARTUP_EXIT_WAIT_MS) : undefined;
+      if (exit !== undefined)
+        return fail((stopped: boolean) => codexStartupFailure(agent.id, exit, stopped, proc.stderrTail()));
+      const refusal = codexImageRefusal(
+        agent.id,
+        imageTarget,
+        "sha256" in image
+          ? "the Codex it started is not a build ORCA verified. Set the agent's command to the native codex binary of a verified version (an npm install's codex command starts Node, which then starts that binary)"
+          : `ORCA could not attest the Codex it started: ${image.error}`,
+        "sha256" in image ? { sha256: image.sha256 } : {},
+      );
+      if (replacement) breakSession(refusal);
+      return fail(refusal);
+    }
+    c.imageVersion = imageVersion;
     const why = stopped();
     if (why) return fail(why);
     if (!proc.stdio)
@@ -1409,11 +1463,18 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
     });
     c.client = client;
     try {
-      await initializeCodexAppServer(client, {
+      const { version } = await initializeCodexAppServer(client, {
         agentId: agent.id,
         orcaVersion: opts.orcaVersion ?? "0.0.0",
         requiredMethods: CODEX_SESSION_METHODS,
       });
+      if (version !== imageVersion)
+        throw codexImageRefusal(
+          agent.id,
+          imageTarget,
+          `the Codex it started reports version ${version}, but its image is the verified Codex ${imageVersion} build`,
+          { version },
+        );
       const answer = await client.request("account/read", CODEX_ACCOUNT_READ_PARAMS);
       const login = codexLoginRefused(agent.id, answer);
       if (login) throw login;

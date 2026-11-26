@@ -17,7 +17,7 @@ import {
   type CodexSessionContinuity,
   type SessionUpdateEvent,
 } from "../src/index.js";
-import { CONFIG_ANSWERS, configRead, WRITE_SANDBOX } from "./codex-config-fixture.js";
+import { CONFIG_ANSWERS, configRead, WRITE_SANDBOX, VERIFIED_IMAGE } from "./codex-config-fixture.js";
 
 const CWD = process.cwd();
 const INIT = { userAgent: "orca/0.171.0 (test)", codexHome: "/h/.codex", platformFamily: "unix", platformOs: "linux" };
@@ -147,6 +147,7 @@ const open = (host: AgentHost, more: Partial<Parameters<typeof openCodexAppServe
     cwd: CWD,
     thread: { approvalPolicy: "on-request", sandbox: "workspace-write" },
     logger: silentLogger,
+    ...VERIFIED_IMAGE,
     sleep: async () => {},
     ...more,
   });
@@ -413,6 +414,24 @@ describe("an app-server that exits", () => {
       await expect(session.prompt("again")).rejects.toBe(error);
       expect(s.spawnAgent).toHaveBeenCalledTimes(2);
     });
+  });
+
+  it("stops the session when a replacement is not a verified Codex build (#1162)", async () => {
+    const s = scriptedHost(() => BASE);
+    const imageDigest = vi.fn(async (pid: number | undefined) =>
+      pid === 4000 ? VERIFIED_IMAGE.imageDigest() : { sha256: "0".repeat(64) },
+    );
+    const session = await open(s.host, { imageDigest });
+    s.procs[0]!.crash();
+    await settle();
+    const error = (await session.prompt("go").catch((e: unknown) => e)) as OrcaError;
+    expect(error.code).toBe("NOT_SUPPORTED");
+    expect(error.details).toMatchObject({ reason: "codex-image-unverified" });
+    expect(imageDigest.mock.calls.map((c) => c[0])).toEqual([4000, 4001]);
+    expect(s.procs[1]!.received).toEqual([]);
+    expect(s.procs[1]!.kill).toHaveBeenCalled();
+    await expect(session.prompt("again")).rejects.toBe(error);
+    expect(s.spawnAgent).toHaveBeenCalledTimes(2);
   });
 
   it("never answers an ask once its process is gone", async () => {

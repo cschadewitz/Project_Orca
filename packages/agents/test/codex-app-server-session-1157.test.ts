@@ -21,7 +21,7 @@ import {
   type AgentProcessHandle,
   type SessionUpdateEvent,
 } from "../src/index.js";
-import { CONFIG_ANSWERS, configRead, NO_HOOKS, WRITE_SANDBOX } from "./codex-config-fixture.js";
+import { CONFIG_ANSWERS, configRead, NO_HOOKS, WRITE_SANDBOX, VERIFIED_IMAGE } from "./codex-config-fixture.js";
 
 const CWD = process.cwd();
 const INIT = {
@@ -140,6 +140,7 @@ const open = (host: AgentHost, more: Partial<Parameters<typeof openCodexAppServe
     cwd: CWD,
     thread: { approvalPolicy: "on-request", sandbox: "workspace-write" },
     logger: silentLogger,
+    ...VERIFIED_IMAGE,
     ...more,
   });
 
@@ -879,6 +880,66 @@ describe("opening a session", () => {
       /does not ask for driver: codex-app-server/,
     );
     expect(s.spawnAgent).not.toHaveBeenCalled();
+  });
+});
+
+describe("the Codex image ORCA starts (#1162)", () => {
+  const OTHER = "0".repeat(64);
+
+  it("refuses a machine with no verified build before anything starts", async () => {
+    const t = scriptedHost(BASE);
+    const error = (await open(t.host, { imageTarget: "win32-x64" }).catch((e: unknown) => e)) as OrcaError;
+    expect(error.code).toBe("NOT_SUPPORTED");
+    expect(error.message).toMatch(
+      /ORCA has no verified Codex build for win32-x64\. ORCA does not start this session\./,
+    );
+    expect(error.details).toMatchObject({ reason: "codex-image-unverified", platform: "win32-x64" });
+    expect(t.spawnAgent).not.toHaveBeenCalled();
+  });
+
+  it("attests the process it started, and refuses a different digest before saying anything to it", async () => {
+    const t = scriptedHost(BASE);
+    const imageDigest = vi.fn(async () => ({ sha256: OTHER }));
+    const error = (await open(t.host, { imageDigest }).catch((e: unknown) => e)) as OrcaError;
+    expect(imageDigest).toHaveBeenCalledWith(4242);
+    expect(error.code).toBe("NOT_SUPPORTED");
+    expect(error.message).toMatch(/the Codex it started is not a build ORCA verified/);
+    expect(error.message).toMatch(/ORCA verified Codex 0\.171\.0 for linux-x64/);
+    expect(error.details).toMatchObject({ reason: "codex-image-unverified", platform: "linux-x64", sha256: OTHER });
+    // No handshake, no thread: Codex was stopped before ORCA sent it anything.
+    expect(t.peer.received).toEqual([]);
+    expect(t.kill).toHaveBeenCalled();
+  });
+
+  it("refuses when the image cannot be attested, with ORCA's reason only", async () => {
+    const t = scriptedHost(BASE);
+    const error = (await open(t.host, {
+      imageDigest: async () => ({ error: "process 4242 is not running as a child ORCA started" }),
+    }).catch((e: unknown) => e)) as OrcaError;
+    expect(error.message).toMatch(/ORCA could not attest the Codex it started: process 4242 is not running as a child/);
+    expect(t.peer.received).toEqual([]);
+  });
+
+  it("gives a process that exited before its image was read the startup diagnosis", async () => {
+    const t = scriptedHost(BASE);
+    const error = (await open(t.host, {
+      imageDigest: async () => {
+        t.exit({ code: 1, signal: null });
+        return { error: "process 4242 is not running as a child ORCA started" };
+      },
+    }).catch((e: unknown) => e)) as OrcaError;
+    expect(error.code).toBe("AGENT_TRANSPORT");
+    expect(error.message).toMatch(/exited with code 1 before ORCA's handshake finished/);
+    expect(error.details).toMatchObject({ exited: true, exitCode: 1 });
+    expect(t.peer.received).toEqual([]);
+  });
+
+  it("refuses a verified image whose handshake reports another version", async () => {
+    const t = scriptedHost({ ...BASE, initialize: () => ({ ...INIT, userAgent: "orca/0.170.0 (test)" }) });
+    const error = (await open(t.host).catch((e: unknown) => e)) as OrcaError;
+    expect(error.code).toBe("NOT_SUPPORTED");
+    expect(error.message).toMatch(/Codex 0\.170\.0/);
+    expect(t.peer.received.map((m) => m.method)).not.toContain("thread/start");
   });
 });
 

@@ -543,6 +543,19 @@ refuses a session whose Codex reports another version, or whose protocol lacks a
 session needs. The **Codex app-server protocol** workflow regenerates the types from the pinned
 Codex and fails on any drift.
 
+ORCA also attests the Codex it starts (#1162). Each verified version has a SHA-256 per
+platform for Codex's native binary (today 0.171.0 on `linux-x64`; the ACP route's verified
+pairs read the same digests). Right after the process starts, and before ORCA sends it
+anything, ORCA hashes the image the kernel runs for its own child (`/proc/<pid>/exe`, checked
+to be the same child before and after) and refuses the session unless the digest is one it
+verified for this machine and the version `initialize` reports is that build's. A machine with
+no verified build is refused before anything starts, and a restart into another build ends the
+session. Nothing a process reports is executed or trusted for this. `command` must therefore
+name the native `codex` binary: an npm install's `codex` command starts Node, which then starts
+the binary, and is refused (with npm, the binary is
+`node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex` under the
+`@openai/codex` install).
+
 ORCA sets the thread's approval policy (`on-request`: Codex 0.171.0 refuses `untrusted` at
 startup, so ORCA refuses a session asked for it before starting Codex), the reviewer `user` and
 the sandbox (`read-only` or `workspace-write`; never full access) as session flags
