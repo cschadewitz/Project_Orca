@@ -14,7 +14,7 @@
  * Tunnels are shared per profile and reference counted, so a reconnect to the profile that
  * is already on screen reuses the open tunnel instead of starting a second ssh.
  */
-import { mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import type { Duplex } from "node:stream";
 import { hostname as osHostname } from "node:os";
 import { join } from "node:path";
@@ -41,7 +41,19 @@ import { OperatorDiscoverySchema } from "@orca/protocol";
 import { CredentialTransportUnavailable, type DaemonTokenSource } from "../client/auth.js";
 import { DaemonClient, DaemonClientError } from "../client/daemon-client.js";
 import { streamTransport, type StreamTransport } from "../client/stream-transport.js";
-import type { RemoteProfileView } from "../daemon-connection.js";
+import type { HostAgentView, RemoteProfileView } from "../daemon-connection.js";
+import {
+  HOST_AGENTS,
+  hostAgent,
+  hostAgentSettings,
+  hostAgentsProgram,
+  hostAgentStatus,
+  HostAgentRefused,
+  installHostAgent,
+  prepareHostAgent,
+  signInHostAgent,
+  type HostAgentLoginPrompt,
+} from "@orca/protocol/server-agents";
 import { ConnectionRefusal } from "./connection-target.js";
 import {
   confirmationCode,
@@ -72,6 +84,7 @@ import {
 } from "@orca/protocol/tailnet";
 import {
   dropCourier,
+  httpsFetch,
   prepareCourier,
   pushCourier,
   type CourierFetch,
@@ -957,6 +970,100 @@ export class RemoteProfiles {
       return { setup, signIn: { ok: true } };
     } catch (error) {
       return { setup, signIn: { ok: false, message: error instanceof Error ? error.message : String(error) } };
+    }
+  }
+
+  /**
+   * The agents on the profile's managed server (#1236): each one this ORCA pins, whether that
+   * exact install is there and whether it is signed in. Over a pinned-only connection; only with
+   * the `tailnet-hosts` flag on.
+   */
+  async hostAgents(id: string, scripts: string): Promise<HostAgentView[]> {
+    return this.withAgentTunnel(id, async (tunnel) => {
+      const found = await hostAgentStatus(tunnel, hostAgentsProgram(scripts));
+      return Object.values(HOST_AGENTS).map((agent): HostAgentView => {
+        const status = found.find((item) => item.agent === agent.id);
+        return {
+          agent: agent.id,
+          name: agent.name,
+          version: agent.version,
+          installed: status?.versions.includes(agent.version) ?? false,
+          signedIn: status?.signedIn ?? "unknown",
+          ...(status?.problem ? { problem: status.problem } : {}),
+        };
+      });
+    });
+  }
+
+  /**
+   * Install the agent's pinned packages on the profile's managed server from this computer
+   * (#1236), and return the server config that runs it.
+   */
+  async installHostAgent(id: string, agentId: string, scripts: string): Promise<{ settings: string }> {
+    const agent = this.knownAgent(agentId);
+    const program = hostAgentsProgram(scripts);
+    const prepared = await prepareHostAgent(agent.id, {
+      cacheDir: join(this.deps.dir, "courier", "agents"),
+      fetch: this.deps.courierFetch ?? httpsFetch,
+    }).catch((error: unknown) => {
+      throw error instanceof HostAgentRefused ? new ConnectionRefusal(error.message) : error;
+    });
+    try {
+      return await this.withAgentTunnel(id, async (tunnel) => ({
+        settings: hostAgentSettings(await installHostAgent(tunnel, prepared, program)),
+      }));
+    } finally {
+      rmSync(prepared.dir, { recursive: true, force: true });
+    }
+  }
+
+  /**
+   * Sign the agent in on the profile's managed server with its own device code (#1236).
+   * `onPrompt` gets the sign-in page and code to show; the credential stays on the server.
+   */
+  async signInHostAgent(
+    id: string,
+    agentId: string,
+    scripts: string,
+    onPrompt: (prompt: HostAgentLoginPrompt) => void,
+  ): Promise<void> {
+    const agent = this.knownAgent(agentId);
+    await this.withAgentTunnel(id, (tunnel) =>
+      signInHostAgent(
+        (command, onLine, input) => tunnel.execStreaming(command, onLine, input),
+        agent.id,
+        hostAgentsProgram(scripts),
+        onPrompt,
+      ),
+    );
+  }
+
+  private knownAgent(agentId: string) {
+    try {
+      return hostAgent(agentId);
+    } catch (error) {
+      throw new ConnectionRefusal(error instanceof Error ? error.message : "Unknown agent.");
+    }
+  }
+
+  /** One pinned-only connection to the profile's server for agent work; refusals as the person reads them. */
+  private async withAgentTunnel<T>(id: string, work: (tunnel: SshTunnel) => Promise<T>): Promise<T> {
+    if (this.closed) throw new ConnectionRefusal("The app is closing.");
+    if (!tailnetEnabled(this.deps.tailnet?.features))
+      throw new ConnectionRefusal("Agents on a server are not available in this build.");
+    if (this.serverSetups.has(id)) throw new ConnectionRefusal("That profile's server is being set up.");
+    const profile = this.get(id);
+    if (!profile) throw new ConnectionRefusal("That profile no longer exists.");
+    if (pinState(this.pins(id)) !== "pinned") throw new ConnectionRefusal("Set up the ORCA server on this machine first.");
+    const tunnel = this.newTunnel(profile, true);
+    try {
+      await tunnel.open();
+      return await work(tunnel);
+    } catch (error) {
+      if (error instanceof HostAgentRefused) throw new ConnectionRefusal(error.message);
+      throw error;
+    } finally {
+      await tunnel.close();
     }
   }
 

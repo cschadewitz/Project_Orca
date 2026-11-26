@@ -313,6 +313,11 @@ same account on several machines is between you and its provider. Codex (`codex 
 Code's sign-in asks for a code to be pasted back, which comes later. The host needs `python3`
 3.8.17, 3.9.17, 3.10.12, 3.11.4 or later, for safe unpacking.
 
+In the app, the same is under **Agents** on the machine's profile in the connection dialog. It
+lists each agent with its pinned version, whether it is installed and signed in (or why an
+install is not usable), with **Install** and **Sign in**. During a sign-in it shows the code and
+the sign-in page's host, and **Open sign-in page** opens that page in your browser.
+
 **Policy notes.** The default tailnet policy lets you SSH to machines you own. If you tag a host
 (for example `tag:orca-server`), it leaves `autogroup:self`, so add a narrow SSH rule for your
 own devices and the account ORCA logs in as. Avoid broad `autogroup:member` rules.

@@ -81,6 +81,7 @@ import { callWorkflowDraft } from "../client/workflow-draft-client.js";
 import {
   daemonEndpoint,
   type DaemonConnectionRequest,
+  type AgentSignInView,
   type LoginApprovalView,
   type ProfileResult,
   type TailnetMachinesView,
@@ -217,6 +218,8 @@ const preferences = new PreferencesFile(join(app.getPath("userData"), "preferenc
 /** Saved SSH profiles, their pinned host keys and sealed credentials (#874). Main only. */
 /** The last Tailscale SSH approval page each profile was sent to (#1228), already checked. */
 const loginApprovals = new Map<string, string>();
+/** The last sign-in page each profile's agent printed (#1236), already checked against its origin. */
+const agentSignIns = new Map<string, string>();
 const remoteProfiles = new RemoteProfiles({
   dir: join(app.getPath("userData"), "remote-daemons"),
   cipher: safeStorage,
@@ -1546,6 +1549,51 @@ ipcMain.handle("orca:profiles.tailnetMachines", () =>
         hostSupported: peer.hostSupported,
       })),
     };
+  }),
+);
+ipcMain.on("orca:profiles.tailnetHosts", (event) => {
+  event.returnValue = tailnetEnabled();
+});
+const AgentIdSchema = z.string().regex(/^[a-z][a-z0-9-]{0,31}$/);
+ipcMain.handle("orca:profiles.hostAgents", (_event, id: unknown) =>
+  profileResult(() => remoteProfiles.hostAgents(ProfileIdSchema.parse(id), serverSetupScripts())),
+);
+ipcMain.handle("orca:profiles.installHostAgent", (_event, id: unknown, agent: unknown) =>
+  profileResult(() =>
+    remoteProfiles.installHostAgent(ProfileIdSchema.parse(id), AgentIdSchema.parse(agent), serverSetupScripts()),
+  ),
+);
+ipcMain.handle("orca:profiles.signInHostAgent", (_event, id: unknown, agent: unknown) =>
+  profileResult(async () => {
+    const profileId = ProfileIdSchema.parse(id);
+    const agentId = AgentIdSchema.parse(agent);
+    const key = `${profileId} ${agentId}`;
+    try {
+      // The page is kept here and opened only on the person's click; the renderer learns its
+      // host and the code to enter, never the URL.
+      await remoteProfiles.signInHostAgent(profileId, agentId, serverSetupScripts(), (prompt) => {
+        if (prompt.url) agentSignIns.set(key, prompt.url);
+        const view: AgentSignInView = {
+          profileId,
+          agent: agentId,
+          ...(prompt.url ? { host: new URL(prompt.url).host } : {}),
+          ...(prompt.code ? { code: prompt.code } : {}),
+        };
+        for (const win of BrowserWindow.getAllWindows())
+          if (!win.isDestroyed()) win.webContents.send("orca:profiles.agentSignIn", view);
+      });
+      return null;
+    } finally {
+      agentSignIns.delete(key);
+    }
+  }),
+);
+ipcMain.handle("orca:profiles.openAgentSignIn", (_event, id: unknown, agent: unknown) =>
+  profileResult(async () => {
+    const url = agentSignIns.get(`${ProfileIdSchema.parse(id)} ${AgentIdSchema.parse(agent)}`);
+    if (!url) throw new ConnectionRefusal("That agent's sign-in is not waiting for you.");
+    await shell.openExternal(url);
+    return null;
   }),
 );
 ipcMain.handle("orca:profiles.openLoginApproval", (_event, id: unknown) =>
