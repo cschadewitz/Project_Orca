@@ -39,7 +39,7 @@ No change.
 
 #### agents
 
-- Claude ACP sessions no longer start in the adapter's `auto` mode. In it Claude Code settled calls itself, so a session without ORCA's hook ran a command ORCA's policy denied without asking ORCA. ORCA now switches a recognized Claude session to `default` (Manual) when it opens, new or loaded, and again before each prompt, and refuses its own requests to switch it away. Manual means Claude Code asks about what its own rules do not settle; it is not a guarantee that every call reaches ORCA (Claude's native rules still apply, and the mode is not watched during a turn). That guarantee remains the native hook's.
+- Claude ACP sessions no longer start in the adapter's `auto` mode. In it Claude Code settled calls itself, so a session without ORCA's hook ran a command ORCA's policy denied without asking ORCA. ORCA now switches a recognized Claude session to `default` (Manual) when it opens, new or loaded, and again before each prompt, and refuses its own requests to switch it away. Manual means Claude Code asks about what its own rules do not settle; it is not a guarantee that every call reaches ORCA (Claude's native rules still apply, and the mode is not watched during a turn). The native hook provides separate assurance for the calls it covers; see `docs/agent-hook-coverage.md`.
 
 #### app
 
