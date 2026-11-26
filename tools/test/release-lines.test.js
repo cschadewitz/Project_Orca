@@ -926,8 +926,8 @@ describe("a real release's reviewed-commit check", () => {
 describe("the patch path through the workflows", () => {
   it("runs CI and the guard on line branches, but never on the release pull request heads", () => {
     const ci = workflow("ci.yml");
-    expect(ci.on.pull_request.branches).toEqual(["main", "release/[0-9]*"]);
-    expect(ci.on.push.branches).toEqual(["main", "release/[0-9]*"]);
+    expect(ci.on.pull_request.branches).toEqual(["main", "release/[0-9]*", "feature/**"]);
+    expect(ci.on.push.branches).toEqual(["main", "release/[0-9]*", "feature/**"]);
   });
 
   it("opens the release pull request against the branch the version is cut from", () => {
