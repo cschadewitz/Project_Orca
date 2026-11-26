@@ -305,8 +305,11 @@ export interface HostAgentLoginPrompt {
   code?: string;
 }
 
+/** Terminal escapes: CSI sequences and OSC strings (which cannot hold another escape). */
 // eslint-disable-next-line no-control-regex
-const ANSI = /\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*\x07/g;
+const ANSI = /\x1b\[[0-9;?]{0,64}[ -/]{0,8}[@-~]|\x1b\][^\x07\x1b]{0,2048}\x07/g;
+/** The most of one line that is looked at: a sign-in prompt is short. */
+const PROMPT_LINE_LIMIT = 4096;
 /** A device code as Codex and GitHub print them: `ABCD-EFGH`, `ABCD-EFGHI`. */
 const CODE = /\b([A-Z0-9]{4}-[A-Z0-9]{4,5})\b/;
 
@@ -316,7 +319,7 @@ const CODE = /\b([A-Z0-9]{4}-[A-Z0-9]{4,5})\b/;
  * elsewhere is never offered.
  */
 export function loginPrompt(line: string, origins: readonly string[]): HostAgentLoginPrompt {
-  const text = line.replace(ANSI, "");
+  const text = line.slice(0, PROMPT_LINE_LIMIT).replace(ANSI, "");
   const prompt: HostAgentLoginPrompt = {};
   for (const candidate of text.match(/https:\/\/[^\s"'<>]{1,2000}/g) ?? []) {
     try {
