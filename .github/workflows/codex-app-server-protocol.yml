@@ -80,6 +80,33 @@ jobs:
           echo "ORCA_CODEX_BIN=$bin" >> "$GITHUB_ENV"
           echo "ORCA_CODEX_ADAPTER=$adapter" >> "$GITHUB_ENV"
 
+      # Codex runs the turn's commands in its bubblewrap sandbox (workspace-write, no network),
+      # with the system's bwrap when there is one and its own bundled copy otherwise. Where
+      # the runner withholds user namespaces from a plain process through AppArmor, bwrap
+      # cannot set up the sandbox's loopback and every command fails. The exception is given
+      # to those two bwrap binaries alone, as codex-exec-gate-acceptance.yml does. This is a
+      # fixture of this test run, not something ORCA does on a host; nothing else is loosened.
+      - name: Let Codex's bubblewrap make its sandbox
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v bwrap || { sudo apt-get update -q && sudo apt-get install -y -q bubblewrap; }
+          system=$(readlink -f /usr/bin/bwrap)
+          bundled=$(readlink -f "$(dirname "$ORCA_CODEX_BIN")/../codex-resources/bwrap")
+          test -x "$bundled"
+          try() { "$1" --unshare-user --unshare-pid --unshare-net --dev-bind / / --proc /proc /bin/true; }
+          if ! try "$system" || ! try "$bundled"; then
+            printf '%s\n' 'abi <abi/4.0>,' 'include <tunables/global>' \
+              "profile orca-codex-bwrap-system \"$system\" flags=(unconfined) {" '  userns,' '}' \
+              "profile orca-codex-bwrap-bundled \"$bundled\" flags=(unconfined) {" '  userns,' '}' \
+              | sudo tee /etc/apparmor.d/orca-codex-bwrap > /dev/null
+            sudo apparmor_parser -r /etc/apparmor.d/orca-codex-bwrap
+            try "$system"
+            try "$bundled"
+            echo "user namespaces: allowed for $system and $bundled by the profiles orca-codex-bwrap-*"
+          fi
+          echo "apparmor_restrict_unprivileged_userns=$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null || echo absent)"
+
       - name: Compare the checked-in protocol with the pinned Codex's
         run: node tools/codex-protocol.mjs check --codex "$ORCA_CODEX_BIN"
 
