@@ -18,8 +18,9 @@ on the server to run it. It works only under the server root the setup made,
                           (`files/`) and its record (`install.json`: every file's path, mode,
                           size and sha256), which becomes `agents/<agent>/<version>` in one
                           rename: there is never a tree without its record. Installs of one
-                          agent hold `agents/<agent>/.install.lock`, so they never overlap; a
-                          staging directory an interrupted install left is removed under it.
+                          agent hold `agents/<agent>/.install.lock`, so they never overlap. A
+                          failed install removes only its own staging directory; one an
+                          interrupted install left is never touched (its owner is not provable).
                           An install already there is accepted only if it is exactly this lock
                           entry and its tree is exactly its record; nothing else is replaced.
   status                  One line: each known agent's verified installed versions, any that
@@ -383,12 +384,6 @@ def install(scratch_arg):
         if not hasattr(tarfile, "data_filter"):
             raise Refused("This server's Python cannot unpack archives safely (it needs 3.8.17, 3.9.17, 3.10.12, "
                           "3.11.4 or later).")
-        # Holding the lock, no other install is running: a staging directory here is one an
-        # interrupted install left. Only this program makes them, by this prefix.
-        for name in os.listdir(agent_dir):
-            leftover = agent_dir / name
-            if name.startswith(".staging-") and not leftover.is_symlink() and leftover.is_dir():
-                shutil.rmtree(leftover, ignore_errors=True)
         staging = Path(tempfile.mkdtemp(prefix=".staging-", dir=agent_dir))
         try:
             files = staging / "files"

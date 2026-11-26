@@ -289,10 +289,11 @@ describe("installing an agent on the server", () => {
     ).toEqual([]);
   });
 
-  it("never overlaps installs of one agent, and removes what an interrupted one left", async () => {
+  it("never overlaps installs of one agent, and leaves a directory it did not make alone", async () => {
     const host = server();
     const made = copilotPackages();
     mkdirSync(`${host.root}/agents/copilot/.staging-interrupted/files`, { recursive: true, mode: 0o755 });
+    writeFileSync(`${host.root}/agents/copilot/.staging-interrupted/files/keep`, "not ORCA's to remove");
     // Another install holds the lock: this one is refused and changes nothing.
     const holder = spawn("python3", [
       "-c",
@@ -308,7 +309,15 @@ describe("installing an agent on the server", () => {
       await new Promise((resolve) => holder.once("close", resolve));
     }
     expect((await install(host, made)).result).toBe("changed");
-    expect(readdirSync(`${host.root}/agents/copilot`).sort()).toEqual([".install.lock", "1.0.114", "home"]);
+    expect(readdirSync(`${host.root}/agents/copilot`).sort()).toEqual([
+      ".install.lock",
+      ".staging-interrupted",
+      "1.0.114",
+      "home",
+    ]);
+    expect(readFileSync(`${host.root}/agents/copilot/.staging-interrupted/files/keep`, "utf8")).toBe(
+      "not ORCA's to remove",
+    );
     expect(readdirSync(`${host.root}/agents/copilot/1.0.114`).sort()).toEqual(["files", "install.json"]);
   });
 
