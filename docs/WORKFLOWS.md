@@ -570,15 +570,17 @@ only when what Codex reported during that turn shows exactly one window at its l
 the failure says no single window was reported, and a reset time no date can hold is left out.
 
 When Codex reports the account changed, new turns wait for ORCA to read it again (a prompt
-cancelled or past its deadline while it waits ends cancelled, without starting a turn), a
-usage-limit read begun before is dropped, and turns are refused with what to do (`codex login`,
-or a new session) while the user is signed out, on another account than the session started on,
-or the account could not be read again. An update Codex sends while a session opens or its
-app-server restarts is read before the session takes turns on it; a restart onto another account
-stops the session. Codex reports a user id only for ChatGPT logins, so for an API-key (or other)
-login ORCA can confirm only the kind of login, not that it is the same account, and says so in
-its log rather than claiming it. A running app-server does not notice a `codex logout` run
-elsewhere (Codex keeps the login it started with), so this covers what Codex itself reports.
+cancelled or past its deadline while it waits ends cancelled, without starting a turn), the
+usage limits reported so far are withdrawn (`onRateLimits(null)`), a usage-limit read begun
+before is dropped unread, no usage is reported until the account is confirmed and allowed, and
+turns are refused with what to do (`codex login`, or a new session) while the user is signed
+out, on another account than the session started on, or the account could not be read again. An
+update Codex sends while a session opens or its app-server restarts is read before the session
+takes turns on it; a restart onto another account stops the session. Codex reports a user id
+only for ChatGPT logins, so for an API-key (or other) login ORCA can confirm only the kind of
+login, not that it is the same account, and says so in its log rather than claiming it. A
+running app-server does not notice a `codex logout` run elsewhere (Codex keeps the login it
+started with), so this covers what Codex itself reports.
 
 When the app-server exits under a session, the running turn fails, an ask it raised is never
 answered, and the next prompt starts a new app-server on the same thread (`thread/resume`, held

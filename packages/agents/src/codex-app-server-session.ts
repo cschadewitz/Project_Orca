@@ -119,8 +119,12 @@ export interface OpenCodexAppServerSessionOptions {
   onVerifiedConfig?: (config: CodexVerifiedConfig) => void;
   /** Called with the account Codex runs on, at open and whenever Codex reports it changed (#1164). */
   onAccount?: (account: CodexAccountStatus) => void;
-  /** Called with Codex's usage limits whenever it reports them, merged with what was known (#1164). */
-  onRateLimits?: (limits: CodexRateLimits) => void;
+  /**
+   * Called with Codex's usage limits whenever it reports them, merged with what was known
+   * (#1164); `null` when what was reported no longer holds (the account is being read again, or a
+   * new app-server took over). No limits are reported while the account is unconfirmed or refused.
+   */
+  onRateLimits?: (limits: CodexRateLimits | null) => void;
   env?: Record<string, string>;
   secrets?: SecretsConfig | undefined;
   authorizeSecretUse?: AuthorizeSecretUse | undefined;
@@ -701,8 +705,10 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
   /** A new account or process: what was known of its usage limits no longer holds. */
   const forgetLimits = () => {
     accountGen++;
+    const published = limitBuckets.size > 0;
     limitBuckets.clear();
     limitReports = [];
+    if (published) opts.onRateLimits?.(null);
   };
   /**
    * Bumped when the account is read again or a new process is installed: a usage-limit read
@@ -761,6 +767,8 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
   const applyLimits = (c: Connection, snapshot: unknown, read?: { since: number; gen: number }) => {
     if (conn !== c) return;
     if (read && read.gen !== accountGen) return;
+    // While the account is being read again, or is refused, no one's usage is reported.
+    if (pendingAccountCheck() || accountProblem) return;
     const since = read?.since;
     const bucket = codexLimitBucket({ limitId: (snapshot as { limitId: string | null }).limitId ?? null });
     const previous = limitBuckets.get(bucket);
@@ -824,13 +832,13 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
   const pendingAccountCheck = () => accountCheck;
   const recheckAccount = (c: Connection) => {
     const read = ++accountReads;
-    // Usage-limit reads begun before this describe an account that may be gone.
-    accountGen++;
+    // What was reported of the usage limits, and any read begun before this, may describe an
+    // account that is gone.
+    forgetLimits();
     const check = (async () => {
       const then = sessionAccount.identity;
       const now = await rereadAccount(c);
       if (read !== accountReads || !then) return;
-      forgetLimits();
       if (!now) {
         // A lost connection is the restart's to deal with: it reads the account again.
         accountProblem = c.client.closed
@@ -850,6 +858,8 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
         refused: accountProblem?.details?.["reason"] ?? null,
       });
       opts.onAccount?.(now.status);
+      // Allowed again: its usage limits are read anew once this check is over.
+      if (!accountProblem) setImmediate(() => void readRateLimits(c));
     })();
     accountCheck = check.finally(() => {
       if (accountCheck === settled) accountCheck = undefined;
@@ -878,6 +888,8 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
       });
       return;
     }
+    // Begun before the account was read again or another app-server took over: dropped unread.
+    if (conn !== c || read.gen !== accountGen) return;
     const a = isObject(answer) ? answer : {};
     const byId = a.rateLimitsByLimitId;
     const snapshots =
@@ -1359,12 +1371,14 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
         if (switched) refused(configRefusal(switched));
       };
       await verifyConfig(c).catch(refused);
-      // No await between the last account check and thread/resume going out (nor, below, between
-      // it and publishing the replacement): an update Codex sends in between is read first.
+      // The synchronous `accountUpdated` test right before thread/resume is sent (and below, right
+      // before the replacement is published) fences any update Codex sent during the awaits.
       await checkAccount(c);
+      while (c.accountUpdated) await checkAccount(c);
       const resumed = await resumeOn(c, threadId).catch(refused);
       const reverified = await verifyConfig(c, threadId).catch(refused);
       await checkAccount(c);
+      while (c.accountUpdated) await checkAccount(c);
       const late = stopped();
       if (late) throw late;
       conn = c;
@@ -1497,26 +1511,32 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
           ? setTimeout(() => requestCancel(`turn timed out after ${options.timeoutMs}ms`), options.timeoutMs)
           : undefined;
         try {
-          // A pending account re-read holds the turn until it answers, under the prompt's cancel
-          // and deadline: once either fires, no turn/start goes out.
-          if (accountCheck) {
-            const woken = new Promise<void>((r) => (turn.waking = r));
-            for (let check = pendingAccountCheck(); check && !turn.cancelReason; check = pendingAccountCheck())
+          // The account gate, passed with no await between it and turn/start going out: a pending
+          // account re-read holds the turn until it answers, under the prompt's cancel and
+          // deadline (once either fires, no turn/start goes out). After a restart the gate runs
+          // again, since the replacement's handoff to this prompt is itself an await.
+          let c: Connection;
+          for (;;) {
+            for (let check = pendingAccountCheck(); check && !turn.cancelReason; check = pendingAccountCheck()) {
+              const woken = new Promise<void>((r) => (turn.waking = r));
               await Promise.race([check, woken]);
-            delete turn.waking;
+              delete turn.waking;
+            }
             if (turn.cancelReason) return { stopReason: "cancelled", durationMs: clock.now() - started };
-          }
-          const brokenSince = isBroken();
-          if (brokenSince) throw brokenSince;
-          if (accountProblem) throw accountProblem;
-          if (closing) throw new OrcaError("RUN_STATE", "the session is closed");
-          // The last app-server exited: a new one on the same thread first.
-          let c = conn;
-          if (!c) {
+            const brokenSince = isBroken();
+            if (brokenSince) throw brokenSince;
+            if (accountProblem) throw accountProblem;
+            if (closing) throw new OrcaError("RUN_STATE", "the session is closed");
+            const live = conn;
+            if (live) {
+              c = live;
+              break;
+            }
+            // The last app-server exited: a new one on the same thread first.
             const r = restart(turn);
             restarting = r;
             try {
-              c = await r;
+              await r;
             } catch (error) {
               // Cancelled while it restarted: no turn was started.
               if (error instanceof RestartCancelled)

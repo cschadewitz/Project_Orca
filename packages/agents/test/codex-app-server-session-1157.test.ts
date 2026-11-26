@@ -421,22 +421,55 @@ describe("account and usage limits (#1164)", () => {
     await session.close();
   });
 
-  it("drops a usage-limit read begun before the account was read again", async () => {
+  it("drops a usage-limit read begun before the account was read again, unread, and reads anew", async () => {
     const limits: unknown[] = [];
-    let readId: unknown;
+    const reads: Msg[] = [];
     const s = scriptedHost({
       ...BASE,
       "account/read": () => CHATGPT(),
-      "account/rateLimits/read": (msg) => ((readId = msg.id), NO_ANSWER),
+      "account/rateLimits/read": (msg) => (reads.push(msg), NO_ANSWER),
     });
     const session = await open(s.host, { onRateLimits: (l) => limits.push(l) });
-    await vi.waitFor(() => expect(readId).toBeDefined());
+    await vi.waitFor(() => expect(reads).toHaveLength(1));
     s.peer.notify("account/updated", { authMode: "chatgpt", planType: "pro", reason: null });
-    await vi.waitFor(() => expect(s.peer.received.filter((m) => m.method === "account/read")).toHaveLength(2));
-    await settle();
-    s.peer.say({ id: readId as number, result: { rateLimits: { ...SNAPSHOT, primary: window(100) } } });
+    // the same account: its usage limits are read anew
+    await vi.waitFor(() => expect(reads).toHaveLength(2));
+    // the first read answers late, malformed: dropped before it is even checked
+    s.peer.say({ id: reads[0]!.id as number, result: { rateLimits: { primary: { usedPercent: "full" } } } });
     await settle();
     expect(limits).toEqual([]);
+    expect(s.kill).not.toHaveBeenCalled();
+    s.peer.say({ id: reads[1]!.id as number, result: { rateLimits: { ...SNAPSHOT, primary: window(30) } } });
+    await vi.waitFor(() => expect(limits).toEqual([expect.objectContaining({ primary: window(30) })]));
+    await session.close();
+  });
+
+  it("reports no usage while the account is being read again or is refused, and withdraws what it reported", async () => {
+    const limits: unknown[] = [];
+    let account: unknown = CHATGPT("user-1");
+    let hold = false;
+    let held: Msg | undefined;
+    const s = scriptedHost({
+      ...BASE,
+      "account/read": (msg) => (hold ? ((hold = false), (held = msg), NO_ANSWER) : account),
+      "account/rateLimits/read": () => ({ rateLimits: SNAPSHOT }),
+    });
+    const session = await open(s.host, { onRateLimits: (l) => limits.push(l) });
+    await vi.waitFor(() => expect(limits).toHaveLength(1));
+    // pending: what was reported is withdrawn, and updates are not reported
+    hold = true;
+    s.peer.notify("account/updated", { authMode: "chatgpt", planType: "pro", reason: null });
+    await vi.waitFor(() => expect(held).toBeTruthy());
+    s.peer.notify("account/rateLimits/updated", { rateLimits: { ...SNAPSHOT, primary: window(77) } });
+    await settle();
+    expect(limits).toEqual([expect.objectContaining({ primary: SNAPSHOT.primary }), null]);
+    // refused: another account's usage is never reported on this session
+    account = CHATGPT("user-2");
+    s.peer.say({ id: held!.id as number, result: account });
+    await expect(session.prompt("go")).rejects.toMatchObject({ details: { reason: "codex-account-switched" } });
+    s.peer.notify("account/rateLimits/updated", { rateLimits: { ...SNAPSHOT, primary: window(88) } });
+    await settle();
+    expect(limits).toHaveLength(2);
     await session.close();
   });
 
