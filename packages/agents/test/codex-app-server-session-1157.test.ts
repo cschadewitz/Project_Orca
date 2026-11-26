@@ -6,6 +6,7 @@
  */
 import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
+import type * as acp from "@agentclientprotocol/sdk";
 import { AgentSpecSchema, silentLogger, type OrcaError } from "@orca/core";
 import {
   codexItemUpdate,
@@ -1216,22 +1217,301 @@ describe("malformed notifications", () => {
   });
 });
 
-describe("asks before ORCA's ask bridge (#1159)", () => {
-  it("declines every approval and refuses any other ask", async () => {
+describe("asks through ORCA's policy (#1159)", () => {
+  const COMMAND = (over: Record<string, unknown> = {}) => ({
+    kind: "command",
+    threadId: "thr_1",
+    turnId: "turn_1",
+    itemId: "call_1",
+    startedAtMs: 1,
+    environmentId: null,
+    command: "/bin/bash -lc 'cat src/a.ts'",
+    cwd: CWD,
+    reason: "to read the file",
+    commandActions: [{ type: "read", command: "cat src/a.ts", name: "a.ts", path: `${CWD}/src/a.ts` }],
+    proposedExecpolicyAmendment: ["cat"],
+    proposedNetworkPolicyAmendments: [{ host: "example.com", action: "allow" }],
+    ...over,
+  });
+  const FILE_CHANGE = (over: Record<string, unknown> = {}) => ({
+    threadId: "thr_1",
+    turnId: "turn_1",
+    itemId: "patch_1",
+    startedAtMs: 1,
+    reason: null,
+    grantRoot: null,
+    ...over,
+  });
+  const PERMISSIONS = (over: Record<string, unknown> = {}) => ({
+    threadId: "thr_1",
+    turnId: "turn_1",
+    itemId: "perm_1",
+    environmentId: null,
+    startedAtMs: 1,
+    cwd: CWD,
+    reason: "needs the network",
+    permissions: { network: { enabled: true }, fileSystem: null },
+    ...over,
+  });
+  const PATCH_ITEM = (path = `${CWD}/src/a.ts`) => ({
+    type: "fileChange",
+    id: "patch_1",
+    changes: [{ path, kind: { type: "update", move_path: null }, diff: "@@" }],
+    status: "inProgress",
+  });
+  type Ask = { method: string; params: Record<string, unknown>; before?: (peer: Peer) => void };
+  /** A Codex whose each turn sends `asks(n)` in turn, waits for each answer, then completes. */
+  const asking = (asks: (n: number) => Ask[]) => {
+    let n = 0;
+    let next = 0;
+    const answers: unknown[] = [];
+    const answers$ = { answers };
+    const table: Record<string, Responder> = {
+      ...BASE,
+      "turn/start": (_msg, peer) => {
+        const turnId = `turn_${++n}`;
+        const list = asks(n);
+        void (async () => {
+          for (const ask of list) {
+            const id = `ask_${++next}`;
+            ask.before?.(peer);
+            peer.say({ id, method: ask.method, params: ask.params });
+            await vi.waitFor(() => expect(peer.received.find((m) => m.id === id && !m.method)).toBeDefined());
+            answers.push((peer.received.find((m) => m.id === id && !m.method) as { result: unknown }).result);
+          }
+          peer.notify("turn/completed", { threadId: "thr_1", turn: { id: turnId, status: "completed", error: null } });
+        })();
+        return { turn: { id: turnId, status: "inProgress" } };
+      },
+    };
+    return { table, ...answers$ };
+  };
+  const withPolicy = (permissions: Record<string, unknown>) => agent({ permissions });
+
+  it("declines an ask outside a live turn, and refuses any other ask", async () => {
     const s = scriptedHost(BASE);
     const session = await open(s.host);
-    const answers: unknown[] = [];
     const before = s.peer.received.length;
-    s.peer.say({ id: "a1", method: "item/commandExecution/requestApproval", params: { threadId: "thr_1" } });
-    s.peer.say({ id: "a2", method: "item/fileChange/requestApproval", params: { threadId: "thr_1" } });
-    s.peer.say({ id: "a3", method: "item/tool/requestUserInput", params: { threadId: "thr_1" } });
-    await vi.waitFor(() => expect(s.peer.received.length).toBe(before + 3));
-    answers.push(...s.peer.received.slice(before));
-    expect(answers).toEqual([
-      { id: "a1", result: { decision: "decline" } },
-      { id: "a2", result: { decision: "decline" } },
-      { id: "a3", error: { code: -32601, message: "ORCA does not answer item/tool/requestUserInput yet" } },
+    s.peer.say({ id: "a1", method: "item/commandExecution/requestApproval", params: COMMAND() });
+    s.peer.say({ id: "a2", method: "item/fileChange/requestApproval", params: FILE_CHANGE() });
+    s.peer.say({ id: "a3", method: "item/permissions/requestApproval", params: PERMISSIONS() });
+    s.peer.say({ id: "a4", method: "item/tool/requestUserInput", params: { threadId: "thr_1" } });
+    await vi.waitFor(() => expect(s.peer.received.length).toBe(before + 4));
+    const byId = (id: string) => s.peer.received.find((m) => m.id === id);
+    expect(byId("a1")).toEqual({ id: "a1", result: { decision: "decline" } });
+    expect(byId("a2")).toEqual({ id: "a2", result: { decision: "decline" } });
+    expect(byId("a3")).toEqual({ id: "a3", result: { permissions: {}, scope: "turn" } });
+    expect(byId("a4")).toEqual({
+      id: "a4",
+      error: { code: -32601, message: "ORCA does not answer item/tool/requestUserInput yet" },
+    });
+    await session.close();
+  });
+
+  it("asks a person with Codex's reason and parsed actions, and asks again for the same call and in a new thread", async () => {
+    const asked: acp.RequestPermissionRequest[] = [];
+    const askPermission = vi.fn(async (req: acp.RequestPermissionRequest) => (asked.push(req), "accept"));
+    const c = asking(() => [
+      { method: "item/commandExecution/requestApproval", params: COMMAND() },
+      { method: "item/commandExecution/requestApproval", params: COMMAND({ itemId: "call_2" }) },
     ]);
+    const s = scriptedHost(c.table);
+    const session = await open(s.host, { askPermission, agent: withPolicy({ default: "ask" }) });
+    await expect(session.prompt("go")).resolves.toMatchObject({ stopReason: "end_turn" });
+    expect(c.answers).toEqual([{ decision: "accept" }, { decision: "accept" }]);
+    expect(askPermission).toHaveBeenCalledTimes(2);
+    expect(asked[0]!.toolCall).toMatchObject({
+      title: "/bin/bash -lc 'cat src/a.ts'",
+      kind: "execute",
+      rawInput: { command: "/bin/bash -lc 'cat src/a.ts'", cwd: CWD },
+    });
+    // the card shows Codex's reason, the directory and what Codex parsed the command as
+    const shown = JSON.stringify(asked[0]!.toolCall.content);
+    expect(shown).toContain("to read the file");
+    expect(shown).toContain(`Codex reads it as: read ${CWD}/src/a.ts`);
+    expect(asked[0]!.options.map((o) => o.kind)).toEqual(["allow_once", "reject_once"]);
+    await session.close();
+    // a new thread asks again too
+    const again = asking(() => [{ method: "item/commandExecution/requestApproval", params: COMMAND() }]);
+    const t = scriptedHost(again.table);
+    const next = await open(t.host, { askPermission, agent: withPolicy({ default: "ask" }) });
+    await next.prompt("go");
+    expect(askPermission).toHaveBeenCalledTimes(3);
+    await next.close();
+  });
+
+  it("answers only one-time decisions, whatever the policy or the person says, for every ask kind", async () => {
+    const kinds: Ask[] = [
+      { method: "item/commandExecution/requestApproval", params: COMMAND() },
+      { method: "item/commandExecution/requestApproval", params: COMMAND({ kind: "writeStdin", itemId: "call_s" }) },
+      {
+        method: "item/commandExecution/requestApproval",
+        params: COMMAND({ command: null, networkApprovalContext: { host: "example.com", protocol: "https" } }),
+      },
+      {
+        method: "item/fileChange/requestApproval",
+        params: FILE_CHANGE(),
+        before: (peer) => peer.notify("item/started", { threadId: "thr_1", turnId: "turn_1", item: PATCH_ITEM() }),
+      },
+      { method: "item/permissions/requestApproval", params: PERMISSIONS() },
+    ];
+    const policies: [string, Record<string, unknown>, (() => Promise<string | undefined>) | undefined][] = [
+      ["allow", { default: "allow" }, undefined],
+      ["deny", { default: "deny" }, undefined],
+      ["ask, accepted", { default: "ask" }, async () => "accept"],
+      ["ask, declined", { default: "ask" }, async () => "decline"],
+      ["ask, dismissed", { default: "ask" }, async () => undefined],
+      ["ask, no answerer", { default: "ask" }, undefined],
+    ];
+    for (const [label, permissions, ask] of policies) {
+      const c = asking(() => kinds);
+      const s = scriptedHost(c.table);
+      const session = await open(s.host, { agent: withPolicy(permissions), ...(ask ? { askPermission: ask } : {}) });
+      await session.prompt("go");
+      expect(c.answers, label).toHaveLength(kinds.length);
+      for (const answer of c.answers) {
+        const a = answer as Record<string, unknown>;
+        if ("decision" in a) expect(["accept", "decline", "cancel"], label).toContain(a.decision);
+        else {
+          expect(a.scope, label).toBe("turn");
+          expect(a, label).not.toHaveProperty("strictAutoReview");
+        }
+        expect(JSON.stringify(a), label).not.toMatch(/ForSession|Amendment|"session"/);
+      }
+      await session.close();
+    }
+  });
+
+  it("grants a permissions ask only what it asked for, for this turn", async () => {
+    const c = asking(() => [
+      {
+        method: "item/permissions/requestApproval",
+        params: PERMISSIONS({
+          permissions: { network: { enabled: true }, fileSystem: { read: null, write: [`${CWD}/out`] } },
+        }),
+      },
+    ]);
+    const asked: acp.RequestPermissionRequest[] = [];
+    const s = scriptedHost(c.table);
+    const session = await open(s.host, {
+      agent: withPolicy({ default: "ask" }),
+      askPermission: async (req) => (asked.push(req), "accept"),
+    });
+    await session.prompt("go");
+    expect(c.answers).toEqual([
+      { permissions: { network: { enabled: true }, fileSystem: { read: [], write: [`${CWD}/out`] } }, scope: "turn" },
+    ]);
+    expect(asked[0]!.toolCall).toMatchObject({
+      title: `Codex asks for network access and write access to ${CWD}/out for this turn`,
+      locations: [{ path: `${CWD}/out` }],
+    });
+    await session.close();
+  });
+
+  it("decides a file change by the files of the item Codex started for it", async () => {
+    const c = asking((n) =>
+      n === 1
+        ? [
+            {
+              method: "item/fileChange/requestApproval",
+              params: FILE_CHANGE(),
+              before: (peer) =>
+                peer.notify("item/started", { threadId: "thr_1", turnId: "turn_1", item: PATCH_ITEM() }),
+            },
+            // an ask for a change Codex never showed, and one for a write root for the session
+            { method: "item/fileChange/requestApproval", params: FILE_CHANGE({ turnId: "turn_1", itemId: "patch_9" }) },
+          ]
+        : [
+            {
+              method: "item/fileChange/requestApproval",
+              params: FILE_CHANGE({ turnId: "turn_2", grantRoot: CWD }),
+              before: (peer) =>
+                peer.notify("item/started", { threadId: "thr_1", turnId: "turn_2", item: PATCH_ITEM() }),
+            },
+          ],
+    );
+    const s = scriptedHost(c.table);
+    const session = await open(s.host, {
+      agent: withPolicy({
+        rules: [{ match: { kind: "edit", pathPrefix: "src/" }, decision: "allow" }],
+        default: "deny",
+      }),
+    });
+    await session.prompt("go");
+    await session.prompt("again");
+    expect(c.answers).toEqual([{ decision: "accept" }, { decision: "decline" }, { decision: "decline" }]);
+    await session.close();
+  });
+
+  it("denies an ask that reaches ORCA's own files, whatever the policy says", async () => {
+    const c = asking(() => [
+      {
+        method: "item/fileChange/requestApproval",
+        params: FILE_CHANGE(),
+        before: (peer) =>
+          peer.notify("item/started", {
+            threadId: "thr_1",
+            turnId: "turn_1",
+            item: PATCH_ITEM(`${CWD}/orca.permissions.json`),
+          }),
+      },
+    ]);
+    const s = scriptedHost(c.table);
+    const session = await open(s.host, {
+      agent: withPolicy({ default: "allow" }),
+      policyProtectedPaths: { readOnly: [`${CWD}/orca.permissions.json`], noAccess: [] },
+    });
+    await session.prompt("go");
+    expect(c.answers).toEqual([{ decision: "decline" }]);
+    await session.close();
+  });
+
+  it("declines an ask about another turn or after cancel, and answers cancel when a person stops the turn", async () => {
+    // another turn's ask
+    const other = asking(() => [
+      { method: "item/commandExecution/requestApproval", params: COMMAND({ turnId: "turn_old" }) },
+    ]);
+    const o = scriptedHost(other.table);
+    const first = await open(o.host, { agent: withPolicy({ default: "allow" }) });
+    await first.prompt("go");
+    expect(other.answers).toEqual([{ decision: "decline" }]);
+    await first.close();
+    // a person stops the turn while an ask is open: cancel; an ask after that: declined unasked
+    let release!: () => void;
+    const s = scriptedHost({
+      ...BASE,
+      "turn/start": () => ({ turn: { id: "turn_1", status: "inProgress" } }),
+      "turn/interrupt": (_m, peer) => (
+        setImmediate(() => {
+          peer.say({ id: "late", method: "item/commandExecution/requestApproval", params: COMMAND() });
+          release = () =>
+            peer.notify("turn/completed", {
+              threadId: "thr_1",
+              turn: { id: "turn_1", status: "interrupted", error: null },
+            });
+        }),
+        {}
+      ),
+    });
+    const asked = vi.fn(() => new Promise<string | undefined>(() => {}));
+    const session = await open(s.host, { agent: withPolicy({ default: "ask" }), askPermission: asked });
+    const turn = session.prompt("go");
+    await settle();
+    s.peer.say({ id: "open", method: "item/commandExecution/requestApproval", params: COMMAND() });
+    await vi.waitFor(() => expect(asked).toHaveBeenCalledTimes(1));
+    await session.cancel();
+    await vi.waitFor(() => expect(s.peer.received.find((m) => m.id === "late" && !m.method)).toBeDefined());
+    expect(s.peer.received.find((m) => m.id === "open" && !m.method)).toEqual({
+      id: "open",
+      result: { decision: "cancel" },
+    });
+    expect(s.peer.received.find((m) => m.id === "late" && !m.method)).toEqual({
+      id: "late",
+      result: { decision: "decline" },
+    });
+    expect(asked).toHaveBeenCalledTimes(1);
+    release();
+    await expect(turn).resolves.toMatchObject({ stopReason: "cancelled" });
     await session.close();
   });
 });

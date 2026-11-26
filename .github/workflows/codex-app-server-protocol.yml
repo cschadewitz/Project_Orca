@@ -6,7 +6,8 @@
 # a removed method refused), and runs ORCA's session driver (#1157) through one turn against the
 # model stand-in, comparing it with the same turn over the ACP adapter (codex-acp
 # CODEX_ACP_VERSION), and through an app-server killed mid-turn and a thread resumed in a new
-# session (#1158). It needs no account, key or secret. A weekly run sees a change
+# session (#1158), and through Codex's asks answered by ORCA's policy, one call at a time
+# (#1159). It needs no account, key or secret. A weekly run sees a change
 # behind the pin.
 #
 # CODEX_VERSION is the version in CODEX_APP_SERVER_PINNED (packages/agents/src/
@@ -24,12 +25,15 @@ on:
       - packages/agents/src/codex-app-server-session.ts
       - packages/agents/src/codex-app-server-config.ts
       - packages/agents/src/codex-app-server-account.ts
+      - packages/agents/src/codex-app-server-asks.ts
+      - packages/agents/src/permissions.ts
       - packages/agents/src/host.ts
       - packages/agents/test/codex-app-server-real-1156.test.ts
       - packages/cli/test/codex-app-server-session-real-1157.test.ts
       - packages/cli/test/codex-app-server-recovery-real-1158.test.ts
       - packages/cli/test/codex-app-server-config-real-1160.test.ts
       - packages/cli/test/codex-app-server-account-real-1164.test.ts
+      - packages/cli/test/codex-app-server-asks-real-1159.test.ts
       - packages/cli/test/codex-model-stand-in.ts
       - tools/codex-protocol.mjs
       - tools/test/codex-protocol-1156.test.js
@@ -128,6 +132,7 @@ jobs:
             packages/cli/test/codex-app-server-recovery-real-1158.test.ts \
             packages/cli/test/codex-app-server-config-real-1160.test.ts \
             packages/cli/test/codex-app-server-account-real-1164.test.ts \
+            packages/cli/test/codex-app-server-asks-real-1159.test.ts \
             --reporter=default --reporter=json --outputFile="$RUNNER_TEMP/protocol.json"
           # The suites skip their Codex tests without ORCA_CODEX_BIN; here every test has to have run.
           node -e '
