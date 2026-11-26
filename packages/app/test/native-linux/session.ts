@@ -30,10 +30,31 @@ const TOOLS = ["Xvfb", "dbus-daemon", "gnome-keyring-daemon", "secret-tool", "xd
 
 export type PromptAction = "cancel" | "unlock";
 
+/** One keyring prompt window, from the first answer sent to it until it was gone. */
 export interface PromptEvent {
+  /** When the answer was first sent. */
   at: string;
   action: PromptAction;
+  /** The prompt's X window id. Each ask gets a window of its own. */
+  window: string;
+  /** How often the answer was sent: more than once means a key was lost and sent again. */
+  sends: number;
+  /** Milliseconds from first seeing the window until it was gone; absent while it is still up. */
+  closedAfterMs?: number;
 }
+
+/** GTK maps the prompt before it can take input; a key sent at once is lost. */
+const PROMPT_SETTLE_MS = 400;
+/**
+ * How long an answered prompt may stay up before its answer is sent again. Cancel closes at
+ * once. Unlock has the password to check first, and typing it again takes a moment itself.
+ */
+const PROMPT_RESEND_MS: Record<PromptAction, number> = { cancel: 1_000, unlock: 3_000 };
+const PROMPT_POLL_MS = 100;
+/** `xdotool windowfocus --sync` can wait many seconds for a window that never takes focus. */
+const XDOTOOL_TIMEOUT_MS = 5_000;
+/** The Xvfb screen. ORCA's window does not reach its bottom-right corner. */
+const SCREEN = { width: 1280, height: 900 };
 
 export async function requireTools(): Promise<void> {
   const missing: string[] = [];
@@ -135,7 +156,7 @@ export class NativeSession {
   private async startDisplay() {
     // -displayfd picks a free display number and writes it once the server is ready.
     const xvfb = this.track(
-      spawn("Xvfb", ["-displayfd", "1", "-screen", "0", "1280x900x24", "-nolisten", "tcp"], {
+      spawn("Xvfb", ["-displayfd", "1", "-screen", "0", `${SCREEN.width}x${SCREEN.height}x24`, "-nolisten", "tcp"], {
         env: this.env,
         stdio: ["ignore", "pipe", "ignore"],
       }),
@@ -147,6 +168,11 @@ export class NativeSession {
       return line && /^\d+$/.test(line) && output.includes("\n") ? line : undefined;
     });
     this.env.DISPLAY = `:${display}`;
+    // When a focused prompt closes, the focus falls back to the root window, and a key then
+    // goes to whatever window is under the pointer. The pointer starts in the middle of the
+    // screen, where ORCA's window will be. A key that just misses its prompt must reach
+    // nothing, so the pointer waits in a corner no window covers.
+    await execute("xdotool", ["mousemove", String(SCREEN.width - 1), String(SCREEN.height - 1)], { env: this.env });
   }
 
   private async startBus() {
@@ -241,33 +267,63 @@ export class NativeSession {
     this.answering ??= this.watchPrompts();
   }
 
+  /**
+   * Each prompt is followed by its X window id, never by "is a prompt showing". One ask of
+   * the app's is several prompts in a row: cancel one and the keyring is asked again, for two
+   * prompts on a fresh keyring and three once ORCA's key is stored in it (as measured here).
+   * Each is a new window, mapped about 25 ms after the last one closed. A watcher that waits
+   * for "no prompt on screen" sees that gap only if it happens to look inside it; otherwise
+   * it waits out its deadline against a prompt nobody is answering. That was #1177: 10 s for
+   * each gap missed, with the app's main process inside the synchronous keyring call the
+   * whole time, so Playwright saw nothing of a page that was right.
+   *
+   * So: a window id not seen before is a new prompt and gets its answer once it has settled,
+   * and a window still up well after its answer gets the answer again, because the key was
+   * lost. Nothing here waits on a deadline.
+   */
   private async watchPrompts() {
+    let current: { window: string; seen: number; tries: number; sent?: number; event?: PromptEvent } | undefined;
     while (!this.stopping) {
       const window = await this.findPrompt();
-      if (window) {
-        const action = this.nextAction;
-        // GTK maps the window before it can take input; a key sent at once is lost.
-        await sleep(400);
-        try {
-          await execute("xdotool", ["windowfocus", "--sync", window], { env: this.env });
-          if (action === "unlock") {
-            await execute("xdotool", ["type", "--delay", "15", KEYRING_PASSWORD], { env: this.env });
-            await execute("xdotool", ["key", "Return"], { env: this.env });
-          } else {
-            await execute("xdotool", ["key", "Escape"], { env: this.env });
+      if (window !== current?.window) {
+        if (current?.event) current.event.closedAfterMs = Date.now() - current.seen;
+        current = window ? { window, seen: Date.now(), tries: 0 } : undefined;
+      }
+      if (current) {
+        const due =
+          current.sent === undefined
+            ? current.seen + PROMPT_SETTLE_MS
+            : current.sent + PROMPT_RESEND_MS[current.event!.action];
+        if (Date.now() >= due) {
+          const action = current.event?.action ?? this.nextAction;
+          try {
+            await this.answerPrompt(current.window, action, current.tries++ > 0);
+            current.sent = Date.now();
+            if (current.event) current.event.sends += 1;
+            else {
+              current.event = { at: new Date().toISOString(), action, window: current.window, sends: 1 };
+              this.prompts.push(current.event);
+            }
+          } catch {
+            // The window can vanish between search and key; the next pass looks again.
           }
-          this.prompts.push({ at: new Date().toISOString(), action });
-          await until(
-            "the keyring prompt to close",
-            async () => ((await this.findPrompt()) ? undefined : true),
-            10_000,
-          );
-        } catch {
-          // The window can vanish between search and key; the next pass looks again.
         }
       }
-      await sleep(200);
+      await sleep(PROMPT_POLL_MS);
     }
+  }
+
+  private async answerPrompt(window: string, action: PromptAction, again: boolean) {
+    const xdotool = (...args: string[]) => execute("xdotool", args, { env: this.env, timeout: XDOTOOL_TIMEOUT_MS });
+    await xdotool("windowfocus", "--sync", window);
+    if (action === "cancel") {
+      await xdotool("key", "Escape");
+      return;
+    }
+    // Whatever an earlier try left in the field would make this one a wrong password.
+    if (again) await xdotool("key", "ctrl+a", "BackSpace");
+    await xdotool("type", "--delay", "15", KEYRING_PASSWORD);
+    await xdotool("key", "Return");
   }
 
   private async findPrompt(): Promise<string | undefined> {
