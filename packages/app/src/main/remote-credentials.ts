@@ -26,7 +26,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
-import type { ConnectionProfile, RemoteResult } from "@orca/protocol/remote-access";
+import { DEFAULT_SERVER_COMMAND, type ConnectionProfile, type RemoteResult } from "@orca/protocol/remote-access";
 import { ConnectionRefusal } from "./connection-target.js";
 
 /** How long issued credentials live, and when they are renewed. */
@@ -70,7 +70,7 @@ export class CredentialSetupRefusal extends ConnectionRefusal {
 }
 
 export function serverCommand(profile: ConnectionProfile): string {
-  return profile.serverCommand ?? "orca";
+  return profile.serverCommand ?? DEFAULT_SERVER_COMMAND;
 }
 
 function refusalMessage(code: CredentialSetupCode, profile: ConnectionProfile): string {
@@ -201,7 +201,15 @@ export function issueCommand(profile: ConnectionProfile, principal: string, expi
 /** Revoke where it was issued: that CLI, that workspace config. */
 export function revokeCommand(target: CredentialTarget, credentialId: string): string[] {
   // A credential id may start with `-`: after `--`, so it is never read as an option.
-  return [target.serverCommand ?? "orca", "auth", "revoke", ...configArgs(target), "--json", "--", credentialId];
+  return [
+    target.serverCommand ?? DEFAULT_SERVER_COMMAND,
+    "auth",
+    "revoke",
+    ...configArgs(target),
+    "--json",
+    "--",
+    credentialId,
+  ];
 }
 
 const CREDENTIAL_ID = /^[A-Za-z0-9_-]{12}$/;

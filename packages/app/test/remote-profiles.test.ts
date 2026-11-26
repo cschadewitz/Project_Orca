@@ -971,7 +971,7 @@ describe("automatic sign-in (#875)", () => {
     const lease = await profiles.open("lab");
     expect(server.commands).toHaveLength(1);
     const [command] = server.commands;
-    expect(command!.slice(0, 3)).toEqual(["orca", "auth", "issue"]);
+    expect(command!.slice(0, 3)).toEqual(["orca-cli", "auth", "issue"]);
     expect(command![3]).toMatch(/^desktop-casey-s-pc-[a-z2-7]{16}$/);
     expect(command![4]).toBe("--preset");
     expect(command).toContain("client");
@@ -1094,8 +1094,8 @@ describe("automatic sign-in (#875)", () => {
     const { profiles, server, tunnels } = store();
     profiles.save({ name: "Lab", destination: "lab" });
     const cases: [number, string[], string, string][] = [
-      [127, ["bash: line 1: orca: command not found"], "cli-missing", "Install ORCA there"],
-      [1, ["'orca' is not recognized as an internal or external command"], "cli-missing", "full path"],
+      [127, ["bash: line 1: orca-cli: command not found"], "cli-missing", "Install ORCA there"],
+      [1, ["'orca-cli' is not recognized as an internal or external command"], "cli-missing", "full path"],
       [126, ["bash: line 1: /opt/orca: Permission denied"], "cli-permission", "may run"],
       [1, ["error [CONFIG_INVALID]: /srv/x.yaml: bad"], "server-not-set-up", "workspace config"],
       [1, ["error: ENOENT: no such file or directory, open '/srv/x.yaml'"], "server-not-set-up", "Set up the daemon"],
@@ -1124,7 +1124,7 @@ describe("automatic sign-in (#875)", () => {
     await (await profiles.open("lab")).release();
     await expect(profiles.remove("lab")).resolves.toBe("revoked");
     expect(server.live()).toEqual([]);
-    expect(server.commands.at(-1)!.slice(0, 3)).toEqual(["orca", "auth", "revoke"]);
+    expect(server.commands.at(-1)!.slice(0, 3)).toEqual(["orca-cli", "auth", "revoke"]);
     expect(existsSync(join(dir, "credentials", "lab.json"))).toBe(false);
 
     profiles.save({ name: "Lab", destination: "lab" });

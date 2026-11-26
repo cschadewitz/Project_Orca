@@ -19,6 +19,21 @@ that name belongs to the GNOME screen reader, which is installed by default as p
 two install side by side; ORCA's package declares no conflict with the screen reader and
 replaces none of its files.
 
+## The command line
+
+The package also installs ORCA's command line as **`orca-cli`** (#1207), `/usr/bin/orca-cli`:
+
+```sh
+orca-cli --help
+orca-cli remote enroll build-box --host-key SHA256:...
+```
+
+It is the same CLI the app runs as its background service, started by the installed app's own
+binary, so it is always the installed version. It is `orca-cli` for the same reason the app
+is `orca-desktop`: plain `orca` is the screen reader. The docs write every command as
+`orca-cli …`, and a remote's `serverCommand` defaults to `orca-cli`. From the archive, run
+`resources/bin/orca-cli` in the unpacked directory, or link it onto your `PATH`.
+
 ## Updating
 
 The package does not update itself. Instead, about 15 seconds after it starts and every six

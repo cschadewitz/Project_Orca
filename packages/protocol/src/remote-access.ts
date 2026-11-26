@@ -42,6 +42,13 @@ import { z } from "zod";
 /** The daemon's default port (`orca serve`). */
 export const DEFAULT_REMOTE_DAEMON_PORT = 6722;
 
+/**
+ * The server's ORCA CLI when a profile or remote names none (#1207): the command desktop installs
+ * put on PATH and the CLI package also installs. Not `orca`, which on Ubuntu Desktop is the GNOME
+ * screen reader (/usr/bin/orca).
+ */
+export const DEFAULT_SERVER_COMMAND = "orca-cli";
+
 const PROFILE_ID = /^[a-z0-9][a-z0-9-]{0,62}$/;
 const USER = "[A-Za-z0-9._][A-Za-z0-9._-]{0,63}";
 const HOST = "(?:[A-Za-z0-9][A-Za-z0-9._-]{0,252}|\\[[0-9A-Fa-f:.]+\\])";
@@ -87,7 +94,7 @@ export const ConnectionProfileSchema = z
     /**
      * The server's ORCA CLI, which issues and renews this profile's credential (#875): a
      * command on the server's PATH or an absolute path, such as a managed install's wrapper.
-     * Default `orca`.
+     * Default {@link DEFAULT_SERVER_COMMAND}, `orca-cli`.
      */
     serverCommand: z.string().regex(SERVER_COMMAND, "Enter a command name or a full path without spaces").optional(),
     /** The daemon's workspace config on the server, passed as `--config`. Absent: the CLI's own default. */

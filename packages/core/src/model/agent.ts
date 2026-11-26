@@ -86,7 +86,7 @@ export const RemoteDaemonSpecSchema = RemoteHopSchema.extend({
   jump: RemoteHopSchema.optional(),
   /** The daemon's port on the remote loopback. Default 6722. */
   remotePort: z.number().int().min(1).max(65535).optional(),
-  /** The server's ORCA CLI, a command name or an absolute path. Default `orca`. */
+  /** The server's ORCA CLI, a command name or an absolute path. Default `orca-cli` (#1207). */
   serverCommand: z.string().min(1).optional(),
   /** The remote daemon's workspace config, as an absolute path on the server. */
   serverConfig: z.string().min(1).optional(),

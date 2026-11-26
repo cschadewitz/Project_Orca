@@ -51,6 +51,7 @@ import {
   OperatorDiscoverySchema,
 } from "@orca/protocol";
 import {
+  DEFAULT_SERVER_COMMAND,
   markPinEnrolled,
   pinState,
   SshTunnel,
@@ -926,7 +927,11 @@ const IssuedSchema = z.object({
 });
 
 function cliOf(remote: RemoteDaemonSpec, ...args: string[]): string[] {
-  return [remote.serverCommand ?? "orca", ...args, ...(remote.serverConfig ? ["--config", remote.serverConfig] : [])];
+  return [
+    remote.serverCommand ?? DEFAULT_SERVER_COMMAND,
+    ...args,
+    ...(remote.serverConfig ? ["--config", remote.serverConfig] : []),
+  ];
 }
 
 /**

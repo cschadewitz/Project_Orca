@@ -276,6 +276,55 @@ jobs:
             pnpm --filter @orca/app exec electron-builder --publish never -c.extraMetadata.version="$VERSION"
           fi
 
+      # The CLI (#1207). A fresh GitHub-hosted VM only: this installs the app for the runner's
+      # account and edits that account's PATH, which no persistent host should have done to
+      # it. The x64 installer, silently and per user, as a person's default install is. A
+      # step's own environment is the runner's, not the registry's, so every PATH check
+      # reads HKCU\Environment the way a new terminal would.
+      - name: The Windows installer puts orca-cli on the user PATH and takes it off again
+        if: matrix.name == 'windows' && runner.environment == 'github-hosted'
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installers = @(Get-ChildItem "packages/app/dist/release/x64/ORCA-*-win-x64.exe")
+          if ($installers.Count -ne 1) { throw "expected one x64 installer, found $($installers.Count)" }
+          $userPath = { [Environment]::GetEnvironmentVariable('Path', 'User') }
+          $before = & $userPath
+          $p = Start-Process -FilePath $installers[0].FullName -ArgumentList '/S', '/currentuser' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "the installer exited $($p.ExitCode)" }
+          $exe = @(Get-ChildItem "$env:LOCALAPPDATA\Programs\*\ORCA.exe")
+          if ($exe.Count -ne 1) { throw "expected one installed ORCA.exe, found $($exe.Count)" }
+          $app = $exe[0].DirectoryName
+          $bin = Join-Path $app 'resources\bin'
+          Write-Output "installed at $app"
+          # Exactly one entry added, at the end, and nothing else changed.
+          $after = & $userPath
+          $expected = if ([string]::IsNullOrEmpty($before)) { $bin } elseif ($before.EndsWith(';')) { $before + $bin } else { "$before;$bin" }
+          if ($after -ne $expected) { throw "user PATH after install: '$after', expected '$expected'" }
+          if (@(Get-ChildItem $bin).Name -join ',' -ne 'orca-cli.cmd') { throw "resources\bin holds more than orca-cli.cmd" }
+          # As a new terminal would find it: the machine PATH, then the user's, as Windows
+          # composes them, and PATHEXT resolving `orca-cli` to the .cmd.
+          $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + $after
+          if ((Get-Command orca-cli).Source -ne (Join-Path $bin 'orca-cli.cmd')) { throw "orca-cli resolved to $((Get-Command orca-cli).Source)" }
+          $out = orca-cli --version
+          if ($LASTEXITCODE -ne 0) { throw "orca-cli --version exited $LASTEXITCODE" }
+          if (($out | Select-Object -Last 1) -ne $env:VERSION) { throw "orca-cli --version said '$out', expected '$env:VERSION'" }
+          if (-not ((orca-cli --help) -match 'Orchestration Runtime for Coding Agents')) { throw "orca-cli --help did not print ORCA's usage" }
+          orca-cli no-such-command *> $null
+          if ($LASTEXITCODE -eq 0) { throw "orca-cli passed a failing exit code through as 0" }
+          Write-Output "orca-cli $env:VERSION from a new terminal's PATH"
+          # The uninstaller hands itself to a copy in %TEMP% and returns, so wait for its effect.
+          $uninstaller = Join-Path $app 'Uninstall ORCA.exe'
+          Start-Process -FilePath $uninstaller -ArgumentList '/S', '/currentuser' -Wait
+          $deadline = (Get-Date).AddSeconds(120)
+          while ((Test-Path (Join-Path $bin 'orca-cli.cmd')) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 2 }
+          if (Test-Path (Join-Path $bin 'orca-cli.cmd')) { throw "the uninstaller did not remove the app" }
+          $final = & $userPath
+          if ($final -ne $before) { throw "user PATH after uninstall: '$final', expected '$before'" }
+          Write-Output "uninstalled; user PATH restored"
+
       # GitHub-hosted fallback only; never runs on a self-hosted runner. Ubuntu 24.04 keeps
       # unprivileged user namespaces, which Chromium's sandbox needs, behind AppArmor. Rather
       # than lift that for the whole VM, load a profile that grants `userns` to the one
@@ -366,6 +415,8 @@ jobs:
       # removal of ORCA's package untouched: same version, same owner of its files.
       - name: The .deb installs and launches sandboxed on stock Ubuntu
         if: matrix.name == 'linux' && runner.environment == 'github-hosted'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
           shopt -s nullglob
@@ -467,6 +518,15 @@ jobs:
           # The launch below is the runner's own unprivileged account, never sudo.
           test "$(id -u)" != 0
 
+          # The CLI (#1207): /usr/bin/orca-cli belongs to this package, and with the screen
+          # reader installed beside it, the command reaches this build of ORCA.
+          test "$(dpkg -S /usr/bin/orca-cli)" = 'orca-desktop: /usr/bin/orca-cli'
+          test "$(stat -c '%a %u:%g' /usr/bin/orca-cli /opt/ORCA/resources/bin/orca-cli)" = "$(printf '755 0:0\n755 0:0')"
+          test "$(command -v orca-cli)" = /usr/bin/orca-cli
+          test "$(orca-cli --version)" = "$VERSION"
+          orca-cli --help | grep -q 'Orchestration Runtime for Coding Agents'
+          test "$(reader)" = "$before"
+
           profile=$(mktemp -d "$RUNNER_TEMP/orca-deb-profile.XXXXXX")
           workspace=$(mktemp -d "$RUNNER_TEMP/orca-deb-workspace.XXXXXX")
           env -u ORCA_DAEMON_URL ORCA_WORKSPACE="$workspace" setsid xvfb-run -a orca-desktop \
@@ -522,6 +582,7 @@ jobs:
 
           sudo apt-get remove -y -q orca-desktop
           test ! -e /etc/apparmor.d/orca-desktop
+          test ! -e /usr/bin/orca-cli
           if sudo grep -q '^orca-desktop ' /sys/kernel/security/apparmor/profiles; then
             echo "::error::removing the package left its AppArmor profile loaded"; exit 1
           fi

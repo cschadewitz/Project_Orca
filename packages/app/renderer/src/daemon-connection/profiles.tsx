@@ -587,7 +587,7 @@ function ProfileEditor({
       {field(
         "serverCommand",
         "Server command",
-        "ORCA's command line on the server, which issues this profile's credential. Leave empty for orca on its PATH, or enter a full path (with / on Windows too).",
+        "ORCA's command line on the server, which issues this profile's credential. Leave empty for orca-cli on its PATH, or enter a full path (with / on Windows too).",
       )}
       {field(
         "serverConfig",
