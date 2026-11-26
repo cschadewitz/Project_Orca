@@ -23,9 +23,10 @@
  *   while `turn/start` is unanswered.
  * - **Cancel outcome (#1299):** `interrupted` says the turn stopped, not that a command it started
  *   did. A cancelled turn waits up to the cancel grace for Codex to report each command in flight
- *   ended, and its result's `cancel` says `confirmed`, `unconfirmed` or `not-carried-out`. While a
- *   command from a cancelled turn may still run, the session takes no further prompt (so no
- *   restart resumes the thread); closing the session is not taken as stopping it.
+ *   ended (a command it reports starting meanwhile included), and its result's `cancel` says
+ *   `confirmed`, `unconfirmed` or `not-carried-out`. While a command from a cancelled turn lacks
+ *   a report that it ended, and for good once one was reported completed, the session takes no
+ *   further prompt (so no restart resumes the thread); closing it is not taken as stopping it.
  * - **Failures:** a `turn/start` whose outcome is unknown (no answer in time, the connection
  *   lost, an answer without a turn id) ends the session, since Codex may be running the turn; a
  *   refusal Codex answers with an error does not. Every notification ORCA reads is checked
@@ -897,8 +898,16 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
    * old work may still run, so no new prompt (and so no restart and resume) is taken.
    */
   const unsettled = new Set<string>();
-  /** Woken whenever Codex reports a command finished. */
+  /** Woken whenever Codex reports a command started or finished. */
   const commandWaiters = new Set<() => void>();
+  /** Turns ORCA cancelled: a command Codex reports starting in one of them is never left untracked. */
+  const cancelledTurns = new Set<string>();
+  /**
+   * Set once Codex reported a command it was asked to stop as completed (#1299): the person
+   * expected it to stop and may need to reconcile what it changed, so the session takes no
+   * further prompt, whether or not the command has since ended.
+   */
+  let cancelNotCarriedOut = false;
   /** Set once the session cannot take another prompt: Codex may still be running a turn. */
   let broken: OrcaError | undefined;
   /** The account the session started on, which every later answer is compared to. */
@@ -1359,22 +1368,31 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
         // Commands in flight, for telling whether a cancel ended them (#1299).
         if (item.type === "commandExecution") {
           const key = `${typeof params.turnId === "string" ? params.turnId : ""}\0${item.id}`;
+          const turnId = typeof params.turnId === "string" ? params.turnId : undefined;
           if (method === "item/started") {
             if (item.status === "inProgress") {
               openCommands.add(key);
+              // A command started once its turn's cancel was asked for, or after that turn
+              // returned, is the cancel's to account for too.
               if (active?.cancelReason) active.cancelOwned.add(key);
+              else if (turnId !== undefined && cancelledTurns.has(turnId)) {
+                unsettled.add(key);
+                logger.warn("Codex started a command in a turn ORCA cancelled", { agentId: agent.id, item: item.id });
+              }
             }
           } else {
             openCommands.delete(key);
             if (active?.cancelOwned.has(key)) active.cancelEnded.set(key, item.status);
-            if (unsettled.delete(key))
+            if (unsettled.delete(key)) {
+              if (item.status === "completed") cancelNotCarriedOut = true;
               logger.warn("Codex reported a command from a cancelled turn finished", {
                 agentId: agent.id,
                 item: item.id,
                 status: item.status,
               });
-            for (const wake of commandWaiters) wake();
+            }
           }
+          for (const wake of commandWaiters) wake();
         }
         if (method === "item/completed" && item.type === "agentMessage" && !active?.streamed.has(item.id) && item.text)
           emit({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: item.text } });
@@ -2099,9 +2117,11 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
    * on, so the session takes no further prompt until Codex reports it ended.
    */
   const cancelOutcome = async (turn: ActiveTurn): Promise<NonNullable<TurnResult["cancel"]>> => {
+    if (turn.turnId !== undefined) cancelledTurns.add(turn.turnId);
     // Only this turn's: a command from an app-server that since exited is never reported ended.
-    const owned = [...turn.cancelOwned].filter((k) => k.startsWith(`${turn.turnId ?? ""}\0`));
-    const open = () => owned.filter((k) => openCommands.has(k));
+    // Read live: a command Codex reports starting during the wait is the cancel's as well.
+    const owned = () => [...turn.cancelOwned].filter((k) => k.startsWith(`${turn.turnId ?? ""}\0`));
+    const open = () => owned().filter((k) => openCommands.has(k));
     if (open().length) {
       let wake!: () => void;
       let timer: ReturnType<typeof setTimeout> | undefined;
@@ -2119,10 +2139,12 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
         clearTimeout(timer);
       }
     }
+    // Read with no await before the prompt settles, so no report falls between this and the fence.
     const stillOpen = open();
-    const completed = owned.filter((k) => turn.cancelEnded.get(k) === "completed");
+    const completed = owned().filter((k) => turn.cancelEnded.get(k) === "completed");
     for (const key of stillOpen) unsettled.add(key);
     const outcome = completed.length ? "not-carried-out" : stillOpen.length ? "unconfirmed" : "confirmed";
+    if (completed.length) cancelNotCarriedOut = true;
     if (outcome !== "confirmed")
       logger.warn(
         outcome === "not-carried-out"
@@ -2192,6 +2214,13 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
         if (broken) throw broken;
         if (closing) throw new OrcaError("RUN_STATE", "the session is closed");
         if (active) throw new OrcaError("RUN_STATE", "a prompt turn is already active on this session");
+        if (cancelNotCarriedOut)
+          throw new OrcaError(
+            "RUN_STATE",
+            `agent ${agent.id}: Codex ran a command to completion after ORCA cancelled its turn; ` +
+              `ORCA takes no further prompt on this session. Close it, and check what the command changed before going on`,
+            { agentId: agent.id, reason: "codex-cancel-not-carried-out" },
+          );
         if (unsettled.size)
           throw new OrcaError(
             "RUN_STATE",

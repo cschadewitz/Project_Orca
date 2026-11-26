@@ -509,8 +509,7 @@ describe.skipIf(CODEX === undefined)("installed-session evidence for the Codex a
       );
     else if (cancelled && finished)
       limitations.push(
-        `the command's result appeared after the turn was cancelled; ORCA reported the cancel as ${orcaCancel}` +
-          (orcaCancel === "unconfirmed" ? " and took no further prompt" : ""),
+        `the command's result appeared after the turn was cancelled; ORCA reported the cancel as ${orcaCancel} and took no further prompt`,
       );
     else if (cancelled && orcaCancel === "unconfirmed")
       limitations.push("Codex never reported the command ended, so ORCA reported the cancel as unconfirmed");

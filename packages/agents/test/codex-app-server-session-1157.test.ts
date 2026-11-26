@@ -2652,6 +2652,98 @@ describe("whether a cancel ended the turn's commands (#1299)", () => {
         stillOpen: [],
       },
     );
+    // the person expected it to stop: nothing continues on this session, though it has ended
+    const refused = (await session.prompt("again").catch((e: unknown) => e)) as OrcaError;
+    expect(refused.code).toBe("RUN_STATE");
+    expect(refused.details).toMatchObject({ reason: "codex-cancel-not-carried-out" });
+    expect(s.peer.received.filter((m) => m.method === "turn/start")).toHaveLength(1);
+    await session.close();
+  });
+
+  /** A Codex whose turn starts `c1`; the test drives everything after the interrupt itself. */
+  function drivenTurn() {
+    let peer!: Peer;
+    const answers: Record<string, Responder> = {
+      ...BASE,
+      "turn/start": (_msg, p) => {
+        peer = p;
+        setImmediate(() =>
+          p.notify("item/started", { threadId: "thr_1", turnId: "turn_1", item: cmd("c1", "inProgress") }),
+        );
+        return { turn: { id: "turn_1", status: "inProgress" } };
+      },
+      "turn/interrupt": (msg, p) => {
+        setImmediate(() =>
+          p.notify("turn/completed", {
+            threadId: "thr_1",
+            turn: { id: msg.params!["turnId"], status: "interrupted", error: null },
+          }),
+        );
+        return {};
+      },
+    };
+    const say = (method: "item/started" | "item/completed", id: string, status: string) =>
+      peer.notify(method, { threadId: "thr_1", turnId: "turn_1", item: cmd(id, status) });
+    return { answers, say };
+  }
+
+  it("a command Codex reports starting while the cancel settles is waited for too", async () => {
+    const t = drivenTurn();
+    const s = scriptedHost(t.answers);
+    const session = await open(s.host, { cancelGraceMs: 300 });
+    let settled: unknown;
+    const turn = startAndCancel(session, s.peer);
+    void turn.then((r) => (settled = r));
+    await new Promise((r) => setTimeout(r, 30));
+    // c2 starts during the wait, then c1 ends: c2 is still open, so nothing is confirmed
+    t.say("item/started", "c2", "inProgress");
+    t.say("item/completed", "c1", "failed");
+    await new Promise((r) => setTimeout(r, 30));
+    expect(settled).toBeUndefined();
+    await expect(turn).resolves.toMatchObject({ cancel: "unconfirmed" });
+    await expect(session.prompt("again")).rejects.toMatchObject({ details: { reason: "codex-cancel-unconfirmed" } });
+    // c2 ends without completing: the fence lifts
+    t.say("item/completed", "c2", "failed");
+    await vi.waitFor(async () => {
+      const next = session.prompt("again");
+      await vi.waitFor(() => expect(s.peer.received.filter((m) => m.method === "turn/start")).toHaveLength(2));
+      await session.cancel();
+      await next;
+    });
+    await session.close();
+  });
+
+  it("a late start whose end is reported in time leaves the cancel confirmed only once both ended", async () => {
+    const t = drivenTurn();
+    const s = scriptedHost(t.answers);
+    const session = await open(s.host, { cancelGraceMs: 2_000 });
+    const turn = startAndCancel(session, s.peer);
+    await new Promise((r) => setTimeout(r, 30));
+    t.say("item/started", "c2", "inProgress");
+    t.say("item/completed", "c1", "failed");
+    t.say("item/completed", "c2", "declined");
+    await expect(turn).resolves.toMatchObject({ cancel: "confirmed" });
+    await session.close();
+  });
+
+  it("a command started in a cancelled turn after it returned is fenced, and one reported completed fences for good", async () => {
+    const t = drivenTurn();
+    const s = scriptedHost(t.answers);
+    const session = await open(s.host, { cancelGraceMs: 2_000 });
+    const turn = startAndCancel(session, s.peer);
+    await new Promise((r) => setTimeout(r, 30));
+    t.say("item/completed", "c1", "failed");
+    await expect(turn).resolves.toMatchObject({ cancel: "confirmed" });
+    t.say("item/started", "c3", "inProgress");
+    await vi.waitFor(() =>
+      expect(session.prompt("again")).rejects.toMatchObject({ details: { reason: "codex-cancel-unconfirmed" } }),
+    );
+    // it ran to completion: blocked for good, not lifted
+    t.say("item/completed", "c3", "completed");
+    await vi.waitFor(() =>
+      expect(session.prompt("again")).rejects.toMatchObject({ details: { reason: "codex-cancel-not-carried-out" } }),
+    );
+    expect(s.peer.received.filter((m) => m.method === "turn/start")).toHaveLength(1);
     await session.close();
   });
 
