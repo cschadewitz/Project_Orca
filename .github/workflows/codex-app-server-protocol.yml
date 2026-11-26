@@ -1,0 +1,85 @@
+# The Codex app-server protocol ORCA's client is pinned to (#1156), checked against the real
+# pinned Codex. ORCA checks in the types `codex app-server generate-ts` generates for each
+# pinned version (packages/agents/src/codex-protocol/<version>/, by tools/codex-protocol.mjs);
+# this regenerates them from the pinned Codex and fails on any byte of drift, then runs ORCA's
+# client against that Codex's app-server in an empty CODEX_HOME (handshake, no login refused,
+# a removed method refused). It needs no account, key or secret. A weekly run sees a change
+# behind the pin.
+#
+# CODEX_VERSION is the version in CODEX_APP_SERVER_PINNED (packages/agents/src/
+# codex-app-server-client.ts); moving it is a reviewed change to both, with the types
+# regenerated: node tools/codex-protocol.mjs generate --codex <path to that codex>.
+name: Codex app-server protocol
+
+on:
+  pull_request:
+    branches: [main, "feature/**"]
+    paths:
+      - packages/agents/src/codex-protocol/**
+      - packages/agents/src/codex-app-server.ts
+      - packages/agents/src/codex-app-server-client.ts
+      - packages/agents/test/codex-app-server-real-1156.test.ts
+      - tools/codex-protocol.mjs
+      - tools/test/codex-protocol-1156.test.js
+      - .github/workflows/codex-app-server-protocol.yml
+  schedule:
+    - cron: "17 7 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codex-app-server-protocol-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CODEX_VERSION: 0.171.0
+
+jobs:
+  linux:
+    name: codex app-server protocol (linux)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+
+      - name: Install the pinned Codex outside the workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          d="$RUNNER_TEMP/codex"
+          mkdir -p "$d"
+          cd "$d"
+          npm init -y >/dev/null
+          npm install --no-audit --no-fund --ignore-scripts \
+            "@openai/codex-linux-x64@npm:@openai/codex@${CODEX_VERSION}-linux-x64"
+          bin="$d/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex"
+          test "$("$bin" --version)" = "codex-cli ${CODEX_VERSION}"
+          echo "ORCA_CODEX_BIN=$bin" >> "$GITHUB_ENV"
+
+      - name: Compare the checked-in protocol with the pinned Codex's
+        run: node tools/codex-protocol.mjs check --codex "$ORCA_CODEX_BIN"
+
+      - name: Run the protocol and client tests against the pinned Codex
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm exec vitest run tools/test/codex-protocol-1156.test.js packages/agents/test/codex-app-server-real-1156.test.ts \
+            --reporter=default --reporter=json --outputFile="$RUNNER_TEMP/protocol.json"
+          # Both suites skip their Codex tests without ORCA_CODEX_BIN; here every test has to have run.
+          node -e '
+            const r = require(process.argv[1]);
+            if (r.numTotalTests === 0 || r.numPendingTests > 0 || r.numPassedTests !== r.numTotalTests)
+              throw new Error(`expected every test to run and pass: ${JSON.stringify({total: r.numTotalTests, passed: r.numPassedTests, skipped: r.numPendingTests})}`);
+          ' "$RUNNER_TEMP/protocol.json"

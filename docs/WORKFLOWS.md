@@ -524,8 +524,17 @@ Codex that needs a login and reports none is to be refused with "run `codex logi
 **Every session that asks for it is refused today**, before anything starts: the driver is not
 built yet (#1157), it runs only on ORCA's own machine (#1166), and config rejects it on an
 `orca-daemon` agent and together with `nativeToolHook` or `codexExecGate`. Nothing falls back to
-the ACP adapter: remove `driver` (or set `driver: acp`, the default) to run Codex through it.
+the ACP adapter: to run Codex through it, remove `driver` (or set `driver: acp`, the default)
+and set `command` back to the adapter (for example `codex-acp`), since `codex` itself is not an
+ACP agent.
 The driver claims no support tier and is not a guard.
+
+The driver is to run only with a Codex version whose app-server protocol ORCA has pinned
+(today 0.171.0): ORCA checks in the types that Codex generates
+(`packages/agents/src/codex-protocol/<version>/`, written by `tools/codex-protocol.mjs`) and
+refuses a session whose Codex reports another version, or whose protocol lacks a method the
+session needs. The **Codex app-server protocol** workflow regenerates the types from the pinned
+Codex and fails on any drift.
 
 An `ask` is routed to the `humanInput` channel above, or upstream when ORCA runs as an ACP
 agent. **An `ask` nobody can answer is refused, never parked**: a permission cannot outlive
