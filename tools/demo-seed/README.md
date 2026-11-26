@@ -34,6 +34,15 @@ node orca-demo-seed/seed.mjs --workspace <app workspace folder>
    `config.set` and `config.apply`. New agents need a daemon restart, so it stops and says so
    (exit code 2).
 2. **Restart the daemon**: quit and reopen ORCA (or restart `orca serve`).
+
+   **With the desktop app's bundled daemon**, a config written from outside the app is not
+   bound for reopening, and the reopened app then refuses to start its daemon (#1192). So
+   for the app, prepare with `--config-out <file>`: the seed writes its files and the finished
+   config to `<file>`, and changes nothing through the daemon. Then, in the app:
+   Config > **Raw**, paste the file, **Validate and review**, **Save reviewed changes**,
+   **Apply saved configuration**; then Config > Form > **Review saved configuration for
+   reopening** > **Bind reviewed saved configuration**. Now quit and reopen ORCA.
+   `packages/app/test/native-linux/visual-sweep.spec.ts` does exactly this.
 3. **Populate.** Run it again with `--phase populate`. It submits the work, then spends up to
    2½ minutes answering the gates it should answer, cancelling the run it should cancel,
    deciding a plan decision and moving risks, and prints what the store holds.
@@ -41,11 +50,12 @@ node orca-demo-seed/seed.mjs --workspace <app workspace folder>
 | Option | Default | What it does |
 | --- | --- | --- |
 | `--workspace <dir>` | required | The app workspace (the folder with `orca.config.yaml`). Its `auth/local-client.token` is the daemon token. Before either phase changes anything, the seed checks that the daemon's own config path (`config.get`) is this workspace's `orca.config.yaml`, and refuses otherwise. |
-| `--url <url>` | found from `/proc` on Linux | The daemon, `http://127.0.0.1:<port>`; only a loopback address is accepted, and redirects are refused, so the token stays on this machine. The desktop app's bundled daemon listens on a random port; elsewhere pass it. `ORCA_DAEMON_URL` works too. |
+| `--url <url>` | found from `/proc` on Linux | The daemon, `http://127.0.0.1:<port>`. Found automatically, it tries each loopback listener of the daemon process for this workspace and keeps the one that answers for it; only a loopback address is accepted, and redirects are refused, so the token stays on this machine. The desktop app's bundled daemon listens on a random port; elsewhere pass it. `ORCA_DAEMON_URL` works too. |
 | `--token-file <file>` | `<workspace>/auth/local-client.token` | |
 | `--phase prepare\|populate\|all` | `all` | `all` prepares, and populates only if no restart is needed. |
 | `--scale <n>` | `1` | Submit the work items and workflow runs `n` times. |
 | `--agent-node <path>` | this Node | What runs the agents. The installed ORCA binary works (`/opt/ORCA/orca-desktop`); the seed then sets `ELECTRON_RUN_AS_NODE=1` for the agents. |
+| `--config-out <file>` | off | Prepare only: write the seeded config to `<file>` instead of saving it through the daemon, for pasting into the desktop app's Config > Raw (above). |
 | `--settle <seconds>` | `150` | How long populate keeps answering and deciding. |
 | `--force` | off | Populate again on a seeded workspace (`demo-seed/seeded.json` marks one). |
 

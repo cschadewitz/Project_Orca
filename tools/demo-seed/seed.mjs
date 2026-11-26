@@ -60,6 +60,7 @@ const { values: args } = parseArgs({
     "agent-node": { type: "string" },
     phase: { type: "string", default: "all" },
     settle: { type: "string", default: "150" },
+    "config-out": { type: "string" },
     force: { type: "boolean", default: false },
     help: { type: "boolean", default: false },
   },
@@ -84,9 +85,14 @@ function assets() {
 
 // ---------------------------------------------------------------- the daemon
 
-/** The loopback port of the daemon whose command line names `workspace`, from /proc (Linux). verifyTarget still checks it. */
-function discoverUrl(workspace) {
-  if (process.platform !== "linux") return undefined;
+/**
+ * The loopback ports of the daemon whose command line names `workspace`, from /proc (Linux). A
+ * daemon can hold more than one listener, and not every one speaks HTTP, so connect() tries each
+ * and verifyTarget still checks the one it keeps.
+ */
+function discoverUrls(workspace) {
+  if (process.platform !== "linux") return [];
+  const urls = [];
   const listening = new Map();
   for (const file of ["/proc/net/tcp", "/proc/net/tcp6"]) {
     if (!existsSync(file)) continue;
@@ -122,13 +128,10 @@ function discoverUrl(workspace) {
         continue;
       }
       const inode = /^socket:\[(\d+)\]$/.exec(target)?.[1];
-      if (inode && listening.has(inode)) {
-        const at = cmdline.indexOf("--config");
-        return { url: `http://127.0.0.1:${listening.get(inode)}`, config: at >= 0 ? cmdline[at + 1] : undefined };
-      }
+      if (inode && listening.has(inode)) urls.push(`http://127.0.0.1:${listening.get(inode)}`);
     }
   }
-  return undefined;
+  return [...new Set(urls)];
 }
 
 const LOOPBACK = new Set(["127.0.0.1", "localhost", "[::1]"]);
@@ -192,16 +195,33 @@ async function verifyTarget(call, workspace) {
 async function connect() {
   if (!args.workspace) throw new Error("--workspace <app workspace folder> is required");
   const workspace = realpathSync(resolve(args.workspace));
-  const url = loopbackUrl(
-    args.url ??
-      process.env.ORCA_DAEMON_URL ??
-      discoverUrl(workspace)?.url ??
-      fail("could not find the daemon for this workspace; pass --url http://127.0.0.1:<port>"),
-  );
   const tokenFile = args["token-file"] ?? join(workspace, "auth", "local-client.token");
-  const call = rpcClient(url, readFileSync(tokenFile, "utf8").trim());
-  await verifyTarget(call, workspace);
-  return { workspace, call };
+  const token = readFileSync(tokenFile, "utf8").trim();
+  const named = args.url ?? process.env.ORCA_DAEMON_URL;
+  const candidates = named ? [named] : discoverUrls(workspace);
+  if (candidates.length === 0) fail("could not find the daemon for this workspace; pass --url http://127.0.0.1:<port>");
+  const refusals = [];
+  for (const candidate of candidates) {
+    const url = loopbackUrl(candidate);
+    const call = rpcClient(url, token);
+    try {
+      await verifyTarget(call, workspace);
+    } catch (error) {
+      // A named daemon is the one the person meant: its refusal is the answer.
+      if (named) throw error;
+      refusals.push(`${url}: ${describe(error)}`);
+      continue;
+    }
+    log(`daemon ${url}`);
+    return { workspace, call };
+  }
+  throw new Error(`no daemon listener for this workspace answered; tried ${refusals.join("; ")}`);
+}
+
+/** An error's message, with the network cause fetch hides behind "fetch failed". */
+function describe(error) {
+  const cause = error?.cause;
+  return `${error?.message ?? error}${cause ? ` (${cause.code ?? cause.message ?? cause})` : ""}`;
 }
 
 function fail(message) {
@@ -359,6 +379,12 @@ async function prepare(call, workspace) {
   const edits = writeFiles(workspace, current.config, files);
   if (edits.length === 0) {
     log("config already has the demo agents, workflows and templates");
+  } else if (args["config-out"]) {
+    // Leave the write to the person (or a test) in the app's own Config > Raw editor: the
+    // desktop app binds a config saved there for reopening, and refuses one saved elsewhere.
+    writeFileSync(resolve(args["config-out"]), json(applyEdits(structuredClone(current.config.parsed ?? {}), edits)));
+    log(`config: ${edits.length} edits written to ${args["config-out"]}; paste it into Config > Raw and save`);
+    return { workspace, restart: true };
   } else {
     // Structured edits keep the file's comments and layout; the daemon refuses them where it
     // cannot (the first-run config is flow-style JSON), and then the seed writes the whole
@@ -634,6 +660,6 @@ try {
   }
   if (args.phase !== "prepare") await populate(call, workspace);
 } catch (error) {
-  process.stderr.write(`[demo-seed] ${error.message}\n`);
+  process.stderr.write(`[demo-seed] ${describe(error)}\n`);
   process.exit(1);
 }

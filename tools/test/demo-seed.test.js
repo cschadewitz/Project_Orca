@@ -4,7 +4,7 @@
  * A fake daemon records every request, so each case can show what the seed never sent.
  */
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -179,4 +179,34 @@ it("never submits a program into an existing plan, and writes only to plans it m
   expect(planWrites.map((call) => call.params.planId)).toEqual(["plan-new-search"]);
   expect(planWrites.map((call) => call.params.key)).toEqual(["hosted-cost"]);
   for (const call of daemon.calls) expect(call.auth).toBe(`Bearer ${TOKEN}`);
+}, 30_000);
+
+it("with --config-out, prepare writes the config to the file and saves nothing through the daemon", async () => {
+  const selected = workspace();
+  const out = join(selected, "seeded-config.json");
+  const daemon = await fakeDaemon({
+    "config.get": {
+      config: {
+        path: join(selected, "orca.config.yaml"),
+        revision: "r1",
+        parsed: { agents: [], workflows: ["first-run/workflow.yaml"], templates: [] },
+      },
+    },
+    "agents.list": { agents: [] },
+  });
+  const { code, output } = await seed([
+    "--workspace",
+    selected,
+    "--url",
+    daemon.url,
+    "--phase",
+    "prepare",
+    "--config-out",
+    out,
+  ]);
+  expect(code, output).not.toBe(1);
+  expect(daemon.calls.filter((call) => MUTATIONS.includes(call.method))).toEqual([]);
+  const written = JSON.parse(readFileSync(out, "utf8"));
+  expect(written.agents.map((agent) => agent.id)).toContain("atlas");
+  expect(written.workflows).toContain("first-run/workflow.yaml");
 }, 30_000);
