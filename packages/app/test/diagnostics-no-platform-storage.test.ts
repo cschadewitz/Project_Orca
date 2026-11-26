@@ -42,6 +42,8 @@ describe("diagnostics on a platform with no diagnostics storage (#1205)", () => 
         code: "unavailable",
         cleanupPending: false,
         previous: false,
+        // The renderer says "not available on this system" rather than a failure (#1109).
+        platformStorage: false,
       });
       // "Keep off", then "Retry cleanup" if it were offered: neither invents pending work.
       const kept = await diagnostics.controller.setEnabled(false, 1);
