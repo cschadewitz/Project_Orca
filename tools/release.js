@@ -11,6 +11,9 @@
 //   node tools/release.js notes --unreleased                        -> prints what changelog.d/ holds
 //   node tools/release.js line 0.7.1                                -> prints the branch it is cut from
 //   node tools/release.js sync 0.7.1 <other CHANGELOG.md>           -> copies that section into CHANGELOG.md
+//                                                                      (and, for a new minor's X.Y.0
+//                                                                      or candidate, raises package.json
+//                                                                      to it when it is behind)
 //
 // The notes themselves are not written here: a pull request drops a fragment into
 // `changelog.d/` (tools/changelog.js) and `prepare` renders the lot into the dated
@@ -21,6 +24,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { FRAGMENT_DIR, deleteFragments, readFragments, renderEntries } from "./changelog.js";
 import { laneOf } from "./release-lane.js";
+import { compare, nextVersion as nextFor } from "./release-plan.js";
 
 const PKG = "package.json";
 const CHANGELOG = "CHANGELOG.md";
@@ -61,21 +65,15 @@ const currentVersion = () => {
 };
 
 /**
- * Pre-1.0 (major === 0) a `major` bump is deliberately treated as a minor one: under
- * semver 0.x promises nothing, and reaching 1.0.0 should be a decision rather than the
- * side effect of one label. Pin the version on the milestone to go to 1.0.0.
+ * The next version for a label bump (tools/release-plan.js): pre-1.0 a `major` bump counts as a
+ * minor one, and a candidate is finalized by its own level's bump (0.9.0-rc.1 + minor = 0.9.0).
  */
 function nextVersion(current, bump) {
-  const { major, minor, patch } = parse(current);
-  if (major === 0) {
-    if (bump === "major" || bump === "minor") return `0.${minor + 1}.0`;
-    if (bump === "patch") return `0.${minor}.${patch + 1}`;
-  } else {
-    if (bump === "major") return `${major + 1}.0.0`;
-    if (bump === "minor") return `${major}.${minor + 1}.0`;
-    if (bump === "patch") return `${major}.${minor}.${patch + 1}`;
+  try {
+    return nextFor(current, bump);
+  } catch (err) {
+    return die(err.message);
   }
-  return die(`unknown bump: ${bump} (expected major, minor or patch)`);
 }
 
 /** The `## Unreleased` body, and the line range it occupies, from a CHANGELOG's lines. */
@@ -150,17 +148,6 @@ function prepare(version) {
   );
 }
 
-const compare = (a, b) => {
-  const x = parse(a);
-  const y = parse(b);
-  for (const key of ["major", "minor", "patch"]) if (x[key] !== y[key]) return x[key] - y[key];
-  // A prerelease sorts below its final (0.7.1-rc.1 < 0.7.1); two prereleases by text.
-  if (x.pre === y.pre) return 0;
-  if (x.pre === undefined) return 1;
-  if (y.pre === undefined) return -1;
-  return x.pre < y.pre ? -1 : 1;
-};
-
 /** A version's `## X.Y.Z - date` section as lines (heading included), or undefined. */
 function sectionOf(lines, version) {
   const start = lines.findIndex((l) => l.startsWith(`## ${version} `));
@@ -172,8 +159,12 @@ function sectionOf(lines, version) {
 
 /**
  * Copies `version`'s section from a line branch's CHANGELOG into this one, in version
- * order, so `main` records a patch that was released from `release/X.Y`. Running it again
+ * order, so `main` records a release that was cut from `release/X.Y`. Running it again
  * changes nothing; a different section already here for the version is a stop.
+ *
+ * A new minor (`X.Y.0` or its candidate) is released from its line too, so `main` would never
+ * learn its version, and the next minor's prepare would compute `X.Y.0` again. Its record
+ * therefore also raises `package.json` to it when `main` is behind. A patch never does.
  */
 function sync(version, sourcePath) {
   parse(version);
@@ -190,6 +181,7 @@ function sync(version, sourcePath) {
     while (existing.length && existing[existing.length - 1].trim() === "") existing.pop();
     if (existing.join("\n") === section.join("\n")) {
       console.error(`${CHANGELOG} already has the ${version} section; nothing changed`);
+      raiseVersion(version);
       return;
     }
     die(`${CHANGELOG} already has a different ${version} section; reconcile it by hand`);
@@ -203,6 +195,19 @@ function sync(version, sourcePath) {
   if (at === -1) at = lines.length;
   writeFileSync(CHANGELOG, [...lines.slice(0, at), ...section, "", ...lines.slice(at)].join("\n"));
   console.error(`${CHANGELOG}: added the ${version} section from ${sourcePath}`);
+  raiseVersion(version);
+}
+
+/** Raises package.json to a new minor's released version when it is behind; else nothing. */
+function raiseVersion(version) {
+  if (parse(version).patch !== 0) return;
+  const current = currentVersion();
+  if (compare(version, current) <= 0) return;
+  const pkgText = readFileSync(PKG, "utf8");
+  const bumped = pkgText.replace(/^(\s*"version":\s*")[^"]+(")/m, `$1${version}$2`);
+  if (bumped === pkgText) die(`could not rewrite the version field in ${PKG}`);
+  writeFileSync(PKG, bumped);
+  console.error(`${PKG}: raised from ${current} to ${version}`);
 }
 
 /** What `prepare` would render today, without writing anything. */
