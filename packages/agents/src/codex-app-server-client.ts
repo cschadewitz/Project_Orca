@@ -301,7 +301,12 @@ export class CodexAppServerClient {
         void this.answer(message.id, message.method, message.params);
         return;
       }
-      this.options.onNotification?.(message.method, message.params);
+      try {
+        this.options.onNotification?.(message.method, message.params);
+      } catch (error) {
+        // A handler that cannot read what Codex sent ends the connection, never the stdio callback.
+        this.closeOnProtocolError(`a ${message.method} notification ORCA could not read (${(error as Error).message})`);
+      }
       return;
     }
     if (!hasId || typeof message.id !== "number")
@@ -318,11 +323,16 @@ export class CodexAppServerClient {
     clearTimeout(waiting.timer);
     if (hasResult) return waiting.resolve(message.result);
     const error = message.error;
-    if (!isObject(error) || typeof error.code !== "number" || typeof error.message !== "string")
+    // A malformed error is not Codex refusing the request: it is a protocol error of ORCA's own
+    // finding, so callers never read it as a definite refusal (`CodexRpcError` is only that).
+    // JSON-RPC 2.0 §5.1: the code is an integer.
+    if (!isObject(error) || !Number.isSafeInteger(error.code) || typeof error.message !== "string")
       return waiting.reject(
-        new CodexRpcError(-32603, `codex app-server answered ${waiting.method} with a malformed error`, error),
+        new OrcaError("AGENT_PROTOCOL", `codex app-server answered ${waiting.method} with a malformed error`, {
+          method: waiting.method,
+        }),
       );
-    waiting.reject(new CodexRpcError(error.code, error.message, error.data));
+    waiting.reject(new CodexRpcError(error.code as number, error.message, error.data));
   }
 
   private async answer(id: string | number, method: string, params: unknown): Promise<void> {
@@ -355,9 +365,17 @@ export class CodexAppServerClient {
     }
   }
 
-  private protocolError(what: string): void {
+  /**
+   * End the connection because Codex sent `what`, which the protocol does not allow: pending
+   * requests fail, and `onClose` gets `AGENT_PROTOCOL`.
+   */
+  closeOnProtocolError(what: string): void {
     this.shutdown(new OrcaError("AGENT_PROTOCOL", `codex app-server sent ${what}; ORCA closed the connection`));
     this.transport.close();
+  }
+
+  private protocolError(what: string): void {
+    this.closeOnProtocolError(what);
   }
 
   private shutdown(error: OrcaError): void {

@@ -3,7 +3,9 @@
 # pinned version (packages/agents/src/codex-protocol/<version>/, by tools/codex-protocol.mjs);
 # this regenerates them from the pinned Codex and fails on any byte of drift, then runs ORCA's
 # client against that Codex's app-server in an empty CODEX_HOME (handshake, no login refused,
-# a removed method refused). It needs no account, key or secret. A weekly run sees a change
+# a removed method refused), and runs ORCA's session driver (#1157) through one turn against the
+# model stand-in, comparing it with the same turn over the ACP adapter (codex-acp
+# CODEX_ACP_VERSION). It needs no account, key or secret. A weekly run sees a change
 # behind the pin.
 #
 # CODEX_VERSION is the version in CODEX_APP_SERVER_PINNED (packages/agents/src/
@@ -18,7 +20,11 @@ on:
       - packages/agents/src/codex-protocol/**
       - packages/agents/src/codex-app-server.ts
       - packages/agents/src/codex-app-server-client.ts
+      - packages/agents/src/codex-app-server-session.ts
+      - packages/agents/src/host.ts
       - packages/agents/test/codex-app-server-real-1156.test.ts
+      - packages/cli/test/codex-app-server-session-real-1157.test.ts
+      - packages/cli/test/codex-model-stand-in.ts
       - tools/codex-protocol.mjs
       - tools/test/codex-protocol-1156.test.js
       - .github/workflows/codex-app-server-protocol.yml
@@ -35,6 +41,7 @@ concurrency:
 
 env:
   CODEX_VERSION: 0.171.0
+  CODEX_ACP_VERSION: 2.9.0
 
 jobs:
   linux:
@@ -63,21 +70,57 @@ jobs:
           cd "$d"
           npm init -y >/dev/null
           npm install --no-audit --no-fund --ignore-scripts \
-            "@openai/codex-linux-x64@npm:@openai/codex@${CODEX_VERSION}-linux-x64"
+            "@openai/codex@${CODEX_VERSION}" \
+            "@openai/codex-linux-x64@npm:@openai/codex@${CODEX_VERSION}-linux-x64" \
+            "@agentclientprotocol/codex-acp@${CODEX_ACP_VERSION}"
           bin="$d/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex"
           test "$("$bin" --version)" = "codex-cli ${CODEX_VERSION}"
+          adapter="$d/node_modules/@agentclientprotocol/codex-acp/dist/index.js"
+          test -f "$adapter"
           echo "ORCA_CODEX_BIN=$bin" >> "$GITHUB_ENV"
+          echo "ORCA_CODEX_ADAPTER=$adapter" >> "$GITHUB_ENV"
+
+      # Codex runs the turn's commands in its bubblewrap sandbox (workspace-write, no network),
+      # with the system's bwrap when there is one and its own bundled copy otherwise. Where
+      # the runner withholds user namespaces from a plain process through AppArmor, bwrap
+      # cannot set up the sandbox's loopback and every command fails. The exception is given
+      # to those two bwrap binaries alone, as codex-exec-gate-acceptance.yml does. This is a
+      # fixture of this test run, not something ORCA does on a host; nothing else is loosened.
+      - name: Let Codex's bubblewrap make its sandbox
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v bwrap || { sudo apt-get update -q && sudo apt-get install -y -q bubblewrap; }
+          system=$(readlink -f /usr/bin/bwrap)
+          bundled=$(readlink -f "$(dirname "$ORCA_CODEX_BIN")/../codex-resources/bwrap")
+          test -x "$bundled"
+          try() { "$1" --unshare-user --unshare-pid --unshare-net --dev-bind / / --proc /proc /bin/true; }
+          if ! try "$system" || ! try "$bundled"; then
+            printf '%s\n' 'abi <abi/4.0>,' 'include <tunables/global>' \
+              "profile orca-codex-bwrap-system \"$system\" flags=(unconfined) {" '  userns,' '}' \
+              "profile orca-codex-bwrap-bundled \"$bundled\" flags=(unconfined) {" '  userns,' '}' \
+              | sudo tee /etc/apparmor.d/orca-codex-bwrap > /dev/null
+            sudo apparmor_parser -r /etc/apparmor.d/orca-codex-bwrap
+            try "$system"
+            try "$bundled"
+            echo "user namespaces: allowed for $system and $bundled by the profiles orca-codex-bwrap-*"
+          fi
+          echo "apparmor_restrict_unprivileged_userns=$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null || echo absent)"
 
       - name: Compare the checked-in protocol with the pinned Codex's
         run: node tools/codex-protocol.mjs check --codex "$ORCA_CODEX_BIN"
 
-      - name: Run the protocol and client tests against the pinned Codex
+      - name: Build the workspace
+        run: pnpm exec tsc -b tsconfig.build.json
+
+      - name: Run the protocol, client and session driver tests against the pinned Codex
         shell: bash
         run: |
           set -euo pipefail
           pnpm exec vitest run tools/test/codex-protocol-1156.test.js packages/agents/test/codex-app-server-real-1156.test.ts \
+            packages/cli/test/codex-app-server-session-real-1157.test.ts \
             --reporter=default --reporter=json --outputFile="$RUNNER_TEMP/protocol.json"
-          # Both suites skip their Codex tests without ORCA_CODEX_BIN; here every test has to have run.
+          # The suites skip their Codex tests without ORCA_CODEX_BIN; here every test has to have run.
           node -e '
             const r = require(process.argv[1]);
             if (r.numTotalTests === 0 || r.numPendingTests > 0 || r.numPassedTests !== r.numTotalTests)

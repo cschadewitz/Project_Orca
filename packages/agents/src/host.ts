@@ -22,8 +22,18 @@ export interface ProcessExit {
 }
 
 export interface AgentProcessHandle {
-  /** ndjson ACP stream bound to the process's stdio. */
+  /**
+   * ndjson ACP stream bound to the process's stdio. Made on first use; a process whose stdio was
+   * taken with `stdio()` has none.
+   */
   stream: acp.Stream;
+  /**
+   * The process's stdin and stdout as they are, for an agent that does not speak ACP (the Codex
+   * app-server driver, #1157). Taking them means the ACP `stream` is never made, and making the
+   * stream first means they cannot be taken: one reader per stdout. Absent on a handle that
+   * cannot give them.
+   */
+  stdio?(): { stdin: Writable; stdout: Readable };
   pid: number | undefined;
   exited: Promise<ProcessExit>;
   /** Last lines of stderr, for diagnostics when a handshake fails. */
@@ -229,8 +239,27 @@ export async function wrapAgentProcess(
       killIfRunning(child, "SIGKILL");
       throw error;
     }
+  let framing: "acp" | "raw" | undefined;
+  let stream: acp.Stream | undefined;
+  const take = (as: "acp" | "raw") => {
+    if (framing !== undefined && framing !== as)
+      throw new Error(`agent process stdio is already in use as ${framing === "acp" ? "an ACP stream" : "raw stdio"}`);
+    framing = as;
+  };
   return {
-    stream: stdioAcpStream(child.stdout, child.stdin),
+    get stream() {
+      take("acp");
+      return (stream ??= stdioAcpStream(child.stdout, child.stdin));
+    },
+    // Assigning a stream behaves as it would on a plain property: a wrapper made with
+    // Object.create(handle) gets its own, and the handle's stdio stays untouched.
+    set stream(value: acp.Stream) {
+      Object.defineProperty(this, "stream", { value, writable: true, enumerable: true, configurable: true });
+    },
+    stdio() {
+      take("raw");
+      return { stdin: child.stdin, stdout: child.stdout };
+    },
     pid: child.pid,
     exited,
     stderrTail: () => tail.text(),

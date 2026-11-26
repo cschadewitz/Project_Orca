@@ -326,6 +326,25 @@ describe("asks and notifications from Codex", () => {
       ["turn/completed", undefined],
     ]);
   });
+
+  it("closes the connection as a protocol error when the notification handler throws", async () => {
+    const onClose = vi.fn();
+    const p = peer();
+    const c = client(p, {
+      onNotification: () => {
+        throw new Error("cannot read it");
+      },
+      onClose,
+    });
+    const pending = c.request("thread/start", {});
+    p.say({ method: "item/started", params: {} });
+    await expect(pending).rejects.toMatchObject({ code: "AGENT_PROTOCOL" });
+    expect(c.closed?.message).toBe(
+      "codex app-server sent a item/started notification ORCA could not read (cannot read it); ORCA closed the connection",
+    );
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(p.closed).toBe(true);
+  });
 });
 
 describe("a malformed message closes the connection", () => {
@@ -353,14 +372,46 @@ describe("a malformed message closes the connection", () => {
       expect(p.closed).toBe(true);
     });
 
-  it("a malformed error answer fails only that request", async () => {
+  it("a malformed error answer fails only that request, as ORCA's protocol error and not as Codex's refusal", async () => {
     const p = peer();
     const c = client(p);
     const r = c.request("account/read", {});
     await p.until(1);
     p.say({ id: 1, error: "nope" });
-    await expect(r).rejects.toMatchObject({ code: -32603 });
+    const error = await r.catch((e: unknown) => e);
+    expect(error).not.toBeInstanceOf(CodexRpcError);
+    expect(error).toMatchObject({
+      code: "AGENT_PROTOCOL",
+      message: "codex app-server answered account/read with a malformed error",
+    });
     expect(c.closed).toBeUndefined();
+  });
+
+  it.each([
+    ["a string code", "-32602"],
+    ["a fractional code", -32602.5],
+    ["an unsafe integer code", 2 ** 53],
+    ["a missing code", undefined],
+  ])("an error answer with %s is malformed: JSON-RPC codes are integers", async (_name, code) => {
+    const p = peer();
+    const c = client(p);
+    const r = c.request("turn/start", {});
+    await p.until(1);
+    p.say({ id: 1, error: { code, message: "bad input" } });
+    const error = await r.catch((e: unknown) => e);
+    expect(error).not.toBeInstanceOf(CodexRpcError);
+    expect(error).toMatchObject({ code: "AGENT_PROTOCOL" });
+  });
+
+  it("a well-formed error answer is Codex's refusal, with its integer code", async () => {
+    const p = peer();
+    const c = client(p);
+    const r = c.request("turn/start", {});
+    await p.until(1);
+    p.say({ id: 1, error: { code: -32602, message: "bad input", data: { field: "input" } } });
+    const error = await r.catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(CodexRpcError);
+    expect(error).toMatchObject({ code: -32602, message: "bad input", data: { field: "input" } });
   });
 });
 
