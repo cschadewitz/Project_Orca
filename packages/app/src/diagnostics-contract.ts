@@ -39,6 +39,8 @@ export interface DiagnosticsStatus {
   controlledBinaryPeakBytes?: number;
   lastSaveOutcome?: "saved" | "refused" | "unknown";
   saveAdmittedBeforeRevocation?: boolean;
+  /** False where this platform has no diagnostics storage (Linux): diagnostics stay off there. */
+  platformStorage?: false;
 }
 export type DiagnosticsResult<T> = { ok: true; value: T } | { ok: false; code: DiagnosticResultCode };
 export interface DiagnosticExport {

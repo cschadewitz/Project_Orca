@@ -74,8 +74,9 @@ function connect(agents: HostAgentView[], profile?: typeof lab) {
   });
   return {
     hostAgents,
-    /** Answer the oldest waiting request. */
+    /** Answer the oldest request, once it has been made. */
     reply: async (value: HostAgentView[] = agents) => {
+      await vi.waitFor(() => expect(replies.length).toBeGreaterThan(0));
       await act(async () => replies.shift()!(value));
     },
     move: (next: Partial<DaemonTargetSnapshot>) =>
@@ -199,12 +200,14 @@ describe("the section", () => {
   it("drops a reply that arrives after the connection changed, even to the same profile", async () => {
     const server = connect([codex], lab);
     const { container } = render(<HostAgentsSection />);
-    // Reconnected to the same profile before the first reply: a new epoch, so a new request.
+    await vi.waitFor(() => expect(server.hostAgents).toHaveBeenCalledTimes(1));
+    // Reconnected to the same profile before the first reply: a new epoch, so a new request,
+    // made once the first is answered (one server read at a time per machine).
     server.move({ epoch: 2 });
     studio.target = { epoch: 2 };
-    expect(server.hostAgents).toHaveBeenCalledTimes(2);
     await server.reply([{ ...codex, entry: { ...entry, command: "/stale/node" } }]);
     expect(container.textContent).toBe("");
+    await vi.waitFor(() => expect(server.hostAgents).toHaveBeenCalledTimes(2));
     await server.reply();
     fireEvent.click(await screen.findByRole("button", { name: "Add to configuration" }));
     expect(studio.edits).toEqual([{ kind: "insert", path: ["agents"], index: 1, value: entry }]);
@@ -222,7 +225,7 @@ describe("the section", () => {
     // A same-profile reconnect: the report is cleared and read again for the new connection.
     server.move({ epoch: 2 });
     expect(container.textContent).toBe("");
-    expect(server.hostAgents).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() => expect(server.hostAgents).toHaveBeenCalledTimes(2));
     await server.reply();
     fireEvent.click(await screen.findByRole("button", { name: "Add to configuration" }));
     expect(studio.edits).toHaveLength(1);

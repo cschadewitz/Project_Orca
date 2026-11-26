@@ -772,3 +772,15 @@ describe("cleanup prompt only when cleanup is really pending (#1205)", () => {
     expect(screen.getByRole("button", { name: "Retry cleanup" })).toBeTruthy();
   });
 });
+
+describe("a platform with no diagnostics storage (#1109)", () => {
+  it("says diagnostics are not available here, rather than that something failed, and offers no Enable", async () => {
+    const f = fakeBridge({ code: "unavailable", cleanupPending: false, platformStorage: false });
+    mount(f.bridge);
+    await screen.findByText("Local diagnostics: Off");
+    expect(screen.getByText(/not available on this system, so they stay off/)).toBeTruthy();
+    expect(screen.queryByText("Local diagnostics are unavailable. Ordinary app work can continue.")).toBeNull();
+    const enable = screen.getByRole("button", { name: "Enable local diagnostics" });
+    expect(enable.getAttribute("aria-disabled") === "true" || enable.hasAttribute("disabled")).toBe(true);
+  });
+});

@@ -24,6 +24,10 @@ export const DIAGNOSTICS_MESSAGES: Record<DiagnosticResultCode, string> = {
     "The earlier unknown Save outcome was acknowledged. A fresh report, destination and separate Save are required.",
 };
 
+/** Where the platform has no diagnostics storage, "unavailable" is the platform, not a fault (#1109). */
+export const NO_PLATFORM_STORAGE =
+  "Local diagnostics are not available on this system, so they stay off. Ordinary app work is not affected.";
+
 export const EARLIER_EXPORT_WARNING =
   "The earlier export may already exist. ORCA cannot confirm its result and will not find, change or delete that file. After safe cleanup, you can acknowledge the unknown result and choose to save again.";
 

@@ -94,7 +94,11 @@ more of them read-only. See [daemon connections](daemon-connection.md#watching-s
    ([#875](daemon-connection.md#automatic-sign-in-875)), and the daemon stays on the
    server's loopback.
 3. **Watch a machine…** on the Machines surface adds a profile to the watched list (at most
-   16).
+   16). For a machine added from your tailnet, the surface also says whether it is online
+   there, read from this computer's Tailscale client every 30 seconds while the surface is open
+   and never over ssh. An offline machine says "Offline on your tailnet" and when it was last
+   seen, beside why the connection failed. This is a hint only: whether the app is connected
+   still comes from the ssh connection (#1230).
 
 Limits: the daemons do not talk to each other, and a run never moves between them. Choose
 the focused machine to start or answer work there.
@@ -276,9 +280,12 @@ left as it is, and so is anything at that path whose `origin` is another reposit
 needs `git`. When there is a checkout of the pushed repository, the command prints the
 `workspace:` settings (`provider: git-worktree`, `repo:` the checkout,
 `allowedRefs:` the pushed branches) for the server's `orca.config.yaml`, so delegated steps can
-name a pushed `gitRef`. To set them from this computer, connect the app to the machine's profile
-and use Config > Raw: Validate and review, Save reviewed changes, then Apply saved
-configuration.
+name a pushed `gitRef`. To set them from this computer, connect the app to the machine's profile:
+Config lists the repositories pushed there, and **Use as workspace** puts those settings into
+the draft, with `baseBranch` the branch the checkout there is on, named in full (`refs/heads/…`). If the workspace is already that
+checkout and fetches from `origin`,
+**Allow pushed branches** only adds the pushed branches it does not allow yet; any other workspace
+is left alone and Config says why. Review, save and apply the draft as with any other change.
 
 **Installing and signing in agents there** (#1236). The host needs no npm, no access to the npm
 registry and no terminal:
