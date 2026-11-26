@@ -111,6 +111,8 @@ export interface ServerInspectionView {
   account: string;
   fingerprints: { server: string[]; jump?: string[] };
   firstUse: boolean;
+  /** The keys are the ones the machine's tailnet advertises (#1227): shown as such, still confirmed. */
+  advertised?: true;
   version: string;
   root: string;
   current: string | null;

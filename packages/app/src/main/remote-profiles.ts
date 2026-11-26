@@ -210,6 +210,8 @@ export interface ServerInspection {
   fingerprints: { server: string[]; jump?: string[] };
   /** The keys are not pinned for this profile yet: confirming enrolls them. */
   firstUse: boolean;
+  /** The keys are the ones the machine's tailnet advertises (#1227): ssh refused any other. */
+  advertised?: true;
   version: string;
   root: string;
   /** The version already set up there, if any (then this verifies and repairs it). */
@@ -771,11 +773,13 @@ export class RemoteProfiles {
     this.serverSetups.add(id);
     let discovery: Discovery;
     try {
+      const advertised = await this.advertisedKeys(profile);
       discovery = await discoverServer({
         base: this.tunnelOptions(profile),
         tunnel: (tunnelOptions) => (this.deps.tunnel ?? ((o) => new SshTunnel(o)))(tunnelOptions),
         version: options.version,
         program: setupProgram(options.scripts),
+        ...(advertised ? { advertised: { alias: `orca-${profile.id}`, keys: advertised } } : {}),
       });
     } finally {
       this.serverSetups.delete(id);
@@ -816,6 +820,7 @@ export class RemoteProfiles {
         account,
         fingerprints: keyFingerprints(discovery.keys),
         firstUse: discovery.firstUse,
+        ...(discovery.advertised ? { advertised: true as const } : {}),
         version: options.version,
         root,
         current,
@@ -1064,6 +1069,18 @@ export class RemoteProfiles {
     }
     this.bump(id);
     return true;
+  }
+
+  /**
+   * The host keys a tailnet profile's node advertises (#1227), for an inspection to check the
+   * server against strictly. None for any other profile, or a node that advertises none.
+   */
+  private async advertisedKeys(profile: ConnectionProfile): Promise<string[] | undefined> {
+    if (!profile.tailnet) return undefined;
+    const read = await this.tailnetMachines();
+    if (read.state !== "running") return undefined;
+    const resolved = resolveTailnetBinding(read.snapshot, profile.tailnet);
+    return resolved.ok && resolved.peer.sshHostKeys.length ? resolved.peer.sshHostKeys : undefined;
   }
 
   /** The host keys the profile's pins vouch for now (server, and jump host). */

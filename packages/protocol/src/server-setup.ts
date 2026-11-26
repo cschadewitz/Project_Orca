@@ -19,7 +19,7 @@
  * unless its pins vouch for exactly the confirmed keys, as exactly the confirmed account.
  */
 import { createHash } from "node:crypto";
-import { constants, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { constants, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { z } from "zod";
@@ -328,6 +328,8 @@ export function confirmationCode(confirmation: Confirmation): string {
 export interface SetupTunnel {
   open(): Promise<string>;
   exec(command: readonly string[], timeoutMs?: number, input?: string): Promise<RemoteResult>;
+  /** Copy a local file to the server (`SshTunnel.upload`, #1234); needed only to push a bundle. */
+  upload?(localPath: string, remotePath: string, timeoutMs?: number): Promise<void>;
   close(): Promise<void>;
   readonly pinnedKeys: string | undefined;
 }
@@ -340,6 +342,11 @@ export interface Discovery {
   firstUse: boolean;
   /** The scratch pin file, when `firstUse`: enrolled by `enrollDiscovered`, or dropped. */
   scratch?: string;
+  /**
+   * The server's keys were the ones its tailnet advertises (#1227): the scratch pin held exactly
+   * those before ssh connected, so ssh refused any other key. Still confirmed by the person.
+   */
+  advertised?: true;
 }
 
 /**
@@ -353,6 +360,13 @@ export async function discoverServer(options: {
   tunnel: (options: SshTunnelOptions) => SetupTunnel;
   version: string;
   program: string;
+  /**
+   * Host keys the server's tailnet advertises (#1227), each `<type> <base64>`, with the alias the
+   * tunnel checks them under (`orca-<profile id>`). For a server not pinned yet they are written
+   * into the scratch pin before ssh connects, so ssh checks the server against them strictly
+   * instead of learning a first-seen key. Ignored for a server already pinned.
+   */
+  advertised?: { alias: string; keys: readonly string[] };
 }): Promise<Discovery> {
   const { base } = options;
   const real = base.knownHostsFile;
@@ -370,6 +384,21 @@ export async function discoverServer(options: {
       if (states[i] === "pinned") copyFileSync(file, i === 0 ? knownHostsFile : `${knownHostsFile}.jump`);
     });
   }
+  const advertised =
+    firstUse && states[0] === "none" && options.advertised?.keys.length ? options.advertised : undefined;
+  if (advertised) {
+    if (
+      !/^[A-Za-z0-9._-]{1,128}$/.test(advertised.alias) ||
+      advertised.keys.some((key) => !/^[a-z0-9-]{1,40} [A-Za-z0-9+/]+={0,2}$/.test(key))
+    ) {
+      rmSync(scratch!, { recursive: true, force: true });
+      throw new Error("Unusable advertised host keys");
+    }
+    writeFileSync(knownHostsFile, advertised.keys.map((key) => `${advertised.alias} ${key}\n`).join(""), {
+      mode: 0o600,
+      flag: "wx",
+    });
+  }
   const tunnel = options.tunnel({
     ...base,
     knownHostsFile,
@@ -383,7 +412,13 @@ export async function discoverServer(options: {
     const outcome = readInspection(
       await tunnel.exec(inspectCommand(options.version, base.profile.remotePort), INSPECT_TIMEOUT_MS, options.program),
     );
-    return { outcome, keys, firstUse, ...(knownHostsFile !== real ? { scratch: knownHostsFile } : {}) };
+    return {
+      outcome,
+      keys,
+      firstUse,
+      ...(knownHostsFile !== real ? { scratch: knownHostsFile } : {}),
+      ...(advertised ? { advertised: true as const } : {}),
+    };
   } catch (error) {
     if (scratch) rmSync(scratch, { recursive: true, force: true });
     throw error;

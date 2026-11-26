@@ -421,6 +421,18 @@ export function tailnetHostResolver(binding: TailnetBinding, options: ReadTailne
   };
 }
 
+/**
+ * The peer a person named on a command line: its stable node ID, its full MagicDNS name, or the
+ * first label of it (`build-1`). Only an exact, unique match; anything ambiguous is no match.
+ */
+export function findTailnetPeer(snapshot: TailnetSnapshot, name: string): TailnetPeer | undefined {
+  const wanted = name.toLowerCase().replace(/\.$/, "");
+  const byId = snapshot.peers.filter((peer) => peer.nodeId === name);
+  if (byId.length === 1) return byId[0];
+  const matches = snapshot.peers.filter((peer) => peer.dnsName === wanted || peer.dnsName.split(".")[0] === wanted);
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
 /** The binding to save for a peer picked from the list. */
 export function bindingFor(peer: TailnetPeer): TailnetBinding {
   return { node: peer.nodeId, name: peer.dnsName };
