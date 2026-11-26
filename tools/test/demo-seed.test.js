@@ -18,7 +18,7 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, beforeAll, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
 
 const SEED = fileURLToPath(new URL("../demo-seed/seed.mjs", import.meta.url));
 const BUILD = fileURLToPath(new URL("../demo-seed/build.mjs", import.meta.url));
@@ -251,3 +251,141 @@ it("--config-out creates a new private file and refuses an existing file or link
   expect(readFileSync(target, "utf8")).toBe("keep me too\n");
   expect(daemon.calls.filter((call) => MUTATIONS.includes(call.method))).toEqual([]);
 }, 60_000);
+
+/**
+ * A stand-in for the desktop app's bundled daemon: a process whose command line has the shape
+ * the app spawns (`orca-daemon.mjs --cwd <ws> --config <config> serve --host <h> --port <p>`),
+ * an HTTP listener on --port and a second listener that is not HTTP, as the real daemon holds.
+ * Every connection and request is appended to `log`, with the authorization it carried.
+ */
+const FAKE_DAEMON = `
+import { appendFileSync } from "node:fs";
+import { createServer } from "node:http";
+import { createServer as tcp } from "node:net";
+const argv = process.argv.slice(2);
+const value = (flag) => argv[argv.indexOf(flag) + 1];
+const log = process.env.FAKE_LOG;
+const host = value("--host").replace(/^\\[|\\]$/g, "");
+createServer((req, res) => {
+  let body = "";
+  req.on("data", (chunk) => (body += chunk));
+  req.on("end", () => {
+    const message = JSON.parse(body);
+    appendFileSync(log, JSON.stringify({ method: message.method, auth: req.headers.authorization ?? null }) + "\\n");
+    const result = message.method === "config.get"
+      ? { config: { path: value("--config"), revision: "r1", parsed: { agents: [] } } }
+      : { agents: [] };
+    res.setHeader("content-type", "application/json");
+    res.end(JSON.stringify({ kind: "response", id: message.id, ok: true, result }));
+  });
+}).listen(Number(value("--port")), host, () => {
+  tcp((socket) => { appendFileSync(log, JSON.stringify({ raw: true }) + "\\n"); socket.destroy(); })
+    .listen(0, host, () => process.stdout.write("ready\\n"));
+});
+`;
+
+/** A free port on `host`. */
+async function freePort(host) {
+  const server = createServer();
+  await new Promise((done) => server.listen(0, host, done));
+  const { port } = server.address();
+  await new Promise((done) => server.close(done));
+  return port;
+}
+
+/** Starts the stand-in daemon for `config` on `host` and returns what it was sent. */
+async function bundledDaemon({ cwd, config, host = "127.0.0.1" }) {
+  const dir = mkdtempSync(join(tmpdir(), "demo-seed-daemon-"));
+  const log = join(dir, "requests.log");
+  writeFileSync(log, "");
+  writeFileSync(join(dir, "orca-daemon.mjs"), FAKE_DAEMON);
+  const port = await freePort(host);
+  const urlHost = host.includes(":") ? `[${host}]` : host;
+  const child = spawn(
+    process.execPath,
+    [join(dir, "orca-daemon.mjs"), "--cwd", cwd, "--config", config, "serve", "--host", host, "--port", String(port)],
+    { env: { PATH: process.env.PATH, FAKE_LOG: log }, stdio: ["ignore", "pipe", "inherit"] },
+  );
+  cleanup.push(async () => {
+    child.kill();
+    await new Promise((done) => (child.exitCode === null ? child.on("exit", done) : done()));
+    rmSync(dir, { recursive: true, force: true });
+  });
+  await new Promise((done, failed) => {
+    child.stdout.on("data", (chunk) => String(chunk).includes("ready") && done());
+    child.on("exit", (code) => failed(new Error(`stand-in daemon exited ${code}`)));
+  });
+  const sent = () =>
+    readFileSync(log, "utf8")
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+  return { url: `http://${urlHost}:${port}`, port, sent };
+}
+
+/** Whether this machine has IPv6 loopback (some containers do not). */
+const IPV6 = await new Promise((done) => {
+  const probe = createServer();
+  probe.once("error", () => done(false));
+  probe.listen(0, "::1", () => probe.close(() => done(true)));
+});
+
+describe.skipIf(process.platform !== "linux")("finding the daemon without --url (Linux /proc)", () => {
+  const prepare = (selected) =>
+    seed(["--workspace", selected, "--phase", "prepare", "--config-out", join(selected, `out-${Date.now()}.json`)]);
+
+  it("talks only to the --port listener of the daemon that names this workspace's config", async () => {
+    const selected = workspace();
+    const daemon = await bundledDaemon({ cwd: selected, config: join(selected, "orca.config.yaml") });
+    const { code, output } = await prepare(selected);
+    expect(code, output).toBe(0);
+    expect(output).toContain(`daemon ${daemon.url}`);
+    expect(daemon.sent().some((entry) => entry.raw)).toBe(false);
+    expect(daemon.sent().every((entry) => entry.auth === `Bearer ${TOKEN}`)).toBe(true);
+  }, 30_000);
+
+  it.skipIf(!IPV6)(
+    "keeps the listener's address family: an IPv6 daemon's port on 127.0.0.1 gets no bearer",
+    async () => {
+      const selected = workspace();
+      const daemon = await bundledDaemon({ cwd: selected, config: join(selected, "orca.config.yaml"), host: "::1" });
+      // Something else on the same port number over IPv4: the old discovery rewrote to 127.0.0.1.
+      const decoy = createServer((req, res) => {
+        decoyAuth.push(req.headers.authorization ?? null);
+        res.end();
+      });
+      const decoyAuth = [];
+      await new Promise((done) => decoy.listen(daemon.port, "127.0.0.1", done));
+      cleanup.push(() => new Promise((done) => decoy.close(done)));
+      const { code, output } = await prepare(selected);
+      expect(code, output).toBe(0);
+      expect(output).toContain(`daemon ${daemon.url}`);
+      expect(decoyAuth).toEqual([]);
+    },
+    30_000,
+  );
+
+  it("sends no bearer to a daemon whose path only starts with this workspace's", async () => {
+    const selected = workspace();
+    const sibling = `${selected}-other`;
+    mkdirSync(sibling);
+    cleanup.push(() => rmSync(sibling, { recursive: true, force: true }));
+    writeFileSync(join(sibling, "orca.config.yaml"), "{}\n");
+    const daemon = await bundledDaemon({ cwd: sibling, config: join(sibling, "orca.config.yaml") });
+    const { code, output } = await prepare(selected);
+    expect(code).not.toBe(0);
+    expect(output).toMatch(/could not find the daemon for this workspace/);
+    expect(daemon.sent()).toEqual([]);
+  }, 30_000);
+
+  it("refuses two daemons for one workspace and sends neither a bearer", async () => {
+    const selected = workspace();
+    const config = join(selected, "orca.config.yaml");
+    const first = await bundledDaemon({ cwd: selected, config });
+    const second = await bundledDaemon({ cwd: selected, config });
+    const { code, output } = await prepare(selected);
+    expect(code).not.toBe(0);
+    expect(output).toMatch(/more than one daemon serves this workspace/);
+    expect([...first.sent(), ...second.sent()]).toEqual([]);
+  }, 30_000);
+});

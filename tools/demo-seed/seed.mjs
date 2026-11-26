@@ -89,52 +89,107 @@ function assets() {
 // ---------------------------------------------------------------- the daemon
 
 /**
- * The loopback ports of the daemon whose command line names `workspace`, from /proc (Linux). A
- * daemon can hold more than one listener, and not every one speaks HTTP, so connect() tries each
- * and verifyTarget still checks the one it keeps.
+ * A loopback listener address from /proc/net/tcp{,6}, in its own address family, or undefined
+ * for any other address (a wildcard or another interface): the URL must reach the very socket
+ * that was found, never another one on the same port.
  */
-function discoverUrls(workspace) {
-  if (process.platform !== "linux") return [];
-  const urls = [];
-  const listening = new Map();
+function loopbackHost(file, address) {
+  if (file.endsWith("tcp")) return address.toUpperCase() === "0100007F" ? "127.0.0.1" : undefined;
+  const hex = address.toUpperCase();
+  if (hex === "00000000000000000000000001000000") return "[::1]";
+  if (hex === "0000000000000000FFFF00000100007F") return "127.0.0.1"; // ::ffff:127.0.0.1
+  return undefined;
+}
+
+/** The value after `flag` in a command line, if any. */
+function argument(cmdline, flag) {
+  const at = cmdline.indexOf(flag);
+  return at >= 0 ? cmdline[at + 1] : undefined;
+}
+
+/** A path's real form, or undefined when it does not resolve. */
+function real(path) {
+  try {
+    return realpathSync(path);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The RPC URL of the one daemon serving `workspace`, found in /proc (Linux) before any request is
+ * made, so the bearer token only ever goes to that daemon's own socket. The daemon must run as
+ * this user, its command line must name exactly this workspace's config (`--config`, or `--cwd`
+ * without one) and `--port`, and that port must be a loopback listener of the same process. Two
+ * such daemons, or anything less exact, is refused: pass --url then. Undefined when none runs.
+ */
+function discoverUrl(workspace) {
+  if (process.platform !== "linux") return undefined;
+  const config = realpathSync(join(workspace, "orca.config.yaml"));
+  const uid = process.getuid?.();
+  const listening = new Map(); // socket inode -> { host, port }
   for (const file of ["/proc/net/tcp", "/proc/net/tcp6"]) {
     if (!existsSync(file)) continue;
     for (const row of readFileSync(file, "utf8").split("\n").slice(1)) {
       const cols = row.trim().split(/\s+/);
-      if (cols[3] !== "0A") continue; // LISTEN
-      const [address, port] = cols[1].split(":");
-      if (!/^(0100007F|0+1000000|0+)$/i.test(address) && !address.endsWith("0100007F")) continue;
-      listening.set(cols[9], Number.parseInt(port, 16));
+      if (cols[3] !== "0A" || !cols[1] || !cols[9]) continue; // LISTEN
+      const [address = "", port = ""] = cols[1].split(":");
+      const host = loopbackHost(file, address);
+      if (host) listening.set(cols[9], { host, port: Number.parseInt(port, 16) });
     }
   }
-  const config = workspace ? resolve(workspace, "orca.config.yaml") : undefined;
+  const matches = [];
   for (const pid of readdirSync("/proc").filter((name) => /^\d+$/.test(name))) {
     let cmdline;
+    let status;
     try {
       cmdline = readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0");
+      status = readFileSync(`/proc/${pid}/status`, "utf8");
     } catch {
       continue;
     }
-    if (!cmdline.some((part) => part.endsWith("orca-daemon.mjs") || part === "serve")) continue;
-    if (config && !cmdline.some((part) => part === config || part.startsWith(`${workspace}`))) continue;
-    let fds;
-    try {
-      fds = readdirSync(`/proc/${pid}/fd`);
-    } catch {
-      continue;
-    }
-    for (const fd of fds) {
-      let target;
-      try {
-        target = readlinkSync(`/proc/${pid}/fd/${fd}`);
-      } catch {
-        continue;
-      }
-      const inode = /^socket:\[(\d+)\]$/.exec(target)?.[1];
-      if (inode && listening.has(inode)) urls.push(`http://127.0.0.1:${listening.get(inode)}`);
-    }
+    const serve = cmdline.indexOf("serve");
+    if (serve < 0 || !cmdline.slice(0, serve).some((part) => part.endsWith("orca-daemon.mjs"))) continue;
+    if (uid !== undefined && Number(/^Uid:\s+(\d+)/m.exec(status)?.[1]) !== uid) continue;
+    const named = argument(cmdline, "--config");
+    const cwd = argument(cmdline, "--cwd");
+    const served = named ? real(resolve(cwd ?? "/", named)) : cwd && real(join(cwd, "orca.config.yaml"));
+    if (served !== config) continue;
+    matches.push({ pid, host: argument(cmdline, "--host"), port: Number(argument(cmdline, "--port")) });
   }
-  return [...new Set(urls)];
+  if (matches.length === 0) return undefined;
+  if (matches.length > 1)
+    fail(`more than one daemon serves this workspace (pids ${matches.map((m) => m.pid).join(", ")}); pass --url`);
+  const [{ pid, host, port }] = matches;
+  const sockets = new Set();
+  try {
+    for (const fd of readdirSync(`/proc/${pid}/fd`)) {
+      const inode = /^socket:\[(\d+)\]$/.exec(safeLink(`/proc/${pid}/fd/${fd}`) ?? "")?.[1];
+      if (inode) sockets.add(inode);
+    }
+  } catch {
+    fail(`cannot read the sockets of daemon ${pid}; pass --url`);
+  }
+  const own = [...sockets].map((inode) => listening.get(inode)).filter((l) => l && l.port === port);
+  if (own.length !== 1 || (host && !sameHost(host, own[0].host)))
+    fail(`daemon ${pid} does not hold exactly one loopback listener on its --port ${port}; pass --url`);
+  return `http://${own[0].host}:${own[0].port}`;
+}
+
+/** A link's target, or undefined. */
+function safeLink(path) {
+  try {
+    return readlinkSync(path);
+  } catch {
+    return undefined;
+  }
+}
+
+/** Whether the daemon's --host names the address family of the listener found. */
+function sameHost(named, found) {
+  const host = named.replace(/^\[|\]$/g, "");
+  if (found === "[::1]") return host === "::1" || host === "localhost";
+  return host === "127.0.0.1" || host === "localhost";
 }
 
 const LOOPBACK = new Set(["127.0.0.1", "localhost", "[::1]"]);
@@ -201,24 +256,15 @@ async function connect() {
   const tokenFile = args["token-file"] ?? join(workspace, "auth", "local-client.token");
   const token = readFileSync(tokenFile, "utf8").trim();
   const named = args.url ?? process.env.ORCA_DAEMON_URL;
-  const candidates = named ? [named] : discoverUrls(workspace);
-  if (candidates.length === 0) fail("could not find the daemon for this workspace; pass --url http://127.0.0.1:<port>");
-  const refusals = [];
-  for (const candidate of candidates) {
-    const url = loopbackUrl(candidate);
-    const call = rpcClient(url, token);
-    try {
-      await verifyTarget(call, workspace);
-    } catch (error) {
-      // A named daemon is the one the person meant: its refusal is the answer.
-      if (named) throw error;
-      refusals.push(`${url}: ${describe(error)}`);
-      continue;
-    }
-    log(`daemon ${url}`);
-    return { workspace, call };
-  }
-  throw new Error(`no daemon listener for this workspace answered; tried ${refusals.join("; ")}`);
+  const url = loopbackUrl(
+    named ??
+      discoverUrl(workspace) ??
+      fail("could not find the daemon for this workspace; pass --url http://127.0.0.1:<port>"),
+  );
+  const call = rpcClient(url, token);
+  await verifyTarget(call, workspace);
+  log(`daemon ${url}`);
+  return { workspace, call };
 }
 
 /** An error's message, with the network cause fetch hides behind "fetch failed". */
