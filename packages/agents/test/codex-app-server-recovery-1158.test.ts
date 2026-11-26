@@ -358,6 +358,25 @@ describe("an app-server that exits", () => {
     expect(logged).not.toContain(SENTINEL);
   });
 
+  it("hands each app-server's secret values to the run before ORCA sends it anything, a restarted one included", async () => {
+    const reported: { values: readonly string[]; sentToNewest: number }[] = [];
+    const s = scriptedHost(
+      () => BASE,
+      (i) => ({ secret: `sk-orca-sentinel-${i}` }),
+    );
+    const session = await open(s.host, {
+      onSecretValues: (values) => reported.push({ values, sentToNewest: s.procs[s.procs.length - 1]!.received.length }),
+    });
+    s.procs[0]!.crash();
+    await settle();
+    await expect(session.prompt("go")).resolves.toMatchObject({ stopReason: "end_turn" });
+    expect(reported).toEqual([
+      { values: ["sk-orca-sentinel-0"], sentToNewest: 0 },
+      { values: ["sk-orca-sentinel-0", "sk-orca-sentinel-1"], sentToNewest: 0 },
+    ]);
+    await session.close();
+  });
+
   it("never answers an ask once its process is gone", async () => {
     const s = scriptedHost((i) => ({
       ...BASE,

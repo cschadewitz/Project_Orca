@@ -3,9 +3,26 @@
  * give a session reaches the driver, ORCA's own files are bound, and each one the driver does
  * not carry yet is refused rather than dropped.
  */
+import { tmpdir } from "node:os";
 import { describe, expect, it, vi } from "vitest";
-import { AgentSpecSchema, type OrcaError } from "@orca/core";
-import { ENV_SECRET_DELIVERY, LocalHost, type OpenSessionOptions } from "@orca/agents";
+import {
+  AgentSpecSchema,
+  parseWorkflow,
+  silentLogger,
+  TemplateRegistry,
+  WorkflowRegistry,
+  type OrcaError,
+} from "@orca/core";
+import {
+  AgentRegistry,
+  ENV_SECRET_DELIVERY,
+  LocalHost,
+  type AgentSession,
+  type OpenCodexAppServerSessionOptions,
+  type OpenSessionOptions,
+} from "@orca/agents";
+import { LocalWorkspaceProvider, Orchestrator, type SessionFactory } from "@orca/engine";
+import { memoryStores } from "@orca/store";
 import { CODEX_FACTORY_THREAD, codexAppServerSessionOptions } from "../src/codex-app-server-factory.js";
 
 const agent = (more: Record<string, unknown> = {}) =>
@@ -34,6 +51,8 @@ describe("the factory's Codex app-server options", () => {
       command: vi.fn(),
       onPermission: vi.fn(),
       onSessionContinuity: vi.fn(),
+      onSecretValues: vi.fn(),
+      recordFsOperation: vi.fn(),
     };
     const protectedPaths = {
       readOnly: ["/cfg/orca.yaml", "/cfg/.orca"],
@@ -53,6 +72,9 @@ describe("the factory's Codex app-server options", () => {
       resumeSessionId: "thr_old",
       requireContextRecovery: true,
       onSessionContinuity: fns.onSessionContinuity,
+      onSecretValues: fns.onSecretValues,
+      // every run supplies it; this route has no ORCA file executor to invoke it
+      recordFsOperation: fns.recordFsOperation,
       exitGraceMs: 5,
       cancelGraceMs: 6,
       secretDelivery: ENV_SECRET_DELIVERY,
@@ -75,6 +97,7 @@ describe("the factory's Codex app-server options", () => {
       judgePermission: fns.judgePermission,
       judgeKinds: { command: fns.command },
       onPermission: fns.onPermission,
+      onSecretValues: fns.onSecretValues,
       resumeThreadId: "thr_old",
       requireContextRecovery: true,
       onSessionContinuity: fns.onSessionContinuity,
@@ -94,7 +117,6 @@ describe("the factory's Codex app-server options", () => {
       [{ relayMcpServers: true }, /relayed MCP servers/],
       [{ relayMcpServers: () => true }, /relayed MCP servers/],
       [{ requireEmbeddedContext: () => new Error("x") }, /embedded context/],
-      [{ recordFsOperation: vi.fn() }, /ORCA-performed file operations/],
       [{ authorizeCapabilityDelivery: vi.fn() }, /capability delivery/],
       [{ judgeKinds: { edit: vi.fn() } }, /judge for edits or MCP calls/],
       [{ judgeKinds: { mcp: vi.fn() } }, /judge for edits or MCP calls/],
@@ -107,5 +129,63 @@ describe("the factory's Codex app-server options", () => {
     }
     // an empty list is no directory
     expect(() => codexAppServerSessionOptions(base({ additionalDirectories: [] }), "1.2.3")).not.toThrow();
+  });
+
+  it("accepts the options the orchestrator opens an ordinary agent session with", async () => {
+    let mapped: OpenCodexAppServerSessionOptions | undefined;
+    let given: OpenSessionOptions | undefined;
+    const factory: SessionFactory = async (o) => {
+      given = o;
+      // what the factory will do for this driver once the route is enabled
+      mapped = codexAppServerSessionOptions(o, "1.2.3");
+      const session: AgentSession = {
+        id: "sess_1",
+        agentId: o.agent.id,
+        hostId: o.host.id,
+        cwd: o.cwd,
+        acpSessionId: "thr_1",
+        configOptions: [],
+        setConfigOption: async () => [],
+        closed: new Promise(() => {}),
+        prompt: async () => ({ stopReason: "end_turn", durationMs: 1 }),
+        onUpdate: () => () => {},
+        cancel: async () => {},
+        close: async () => {},
+      };
+      return session;
+    };
+    const orchestrator = new Orchestrator({
+      stores: memoryStores(),
+      agents: new AgentRegistry()
+        .addHost(new LocalHost({ id: "local", type: "local" }))
+        .addAgent(agent({ hostId: "local" })),
+      workflows: new WorkflowRegistry().register(
+        parseWorkflow(`
+id: contract
+name: contract
+start: s
+nodes:
+  s: { type: start }
+  work: { type: agent, agent: codex, prompt: "do it" }
+  e: { type: end }
+edges: [{ from: s, to: work }, { from: work, to: e }]
+`),
+      ),
+      templates: new TemplateRegistry(),
+      workspaceProvider: new LocalWorkspaceProvider(tmpdir()),
+      logger: silentLogger,
+      sessionFactory: factory,
+    });
+    const state = await orchestrator.startAndRun({ workflowId: "contract" });
+    expect(state.run.status).toBe("completed");
+    expect(mapped).toBeDefined();
+    // the orchestrator gives every ordinary session ORCA's file-executor record, which this
+    // route accepts and does not carry
+    expect(given!.recordFsOperation).toEqual(expect.any(Function));
+    expect(mapped).not.toHaveProperty("recordFsOperation");
+    // the run's redaction and answerer reach the driver
+    expect(mapped!.onSecretValues).toEqual(expect.any(Function));
+    expect(mapped!.askPermission).toEqual(expect.any(Function));
+    expect(mapped!.thread).toEqual({ approvalPolicy: "on-request", sandbox: "workspace-write" });
   });
 });

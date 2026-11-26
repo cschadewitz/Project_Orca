@@ -526,7 +526,8 @@ exists and answers Codex's asks through ORCA's policy, but the route is not qual
 (#1165), it runs only on ORCA's own machine (#1166), and config rejects it on an
 `orca-daemon` agent and together with `nativeToolHook` or `codexExecGate`. The factory's
 options for it are mapped and tested: a session gets ORCA's permission files and protected
-paths, its answerer, judge advice on commands, resume and the run's secrets, with
+paths, its answerer, judge advice on commands, resume and the run's secrets (each
+app-server's secret values reach the run's redaction before ORCA sends it anything), with
 `on-request` and a `workspace-write` sandbox, and is refused, rather than run without, when
 it is given additional directories, MCP servers (#1163), a judge for edits or MCP calls, or
 an ACP- or hook-route option. Nothing falls back to

@@ -197,6 +197,11 @@ export interface OpenCodexAppServerSessionOptions {
   sleep?: (ms: number) => Promise<void>;
   /** For tests: how long each stop signal waits for the process to exit (default 2 s). */
   exitGraceMs?: number;
+  /**
+   * Handed every secret value each app-server was given, a restarted one included, before ORCA
+   * sends it anything, so the caller can redact them from what the run records.
+   */
+  onSecretValues?: (values: readonly string[]) => void;
 }
 
 /** As `SessionContinuity` on the ACP route: the thread was resumed, or a new one started. */
@@ -1331,6 +1336,8 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
       ...ENV_SECRET_DELIVERY.spawnOptions(secretPlan),
     });
     values.push(...(proc.secretValues?.values() ?? []));
+    // Before the handshake: nothing this process says reaches the run before its values do.
+    if (proc.secretValues?.size) opts.onSecretValues?.([...values]);
     const cleanup = processCleanup(proc, opts.exitGraceMs);
     const c = { proc, cleanup } as Connection;
     owned.add(c);

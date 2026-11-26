@@ -39,7 +39,11 @@ export function codexAppServerSessionOptions(
   if (options.admission !== undefined) throw refuse("a runtime admission");
   if (options.relayMcpServers !== undefined && options.relayMcpServers !== false) throw refuse("relayed MCP servers");
   if (options.requireEmbeddedContext !== undefined) throw refuse("embedded context");
-  if (options.recordFsOperation !== undefined) throw refuse("ORCA-performed file operations");
+  // `recordFsOperation` is the durable record of ORCA's own file executor, which every run
+  // supplies. This route has no such executor: Codex reads and writes itself, inside its
+  // sandbox, and the driver serves no `fs/*` request. So the callback is not carried, and
+  // nothing on this route could invoke it; an executor here needs its own authorization and
+  // audit first (#1173).
   if (options.authorizeCapabilityDelivery !== undefined) throw refuse("capability delivery");
   // The driver's judge advises on commands only (#1184-#1188 for the rest).
   if (options.judgeKinds?.edit || options.judgeKinds?.mcp) throw refuse("a judge for edits or MCP calls", "#1187");
@@ -68,6 +72,8 @@ export function codexAppServerSessionOptions(
     ...(options.judgePermission ? { judgePermission: options.judgePermission } : {}),
     ...(options.judgeKinds?.command ? { judgeKinds: { command: options.judgeKinds.command } } : {}),
     ...(options.onPermission ? { onPermission: options.onPermission } : {}),
+    // Run-level redaction: every secret value the app-server is given, before it says anything.
+    ...(options.onSecretValues ? { onSecretValues: options.onSecretValues } : {}),
     ...(options.resumeSessionId ? { resumeThreadId: options.resumeSessionId } : {}),
     ...(options.requireContextRecovery !== undefined ? { requireContextRecovery: options.requireContextRecovery } : {}),
     ...(options.onSessionContinuity ? { onSessionContinuity: options.onSessionContinuity } : {}),
