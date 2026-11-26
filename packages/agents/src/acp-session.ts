@@ -58,6 +58,7 @@ import { processCleanup } from "./process-cleanup.js";
 import * as acpUnstable from "@agentclientprotocol/sdk/unstable";
 import { createMcpRelay, type McpRelay, type McpRelayCall, type McpRelayDispatch } from "./mcp-relay.js";
 import { nativeToolHookRefused } from "./native-tool-hook-session.js";
+import { claudeSdkNotAcp, claudeSdkRequested } from "./claude-sdk/launch.js";
 import { codexExecGateRefused } from "./codex-exec-gate-session.js";
 import { normalizeConfigOption, normalizeSessionConfig } from "./config-options.js";
 import { isHostFileMissing, type AgentHost, type AgentProcessHandle } from "./host.js";
@@ -367,6 +368,9 @@ export async function openAcpSession(opts: OpenSessionOptions): Promise<AgentSes
   // metadata or without: metadata is not an admission.
   const gateRefused = codexExecGateRefused(opts.agent, "launch");
   if (gateRefused) throw gateRefused;
+  // A `driver: claude-agent-sdk` agent (#1118) is never spoken to over ACP: its `command` is
+  // the person's own `claude`, which is not an ACP agent.
+  if (claudeSdkRequested(opts.agent)) throw claudeSdkNotAcp(opts.agent.id);
   // An agent that asked for ORCA's tool hook is opened only by the session factory that
   // installs it (`sessionMeta`); any other caller (a probe, a tool) would run it unguarded.
   if (opts.sessionMeta === undefined) {

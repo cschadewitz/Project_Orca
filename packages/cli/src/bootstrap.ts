@@ -48,6 +48,8 @@ import {
   nativeToolHookSession,
   sweepHookTelemetrySpools,
   openAcpSession,
+  claudeSdkRequested,
+  refuseClaudeSdkSessionUntilDriver,
   withProviderGuards,
   permissionPolicyPath,
   type AgentSession,
@@ -355,6 +357,24 @@ export function makeSessionFactory(
     ));
   return async (options: Parameters<SessionFactory>[0]) => {
     const bound = { ...options, permissionFiles, protectedPaths };
+    // Claude through the Claude Agent SDK (#1118, held on feature/claude-agent-sdk): the
+    // person's own `claude` and login, checked before anything starts. The session driver is
+    // the next slice (#1120); until then the open is refused after the checks.
+    if (claudeSdkRequested(options.agent)) {
+      if (options.host.spec.type !== "local")
+        throw new OrcaError(
+          "NOT_SUPPORTED",
+          `agent ${options.agent.id} has driver: claude-agent-sdk, but it runs on ${options.host.spec.type} host ${options.host.spec.id}; ` +
+            `the Claude Agent SDK driver runs only on ORCA's own machine for now (#1130).`,
+          { agentId: options.agent.id, host: options.host.spec.id },
+        );
+      return refuseClaudeSdkSessionUntilDriver({
+        agent: options.agent,
+        cwd: options.cwd,
+        orcaEnv: options.env ?? {},
+        signal: options.origin?.signal,
+      });
+    }
     // ORCA's gate in Codex's executor path (#1026): its own route, which refuses every session
     // for now, with the reasons. Nothing falls back to the hook or to no gate.
     if (codexExecGateRequested(options.agent)) {

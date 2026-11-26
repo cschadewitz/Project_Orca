@@ -1126,6 +1126,19 @@ export type McpServerConfig = z.infer<typeof McpServerConfigSchema>;
 export const AgentTypeSchema = z.enum(["acp", "orca-daemon"]);
 export type AgentType = z.infer<typeof AgentTypeSchema>;
 
+/**
+ * How ORCA drives a process agent (#1118). `acp` (the default, and the meaning of leaving it
+ * out) speaks ACP to `command`. `claude-agent-sdk` runs Claude through the Claude Agent SDK
+ * instead, against the person's own installed, unmodified `claude` (`command`, `claude` on PATH
+ * when left out) and the login they made with `claude auth login`: ORCA offers no login and
+ * never reads Claude's credentials. Work in progress on `feature/claude-agent-sdk` (#1153).
+ */
+export const AgentDriverSchema = z.enum(["acp", "claude-agent-sdk"]);
+export type AgentDriver = z.infer<typeof AgentDriverSchema>;
+
+/** The executable a `driver: claude-agent-sdk` agent runs when its `command` is left out. */
+export const CLAUDE_SDK_DEFAULT_COMMAND = "claude";
+
 export const AgentSpecSchema = z
   .object({
     id: z.string().min(1),
@@ -1177,6 +1190,11 @@ export const AgentSpecSchema = z
      * `effectivePermissionPolicy`.
      */
     permissions: PermissionPolicySchema.default(() => ({ rules: [] })),
+    /**
+     * How ORCA drives this agent's process (#1118): `acp` when left out. See `AgentDriverSchema`.
+     * Only for `type: acp`.
+     */
+    driver: AgentDriverSchema.optional(),
     /**
      * Whether ORCA installs its pre-tool hook in this agent (#704, #705), so that
      * `permissions` decides every tool call it hooks and not only the ones the agent asks
@@ -1258,8 +1276,36 @@ export const AgentSpecSchema = z
         path: ["codexExecGate"],
         message: "codexExecGate and nativeToolHook are separate routes; an agent takes one of them",
       });
+    if (agent.driver === "claude-agent-sdk") {
+      if (agent.type !== "acp")
+        ctx.addIssue({
+          code: "custom",
+          path: ["driver"],
+          message:
+            "driver: claude-agent-sdk runs Claude on this machine; an orca-daemon agent runs the remote daemon's own agents",
+        });
+      if (agent.args.length > 0)
+        ctx.addIssue({
+          code: "custom",
+          path: ["args"],
+          message: "driver: claude-agent-sdk builds Claude's arguments itself; args do not apply to it",
+        });
+      if (agent.nativeToolHook === "on" || agent.nativeToolHook === "experimental")
+        ctx.addIssue({
+          code: "custom",
+          path: ["nativeToolHook"],
+          message:
+            "nativeToolHook installs ORCA's hook through the ACP adapter; driver: claude-agent-sdk does not take it",
+        });
+      if (agent.codexExecGate === "experimental")
+        ctx.addIssue({
+          code: "custom",
+          path: ["codexExecGate"],
+          message: "codexExecGate is Codex's gate; driver: claude-agent-sdk runs Claude",
+        });
+    }
     if (agent.type === "acp") {
-      if (agent.command.length === 0)
+      if (agent.command.length === 0 && agent.driver !== "claude-agent-sdk")
         ctx.addIssue({ code: "custom", path: ["command"], message: "an ACP agent needs the command that starts it" });
       for (const key of ["profile", "workflow", "promptVar", "gitRef"] as const)
         if (agent[key] !== undefined)
