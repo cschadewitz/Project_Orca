@@ -18,7 +18,8 @@ import { textClass } from "../ui/index.js";
 import { GateRevision } from "./revision-card.js";
 import type { RevisionsFeed } from "./use-revisions.js";
 import { AnswerCard, type AnswerRequest } from "./answer-card.js";
-import { artifactsReady as artifactsAreReady, waitedLabel } from "./card-model.js";
+import { artifactsReady as artifactsAreReady } from "./card-model.js";
+import { WaitedAge } from "./waited-age.js";
 
 export interface GateCardProps {
   /** The ask, as `inputs.list` and `input.opened` give it. */
@@ -54,9 +55,7 @@ export function GateCard({ input, artifactsReady, revisions, ...rest }: GateCard
         eyebrow={
           <>
             <span>gate</span>
-            {/* `.orca-attn__age` is noted `type: mono-id` in components.css: a duration is
-              machine text and takes tabular numerals (#211, rule 8). */}
-            <span className={`orca-attn__age ${textClass("mono-id")}`}>{waitedLabel(input.waitingMs)}</span>
+            <WaitedAge input={input} />
           </>
         }
         question={input.question}

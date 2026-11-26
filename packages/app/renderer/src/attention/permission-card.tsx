@@ -28,7 +28,8 @@ import type { JSX, Ref } from "react";
 import type { OpenInputView } from "@orca/protocol";
 import { ObjectId, textClass } from "../ui/index.js";
 import { AnswerCard, type AnswerRequest } from "./answer-card.js";
-import { permissionSubject, waitedLabel } from "./card-model.js";
+import { permissionSubject } from "./card-model.js";
+import { WaitedAge } from "./waited-age.js";
 import { JudgeNote, judgeAskNote } from "./judge-note.js";
 import { ScopedRuleChoices } from "./scoped-rule-choices.js";
 import { scopedRulePort } from "./scoped-rule-port.js";
@@ -64,9 +65,7 @@ export function PermissionCard({ input, scopedRuleReview, ...rest }: PermissionC
       eyebrow={
         <>
           <span>permission</span>
-          {/* `.orca-attn__age` is noted `type: mono-id` in components.css: a duration is
-              machine text and takes tabular numerals (#211, rule 8). */}
-          <span className={`orca-attn__age ${textClass("mono-id")}`}>{waitedLabel(input.waitingMs)}</span>
+          <WaitedAge input={input} />
         </>
       }
       question={scopedRuleReview ? "Review scoped tool permission" : input.question}
@@ -75,6 +74,16 @@ export function PermissionCard({ input, scopedRuleReview, ...rest }: PermissionC
           "Exact scope is available only through the reviewed disclosure."
         ) : (
           <>
+            {/* The run the ask belongs to, first: two asks of the same shape from two runs
+                read the same otherwise, and a person could not tell which one they were
+                allowing (#1194). Then the work item, as a gate card names it. */}
+            {agent ? (
+              <>
+                <span>{input.runName}</span>
+                {input.workItem && input.workItem.title !== input.runName ? ` · ${input.workItem.title}` : ""}
+                {" · "}
+              </>
+            ) : null}
             <span className={`orca-id ${textClass("mono-id")}`}>{agent?.id ?? input.runName}</span>
             {agent?.hostId ? ` on ${agent.hostId}` : ""}
             {` · step `}

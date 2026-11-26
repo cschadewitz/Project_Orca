@@ -44,9 +44,9 @@
 # package.json version, which must be plain semver. That is exactly what a release-prepare
 # commit changes, so the candidate is built and signed from reviewed code and configuration.
 # The reference comes from the version's one lane (tools/release-lane.js; docs/RELEASING.md
-# "Release lines"): the dispatching `main` commit for a new minor or major, and for a patch
-# the head of its protected release line `release/X.Y`, which the source must be on. A patch
-# carries only what was merged to its line, never what `main` gained for the next minor. The workflow that runs is always `main`'s, and the job
+# "Release lines"): the head of its protected release line `release/X.Y`, which the source
+# must be on, for a new minor's candidate as for a patch. A release carries only what was
+# merged to its line, never what `main` gained since the line was cut. The workflow that runs is always `main`'s, and the job
 # summary shows the protected environment's reviewer which commit and version they are
 # approving.
 #
@@ -120,14 +120,17 @@ jobs:
           if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
             echo "::error::$source has version '${version//[^0-9A-Za-z.+-]/?}', which is not a plain semver"; exit 1
           fi
-          # The reviewed reference comes from the one lane this version may be signed from
-          # (tools/release-lane.js, main's copy): the dispatching main commit for a new minor
-          # or major, the head of the protected line `release/X.Y` for a patch. A patch's
-          # source must be on that line, and the line must be protected.
+          # The reviewed reference comes from the one lane this version may be released from
+          # (tools/release-lane.js, main's copy): the head of the protected line `release/X.Y`,
+          # which the source must be on, for a patch and for a new minor's candidate once its
+          # line is cut. A new minor's version (`X.Y.0` or a candidate) that is not on a line
+          # is no release yet: it is checked against the dispatching main commit, as before
+          # lines were cut at the first candidate.
           reference="$GITHUB_SHA"
           reference_name="main"
           lane=$(node tools/release-lane.js lane "$version")
-          if [ "$lane" != main ]; then
+          if git merge-base --is-ancestor "$source" "refs/remotes/origin/$lane" 2>/dev/null ||
+            ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.0(-|$) ]]; then
             if ! node tools/release-lane.js verify "$source" "$version" > "$RUNNER_TEMP/lane"; then
               cat "$RUNNER_TEMP/lane"
               exit 1

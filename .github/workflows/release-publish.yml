@@ -1,6 +1,6 @@
-# Merging a `release` pull request (the one release-prepare.yml opened, into `main` for a new
-# minor or into its release line `release/X.Y` for a patch) tags the merge commit and publishes
-# the GitHub release.
+# Merging a `release` pull request (the one release-prepare.yml opened, into its release line
+# `release/X.Y`, a new minor's and its candidates' included) tags the merge commit and
+# publishes the GitHub release.
 #
 # The checks run again here rather than trusting the PR's green run: what gets tagged is
 # the merge commit, which no CI run has seen, and a release nobody built from the tagged
@@ -116,8 +116,8 @@ jobs:
 
       # A real release runs the released commit's own tooling with a write token (the
       # `publish` job), so that commit must already be reviewed, from the one lane its version
-      # may come from (tools/release-lane.js, read from main, not from the commit): `main` for
-      # a new minor or major, the protected line `release/X.Y` for a patch (docs/RELEASING.md
+      # may come from (tools/release-lane.js, read from main, not from the commit): its
+      # protected line `release/X.Y`, for a new minor as for a patch (docs/RELEASING.md
       # "Release lines"). It is dispatched with main's workflow. Any commit on its lane
       # qualifies, which keeps the fix-forward path open. A merged release pull request must
       # also be the release preparation the guard passed, merged exactly as reviewed. A dry
@@ -153,6 +153,29 @@ jobs:
           fi
           echo "releasing $SHA (v$version) from $lane"
           echo "Released v$version from \`$lane\`." >> "$GITHUB_STEP_SUMMARY"
+
+      # A dry run skips the gate above, so it would never show that a candidate or final is
+      # accepted from its line (#1240 review). This reports what the gate would say about the
+      # rehearsed ref, with main's policy, and never fails the rehearsal.
+      - name: Rehearse the lane gate (report only)
+        if: ${{ inputs.dry_run }}
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          SHA: ${{ steps.sha.outputs.sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          policy="$RUNNER_TEMP/release-lane.js"
+          git show "refs/remotes/origin/$DEFAULT_BRANCH:tools/release-lane.js" > "$policy"
+          version=$(git show "$SHA:package.json" | node -p 'JSON.parse(require("fs").readFileSync(0, "utf8")).version')
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "lane gate: package.json version is not semver" | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          result=$(node "$policy" rehearse "$SHA" "$version" || echo "lane gate: could not be rehearsed")
+          echo "$result"
+          echo "Rehearsed $result" >> "$GITHUB_STEP_SUMMARY"
+          case "$result" in *"would refuse"*) echo "::warning::$result" ;; esac
 
       # Read once, here, and passed to every job below, so that the version the desktop
       # artifacts are stamped with and the version that gets tagged cannot disagree.

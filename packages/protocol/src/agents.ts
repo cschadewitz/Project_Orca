@@ -74,6 +74,14 @@ export const AgentViewSchema = z.object({
   consecutiveFailures: z.number().int().nonnegative(),
   /** Why the last handshake failed. Kept only while `down`. */
   lastError: ViewErrorSchema.optional(),
+  /**
+   * Present, and `true`, when the agent runs on this daemon's own host and its command names
+   * nothing there: an absolute path with no file, or a bare name on no directory of `PATH`
+   * (#1200). Health stays `unknown` until a handshake, so without this an agent that cannot
+   * start read the same as one nobody had asked yet. Absent for a remote host, where only a
+   * handshake can tell, and from a daemon that predates it.
+   */
+  commandMissing: z.literal(true).optional(),
 });
 export type AgentView = z.infer<typeof AgentViewSchema>;
 

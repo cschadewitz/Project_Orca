@@ -1,8 +1,10 @@
 # Records a published line release on main (docs/RELEASING.md, "Release lines").
 #
-# A patch released from `release/X.Y` never merges into main, so main would neither list it in
-# CHANGELOG.md nor know its changelog.d/ fragments were released, and the next minor would
-# repeat them. This opens one pull request on main, `changelog: record vX.Y.Z` from the branch
+# Every release is cut from its line `release/X.Y` and never merges into main, so main would
+# neither list it in CHANGELOG.md nor know its changelog.d/ fragments were released, and the
+# next minor would repeat them. For a new minor (`X.Y.0` or a candidate of it) the record also
+# raises main's package.json version to it, so the next minor's prepare counts from there.
+# This opens one pull request on main, `changelog: record vX.Y.Z` from the branch
 # `release-sync/vX.Y.Z`, that adds the release's section and deletes exactly the fragments the
 # release commit consumed, each only where main's copy is byte-identical to the released one (a
 # differing copy is kept and named). It stops there: the pull request waits for main's normal
@@ -96,11 +98,6 @@ jobs:
           git fetch -q --force origin "refs/tags/v$VERSION:refs/tags/v$VERSION"
           sha=$(git rev-parse "refs/tags/v$VERSION^{commit}")
           lane=$(node tools/release-lane.js lane "$VERSION")
-          if [ "$lane" = main ]; then
-            echo "v$VERSION was released from main; nothing to record." | tee -a "$GITHUB_STEP_SUMMARY"
-            echo "sha=" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
           # The exact tag commit must be on the version's protected line.
           if ! node tools/release-lane.js verify "$sha" "$VERSION" > "$RUNNER_TEMP/lane"; then
             cat "$RUNNER_TEMP/lane"; exit 1
@@ -136,14 +133,15 @@ jobs:
             echo "::warning::kept $file on $DEFAULT_BRANCH: it differs from the copy v$VERSION released"
           done
           git add CHANGELOG.md
+          if [ -f package.json ]; then git add package.json; fi
           if git diff --cached --quiet; then
             echo "$DEFAULT_BRANCH already records v$VERSION; nothing to do." | tee -a "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
           changed=$(git diff --cached --name-status |
-            awk -F'\t' '!(($1 == "M" && $2 == "CHANGELOG.md") || ($1 == "D" && $2 ~ /^changelog\.d\/[^\/]+\.md$/))')
+            awk -F'\t' '!(($1 == "M" && ($2 == "CHANGELOG.md" || $2 == "package.json")) || ($1 == "D" && $2 ~ /^changelog\.d\/[^\/]+\.md$/))')
           if [ -n "$changed" ]; then
-            echo "::error::the sync would change more than CHANGELOG.md and released fragments:"
+            echo "::error::the sync would change more than CHANGELOG.md, the package.json version and released fragments:"
             echo "$changed"
             exit 1
           fi
@@ -174,7 +172,7 @@ jobs:
             --json url,headRefOid --jq '.[0] | "\(.url // "") \(.headRefOid // "")"')
           read -r url pr_head <<<"$found" || true
           if [ -z "${url:-}" ]; then
-            body="v$VERSION was released from its release line at \`$SHA\`. This adds its CHANGELOG section to $DEFAULT_BRANCH and deletes the changelog.d/ fragments it released (only where $DEFAULT_BRANCH's copy is identical), so the next minor does not repeat them. It changes nothing else."
+            body="v$VERSION was released from its release line at \`$SHA\`. This adds its CHANGELOG section to $DEFAULT_BRANCH and deletes the changelog.d/ fragments it released (only where $DEFAULT_BRANCH's copy is identical), so the next minor does not repeat them. For a new minor it also raises the package.json version to v$VERSION when $DEFAULT_BRANCH is behind. It changes nothing else."
             if [ ${#kept[@]} -gt 0 ]; then body+=$'\n\n'"Kept because they differ from the released copy: ${kept[*]}"; fi
             url=$(gh pr create --repo "$REPO" --base "$DEFAULT_BRANCH" --head "$branch" --label no-changelog \
               --title "changelog: record v$VERSION" --body "$body")

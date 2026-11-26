@@ -239,7 +239,14 @@ export type ProtocolVersion = z.infer<typeof ProtocolVersionSchema>;
  * likewise only by a daemon that lists it. A permission ask may carry the judge's note in its
  * free `context` record, `context.judge` (`JudgeAskNoteSchema`); an older client ignores it.
  */
-export const PROTOCOL_VERSION: ProtocolVersion = { major: 2, minor: 12 };
+/**
+ * 2.13 (#1206) adds `remotes.list` (a read under `config.read`) and `remotes.enroll` (a
+ * `config.write` mutation): enrollment of a delegation remote by the daemon that owns the
+ * workspace, which is the route a workspace the desktop app set up in first-run admits. New
+ * method names in `hello.methods`: a 2.12 client never calls them, and the app offers its Remote
+ * daemons section only to a daemon that lists them.
+ */
+export const PROTOCOL_VERSION: ProtocolVersion = { major: 2, minor: 13 };
 
 /**
  * The previous major this build still speaks, as its last minor, or `undefined` when there is
