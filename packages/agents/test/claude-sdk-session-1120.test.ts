@@ -175,6 +175,57 @@ describe.runIf(process.platform !== "win32")("Claude Agent SDK session (#1120)",
     expect(session.configOptions[0]!.currentValue).toBe("default");
   });
 
+  it("undoes the effort reset when the model change is refused, and changes nothing (#1295 review)", async () => {
+    const session = await open({ STAND_IN_REFUSE_SET_MODEL: "1" });
+    const events = collect(session);
+    await session.setConfigOption("effort", "max");
+    // sonnet does not take max: the reset to default goes first, then the model is refused.
+    await expect(session.setConfigOption("model", "sonnet")).rejects.toMatchObject({ code: "AGENT_PROTOCOL" });
+    expect(session.configOptions.map((o) => o.currentValue)).toEqual(["default", "max"]);
+    await session.prompt("config");
+    expect(JSON.parse(texts(events).at(-1)!)).toEqual({ model: null, effort: "max" });
+  });
+
+  it("changes nothing when the effort reset itself is refused", async () => {
+    const session = await open({ STAND_IN_FLAGS_OK: "1" });
+    const events = collect(session);
+    await session.setConfigOption("effort", "max");
+    await expect(session.setConfigOption("model", "sonnet")).rejects.toMatchObject({ code: "AGENT_PROTOCOL" });
+    expect(session.configOptions.map((o) => o.currentValue)).toEqual(["default", "max"]);
+    await session.prompt("config");
+    expect(JSON.parse(texts(events).at(-1)!)).toEqual({ model: null, effort: "max" });
+  });
+
+  it("stops the session when a partial change cannot be undone", async () => {
+    // max (ok), the reset to default (ok), the model (refused), putting max back (refused).
+    const session = await open({ STAND_IN_REFUSE_SET_MODEL: "1", STAND_IN_FLAGS_OK: "2" });
+    await session.setConfigOption("effort", "max");
+    const failure = (await session.setConfigOption("model", "sonnet").catch((x: unknown) => x)) as OrcaError;
+    expect(failure.code).toBe("AGENT_TRANSPORT");
+    expect(failure.message).toMatch(/refused to undo it; the session was stopped/);
+    expect(failure.message + JSON.stringify(failure.details)).not.toContain(SENTINEL);
+    await session.closed;
+    await session.terminated;
+    await expect(session.prompt("hello")).rejects.toThrow(/session has ended/);
+  });
+
+  it("starts no turn while a change is applied, and no change while a turn runs", async () => {
+    const session = await open({ STAND_IN_CONFIG_DELAY_MS: "300" });
+    const events = collect(session);
+    const change = session.setConfigOption("model", "sonnet");
+    await expect(session.prompt("config")).rejects.toMatchObject({ code: "RUN_STATE" });
+    await change;
+    await session.prompt("config");
+    expect(JSON.parse(texts(events).at(-1)!)).toMatchObject({ model: "sonnet" });
+
+    const turn = session.prompt("slow");
+    await until(() => texts(events).includes("working"));
+    await expect(session.setConfigOption("effort", "low")).rejects.toMatchObject({ code: "RUN_STATE" });
+    await session.cancel();
+    await turn;
+    expect((await session.setConfigOption("effort", "low"))[1]!.currentValue).toBe("low");
+  });
+
   it("gives claude only the environment it was handed, not the daemon's", async () => {
     process.env.ORCA_TEST_DAEMON_ONLY = "leak";
     try {

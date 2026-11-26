@@ -296,31 +296,66 @@ export async function openClaudeSdkSession(options: ClaudeSdkSessionOptions): Pr
       `agent '${options.agent.id}' rejected session/set_config_option ${configId}=${String(value)}: ${why}`,
       { configId, value, ...details },
     );
-  const applyEffort = async (next: string) => {
-    await q.applyFlagSettings({ effortLevel: next === CLAUDE_SDK_DEFAULT_EFFORT ? null : (next as ClaudeEffort) });
-    effort = next;
-  };
+  const sendEffort = (next: string) =>
+    q.applyFlagSettings({ effortLevel: next === CLAUDE_SDK_DEFAULT_EFFORT ? null : (next as ClaudeEffort) });
+  /** Changes asked for and not yet settled: no turn starts then, and no change starts during a turn. */
+  let configPending = 0;
   const setOption = async (configId: string, value: string | boolean): Promise<SessionConfigOption[]> => {
     if (ended || terminating)
       throw new OrcaError("AGENT_TRANSPORT", `agent ${options.agent.id}: the session has ended`);
+    if (activeTurn)
+      throw new OrcaError(
+        "RUN_STATE",
+        `agent ${options.agent.id}: a turn is running; change ${configId} after it ends`,
+      );
     if (typeof value !== "string") throw configRefusal(configId, value, "it takes a value from its list");
     const option = configOptions.find((o) => o.id === configId);
     if (!option) throw configRefusal(configId, value, "the session has no such option");
     const offered = configOptionValues(option).map((o) => o.value);
     if (!offered.includes(value))
       throw configRefusal(configId, value, `offered: ${offered.join(", ")}`, { available: offered });
-    try {
-      if (configId === CLAUDE_SDK_MODEL_OPTION) {
-        await q.setModel(value);
-        model = value;
-        // An effort the new model does not take goes back to its default.
-        if (!effortFits(models, value, effort)) await applyEffort(CLAUDE_SDK_DEFAULT_EFFORT);
-      } else await applyEffort(value);
-    } catch (e) {
-      throw configRefusal(configId, value, "Claude Code refused it", { sdkError: errorName(e) });
+    const nextModel = configId === CLAUDE_SDK_MODEL_OPTION ? value : model!;
+    // An effort the new model does not take goes back to the default, which every model takes,
+    // so it is set first, while the old model is still on: then only the model call is left.
+    const nextEffort =
+      configId === CLAUDE_SDK_MODEL_OPTION
+        ? effortFits(models, value, effort)
+          ? effort
+          : CLAUDE_SDK_DEFAULT_EFFORT
+        : value;
+    {
+      let effortSent = false;
+      try {
+        if (nextEffort !== effort) {
+          await sendEffort(nextEffort);
+          effortSent = true;
+        }
+        if (nextModel !== model) await q.setModel(nextModel);
+      } catch (e) {
+        // Put back what was already changed. If that fails too, ORCA no longer knows what Claude
+        // runs on, so the session is stopped rather than left in a state nobody chose.
+        if (effortSent) {
+          try {
+            await sendEffort(effort);
+          } catch {
+            logger.warn("claude did not take back an effort change; stopping the session", {
+              agentId: options.agent.id,
+            });
+            void terminate();
+            throw new OrcaError(
+              "AGENT_TRANSPORT",
+              `agent ${options.agent.id}: Claude Code took part of the change ${configId}=${value} and refused to undo it; the session was stopped`,
+              { configId, value, sdkError: errorName(e) },
+            );
+          }
+        }
+        throw configRefusal(configId, value, "Claude Code refused it", { sdkError: errorName(e) });
+      }
+      model = nextModel;
+      effort = nextEffort;
+      configOptions = claudeSdkConfigOptions(models, model, effort);
+      return configOptions;
     }
-    configOptions = claudeSdkConfigOptions(models, model, effort);
-    return configOptions;
   };
   const acpSessionId = randomUUID();
   const listeners = new Set<(e: SessionUpdateEvent) => void>();
@@ -406,6 +441,8 @@ export async function openClaudeSdkSession(options: ClaudeSdkSessionOptions): Pr
       if (ended || terminating)
         throw new OrcaError("AGENT_TRANSPORT", `agent ${options.agent.id}: the session has ended`);
       if (activeTurn) throw new OrcaError("RUN_STATE", "a prompt turn is already active on this session");
+      if (configPending > 0)
+        throw new OrcaError("RUN_STATE", `agent ${options.agent.id}: a model or effort change is being applied`);
       if (promptOptions.signal?.aborted)
         throw new OrcaError("CANCELLED", String(promptOptions.signal.reason ?? "cancelled"));
       const content = claudeContent(promptInput);
@@ -439,7 +476,9 @@ export async function openClaudeSdkSession(options: ClaudeSdkSessionOptions): Pr
     },
 
     setConfigOption(configId, value) {
-      const next = configChain.then(() => setOption(configId, value));
+      // Counted from the call, so a prompt sent while this change waits its turn is refused too.
+      configPending++;
+      const next = configChain.then(() => setOption(configId, value)).finally(() => configPending--);
       configChain = next.catch(() => undefined);
       return next;
     },

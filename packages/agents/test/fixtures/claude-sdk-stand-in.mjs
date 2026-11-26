@@ -6,6 +6,9 @@
  * Startup: `STAND_IN_STARTUP` = `ok` (default), `silent` (never answers initialize), `exit`
  * (exits at once) or `old` (answers without hook `onFailure` support).
  * Turns: the first word of the prompt picks the script (see `turn` below).
+ * `STAND_IN_REFUSE_CONFIG` refuses every model and effort change, `STAND_IN_REFUSE_SET_MODEL`
+ * every model change, `STAND_IN_FLAGS_OK=n` every effort change after the first n;
+ * `STAND_IN_CONFIG_DELAY_MS` answers changes that late.
  * `STAND_IN_STUBBORN`, when set, keeps it running after its input ends and through SIGTERM.
  * `STAND_IN_LOG`, when set, gets one JSON line per input line and the argv.
  */
@@ -45,6 +48,9 @@ const MODELS = [
   { value: "bad id with spaces", displayName: "refused row" },
   { value: "sonnet", displayName: "duplicate" },
 ];
+
+/** How many `apply_flag_settings` succeed before the rest are refused (STAND_IN_FLAGS_OK). */
+let flagsOk = process.env.STAND_IN_FLAGS_OK === undefined ? Infinity : Number(process.env.STAND_IN_FLAGS_OK);
 
 let hookId;
 let nextRequest = 0;
@@ -252,13 +258,26 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     }
     if (req.subtype === "interrupt") interrupted?.();
     if (req.subtype === "set_model" || req.subtype === "apply_flag_settings") {
-      if (process.env.STAND_IN_REFUSE_CONFIG)
+      const refuse =
+        process.env.STAND_IN_REFUSE_CONFIG ||
+        (req.subtype === "set_model" && process.env.STAND_IN_REFUSE_SET_MODEL) ||
+        (req.subtype === "apply_flag_settings" && flagsOk-- <= 0);
+      if (process.env.STAND_IN_CONFIG_DELAY_MS && !refuse) {
+        const id = m.request_id;
+        const apply = () => {
+          if (req.subtype === "set_model") state.model = req.model;
+          else if ("effortLevel" in req.settings) state.effort = req.settings.effortLevel;
+          out({ type: "control_response", response: { subtype: "success", request_id: id, response: {} } });
+        };
+        return void setTimeout(apply, Number(process.env.STAND_IN_CONFIG_DELAY_MS));
+      }
+      if (refuse)
         return out({
           type: "control_response",
           response: {
             subtype: "error",
             request_id: m.request_id,
-            error: `${process.env.STAND_IN_REFUSE_CONFIG} refused`,
+            error: `${process.env.STAND_IN_REFUSE_CONFIG ?? "SENTINEL-7c1e-cli-text"} refused`,
           },
         });
       if (req.subtype === "set_model") state.model = req.model;
