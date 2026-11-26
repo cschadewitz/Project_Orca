@@ -291,6 +291,11 @@ export interface HostAgentStatus {
   /** Why the pinned version there cannot be used (changed since install, say). */
   problem?: string;
   /**
+   * The server config entry that runs it, once the pinned version is installed: built here from
+   * the managed root the server reports, like `signInCommand`, never taken from the server.
+   */
+  entry?: HostAgentConfigEntry;
+  /**
    * For an agent the person signs in themselves, installed: what to run on the server to do it.
    * Built here, never taken from the server: only from the root it reports, and only when that
    * is a managed root (see `managedRoot`).
@@ -343,9 +348,15 @@ export async function hostAgentStatus(transport: HostAgentTransport, program: st
         signedIn: signedIn === "yes" || signedIn === "no" ? signedIn : "unknown",
         ...(typeof problem === "string" ? { problem: problem.slice(0, 2000) } : {}),
         ...(command(agent, list(versions)) ?? {}),
+        ...(configEntry(agent, list(versions)) ?? {}),
       },
     ];
   });
+  function configEntry(id: string, versions: readonly string[]): { entry: HostAgentConfigEntry } | undefined {
+    const agent = HOST_AGENTS[id]!;
+    const root = managedRoot(found.find((record) => Array.isArray(record.status))?.root);
+    return root && versions.includes(agent.version) ? { entry: hostAgentEntry(agent.id, root) } : undefined;
+  }
   function command(id: string, versions: readonly string[]): { signInCommand: string } | undefined {
     const agent = HOST_AGENTS[id]!;
     const root = managedRoot(found.find((record) => Array.isArray(record.status))?.root);
@@ -482,41 +493,65 @@ export function hostAgentSignInCommand(installed: HostAgentInstalled): string | 
   return signInCommandFor(agent, root);
 }
 
+/** One `agents:` entry of the server's own config: what runs an installed agent there. */
+export interface HostAgentConfigEntry {
+  id: string;
+  name: string;
+  command: string;
+  args: string[];
+  env: Record<string, string>;
+}
+
+/**
+ * The `agents:` entry that runs the pinned version of `id` installed under the managed `root`, as
+ * `hostAgentSettings` writes it for an install there. Every part is fixed here.
+ */
+export function hostAgentEntry(id: string, root: string): HostAgentConfigEntry {
+  const agent = hostAgent(id);
+  const dir = `${root}/agents/${agent.id}/${agent.version}`;
+  const home = `${root}/agents/${agent.id}/home`;
+  const node = `${root}/current/runtime/bin/node`;
+  if (agent.id === "claude")
+    return {
+      id: "claude",
+      name: agent.name,
+      command: node,
+      args: [`${dir}/files/node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js`],
+      env: { CLAUDE_CONFIG_DIR: home },
+    };
+  if (agent.id === "codex")
+    return {
+      id: "codex",
+      name: agent.name,
+      command: node,
+      args: [`${dir}/files/node_modules/@agentclientprotocol/codex-acp/dist/index.js`],
+      env: { CODEX_HOME: home },
+    };
+  return {
+    id: "copilot",
+    name: agent.name,
+    command: `${dir}/files/node_modules/@github/copilot-linux-x64/copilot`,
+    args: ["--acp", "--stdio", "--no-auto-update", "--disable-builtin-mcps", "--no-ask-user"],
+    env: { COPILOT_HOME: home, COPILOT_AUTO_UPDATE: "false", COPILOT_ALLOW_ALL: "false" },
+  };
+}
+
 /** The YAML for the server's own config that runs an installed agent, under `agents:`. */
 export function hostAgentSettings(installed: HostAgentInstalled): string {
   const agent = hostAgent(installed.agent);
   const suffix = `/agents/${agent.id}/${installed.version}`;
-  if (!installed.dir.endsWith(suffix)) throw new HostAgentRefused("The install is not under the server root.");
-  const root = installed.dir.slice(0, -suffix.length);
-  if (agent.id === "claude")
-    return [
-      "agents:",
-      "  - id: claude",
-      `    name: ${agent.name}`,
-      `    command: ${root}/current/runtime/bin/node`,
-      `    args: [${installed.dir}/files/node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js]`,
-      "    env:",
-      `      CLAUDE_CONFIG_DIR: ${installed.home}`,
-    ].join("\n");
-  if (agent.id === "codex")
-    return [
-      "agents:",
-      "  - id: codex",
-      `    name: ${agent.name}`,
-      `    command: ${root}/current/runtime/bin/node`,
-      `    args: [${installed.dir}/files/node_modules/@agentclientprotocol/codex-acp/dist/index.js]`,
-      "    env:",
-      `      CODEX_HOME: ${installed.home}`,
-    ].join("\n");
+  if (installed.version !== agent.version || !installed.dir.endsWith(suffix))
+    throw new HostAgentRefused("The install is not under the server root.");
+  const entry = hostAgentEntry(agent.id, installed.dir.slice(0, -suffix.length));
+  const quote = (value: string) =>
+    /^[A-Za-z0-9._/@-]+$/.test(value) && !/^(?:true|false|null|~|[0-9.]+)$/.test(value) ? value : JSON.stringify(value);
   return [
     "agents:",
-    "  - id: copilot",
-    `    name: ${agent.name}`,
-    `    command: ${installed.binary}`,
-    "    args: [--acp, --stdio, --no-auto-update, --disable-builtin-mcps, --no-ask-user]",
+    `  - id: ${entry.id}`,
+    `    name: ${entry.name}`,
+    `    command: ${entry.command}`,
+    `    args: [${entry.args.join(", ")}]`,
     "    env:",
-    `      COPILOT_HOME: ${installed.home}`,
-    '      COPILOT_AUTO_UPDATE: "false"',
-    '      COPILOT_ALLOW_ALL: "false"',
+    ...Object.entries(entry.env).map(([name, value]) => `      ${name}: ${quote(value)}`),
   ].join("\n");
 }

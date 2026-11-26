@@ -173,6 +173,8 @@ export interface HostAgentView {
   signIn: "device-code" | "yourself";
   /** For `yourself`, once installed: what to run on that machine to sign it in. */
   signInCommand?: string;
+  /** Once installed: the `agents:` entry that runs it in that machine's own config (#1235). */
+  entry?: { id: string; name: string; command: string; args: string[]; env: Record<string, string> };
 }
 
 /** An agent's sign-in on a server waits for the person (#1236): the page's host and the code to enter. */

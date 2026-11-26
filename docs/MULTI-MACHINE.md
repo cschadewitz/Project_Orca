@@ -322,7 +322,10 @@ In the app, the same is under **Agents** on the machine's profile in the connect
 lists each agent with its pinned version, whether it is installed and signed in (or why an
 install is not usable), with **Install** and **Sign in**. During a sign-in it shows the code and
 the sign-in page's host, and **Open sign-in page** opens that page in your browser. For Claude
-Code there is no **Sign in**: it shows the command to run on the machine instead.
+Code there is no **Sign in**: it shows the command to run on the machine instead. While the app
+is connected to that machine's profile, Config lists the agents installed there: **Add to
+configuration** puts the agent's `agents:` entry (the one `install` prints) into the draft, in
+place of one with the same id. Review, save and apply it as with any other change (#1235).
 
 **Policy notes.** The default tailnet policy lets you SSH to machines you own. If you tag a host
 (for example `tag:orca-server`), it leaves `autogroup:self`, so add a narrow SSH rule for your
