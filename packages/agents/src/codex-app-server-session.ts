@@ -41,7 +41,7 @@ import {
   type SecretsConfig,
   type SessionConfigOption,
 } from "@orca/core";
-import type { AgentHost } from "./host.js";
+import type { AgentHost, AgentProcessHandle } from "./host.js";
 import {
   codexAppServerLaunch,
   codexAppServerRequested,
@@ -101,6 +101,130 @@ export interface OpenCodexAppServerSessionOptions {
   cancelGraceMs?: number;
   /** Called once with the token usage Codex last reported, whenever it changes. */
   onTokenUsage?: (usage: ThreadTokenUsage) => void;
+  /**
+   * A listener for the session's updates from the start, so it also gets the history a resumed
+   * thread replays before the session is returned.
+   */
+  onUpdate?: (event: SessionUpdateEvent) => void;
+  /**
+   * Resume this Codex thread (`thread/resume`) instead of starting one, replaying its history
+   * as session updates. Explicit opt-in only: nothing restores an ask that was pending.
+   */
+  resumeThreadId?: string;
+  /** Fail the open when the thread cannot be resumed, instead of starting a new one. */
+  requireContextRecovery?: boolean;
+  /** Whether the session resumed the thread or started a new one, and why. */
+  onSessionContinuity?: (state: CodexSessionContinuity) => void;
+  /** Overrides the crash-loop budget for restarting an app-server that exited. */
+  recovery?: Partial<CodexRecoveryLimits>;
+  /** For tests: how the restart backoff waits. */
+  sleep?: (ms: number) => Promise<void>;
+}
+
+/** As `SessionContinuity` on the ACP route: the thread was resumed, or a new one started. */
+export interface CodexSessionContinuity {
+  mode: "fresh" | "loaded";
+  reason: "new" | "load-supported" | "load-failed";
+}
+
+/**
+ * How often a session restarts an app-server that exited before it gives up: at most
+ * `crashLimit` exits or failed restarts within `windowMs`, the n-th restart waiting
+ * `backoffMs[n - 1]` (the last entry after that).
+ */
+export interface CodexRecoveryLimits {
+  crashLimit: number;
+  windowMs: number;
+  backoffMs: readonly number[];
+}
+
+export const CODEX_RECOVERY_LIMITS: CodexRecoveryLimits = {
+  crashLimit: 3,
+  windowMs: 5 * 60_000,
+  backoffMs: [0, 1_000, 2_000, 4_000],
+};
+
+/** One app-server process and ORCA's connection to it. */
+interface Connection {
+  proc: AgentProcessHandle;
+  client: CodexAppServerClient;
+  cleanup: () => Promise<void>;
+}
+
+/** Provider errors can carry private context: report only the failed recovery boundary, as the ACP route does. */
+function codexRecoveryFailure(reason: "missing-thread-id" | "load-failed"): OrcaError {
+  return reason === "missing-thread-id"
+    ? new OrcaError("CONFIG_INVALID", "Required agent context recovery needs a nonempty resumeThreadId.", {
+        contextRecoveryReason: reason,
+      })
+    : new OrcaError("AGENT_PROTOCOL", "Required agent context could not be loaded; no fresh session was opened.", {
+        contextRecoveryReason: reason,
+      });
+}
+
+/** How many turns a history page asks for, and how many pages ORCA reads at most. */
+const HISTORY_PAGE = 50;
+const HISTORY_MAX_PAGES = 200;
+
+/**
+ * A thread's history as the session updates a live run of it reported: the user's messages,
+ * Codex's messages and reasoning summaries, and each tool call started and ended. Read
+ * oldest first with `thread/turns/list`; every item is checked against the pinned protocol.
+ */
+export async function codexThreadHistory(
+  client: CodexAppServerClient,
+  threadId: string,
+  agentId: string,
+): Promise<acp.SessionUpdate[]> {
+  const updates: acp.SessionUpdate[] = [];
+  const malformed = (what: string) =>
+    new OrcaError("AGENT_PROTOCOL", `agent ${agentId}: thread/turns/list answered with ${what}`);
+  let cursor: string | null = null;
+  for (let page = 0; ; page++) {
+    if (page >= HISTORY_MAX_PAGES) throw malformed(`more than ${HISTORY_MAX_PAGES} pages`);
+    const answer = await client.request("thread/turns/list", {
+      threadId,
+      sortDirection: "asc",
+      itemsView: "full",
+      limit: HISTORY_PAGE,
+      ...(cursor ? { cursor } : {}),
+    });
+    if (!isObject(answer) || !Array.isArray(answer.data)) throw malformed("no list of turns");
+    for (const turn of answer.data as unknown[]) {
+      if (!isObject(turn) || !Array.isArray(turn.items)) throw malformed("a turn without its items");
+      for (const item of turn.items as unknown[]) {
+        const problem = codexItemProblem(item);
+        if (problem) throw malformed(problem);
+        updates.push(...codexHistoryUpdates(item as ThreadItem));
+      }
+    }
+    if (answer.nextCursor === null || answer.nextCursor === undefined) return updates;
+    if (typeof answer.nextCursor !== "string" || answer.nextCursor === cursor)
+      throw malformed("a cursor that does not advance");
+    cursor = answer.nextCursor;
+  }
+}
+
+/** One saved item as the updates a live run reported for it. */
+export function codexHistoryUpdates(item: ThreadItem): acp.SessionUpdate[] {
+  switch (item.type) {
+    case "userMessage":
+      return item.content.flatMap((c) =>
+        c.type === "text" && c.text
+          ? [{ sessionUpdate: "user_message_chunk" as const, content: { type: "text" as const, text: c.text } }]
+          : [],
+      );
+    case "agentMessage":
+      return item.text ? [{ sessionUpdate: "agent_message_chunk", content: { type: "text", text: item.text } }] : [];
+    case "reasoning":
+      return item.summary
+        .filter((t) => t)
+        .map((t) => ({ sessionUpdate: "agent_thought_chunk" as const, content: { type: "text" as const, text: t } }));
+    default:
+      return [codexItemUpdate(item, "started"), codexItemUpdate(item, "completed")].filter(
+        (u): u is acp.SessionUpdate => u !== undefined,
+      );
+  }
 }
 
 /** Methods every session of this driver calls; the handshake refuses a protocol without them. */
@@ -110,6 +234,8 @@ export const CODEX_SESSION_METHODS = [
   "turn/start",
   "turn/interrupt",
   "thread/unsubscribe",
+  "thread/resume",
+  "thread/turns/list",
   "model/list",
 ] as const;
 
@@ -347,6 +473,17 @@ export function codexItemProblem(item: unknown): string | undefined {
   switch (item.type) {
     case "agentMessage":
       return isString(item.text) ? undefined : "an agentMessage item without its text";
+    case "userMessage":
+      return Array.isArray(item.content) &&
+        (item.content as unknown[]).every(
+          (c) => isObject(c) && isString(c.type) && (c.type !== "text" || isString(c.text)),
+        )
+        ? undefined
+        : "a userMessage item without its content";
+    case "reasoning":
+      return Array.isArray(item.summary) && (item.summary as unknown[]).every(isString)
+        ? undefined
+        : "a reasoning item without its summary";
     case "commandExecution": {
       if (!isString(item.command) || !isString(item.cwd) || !Array.isArray(item.commandActions) || !status)
         return "a commandExecution item without its command, cwd, actions or status";
@@ -442,6 +579,7 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
       `agent ${agent.id}: a Codex app-server session needs an approval policy (untrusted or on-request) and a sandbox (read-only or workspace-write)`,
       { agentId: agent.id },
     );
+  if (opts.requireContextRecovery && !opts.resumeThreadId?.trim()) throw codexRecoveryFailure("missing-thread-id");
 
   const secretPlan = planSessionSecrets(opts.host, agent, opts.secrets);
   await checkSecretUse(secretPlan, opts.host, agent.id, opts.authorizeSecretUse);
@@ -453,40 +591,39 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
 
   const launch = await codexAppServerLaunch(agent, { cwd: opts.cwd, env: { ...process.env, ...(opts.env ?? {}) } });
   const spec: AgentSpec = { ...secretPlan.agent, command: launch.command, args: launch.args };
-  const proc = await opts.host.spawnAgent(spec, {
-    cwd: opts.cwd,
-    ...(opts.env ? { env: opts.env } : {}),
-    ...ENV_SECRET_DELIVERY.spawnOptions(secretPlan),
-  });
-  values.push(...(proc.secretValues?.values() ?? []));
-  const cleanup = processCleanup(proc);
-  const stop = async (error: unknown): Promise<never> => {
-    await cleanup().catch(() => undefined);
-    const failure = redactError(error instanceof Error ? error : new Error(String(error)), values);
-    throw withStartupTermination(failure, proc.exited);
-  };
-  if (!proc.stdio) return stop(new OrcaError("NOT_SUPPORTED", `host ${opts.host.id} cannot give an agent's raw stdio`));
-
   const logger = (opts.logger ?? silentLogger).child({ agent: agent.id, host: opts.host.id });
   const clock = opts.clock ?? systemClock;
+  const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  const limits = { ...CODEX_RECOVERY_LIMITS, ...(opts.recovery ?? {}) };
   const listeners = new Set<(e: SessionUpdateEvent) => void>();
+  if (opts.onUpdate) listeners.add(opts.onUpdate);
   const id = newId("sess", clock.now());
   let threadId = "";
   let active: ActiveTurn | undefined;
   /** Set once the session cannot take another prompt: Codex may still be running a turn. */
   let broken: OrcaError | undefined;
-  /** Stops the session once it is open (until then, a failed open stops the process itself). */
-  let shutdown: () => Promise<void> = async () => undefined;
+  /** The live app-server; undefined after it exited, until the next prompt restarts it. */
+  let conn: Connection | undefined;
+  /** The connection that exited last, whose process the restart waits on. */
+  let lost: Connection | undefined;
+  /** When each exit or failed restart happened, for the crash-loop budget. */
+  const crashes: number[] = [];
+  let closing = false;
+  /** Whether the open finished: from then on an exit is recovered rather than the open's failure. */
+  let open = false;
   let closedResolve!: () => void;
   const closed = new Promise<void>((r) => (closedResolve = r));
+  let terminatedResolve!: () => void;
+  const terminated = new Promise<void>((r) => (terminatedResolve = r));
 
+  const event = (update: acp.SessionUpdate): SessionUpdateEvent => ({
+    sessionId: threadId,
+    raw: update,
+    summary: summarizeUpdate(update),
+    at: clock.now(),
+  });
   const emit = (update: acp.SessionUpdate) => {
-    const e: SessionUpdateEvent = {
-      sessionId: threadId,
-      raw: update,
-      summary: summarizeUpdate(update),
-      at: clock.now(),
-    };
+    const e = event(update);
     for (const l of listeners) l(e);
   };
 
@@ -550,111 +687,291 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
     }
   };
 
-  const client = new CodexAppServerClient(stdioLineTransport(proc.stdio()), {
-    requestTimeoutMs: opts.requestTimeoutMs ?? 30_000,
-    onNotification: (method, params) => {
-      try {
-        onNotification(method, params);
-      } catch (error) {
-        if (!(error instanceof PayloadProblem)) throw error;
-        client.closeOnProtocolError(`a ${method} notification with ${error.message}`);
-      }
-    },
-    // Until ORCA's policy answers asks (#1159): approvals declined, anything else refused.
-    onServerRequest: async (method) => {
-      const answer = APPROVAL_ASKS[method];
-      if (answer !== undefined) {
-        logger.warn("Codex asked for approval; declined until ORCA's ask bridge (#1159)", { method });
-        return answer;
-      }
-      throw new CodexRpcError(-32601, `ORCA does not answer ${method} yet`);
-    },
-    onClose: (error) => {
+  /** Exits and failed restarts within the window, after dropping older ones. */
+  const recentCrashes = () => {
+    const since = clock.now() - limits.windowMs;
+    while (crashes.length && crashes[0]! < since) crashes.shift();
+    return crashes.length;
+  };
+  const crashLoop = (last: Error) =>
+    new OrcaError(
+      "AGENT_TRANSPORT",
+      `agent ${agent.id}: the Codex app-server exited or failed to restart ${crashes.length} times within ` +
+        `${Math.round(limits.windowMs / 1000)}s; ORCA stops the session (last: ${last.message})`,
+      { agentId: agent.id, crashes: crashes.length },
+    );
+
+  /**
+   * The connection ended. ORCA's own close is nothing more; a protocol error ends the session;
+   * anything else is Codex exiting or its stdio closing: the turn fails, any ask it raised goes
+   * unanswered (the client never writes to a closed connection), the process is stopped, and the
+   * next prompt starts a new app-server on the same thread, within the crash budget.
+   */
+  const connectionClosed = (c: Connection, error: OrcaError) => {
+    if (conn !== c) return;
+    // While opening, the open's pending request fails with this error and the open stops it.
+    if (closing || !open || error.code === "AGENT_PROTOCOL") {
       active?.fail(error);
-      broken ??= error;
-      // The connection is gone (Codex exited, or sent what the protocol does not allow): stop
-      // the process too, without waiting on a reply that cannot come.
-      void shutdown();
-    },
+      if (open && !closing) breakSession(error);
+      return;
+    }
+    conn = undefined;
+    lost = c;
+    void c.cleanup().catch(() => undefined);
+    crashes.push(clock.now());
+    if (recentCrashes() >= limits.crashLimit) {
+      const loop = crashLoop(error);
+      active?.fail(loop);
+      breakSession(loop);
+      return;
+    }
+    active?.fail(error);
+    logger.warn("Codex app-server exited; ORCA restarts it on the next prompt", {
+      error: error.message,
+      stderr: c.proc.stderrTail(),
+      crashes: crashes.length,
+    });
+  };
+
+  /** Start `codex app-server`, handshake and check the login. The process is stopped on any failure. */
+  const connect = async (): Promise<Connection> => {
+    const proc = await opts.host.spawnAgent(spec, {
+      cwd: opts.cwd,
+      ...(opts.env ? { env: opts.env } : {}),
+      ...ENV_SECRET_DELIVERY.spawnOptions(secretPlan),
+    });
+    values.push(...(proc.secretValues?.values() ?? []));
+    const cleanup = processCleanup(proc);
+    const fail = async (error: unknown): Promise<never> => {
+      await cleanup().catch(() => undefined);
+      const failure = redactError(error instanceof Error ? error : new Error(String(error)), values);
+      throw withStartupTermination(failure, proc.exited);
+    };
+    if (!proc.stdio)
+      return fail(new OrcaError("NOT_SUPPORTED", `host ${opts.host.id} cannot give an agent's raw stdio`));
+    const c = { proc, cleanup } as Connection;
+    const client: CodexAppServerClient = new CodexAppServerClient(stdioLineTransport(proc.stdio()), {
+      requestTimeoutMs: opts.requestTimeoutMs ?? 30_000,
+      onNotification: (method, params) => {
+        if (conn !== c) return;
+        try {
+          onNotification(method, params);
+        } catch (error) {
+          if (!(error instanceof PayloadProblem)) throw error;
+          client.closeOnProtocolError(`a ${method} notification with ${error.message}`);
+        }
+      },
+      // Until ORCA's policy answers asks (#1159): approvals declined, anything else refused.
+      onServerRequest: async (method) => {
+        const answer = APPROVAL_ASKS[method];
+        if (answer !== undefined) {
+          logger.warn("Codex asked for approval; declined until ORCA's ask bridge (#1159)", { method });
+          return answer;
+        }
+        throw new CodexRpcError(-32601, `ORCA does not answer ${method} yet`);
+      },
+      onClose: (error) => connectionClosed(c, error),
+    });
+    c.client = client;
+    try {
+      await initializeCodexAppServer(client, {
+        agentId: agent.id,
+        orcaVersion: opts.orcaVersion ?? "0.0.0",
+        requiredMethods: CODEX_SESSION_METHODS,
+      });
+      const login = codexLoginRefused(agent.id, await client.request("account/read", CODEX_ACCOUNT_READ_PARAMS));
+      if (login) throw login;
+      return c;
+    } catch (error) {
+      client.close("closed after a refused open");
+      return fail(error);
+    }
+  };
+
+  const policyParams = () => ({
+    cwd: opts.cwd,
+    approvalPolicy: opts.thread.approvalPolicy,
+    approvalsReviewer: "user" as const,
+    sandbox: opts.thread.sandbox,
   });
+  /** The thread Codex answered with, refused unless it is what ORCA asked for. */
+  const acceptThread = (method: string, answer: unknown, want?: string) => {
+    const t = isObject(answer) ? answer : {};
+    const thread = isObject(t.thread) ? t.thread : {};
+    if (typeof thread.id !== "string" || !thread.id)
+      throw new OrcaError("AGENT_PROTOCOL", `agent ${agent.id}: ${method} answered without a thread id`);
+    const refuse = (what: string, got: unknown) =>
+      new OrcaError(
+        "NOT_SUPPORTED",
+        `agent ${agent.id}: Codex ${method === "thread/start" ? "started" : "resumed"} the thread with ${what} ${JSON.stringify(got)}, not what ORCA asked for. ORCA refuses the session.`,
+        { agentId: agent.id, [what.replace(/ /g, "_")]: got ?? null },
+      );
+    if (want !== undefined && thread.id !== want) throw refuse("thread id", thread.id);
+    if (t.approvalsReviewer !== "user") throw refuse("approvals reviewer", t.approvalsReviewer);
+    if (t.approvalPolicy !== opts.thread.approvalPolicy) throw refuse("approval policy", t.approvalPolicy);
+    if (typeof t.cwd !== "string" || !samePath(t.cwd, opts.cwd)) throw refuse("working directory", t.cwd);
+    return {
+      id: thread.id,
+      model: typeof t.model === "string" ? t.model : undefined,
+      effort: typeof t.reasoningEffort === "string" ? t.reasoningEffort : null,
+    };
+  };
+  /** `thread/resume` of `want` on `c`, with ORCA's policy, history left to `thread/turns/list`. */
+  const resumeOn = async (c: Connection, want: string) =>
+    acceptThread(
+      "thread/resume",
+      await c.client.request("thread/resume", {
+        threadId: want,
+        ...policyParams(),
+        ...(model ? { model } : {}),
+        excludeTurns: true,
+      }),
+      want,
+    );
 
   let configOptions: SessionConfigOption[] = [];
   let model: string | undefined;
   let effort: string | null = null;
+  let continuity: CodexSessionContinuity = { mode: "fresh", reason: "new" };
+  conn = await connect();
   try {
-    await initializeCodexAppServer(client, {
-      agentId: agent.id,
-      orcaVersion: opts.orcaVersion ?? "0.0.0",
-      requiredMethods: CODEX_SESSION_METHODS,
-    });
-    const login = codexLoginRefused(agent.id, await client.request("account/read", CODEX_ACCOUNT_READ_PARAMS));
-    if (login) throw login;
-    const params: ThreadStartParams = {
-      cwd: opts.cwd,
-      approvalPolicy: opts.thread.approvalPolicy,
-      approvalsReviewer: "user",
-      sandbox: opts.thread.sandbox,
-      ...(agent.defaultModel ? { model: agent.defaultModel } : {}),
-    };
-    const started = await client.request("thread/start", params);
-    const t = isObject(started) ? started : {};
-    const thread = isObject(t.thread) ? t.thread : {};
-    if (typeof thread.id !== "string" || !thread.id)
-      throw new OrcaError("AGENT_PROTOCOL", `agent ${agent.id}: thread/start answered without a thread id`);
-    threadId = thread.id;
-    const refuse = (what: string, got: unknown) =>
-      new OrcaError(
-        "NOT_SUPPORTED",
-        `agent ${agent.id}: Codex started the thread with ${what} ${JSON.stringify(got)}, not what ORCA asked for. ORCA refuses the session.`,
-        { agentId: agent.id, [what.replace(/ /g, "_")]: got ?? null },
-      );
-    if (t.approvalsReviewer !== "user") throw refuse("approvals reviewer", t.approvalsReviewer);
-    if (t.approvalPolicy !== opts.thread.approvalPolicy) throw refuse("approval policy", t.approvalPolicy);
-    if (typeof t.cwd !== "string" || !samePath(t.cwd, opts.cwd)) throw refuse("working directory", t.cwd);
-    model = typeof t.model === "string" ? t.model : undefined;
-    effort = typeof t.reasoningEffort === "string" ? t.reasoningEffort : null;
-    configOptions = await readConfigOptions(client, model, effort, logger);
+    let opened: ReturnType<typeof acceptThread> | undefined;
+    if (opts.resumeThreadId) {
+      try {
+        opened = await resumeOn(conn, opts.resumeThreadId);
+        threadId = opened.id;
+        // History is part of the resume: a thread whose history cannot be read is not resumed.
+        for (const update of await codexThreadHistory(conn.client, threadId, agent.id)) emit(update);
+        continuity = { mode: "loaded", reason: "load-supported" };
+      } catch (error) {
+        // A closed connection is the open's own failure, never a failed resume to fall back from.
+        if (conn.client.closed) throw conn.client.closed;
+        if (opts.requireContextRecovery) throw codexRecoveryFailure("load-failed");
+        logger.warn("Codex could not resume the thread; ORCA starts a new one", {
+          error: (error as Error).message,
+        });
+        opened = undefined;
+        threadId = "";
+        continuity = { mode: "fresh", reason: "load-failed" };
+      }
+    }
+    if (!opened) {
+      const params: ThreadStartParams = {
+        ...policyParams(),
+        ...(agent.defaultModel ? { model: agent.defaultModel } : {}),
+      };
+      opened = acceptThread("thread/start", await conn.client.request("thread/start", params));
+      threadId = opened.id;
+    }
+    model = opened.model;
+    effort = opened.effort;
+    configOptions = await readConfigOptions(conn.client, model, effort, logger);
   } catch (error) {
-    client.close("closed after a refused open");
-    return stop(error);
+    const c = conn;
+    closing = true;
+    c.client.close("closed after a refused open");
+    await c.cleanup().catch(() => undefined);
+    throw withStartupTermination(
+      redactError(error instanceof Error ? error : new Error(String(error)), values),
+      c.proc.exited,
+    );
   }
+  opts.onSessionContinuity?.(continuity);
 
   const cancelGraceMs = opts.cancelGraceMs ?? agent.cancelGraceMs;
   let terminating: Promise<void> | undefined;
   /** Close: unsubscribe from the thread while the connection is up, then stop the process. */
   const terminate = () =>
     (terminating ??= (async () => {
-      if (!client.closed) {
-        await client.request("thread/unsubscribe", { threadId }, { timeoutMs: 5_000 }).catch(() => undefined);
-        client.close();
+      closing = true;
+      const c = conn ?? lost;
+      if (c && !c.client.closed) {
+        await c.client.request("thread/unsubscribe", { threadId }, { timeoutMs: 5_000 }).catch(() => undefined);
+        c.client.close();
       }
-      await cleanup();
       closedResolve();
+      if (c) {
+        await c.cleanup();
+        await c.proc.exited.catch(() => undefined);
+      }
+      terminatedResolve();
     })());
   /**
    * Stop now, waiting on no reply: the connection is closed first, so a pending unsubscribe
    * fails at once, and the process is stopped.
    */
   const stopNow = () => {
-    if (!client.closed) client.close("closed by ORCA: the session stopped");
+    closing = true;
+    const c = conn ?? lost;
+    if (c && !c.client.closed) c.client.close("closed by ORCA: the session stopped");
     return terminate();
   };
-  shutdown = stopNow;
   /** The session takes no further prompt, and stops. */
-  const breakSession = (error: OrcaError) => {
+  function breakSession(error: OrcaError) {
     broken ??= error;
     void stopNow().catch(() => undefined);
+  }
+  open = true;
+  // Codex may have exited between its last answer and here.
+  if (conn.client.closed) connectionClosed(conn, conn.client.closed);
+
+  /**
+   * A new app-server for the same thread after the last one exited: after the backoff its crash
+   * count calls for, once the old process is gone, with the same policy checks as the open.
+   * A failed restart counts against the budget like an exit.
+   */
+  /** The session's failure, read fresh (TypeScript narrows `broken` across awaits). */
+  const isBroken = (): OrcaError | undefined => broken;
+  const restart = async (): Promise<Connection> => {
+    const n = recentCrashes();
+    const wait = n === 0 ? 0 : limits.backoffMs[Math.min(n, limits.backoffMs.length) - 1]!;
+    if (wait > 0) await sleep(wait);
+    if (closing) throw isBroken() ?? new OrcaError("RUN_STATE", "the session closed during the restart");
+    if (lost) await lost.cleanup().catch(() => undefined);
+    const before = isBroken();
+    if (before) throw before;
+    let c: Connection | undefined;
+    try {
+      c = await connect();
+      const resumed = await resumeOn(c, threadId);
+      if (closing || isBroken())
+        throw isBroken() ?? new OrcaError("RUN_STATE", "the session closed during the restart");
+      conn = c;
+      lost = undefined;
+      model = resumed.model ?? model;
+      logger.info("Codex app-server restarted on the same thread", { threadId, crashes: crashes.length });
+      return c;
+    } catch (error) {
+      if (c) {
+        c.client.close("closed after a failed restart");
+        await c.cleanup().catch(() => undefined);
+      }
+      const before = isBroken();
+      if (before) throw before;
+      crashes.push(clock.now());
+      const failure = new OrcaError(
+        "AGENT_TRANSPORT",
+        `agent ${agent.id}: ORCA could not restart the Codex app-server: ${(error as Error).message}`,
+        { agentId: agent.id },
+      );
+      if (recentCrashes() >= limits.crashLimit) {
+        breakSession(crashLoop(failure));
+        throw isBroken() ?? failure;
+      }
+      throw failure;
+    }
   };
-  const terminated = (async () => {
-    await proc.exited;
-  })();
 
   const requestCancel = (reason: string) => {
     const turn = active;
     if (!turn || turn.cancelReason) return;
     turn.cancelReason = reason;
+    // While the app-server restarts there is no turn yet: the prompt ends cancelled after it.
+    const c = conn;
+    if (!c) return;
     const interrupt = () => {
-      if (turn.turnId) void client.request("turn/interrupt", { threadId, turnId: turn.turnId }).catch(() => undefined);
+      if (turn.turnId)
+        void c.client.request("turn/interrupt", { threadId, turnId: turn.turnId }).catch(() => undefined);
     };
     // Before turn/start answers there is no turn id yet; the prompt sends the interrupt then.
     interrupt();
@@ -662,7 +979,7 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
       const err = new OrcaError(
         "AGENT_TRANSPORT",
         `agent '${agent.id}' did not end its turn within ${cancelGraceMs}ms of turn/interrupt (${reason}); killing it`,
-        { reason, stderr: proc.stderrTail() },
+        { reason, stderr: c.proc.stderrTail() },
       );
       // The caller settles now, whether turn/start has answered or not, and the process stops
       // without waiting on any reply from it.
@@ -684,9 +1001,9 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
     prompt: (input, options: PromptOptions = {}) =>
       redacted(async (): Promise<TurnResult> => {
         if (broken) throw broken;
+        if (closing) throw new OrcaError("RUN_STATE", "the session is closed");
         if (active) throw new OrcaError("RUN_STATE", "a prompt turn is already active on this session");
         if (options.signal?.aborted) throw new OrcaError("CANCELLED", String(options.signal.reason ?? "cancelled"));
-        if (client.closed) throw client.closed;
         const blocks: acp.ContentBlock[] = typeof input === "string" ? [{ type: "text", text: input }] : input;
         const other = blocks.find((b) => b.type !== "text");
         if (other)
@@ -726,7 +1043,11 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
           ? setTimeout(() => requestCancel(`turn timed out after ${options.timeoutMs}ms`), options.timeoutMs)
           : undefined;
         try {
-          const start = client.request("turn/start", {
+          // The last app-server exited: a new one on the same thread first.
+          const c = conn ?? (await restart());
+          // Cancelled while it restarted: no turn was started.
+          if (turn.cancelReason) return { stopReason: "cancelled", durationMs: clock.now() - started };
+          const start = c.client.request("turn/start", {
             threadId,
             clientUserMessageId: randomUUID(),
             input: blocks.map((b) => ({ type: "text", text: (b as { text: string }).text, text_elements: [] })),
@@ -746,7 +1067,7 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
               throw new OrcaError("AGENT_PROTOCOL", `agent ${agent.id}: Codex refused turn/start: ${error.message}`, {
                 code: error.code,
               });
-            // No usable answer (timeout, connection lost, a malformed error): Codex may be running the turn, so the session ends.
+            // No usable answer (timeout, a malformed error): Codex may be running the turn, so the session ends.
             throw unknownStart(`no usable answer (${(error as Error).message})`);
           }
           const turnId =
@@ -758,7 +1079,7 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
           if (turn.finishedEarly.has(turnId)) {
             turn.done(turn.finishedEarly.get(turnId));
           } else if (turn.cancelReason) {
-            void client.request("turn/interrupt", { threadId, turnId }).catch(() => undefined);
+            void c.client.request("turn/interrupt", { threadId, turnId }).catch(() => undefined);
           }
           const finished = await ended;
           return { stopReason: codexStopReason(agent.id, finished), durationMs: clock.now() - started };
@@ -800,7 +1121,8 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
           });
         if (configId === MODEL_OPTION) model = value;
         else effort = value;
-        configOptions = await readConfigOptions(client, model, effort, logger);
+        const c = conn;
+        if (c) configOptions = await readConfigOptions(c.client, model, effort, logger);
         return configOptions;
       }),
 
