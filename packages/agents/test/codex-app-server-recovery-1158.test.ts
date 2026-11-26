@@ -377,6 +377,44 @@ describe("an app-server that exits", () => {
     await session.close();
   });
 
+  describe("a run that cannot take an app-server's secret values", () => {
+    const failing = () => {
+      throw new Error("callback broke near sk-orca-callback-sentinel");
+    };
+    const sanitized = (error: OrcaError) => {
+      expect(error.details).toMatchObject({ reason: "codex-secret-redaction" });
+      expect(JSON.stringify(error) + error.message + String(error.stack)).not.toContain("sk-orca-callback-sentinel");
+    };
+
+    it("refuses the open and stops the process before it is sent anything", async () => {
+      const s = scriptedHost(
+        () => BASE,
+        () => ({ secret: "sk-orca-sentinel-0" }),
+      );
+      const error = (await open(s.host, { onSecretValues: failing }).catch((e: unknown) => e)) as OrcaError;
+      sanitized(error);
+      expect(s.procs[0]!.received).toEqual([]);
+      expect(s.procs[0]!.kill).toHaveBeenCalled();
+    });
+
+    it("stops the session when a replacement's values cannot be taken", async () => {
+      let calls = 0;
+      const s = scriptedHost(
+        () => BASE,
+        (i) => ({ secret: `sk-orca-sentinel-${i}` }),
+      );
+      const session = await open(s.host, { onSecretValues: () => (++calls === 2 ? failing() : undefined) });
+      s.procs[0]!.crash();
+      await settle();
+      const error = (await session.prompt("go").catch((e: unknown) => e)) as OrcaError;
+      sanitized(error);
+      expect(s.procs[1]!.received).toEqual([]);
+      expect(s.procs[1]!.kill).toHaveBeenCalled();
+      await expect(session.prompt("again")).rejects.toBe(error);
+      expect(s.spawnAgent).toHaveBeenCalledTimes(2);
+    });
+  });
+
   it("never answers an ask once its process is gone", async () => {
     const s = scriptedHost((i) => ({
       ...BASE,

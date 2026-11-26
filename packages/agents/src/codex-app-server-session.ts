@@ -1336,8 +1336,6 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
       ...ENV_SECRET_DELIVERY.spawnOptions(secretPlan),
     });
     values.push(...(proc.secretValues?.values() ?? []));
-    // Before the handshake: nothing this process says reaches the run before its values do.
-    if (proc.secretValues?.size) opts.onSecretValues?.([...values]);
     const cleanup = processCleanup(proc, opts.exitGraceMs);
     const c = { proc, cleanup } as Connection;
     owned.add(c);
@@ -1352,6 +1350,22 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
       const failure = redactError(error instanceof Error ? error : new Error(String(error)), values);
       throw withStartupTermination(failure, proc.exited);
     };
+    // Before the handshake, and once the process is owned: nothing it says reaches the run
+    // before its values do. A run that cannot take them cannot redact this process's output,
+    // so the open, or the whole session on a restart, stops; the callback's own error is not
+    // repeated.
+    if (proc.secretValues?.size && opts.onSecretValues)
+      try {
+        opts.onSecretValues([...values]);
+      } catch {
+        const refusal = new OrcaError(
+          "AGENT_TRANSPORT",
+          `agent ${agent.id}: ORCA could not register the Codex app-server's secret values for redaction, so it stops the app-server`,
+          { agentId: agent.id, reason: "codex-secret-redaction" },
+        );
+        if (replacement) breakSession(refusal);
+        return fail(refusal);
+      }
     const why = stopped();
     if (why) return fail(why);
     if (!proc.stdio)
