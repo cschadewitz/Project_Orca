@@ -257,6 +257,27 @@ already runs a daemon.
   The host still checks the bundle's signature itself. Such a host is updated from the app, not
   by its own timer.
 
+**Putting your repository there** (#1235). The host needs no git credentials and no access to
+where your code is hosted:
+
+```sh
+cd ~/src/app
+orca-cli remote push-repo you@build-1 --tailnet                    # the current branch
+orca-cli remote push-repo you@build-1 --tailnet --ref refs/heads/release/1.2 --name app
+```
+
+This computer writes the branch (or each `--ref`, a full branch or tag name) into a git bundle,
+copies it over the host key `remote add` pinned, and the host fetches it into
+`~/.local/share/orca-server/repos/<name>.git`. A checkout beside it,
+`~/.local/share/orca-server/checkouts/<name>`, has that repository as `origin`. A later push
+moves both forward; a branch the host has at a commit your push does not build on is refused,
+never overwritten, and a checkout with changes of its own is left as it is. The host needs `git`.
+The command prints the `workspace:` settings (`provider: git-worktree`, `repo:` the checkout,
+`allowedRefs:` the pushed branches) for the server's `orca.config.yaml`, so delegated steps can
+name a pushed `gitRef`. To set them from this computer, connect the app to the machine's profile
+and use Config > Raw: Validate and review, Save reviewed changes, then Apply saved
+configuration.
+
 **Policy notes.** The default tailnet policy lets you SSH to machines you own. If you tag a host
 (for example `tag:orca-server`), it leaves `autogroup:self`, so add a narrow SSH rule for your
 own devices and the account ORCA logs in as. Avoid broad `autogroup:member` rules.
