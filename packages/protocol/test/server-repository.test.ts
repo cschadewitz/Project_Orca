@@ -254,13 +254,25 @@ describe("hostRepositories", () => {
         name: "app",
         checkout: `${host.root}/checkouts/app`,
         branches: ["refs/heads/main", "refs/heads/release/1.2"],
-        head: "refs/heads/main",
+        workspace: {
+          provider: "git-worktree",
+          repo: `${host.root}/checkouts/app`,
+          baseBranch: "main",
+          fetchRemote: "origin",
+          allowedRefs: ["refs/heads/main", "refs/heads/release/1.2"],
+        },
       },
       {
         name: "tools",
         checkout: `${host.root}/checkouts/tools`,
         branches: ["refs/heads/main"],
-        head: "refs/heads/main",
+        workspace: {
+          provider: "git-worktree",
+          repo: `${host.root}/checkouts/tools`,
+          baseBranch: "main",
+          fetchRemote: "origin",
+          allowedRefs: ["refs/heads/main"],
+        },
       },
     ]);
     const listing = host.commands.slice(before);
@@ -288,6 +300,28 @@ describe("hostRepositories", () => {
     rmSync(join(linked.root, "repos"), { recursive: true, force: true });
     symlinkSync(outside, join(linked.root, "repos"));
     expect(await hostRepositories(linked.transport)).toEqual([]);
+  });
+
+  it("starts work from the branch the checkout has, not one only a later push named", async () => {
+    const local = repo();
+    const host = server();
+    await push(local, host.transport, "app");
+    git(local, "checkout", "-q", "-b", "feature");
+    commit(local, "feature\n");
+    // Only the new branch: the bare repository's HEAD now names it, the checkout stays on main.
+    await push(local, host.transport, "app");
+    expect(git(`${host.root}/repos/app.git`, "symbolic-ref", "HEAD")).toBe("refs/heads/feature");
+    const [listed] = await hostRepositories(host.transport);
+    expect(listed!.workspace).toMatchObject({
+      baseBranch: "main",
+      allowedRefs: ["refs/heads/feature", "refs/heads/main"],
+    });
+
+    // A checkout on no branch of its own gives no workspace settings, with why.
+    git(`${host.root}/checkouts/app`, "checkout", "-q", "--detach");
+    const [detached] = await hostRepositories(host.transport);
+    expect(detached).not.toHaveProperty("workspace");
+    expect(detached!.problem).toMatch(/not on a branch/);
   });
 
   it("refuses a machine that is not set up yet", async () => {

@@ -158,12 +158,23 @@ export interface LoginApprovalView {
 /** A repository a push put on a managed server (#1235), with the checkout a daemon there works in. */
 export interface HostRepositoryView {
   name: string;
-  /** The checkout: the value for `workspace.repo`. */
+  /** The checkout on the server. */
   checkout: string;
   /** Its branches there (`refs/heads/…`). */
   branches: string[];
-  /** The branch the last push of a branch named. */
-  head?: string;
+  /**
+   * The `workspace:` settings that work in the checkout, built by this computer from what it
+   * checked there: from the branch the checkout has. Absent when it is on no branch of its own.
+   */
+  workspace?: {
+    provider: "git-worktree";
+    repo: string;
+    baseBranch: string;
+    fetchRemote: "origin";
+    allowedRefs?: string[];
+  };
+  /** Why there are no workspace settings for it. */
+  problem?: string;
 }
 
 /** One agent ORCA can put on a managed server (#1236), and its state there. */

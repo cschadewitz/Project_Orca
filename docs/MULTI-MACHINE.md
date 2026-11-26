@@ -278,7 +278,8 @@ needs `git`. When there is a checkout of the pushed repository, the command prin
 `allowedRefs:` the pushed branches) for the server's `orca.config.yaml`, so delegated steps can
 name a pushed `gitRef`. To set them from this computer, connect the app to the machine's profile:
 Config lists the repositories pushed there, and **Use as workspace** puts those settings into
-the draft (with `baseBranch` the branch last pushed). If the workspace is already that checkout,
+the draft, with `baseBranch` the branch the checkout there is on. If the workspace is already that
+checkout and fetches from `origin`,
 **Allow pushed branches** only adds the pushed branches it does not allow yet; any other workspace
 is left alone and Config says why. Review, save and apply the draft as with any other change.
 

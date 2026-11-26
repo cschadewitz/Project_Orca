@@ -161,7 +161,18 @@ describe("repositories on a profile's server", () => {
       git(root, "clone", "-q", "--bare", local, join(root, "repos/app.git"));
       git(root, "clone", "-q", join(root, "repos/app.git"), join(root, "checkouts/app"));
       await expect(profiles.hostRepositories("lab")).resolves.toEqual([
-        { name: "app", checkout: join(root, "checkouts/app"), branches: ["refs/heads/main"], head: "refs/heads/main" },
+        {
+          name: "app",
+          checkout: join(root, "checkouts/app"),
+          branches: ["refs/heads/main"],
+          workspace: {
+            provider: "git-worktree",
+            repo: join(root, "checkouts/app"),
+            baseBranch: "main",
+            fetchRemote: "origin",
+            allowedRefs: ["refs/heads/main"],
+          },
+        },
       ]);
       expect(opened.every((options) => options.pinnedOnly)).toBe(true);
 

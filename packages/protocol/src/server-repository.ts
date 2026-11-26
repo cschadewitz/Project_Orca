@@ -295,8 +295,26 @@ export interface HostRepository {
   checkout: string;
   /** The branches the server has, from what was pushed. */
   branches: string[];
-  /** The branch the last push of a branch named, when there is one. */
-  head?: string;
+  /**
+   * The `workspace:` settings that make a daemon work in the checkout, when it is on a branch
+   * that exists in it: new work items branch from that branch, the one the checkout has, never
+   * a name only the bare repository knows. Absent when the checkout is on no such branch.
+   */
+  workspace?: HostWorkspace;
+  /** Why there are no workspace settings for it. */
+  problem?: string;
+}
+
+/** The `workspace:` settings for a pushed checkout, as `hostRepositories` builds them. */
+export interface HostWorkspace {
+  provider: "git-worktree";
+  repo: string;
+  /** A branch the checkout itself has, so a work item's worktree can start from it. */
+  baseBranch: string;
+  /** The checkout's `origin`: the bare repository the pushes went to. */
+  fetchRemote: "origin";
+  /** The branches pushed there, which delegated runs may name. */
+  allowedRefs?: string[];
 }
 
 /** The most repositories, and branches of one, that are listed. */
@@ -339,10 +357,40 @@ export async function hostRepositories(transport: CourierTransport): Promise<Hos
       .split("\n")
       .filter((ref) => REF.test(ref) && ref.startsWith("refs/heads/") && !ref.split("/").includes(".."))
       .slice(0, LIST_LIMIT);
-    const head = (
-      await run(transport, ["git", "-C", hub, "symbolic-ref", "-q", "HEAD"], LIST_TIMEOUT_MS)
+    // The branch the checkout is on, and only if the checkout itself has it: a later push of
+    // another branch moves the bare repository's HEAD but leaves the checkout where it was.
+    const current = (
+      await run(transport, ["git", "-C", checkout, "symbolic-ref", "-q", "HEAD"], LIST_TIMEOUT_MS)
     ).stdout.trim();
-    found.push({ name, checkout, branches, ...(branches.includes(head) ? { head } : {}) });
+    const base =
+      REF.test(current) &&
+      current.startsWith("refs/heads/") &&
+      !current.split("/").includes("..") &&
+      (
+        await run(
+          transport,
+          ["git", "-C", checkout, "rev-parse", "-q", "--verify", `${current}^{commit}`],
+          LIST_TIMEOUT_MS,
+        )
+      ).code === 0
+        ? current.slice("refs/heads/".length)
+        : undefined;
+    found.push({
+      name,
+      checkout,
+      branches,
+      ...(base
+        ? {
+            workspace: {
+              provider: "git-worktree" as const,
+              repo: checkout,
+              baseBranch: base,
+              fetchRemote: "origin" as const,
+              ...(branches.length ? { allowedRefs: [...branches] } : {}),
+            },
+          }
+        : { problem: "Its checkout on the server is not on a branch of its own, so no work can start from it." }),
+    });
   }
   return found;
 }

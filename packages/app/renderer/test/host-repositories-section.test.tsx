@@ -28,7 +28,13 @@ const app: HostRepositoryView = {
   name: "app",
   checkout,
   branches: ["refs/heads/main", "refs/heads/release/1.2"],
-  head: "refs/heads/release/1.2",
+  workspace: {
+    provider: "git-worktree",
+    repo: checkout,
+    baseBranch: "main",
+    fetchRemote: "origin",
+    allowedRefs: ["refs/heads/main", "refs/heads/release/1.2"],
+  },
 };
 const lab = { id: "lab", name: "Lab", destination: "casey@lab" };
 
@@ -85,7 +91,7 @@ describe("the workspace for a pushed repository", () => {
           value: {
             provider: "git-worktree",
             repo: checkout,
-            baseBranch: "release/1.2",
+            baseBranch: "main",
             fetchRemote: "origin",
             allowedRefs: ["refs/heads/main", "refs/heads/release/1.2"],
           },
@@ -125,6 +131,8 @@ describe("the workspace for a pushed repository", () => {
       { provider: "local", root: "/srv/app" },
       { provider: "git-worktree", repo: "/srv/app" },
       { provider: "git-worktree", repo: checkout, hostId: "builder" },
+      // Delegated refs would be fetched from another remote than what was pushed.
+      { provider: "git-worktree", repo: checkout, fetchRemote: "upstream" },
       { provider: "git-worktree", repo: checkout, allowedRefs: "refs/heads/main" },
       "somewhere",
     ])
@@ -134,6 +142,23 @@ describe("the workspace for a pushed repository", () => {
       });
     expect(workspacePlan({ workspace: { provider: "git-worktree", repo: "/srv/app" } }, app)).toMatchObject({
       reason: expect.stringContaining("in /srv/app"),
+    });
+    expect(
+      workspacePlan({ workspace: { provider: "git-worktree", repo: checkout, fetchRemote: "upstream" } }, app),
+    ).toMatchObject({ reason: expect.stringContaining("from upstream, not from what was pushed") });
+    // `origin` named explicitly is the pushed repository too.
+    expect(
+      workspacePlan({ workspace: { provider: "git-worktree", repo: checkout, fetchRemote: "origin" } }, app),
+    ).toMatchObject({ kind: "allow" });
+  });
+
+  it("offers nothing for a checkout on no branch of its own, with why", () => {
+    const { workspace: _none, ...detached } = app;
+    expect(
+      workspacePlan({}, { ...detached, problem: "Its checkout on the server is not on a branch of its own." }),
+    ).toEqual({
+      kind: "conflict",
+      reason: "Its checkout on the server is not on a branch of its own.",
     });
   });
 });
@@ -177,7 +202,9 @@ describe("the section", () => {
     await vi.waitFor(() => expect(server.hostRepositories).toHaveBeenCalledTimes(1));
     server.move({ epoch: 2 });
     studio.target = { epoch: 2 };
-    await server.reply([{ ...app, checkout: "/stale/checkouts/app" }]);
+    await server.reply([
+      { ...app, checkout: "/stale/checkouts/app", workspace: { ...app.workspace!, repo: "/stale" } },
+    ]);
     expect(container.textContent).toBe("");
     await server.reply();
     const button = await screen.findByRole("button", { name: "Use as workspace" });

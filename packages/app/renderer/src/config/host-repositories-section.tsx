@@ -2,11 +2,11 @@
  * Repositories pushed to this managed server, on its Config surface (#1235). Shown only while the
  * app is connected to a saved SSH profile whose server has a repository `orca-cli remote
  * push-repo` put there. **Use as workspace** puts the `workspace:` settings that make the daemon
- * work in that repository's checkout into the draft (the ones `push-repo` prints): a
- * `git-worktree` workspace on the checkout, from the branch last pushed, fetching delegated refs
- * from what was pushed and allowing its pushed branches. For a workspace already on that checkout
- * it only adds the pushed branches it does not allow yet; any other workspace is left alone with
- * the reason. Nothing is written until the person reviews, saves and applies the draft.
+ * work in that repository's checkout into the draft, as this computer built them from what it
+ * checked on the server: a `git-worktree` workspace on the checkout, branching from the branch the
+ * checkout has, fetching delegated refs from what was pushed (`origin`) and allowing its pushed
+ * branches. For a workspace already on that checkout, fetching from `origin`, it only adds the
+ * pushed branches it does not allow yet; any other workspace is left alone with the reason. Nothing is written until the person reviews, saves and applies the draft.
  *
  * The report is bound to the connection it was read on (see `useServerReport`).
  */
@@ -33,34 +33,37 @@ function allows(allowed: readonly unknown[], ref: string): boolean {
 
 /**
  * The edits that make the draft's workspace the pushed checkout. With no workspace: the whole
- * `workspace:` block. With a `git-worktree` workspace on this checkout, on this host: only the
- * pushed branches it does not allow yet, added to `allowedRefs`. Anything else is the person's
+ * `workspace:` block. With a `git-worktree` workspace on this checkout, on this host, fetching
+ * from `origin`: only the pushed branches it does not allow yet, added to `allowedRefs`. Anything else is the person's
  * own workspace and is left alone, with the reason.
  */
 export function workspacePlan(draft: unknown, repository: HostRepositoryView): WorkspacePlan {
+  const settings = repository.workspace;
+  if (!settings)
+    return { kind: "conflict", reason: repository.problem ?? "There are no workspace settings for its checkout." };
   const workspace = isRecord(draft) ? draft.workspace : undefined;
-  if (workspace === undefined || workspace === null) {
-    const value = {
-      provider: "git-worktree",
-      repo: repository.checkout,
-      ...(repository.head ? { baseBranch: repository.head.slice("refs/heads/".length) } : {}),
-      fetchRemote: "origin",
-      ...(repository.branches.length ? { allowedRefs: [...repository.branches] } : {}),
-    };
-    return { kind: "use", edits: [{ kind: "set", path: ["workspace"], value }] };
-  }
+  if (workspace === undefined || workspace === null)
+    return { kind: "use", edits: [{ kind: "set", path: ["workspace"], value: { ...settings } }] };
   const conflict = (why: string): WorkspacePlan => ({
     kind: "conflict",
     reason: `This configuration already has a workspace ${why}. Change it in the form to work in ${repository.name}.`,
   });
   if (!isRecord(workspace)) return conflict("that is not a map");
   if (workspace.provider !== "git-worktree") return conflict("that is not a git worktree workspace");
-  if (workspace.repo !== repository.checkout)
+  if (workspace.repo !== settings.repo)
     return conflict(typeof workspace.repo === "string" ? `in ${workspace.repo}` : "in another repository");
   if (workspace.hostId !== undefined && workspace.hostId !== "local") return conflict("on another host");
+  // Delegated refs are fetched from `fetchRemote`: the pushed branches are allowed only where
+  // they are fetched from what was pushed, the checkout's `origin`.
+  if (workspace.fetchRemote !== undefined && workspace.fetchRemote !== settings.fetchRemote)
+    return conflict(
+      typeof workspace.fetchRemote === "string"
+        ? `that fetches delegated refs from ${workspace.fetchRemote}, not from what was pushed`
+        : "whose fetchRemote is not a remote name",
+    );
   const allowed = workspace.allowedRefs;
   if (allowed !== undefined && !Array.isArray(allowed)) return conflict("whose allowedRefs is not a list");
-  const missing = repository.branches.filter((ref) => !allows(allowed ?? [], ref));
+  const missing = (settings.allowedRefs ?? []).filter((ref) => !allows(allowed ?? [], ref));
   if (!missing.length) return { kind: "current" };
   if (!allowed) return { kind: "allow", edits: [{ kind: "set", path: ["workspace", "allowedRefs"], value: missing }] };
   return {
