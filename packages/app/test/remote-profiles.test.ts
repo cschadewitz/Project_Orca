@@ -93,7 +93,13 @@ class FakeServer {
     ].join("\n"),
     serverLines: [],
   };
+  /** How often the setup asked which system this is (`serverOs`): a Linux one, here. */
+  probes = 0;
   run(command: readonly string[]): RemoteResult {
+    if (command.join(" ") === "cmd /c ver") {
+      this.probes += 1;
+      return { code: 127, stdout: "", serverLines: ["sh: 1: cmd: not found"] };
+    }
     this.commands.push([...command]);
     if (command[0] === "python3") return command.includes("--inspect") ? this.inspect : this.setup;
     if (this.fail) return { code: this.fail.code, stdout: "", serverLines: this.fail.lines };

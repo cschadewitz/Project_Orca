@@ -10,6 +10,13 @@
  * and reports each step as one `orca-setup: {json}` line. This module builds that program and
  * reads those lines; nothing else the server prints is shown or kept.
  *
+ * A Windows server (#1238) runs `tools/deploy/orca-server-setup.ps1` instead, in its own Windows
+ * PowerShell: Windows OpenSSH hands the command to cmd.exe, so the words are a fixed
+ * `powershell ... -Command -`, and standard input carries one bootstrap line, with the setup's
+ * arguments in it as PowerShell literals, followed by the script, which that line reads to its
+ * end and runs (`windowsProgram`). The setup downloads its own signed bundle there and reports
+ * the same lines. `discoverServer` tells the two apart by asking the server (`cmd /c ver`).
+ *
  * Nothing is installed on a key nobody confirmed (#881 review): `discoverServer` connects
  * read-only, with a first-seen key held in a scratch pin file rather than enrolled, and runs
  * the setup's `--inspect`, which changes nothing. The person then confirms exactly what it
@@ -37,6 +44,11 @@ import { parseAdvertisedHostKey } from "./tailnet.js";
 /** The two files, as shipped: `server-setup/` in a packaged app, `tools/deploy/` in a checkout. */
 export const SETUP_SCRIPT = "orca-server-setup.py";
 export const SETUP_ADAPTER = "orca-release.py";
+/** The Windows setup (#1238), shipped beside them. */
+export const WINDOWS_SETUP_SCRIPT = "orca-server-setup.ps1";
+
+/** The server's operating system, as the setup sees it: which setup runs, and in which forms. */
+export type ServerOs = "linux" | "windows";
 
 /** Setup downloads and verifies a bundle and runs its checks: minutes, not seconds. */
 export const SETUP_TIMEOUT_MS = 30 * 60_000;
@@ -55,6 +67,20 @@ const ACCOUNT = /^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$/;
 
 /** A canonical absolute directory on the server, as one remote word. */
 const SERVER_DIR = /^\/[A-Za-z0-9._/-]{0,1023}$/;
+
+/**
+ * A Windows account as the setup names it, `DOMAIN\user` (the computer's name for a local
+ * account), and its setup directory, a local `X:\...` path. Neither ever holds a quote, so
+ * each is a plain PowerShell literal in the bootstrap line.
+ */
+const WINDOWS_ACCOUNT = /^[A-Za-z0-9._-]{1,15}\\[A-Za-z0-9._ -]{1,64}$/;
+const WINDOWS_DIR = /^[A-Za-z]:\\(?:[A-Za-z0-9._ -]{1,255}\\){0,32}[A-Za-z0-9._ -]{1,255}$/;
+
+const accountForm = (os: ServerOs) => (os === "windows" ? WINDOWS_ACCOUNT : ACCOUNT);
+const rootForm = (os: ServerOs) => (os === "windows" ? WINDOWS_DIR : SERVER_DIR);
+const separator = (os: ServerOs) => (os === "windows" ? "\\" : "/");
+const isRoot = (os: ServerOs, root: string) =>
+  root.length <= 1024 && rootForm(os).test(root) && !root.split(separator(os)).includes("..");
 
 /** What the person confirmed about the server, which the setup rechecks there before any change. */
 export interface ConfirmedServer {
@@ -113,6 +139,86 @@ export function inspectCommand(version: string, port: number): string[] {
   return ["python3", "-", "--version", version, "--port", String(port), "--inspect"];
 }
 
+/** What one run of a setup sends: its command words, and the program on its standard input. */
+export interface SetupInvocation {
+  command: string[];
+  input: string;
+}
+
+/**
+ * Windows PowerShell 5.1, every Windows host's own, reading commands from standard input. Fixed
+ * words: cmd.exe (Windows OpenSSH's shell) passes them on as they are.
+ */
+export const WINDOWS_COMMAND = [
+  "powershell",
+  "-NoProfile",
+  "-NonInteractive",
+  "-ExecutionPolicy",
+  "Bypass",
+  "-Command",
+  "-",
+];
+
+/** A PowerShell single-quoted literal: nothing in it expands. */
+const literal = (value: string) => `'${value.replace(/'/g, "''")}'`;
+
+/**
+ * The Windows setup's standard input: one line that reads the rest of standard input, the
+ * script as shipped, and runs it with exactly `options`, then the script. The script's own exit
+ * code ends PowerShell. `options` are checked before they get here.
+ */
+export function windowsProgram(dir: string, options: Record<string, string | number | true>): string {
+  const script = readFileSync(join(dir, WINDOWS_SETUP_SCRIPT), "utf8");
+  // Read as the console's code page: only ASCII means the same in every one.
+  if (!/^[\t\n\r -~]*$/.test(script)) throw new Error(`${WINDOWS_SETUP_SCRIPT} is not plain ASCII`);
+  const pairs = Object.entries(options).map(
+    ([name, value]) =>
+      `${name}=${value === true ? "$true" : typeof value === "number" ? String(value) : literal(value)}`,
+  );
+  return `$o=@{${pairs.join(";")}}; & ([scriptblock]::Create([Console]::In.ReadToEnd())) @o; exit $LASTEXITCODE\n${script}`;
+}
+
+/** The read-only inspection on a server running `os`. */
+export function inspectInvocation(os: ServerOs, dir: string, version: string, port: number): SetupInvocation {
+  if (os === "linux") return { command: inspectCommand(version, port), input: setupProgram(dir) };
+  if (!VERSION.test(version)) throw new Error(`Not a release version: ${version}`);
+  return { command: WINDOWS_COMMAND, input: windowsProgram(dir, { Version: version, Port: port, Inspect: true }) };
+}
+
+/** The confirmed setup on a server running `os` (`setupCommand`, for Windows too). */
+export function setupInvocation(
+  os: ServerOs,
+  dir: string,
+  version: string,
+  port: number,
+  confirmed: ConfirmedServer,
+  bundleDir?: string,
+): SetupInvocation {
+  if (os === "linux") return { command: setupCommand(version, port, confirmed, bundleDir), input: setupProgram(dir) };
+  if (bundleDir !== undefined) throw new Error("Carrying the server bundle to a Windows server is not available yet.");
+  if (!VERSION.test(version)) throw new Error(`Not a release version: ${version}`);
+  if (!WINDOWS_ACCOUNT.test(confirmed.account)) throw new Error(`Not an account name: ${confirmed.account}`);
+  if (!isRoot("windows", confirmed.root)) throw new Error(`Not a setup directory: ${confirmed.root}`);
+  if (confirmed.current !== null && !VERSION.test(confirmed.current))
+    throw new Error(`Not a release version: ${confirmed.current}`);
+  return {
+    command: WINDOWS_COMMAND,
+    input: windowsProgram(dir, {
+      Version: version,
+      Port: port,
+      ExpectAccount: confirmed.account,
+      ExpectRoot: confirmed.root,
+      ExpectCurrent: confirmed.current ?? "none",
+    }),
+  };
+}
+
+/** Which setup a server takes: Windows answers `cmd /c ver` with its version; anything else is Linux. */
+export async function serverOs(tunnel: Pick<SetupTunnel, "exec">): Promise<ServerOs> {
+  const probe = await tunnel.exec(["cmd", "/c", "ver"], 30_000);
+  return probe.code === 0 && /^\s*Microsoft Windows \[Version \d+\.\d+\.\d+/m.test(probe.stdout) ? "windows" : "linux";
+}
+
 /** Inspection reads the server and the release directory: a minute or two at most. */
 export const INSPECT_TIMEOUT_MS = 2 * 60_000;
 
@@ -127,7 +233,7 @@ const DoneSchema = z.object({
   done: z.literal(true),
   root: z.string().max(1024),
   command: z.string().max(1024),
-  account: z.string().max(64),
+  account: z.string().max(80),
   version: z.string().regex(VERSION),
   port: z.number().int().min(1024).max(65535),
 });
@@ -160,13 +266,14 @@ export type SetupOutcome =
    */
   | { kind: "unknown"; steps: SetupStep[]; detail?: string };
 
-const InspectedSchema = z.object({
-  inspected: z.literal(true),
-  account: z.string().regex(ACCOUNT),
-  root: z.string().regex(SERVER_DIR),
-  current: z.string().regex(VERSION).nullable(),
-});
-export type Inspected = z.infer<typeof InspectedSchema>;
+const inspectedSchema = (os: ServerOs) =>
+  z.object({
+    inspected: z.literal(true),
+    account: z.string().regex(accountForm(os)),
+    root: z.string().refine((root) => isRoot(os, root)),
+    current: z.string().regex(VERSION).nullable(),
+  });
+export type Inspected = z.infer<ReturnType<typeof inspectedSchema>>;
 
 /** What a read-only inspection found: ready to confirm, or why not. */
 export type InspectOutcome =
@@ -230,8 +337,19 @@ export function readSetup(result: RemoteResult): SetupOutcome {
 }
 
 /** The managed launcher a setup in `root` installs: derived here, never taken from the server. */
-export function managedLauncher(root: string): string {
-  return `${root.replace(/\/+$/, "")}/orca`;
+export function managedLauncher(root: string, os: ServerOs = "linux"): string {
+  return os === "windows" ? `${root.replace(/\\+$/, "")}\\orca.cmd` : `${root.replace(/\/+$/, "")}/orca`;
+}
+
+/**
+ * The managed launcher as a profile's server command: on Windows written with `/`, which means
+ * the same to cmd.exe and to every shell between (`SERVER_COMMAND`). `undefined` for a path no
+ * server command can name yet (one with a space).
+ */
+export function launcherCommand(root: string, os: ServerOs = "linux"): string | undefined {
+  const launcher = managedLauncher(root, os);
+  if (os === "linux") return launcher;
+  return /^[A-Za-z]:\\[A-Za-z0-9._\\-]*$/.test(launcher) ? launcher.replace(/\\/g, "/") : undefined;
 }
 
 /**
@@ -242,6 +360,7 @@ export function managedLauncher(root: string): string {
 export function confirmedResult(
   outcome: SetupOutcome,
   expected: { version: string; port: number; account: string; root: string },
+  os: ServerOs = "linux",
 ): SetupOutcome {
   if (outcome.kind !== "ready") return outcome;
   const differs = [
@@ -249,8 +368,8 @@ export function confirmedResult(
     outcome.port !== expected.port && `port ${outcome.port}, not ${expected.port}`,
     outcome.account !== expected.account && `account ${outcome.account}, not ${expected.account}`,
     outcome.root !== expected.root && `directory ${outcome.root}, not ${expected.root}`,
-    outcome.command !== managedLauncher(expected.root) &&
-      `launcher ${outcome.command}, not ${managedLauncher(expected.root)}`,
+    outcome.command !== managedLauncher(expected.root, os) &&
+      `launcher ${outcome.command}, not ${managedLauncher(expected.root, os)}`,
   ].filter((item): item is string => typeof item === "string");
   return differs.length
     ? {
@@ -262,10 +381,22 @@ export function confirmedResult(
 }
 
 /** Read an `--inspect` run's lines. */
-export function readInspection(result: RemoteResult): InspectOutcome {
+export function readInspection(result: RemoteResult, os: ServerOs = "linux"): InspectOutcome {
   const { steps, values } = readLines(result);
-  const inspected = values.map((value) => InspectedSchema.safeParse(value)).findLast((p) => p.success)?.data;
-  if (result.code === 0 && inspected && !ended(steps)) return { kind: "inspected", steps, inspected };
+  const schema = inspectedSchema(os);
+  const inspected = values.map((value) => schema.safeParse(value)).findLast((p) => p.success)?.data;
+  if (result.code === 0 && inspected && !ended(steps)) {
+    // Refused here, before anything is confirmed or installed, rather than after the setup.
+    if (launcherCommand(inspected.root, os) === undefined) {
+      const step = {
+        step: "inspect",
+        result: "refused" as const,
+        detail: `ORCA cannot run a server from ${inspected.root} yet: its path has a space. Nothing was changed.`,
+      };
+      return { kind: "refused", steps: [...steps, step], step: step.step, detail: step.detail };
+    }
+    return { kind: "inspected", steps, inspected };
+  }
   return notReady(result, steps);
 }
 
@@ -303,6 +434,8 @@ export interface Confirmation {
   current: string | null;
   version: string;
   scope: SetupScope;
+  /** A Windows server's (#1238); a Linux one's leaves it out. */
+  os?: ServerOs;
 }
 
 /**
@@ -325,6 +458,7 @@ export function confirmationCode(confirmation: Confirmation): string {
     confirmation.current,
     confirmation.version,
     confirmation.scope,
+    ...(confirmation.os === "windows" ? ["windows"] : []),
   ]);
   const hex = createHash("sha256").update(bound).digest("hex").slice(0, 12);
   return `${hex.slice(0, 4)}-${hex.slice(4, 8)}-${hex.slice(8)}`;
@@ -359,6 +493,8 @@ export interface Discovery {
    * those before ssh connected, so ssh refused any other key. Still confirmed by the person.
    */
   advertised?: true;
+  /** Which setup the server takes, as it answered (`serverOs`): what the setup then runs. */
+  os: ServerOs;
 }
 
 /**
@@ -371,7 +507,8 @@ export async function discoverServer(options: {
   base: SshTunnelOptions;
   tunnel: (options: SshTunnelOptions) => SetupTunnel;
   version: string;
-  program: string;
+  /** The directory holding the setup files (`setupProgram`, `windowsProgram`). */
+  scripts: string;
   /**
    * Host keys the server's tailnet advertises (#1227), each `<type> <base64>`, with the alias the
    * tunnel checks them under (`orca-<profile id>`). For a server not pinned yet they are written
@@ -421,13 +558,14 @@ export async function discoverServer(options: {
     await tunnel.open();
     const keys = tunnel.pinnedKeys;
     if (keys === undefined) throw new TunnelRefusal("host-key-missing");
-    const outcome = readInspection(
-      await tunnel.exec(inspectCommand(options.version, base.profile.remotePort), INSPECT_TIMEOUT_MS, options.program),
-    );
+    const os = await serverOs(tunnel);
+    const inspect = inspectInvocation(os, options.scripts, options.version, base.profile.remotePort);
+    const outcome = readInspection(await tunnel.exec(inspect.command, INSPECT_TIMEOUT_MS, inspect.input), os);
     return {
       outcome,
       keys,
       firstUse,
+      os,
       ...(knownHostsFile !== real ? { scratch: knownHostsFile } : {}),
       ...(advertised ? { advertised: true as const } : {}),
     };

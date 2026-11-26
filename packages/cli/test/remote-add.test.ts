@@ -113,6 +113,8 @@ function fakeServer(opts: { key?: string; inspect?: RemoteResult; setup?: Remote
         return "http://127.0.0.1:1";
       },
       exec: async (command: readonly string[], _timeout?: number, input?: string) => {
+        // Which system this is (`serverOs`): a Linux one, here.
+        if (command.join(" ") === "cmd /c ver") return { code: 127, stdout: "", serverLines: [] };
         server.commands.push({ command: [...command], input, options });
         return command.includes("--inspect") ? (opts.inspect ?? INSPECTED) : (opts.setup ?? READY);
       },

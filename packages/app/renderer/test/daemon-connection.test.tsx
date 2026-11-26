@@ -394,7 +394,7 @@ it("adds a machine picked from the tailnet, and passes Tailscale SSH approval on
         state: "running" as const,
         machines: [
           machine("nBuild1", "build-1.example-tailnet.ts.net"),
-          machine("nWin", "desk.example-tailnet.ts.net", { os: "windows", hostSupported: false }),
+          machine("nMac", "desk.example-tailnet.ts.net", { os: "macOS", hostSupported: false }),
           machine("nOff", "old.example-tailnet.ts.net", { online: false }),
         ],
       },
@@ -415,9 +415,9 @@ it("adds a machine picked from the tailnet, and passes Tailscale SSH approval on
   await within(group).findByText("Machine on your tailnet");
   const select = group.querySelector("select")!;
   const option = (name: string) => [...select.options].find((o) => o.textContent?.startsWith(name))!;
-  // Setting up needs a Linux machine that is online.
+  // Setting up needs a Linux or Windows machine that is online.
   expect(option("desk.").disabled).toBe(true);
-  expect(option("desk.").textContent).toContain("not Linux");
+  expect(option("desk.").textContent).toContain("not Linux or Windows");
   expect(option("old.").disabled).toBe(true);
   const inputs = () => [...group.querySelectorAll("input")];
   fireEvent.change(inputs()[1]!, { target: { value: "casey@" } });

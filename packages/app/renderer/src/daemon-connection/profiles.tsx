@@ -101,7 +101,7 @@ export function withHost(destination: string, host: string): string {
 /** Why a machine cannot be picked, or undefined when it can. */
 export function machineUnavailable(machine: TailnetMachineView, settingUp: boolean): string | undefined {
   if (!machine.online) return "offline";
-  if (settingUp && !machine.hostSupported) return "not Linux";
+  if (settingUp && !machine.hostSupported) return "not Linux or Windows";
   return undefined;
 }
 
@@ -501,15 +501,16 @@ export function ConnectionProfiles({
         <Text style="caption" as="p">
           Saving checks the machine over SSH and shows you its host keys, the account and what will be installed. Once
           you confirm, it sets the machine up as a managed ORCA server: this version&apos;s signed server bundle and a
-          systemd user service, then signs this computer in. It refuses a machine that already has an ORCA it did not
-          install. Linux x64 with Python 3.8 or newer.
+          systemd user service (on Windows, a scheduled task), then signs this computer in. It refuses a machine that
+          already has an ORCA it did not install. Linux x64 with Python 3.8 or newer, or Windows x64 with its OpenSSH
+          Server on.
         </Text>
       )}
       {confirming && (
         <ServerConfirmation
           inspection={confirming.inspection}
           name={confirming.profile.name}
-          carries={confirming.profile.tailnet !== undefined}
+          carries={confirming.profile.tailnet !== undefined && confirming.inspection.os !== "windows"}
           disabled={disabled}
           confirm={confirmSetUp}
           cancel={() => setConfirming(undefined)}
@@ -795,8 +796,9 @@ function ServerConfirmation({
         {inspection.current
           ? `verify and repair ORCA ${inspection.current} in ${inspection.root}`
           : `install ORCA ${inspection.version} from its signed server bundle in ${inspection.root}`}
-        , enable and start its systemd user service (with lingering, so it runs without a login), then sign this
-        computer in.
+        {inspection.os === "windows"
+          ? ", register and start its scheduled task (\\ORCA\\orca-server, so it runs without a login), then sign this computer in."
+          : ", enable and start its systemd user service (with lingering, so it runs without a login), then sign this computer in."}
       </Text>
       {carries && (
         <ConfigField

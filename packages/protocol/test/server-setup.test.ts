@@ -2,17 +2,32 @@
  * The client side of one-step server setup (#881): what the person is shown and confirms is
  * exactly what ssh would print, and the confirmation is bound to all of it.
  */
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { ConnectionProfileSchema } from "../src/remote-access.js";
+import { ConnectionProfileSchema, type RemoteResult } from "../src/remote-access.js";
 import {
   confirmationCode,
   confirmedResult,
+  discoverServer,
   readSetup,
   inspectCommand,
+  inspectInvocation,
   keyFingerprints,
+  launcherCommand,
+  managedLauncher,
   readInspection,
+  serverOs,
   setupCommand,
+  setupInvocation,
+  WINDOWS_COMMAND,
+  WINDOWS_SETUP_SCRIPT,
 } from "../src/server-setup.js";
+
+/** The shipped setup files. */
+const DEPLOY = fileURLToPath(new URL("../../../tools/deploy/", import.meta.url));
 
 const KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMGC5YgJWg846Er1M8f6jE+18UxKVqDbV+HNuA7JZB+l";
 
@@ -51,6 +66,7 @@ describe("server setup confirmation (#881)", () => {
       { ...base, version: "0.8.1" },
       { ...base, scope: "install-and-sign-in" as const },
       { ...base, revision: 1 },
+      { ...base, os: "windows" as const },
     ])
       expect(confirmationCode(changed)).not.toBe(code);
   });
@@ -156,5 +172,158 @@ describe("server setup confirmation (#881)", () => {
       { command: `${root}/../orca` },
     ])
       expect(confirmedResult({ ...ready, ...changed }, expected).kind).toBe("mismatch");
+  });
+});
+
+describe("a Windows server (#1238)", () => {
+  const account = "DESK-1\\casey";
+  const root = "C:\\Users\\casey\\AppData\\Local\\orca-server";
+  const line = (value: unknown) => `orca-setup: ${JSON.stringify(value)}`;
+  const result = (stdout: string, code = 0): RemoteResult => ({ code, stdout, serverLines: [] });
+
+  it("is told apart by its own answer to cmd /c ver", async () => {
+    const answering = (answer: RemoteResult) => ({ exec: async () => answer });
+    const ver = "\r\nMicrosoft Windows [Version 10.0.26100.4349]\r\n";
+    expect(await serverOs(answering(result(ver)))).toBe("windows");
+    expect(await serverOs(answering(result("", 127)))).toBe("linux");
+    expect(await serverOs(answering(result(ver, 1)))).toBe("linux");
+    expect(await serverOs(answering(result("Microsoft Windows, said a shell script")))).toBe("linux");
+  });
+
+  it("sends fixed PowerShell words, and the setup on standard input behind one line carrying its arguments", () => {
+    const script = readFileSync(join(DEPLOY, WINDOWS_SETUP_SCRIPT), "utf8");
+    const inspect = inspectInvocation("windows", DEPLOY, "0.9.0", 6722);
+    expect(inspect.command).toEqual(WINDOWS_COMMAND);
+    expect(inspect.command).toEqual([
+      "powershell",
+      "-NoProfile",
+      "-NonInteractive",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-Command",
+      "-",
+    ]);
+    expect(inspect.input).toBe(
+      `$o=@{Version='0.9.0';Port=6722;Inspect=$true}; & ([scriptblock]::Create([Console]::In.ReadToEnd())) @o; exit $LASTEXITCODE\n${script}`,
+    );
+    const setup = setupInvocation("windows", DEPLOY, "0.9.0", 6723, { account, root, current: null });
+    expect(setup.command).toEqual(WINDOWS_COMMAND);
+    expect(setup.input.split("\n")[0]).toBe(
+      `$o=@{Version='0.9.0';Port=6723;ExpectAccount='${account}';ExpectRoot='${root}';ExpectCurrent='none'}; & ([scriptblock]::Create([Console]::In.ReadToEnd())) @o; exit $LASTEXITCODE`,
+    );
+    expect(setupInvocation("windows", DEPLOY, "0.9.0", 6722, { account, root, current: "0.8.0" }).input).toContain(
+      "ExpectCurrent='0.8.0'",
+    );
+    // Linux is unchanged.
+    expect(inspectInvocation("linux", DEPLOY, "0.9.0", 6722).command).toEqual(inspectCommand("0.9.0", 6722));
+  });
+
+  it("refuses anything that is not a Windows account, setup directory or release, and a carried bundle", () => {
+    const run = (confirmed: { account: string; root: string; current: string | null }, bundle?: string) =>
+      setupInvocation("windows", DEPLOY, "0.9.0", 6722, confirmed, bundle);
+    for (const bad of ["casey", "DESK-1\\o'brien", "DESK-1\\a\\b", "DESK-1\\$(x)"])
+      expect(() => run({ account: bad, root, current: null })).toThrow(/Not an account name/);
+    for (const bad of [
+      "/home/casey",
+      "C:\\Users\\..\\Public",
+      "C:\\Users\\o'brien",
+      "\\\\host\\share\\orca",
+      "C:/Users/casey",
+    ])
+      expect(() => run({ account, root: bad, current: null })).toThrow(/Not a setup directory/);
+    expect(() => run({ account, root, current: "latest" })).toThrow(/Not a release version/);
+    expect(() => run({ account, root, current: null }, "C:/Temp/bundle")).toThrow(/not available yet/);
+    expect(() => inspectInvocation("windows", DEPLOY, "0.9", 6722)).toThrow(/Not a release version/);
+  });
+
+  it("sends only a plain ASCII script, which reads the same in every console code page", () => {
+    const dir = mkdtempSync(join(tmpdir(), "orca-windows-setup-"));
+    try {
+      writeFileSync(join(dir, WINDOWS_SETUP_SCRIPT), "Write-Host 'caf\u00e9'\n");
+      expect(() => inspectInvocation("windows", dir, "0.9.0", 6722)).toThrow(/plain ASCII/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("reads what a Windows inspection found, in Windows forms only", () => {
+    const found = { inspected: true, account, root, current: null };
+    expect(readInspection(result(line(found)), "windows")).toMatchObject({ kind: "inspected", inspected: found });
+    // A Linux inspection does not pass as a Windows one, nor the other way round.
+    expect(readInspection(result(line(found)), "linux").kind).toBe("unknown");
+    expect(
+      readInspection(
+        result(line({ ...found, account: "casey", root: "/home/casey/.local/share/orca-server" })),
+        "windows",
+      ).kind,
+    ).toBe("unknown");
+  });
+
+  it("refuses at inspection a directory no server command can name, before anything is installed", () => {
+    const spaced = "C:\\Users\\Casey S\\AppData\\Local\\orca-server";
+    const outcome = readInspection(
+      result(line({ inspected: true, account: "DESK-1\\Casey S", root: spaced, current: null })),
+      "windows",
+    );
+    expect(outcome).toMatchObject({ kind: "refused", step: "inspect" });
+    expect(outcome.kind === "refused" && outcome.detail).toMatch(/has a space\. Nothing was changed\./);
+  });
+
+  it("derives the launcher from the confirmed directory, and names it with / as a server command", () => {
+    expect(managedLauncher(root, "windows")).toBe(`${root}\\orca.cmd`);
+    expect(launcherCommand(root, "windows")).toBe("C:/Users/casey/AppData/Local/orca-server/orca.cmd");
+    expect(launcherCommand("/home/casey/.local/share/orca-server")).toBe("/home/casey/.local/share/orca-server/orca");
+    const ready = readSetup(
+      result(
+        line({
+          done: true,
+          root,
+          command: `${root}\\orca.cmd`,
+          account,
+          version: "0.9.0",
+          port: 6722,
+          platform: "win-x64",
+        }),
+      ),
+    );
+    expect(ready.kind).toBe("ready");
+    const expected = { version: "0.9.0", port: 6722, account, root };
+    expect(confirmedResult(ready, expected, "windows")).toBe(ready);
+    // The Linux launcher for that directory is not what was set up.
+    expect(confirmedResult(ready, expected).kind).toBe("mismatch");
+  });
+
+  it("discovers a Windows server: asks which system it is, then inspects it with the Windows setup", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "orca-discover-windows-"));
+    const pins = join(dir, "pins");
+    writeFileSync(pins, `orca-lab ${KEY}\n`);
+    const ran: { command: readonly string[]; input?: string }[] = [];
+    try {
+      const discovery = await discoverServer({
+        base: {
+          profile: ConnectionProfileSchema.parse({ id: "lab", name: "Lab", destination: "casey@desk" }),
+          knownHostsFile: pins,
+        },
+        tunnel: () => ({
+          open: async () => "http://127.0.0.1:1",
+          exec: async (command, _timeout, input) => {
+            ran.push({ command, ...(input !== undefined ? { input } : {}) });
+            return command[0] === "cmd"
+              ? result("Microsoft Windows [Version 10.0.26100.4349]")
+              : result(line({ inspected: true, account, root, current: null }));
+          },
+          close: async () => {},
+          pinnedKeys: JSON.stringify([KEY, null]),
+        }),
+        version: "0.9.0",
+        scripts: DEPLOY,
+      });
+      expect(discovery.os).toBe("windows");
+      expect(discovery.outcome.kind).toBe("inspected");
+      expect(ran.map((r) => r.command)).toEqual([["cmd", "/c", "ver"], WINDOWS_COMMAND]);
+      expect(ran[1]!.input).toBe(inspectInvocation("windows", DEPLOY, "0.9.0", 6722).input);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
