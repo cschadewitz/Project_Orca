@@ -21,6 +21,7 @@ import type {
   DaemonTargetSnapshot,
   FleetSnapshot,
   HostAgentView,
+  HostRepositoryView,
   LoginApprovalView,
   ProfileRemoval,
   ProfileResult,
@@ -287,6 +288,8 @@ const bridge: OrcaBridge = {
         ? {
             hostAgents: (id: string) =>
               ipcRenderer.invoke("orca:profiles.hostAgents", id) as Promise<ProfileResult<HostAgentView[]>>,
+            hostRepositories: (id: string) =>
+              ipcRenderer.invoke("orca:profiles.hostRepositories", id) as Promise<ProfileResult<HostRepositoryView[]>>,
             installHostAgent: (id: string, agent: string) =>
               ipcRenderer.invoke("orca:profiles.installHostAgent", id, agent) as Promise<
                 ProfileResult<{ settings: string }>

@@ -1558,6 +1558,9 @@ const AgentIdSchema = z.string().regex(/^[a-z][a-z0-9-]{0,31}$/);
 ipcMain.handle("orca:profiles.hostAgents", (_event, id: unknown) =>
   profileResult(() => remoteProfiles.hostAgents(ProfileIdSchema.parse(id), serverSetupScripts())),
 );
+ipcMain.handle("orca:profiles.hostRepositories", (_event, id: unknown) =>
+  profileResult(() => remoteProfiles.hostRepositories(ProfileIdSchema.parse(id))),
+);
 ipcMain.handle("orca:profiles.installHostAgent", (_event, id: unknown, agent: unknown) =>
   profileResult(() =>
     remoteProfiles.installHostAgent(ProfileIdSchema.parse(id), AgentIdSchema.parse(agent), serverSetupScripts()),

@@ -155,6 +155,17 @@ export interface LoginApprovalView {
   host: string;
 }
 
+/** A repository a push put on a managed server (#1235), with the checkout a daemon there works in. */
+export interface HostRepositoryView {
+  name: string;
+  /** The checkout: the value for `workspace.repo`. */
+  checkout: string;
+  /** Its branches there (`refs/heads/…`). */
+  branches: string[];
+  /** The branch the last push of a branch named. */
+  head?: string;
+}
+
 /** One agent ORCA can put on a managed server (#1236), and its state there. */
 export interface HostAgentView {
   agent: string;
@@ -225,6 +236,8 @@ export interface RemoteProfilesBridge {
   openLoginApproval?(this: void, id: string): Promise<ProfileResult<null>>;
   /** The agents on the profile's managed server (#1236). Absent unless the `tailnet-hosts` flag is on. */
   hostAgents?(this: void, id: string): Promise<ProfileResult<HostAgentView[]>>;
+  /** The repositories pushes put on the profile's managed server (#1235). Absent unless `tailnet-hosts` is on. */
+  hostRepositories?(this: void, id: string): Promise<ProfileResult<HostRepositoryView[]>>;
   /** Install the agent's pinned packages there from this computer; returns the server config that runs it. */
   installHostAgent?(this: void, id: string, agent: string): Promise<ProfileResult<{ settings: string }>>;
   /** Run the agent's own device-code sign-in there; resolves when it is signed in. */

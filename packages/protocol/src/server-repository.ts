@@ -31,6 +31,8 @@ const REF = /^refs\/(?:heads|tags)\/[A-Za-z0-9._/-]{1,200}$/;
 const ROOT = /^\/[A-Za-z0-9._/-]{1,400}$/;
 const GIT_TIMEOUT_MS = 10 * 60_000;
 const BUNDLE_LIMIT = 4 * 1024 ** 3;
+/** Each command of a listing: reading, never fetching. */
+const LIST_TIMEOUT_MS = 60_000;
 
 /** A git command here, in a directory: exit code and output. A test passes its own. */
 export type LocalGit = (
@@ -216,17 +218,19 @@ export async function pushRepository(
   return { name: options.name, hub, checkout, refs: [...options.refs], checkoutState };
 }
 
-/** Refuse unless `hub` is itself a bare repository, where it was made, with nothing redirecting Git. */
-async function assertHub(transport: CourierTransport, hub: string): Promise<void> {
+/** Whether `hub` is itself a bare repository, where it was made, with nothing redirecting Git. */
+async function isHub(transport: CourierTransport, hub: string): Promise<boolean> {
   const resolved = await run(transport, ["realpath", "-e", "--", hub]);
   const gitDir = await run(transport, ["git", "-C", hub, "rev-parse", "--absolute-git-dir"]);
   const bare = await run(transport, ["git", "-C", hub, "rev-parse", "--is-bare-repository"]);
-  if (
-    resolved.stdout.trim() !== hub ||
-    gitDir.code !== 0 ||
-    gitDir.stdout.trim() !== hub ||
-    bare.stdout.trim() !== "true"
-  )
+  return (
+    resolved.stdout.trim() === hub && gitDir.code === 0 && gitDir.stdout.trim() === hub && bare.stdout.trim() === "true"
+  );
+}
+
+/** Refuse unless `hub` is itself a bare repository, where it was made, with nothing redirecting Git. */
+async function assertHub(transport: CourierTransport, hub: string): Promise<void> {
+  if (!(await isHub(transport, hub)))
     throw new RepositoryRefused(
       `${hub} on the server is not the bare repository a push made there. Nothing was changed.`,
     );
@@ -248,15 +252,9 @@ async function updateCheckout(
     const cloned = await run(transport, ["git", "clone", "-q", "--no-hardlinks", "--", hub, checkout]);
     return cloned.code === 0 ? { kind: "created" } : kept("it could not be cloned", false);
   }
-  // `git -C` finds a repository above the path it is given: Git must be working on exactly this
-  // directory, which is where it was made (no link out of the server root), as its worktree root.
-  const resolved = await run(transport, ["realpath", "-e", "--", checkout]);
-  const top = await run(transport, ["git", "-C", checkout, "rev-parse", "--show-toplevel"]);
-  if (resolved.code !== 0 || resolved.stdout.trim() !== checkout || top.code !== 0 || top.stdout.trim() !== checkout)
-    return kept(`it is not a checkout of its own at ${checkout}, so it was not touched`, false);
-  const origin = await run(transport, ["git", "-C", checkout, "remote", "get-url", "origin"]);
-  if (origin.code !== 0 || origin.stdout.trim() !== hub)
-    return kept(`it is not a checkout of ${hub}, so it was not touched`, false);
+  const own = await checkoutOf(transport, checkout, hub);
+  if (own === "elsewhere") return kept(`it is not a checkout of its own at ${checkout}, so it was not touched`, false);
+  if (own === "other") return kept(`it is not a checkout of ${hub}, so it was not touched`, false);
   if (!branch) return kept("only tags were pushed", true);
   const short = branch.slice("refs/heads/".length);
   const current = await run(transport, ["git", "-C", checkout, "symbolic-ref", "-q", "HEAD"]);
@@ -270,6 +268,83 @@ async function updateCheckout(
   if (fetched.code !== 0) return kept("it could not fetch from the server's repository", true);
   const moved = await run(transport, ["git", "-C", checkout, "merge", "-q", "--ff-only", commit]);
   return moved.code === 0 ? { kind: "updated" } : kept("it has changes of its own, so it was not moved forward", true);
+}
+
+/**
+ * Whether `checkout` is a checkout of `hub`: `elsewhere` when Git is not working on exactly that
+ * directory as its worktree root (`git -C` finds a repository above the path it is given, and a
+ * link would lead out of the server root), `other` when its `origin` is not the hub.
+ */
+async function checkoutOf(
+  transport: CourierTransport,
+  checkout: string,
+  hub: string,
+): Promise<"yes" | "elsewhere" | "other"> {
+  const resolved = await run(transport, ["realpath", "-e", "--", checkout]);
+  const top = await run(transport, ["git", "-C", checkout, "rev-parse", "--show-toplevel"]);
+  if (resolved.code !== 0 || resolved.stdout.trim() !== checkout || top.code !== 0 || top.stdout.trim() !== checkout)
+    return "elsewhere";
+  const origin = await run(transport, ["git", "-C", checkout, "remote", "get-url", "origin"]);
+  return origin.code === 0 && origin.stdout.trim() === hub ? "yes" : "other";
+}
+
+/** A repository a push put on the server, with a checkout of it a daemon can work in. */
+export interface HostRepository {
+  name: string;
+  /** The checkout: the value for `workspace.repo`. */
+  checkout: string;
+  /** The branches the server has, from what was pushed. */
+  branches: string[];
+  /** The branch the last push of a branch named, when there is one. */
+  head?: string;
+}
+
+/** The most repositories, and branches of one, that are listed. */
+const LIST_LIMIT = 50;
+
+/**
+ * The repositories pushes put on this server (`repos/<name>.git`) that have a checkout of their
+ * own beside them (`checkouts/<name>`), as `pushRepository` leaves them. Anything else under the
+ * server root, or a directory that is a link out of it, is not listed. Nothing is changed.
+ */
+export async function hostRepositories(transport: CourierTransport): Promise<HostRepository[]> {
+  const located = await run(transport, ["realpath", "-e", "--", SERVER_ROOT_FROM_HOME], LIST_TIMEOUT_MS);
+  const root = located.stdout.trim();
+  if (located.code !== 0 || !ROOT.test(root) || root.split("/").includes(".."))
+    throw new RepositoryRefused("This machine is not an ORCA server yet: set it up first.");
+  for (const parent of [`${root}/repos`, `${root}/checkouts`]) {
+    const resolved = await run(transport, ["realpath", "-e", "--", parent], LIST_TIMEOUT_MS);
+    if (resolved.code !== 0 || resolved.stdout.trim() !== parent) return [];
+  }
+  const listed = await run(transport, ["ls", "-1", "-A", "--", `${root}/repos`], LIST_TIMEOUT_MS);
+  if (listed.code !== 0) return [];
+  const names = listed.stdout
+    .split("\n")
+    .filter((entry) => entry.endsWith(".git"))
+    .map((entry) => entry.slice(0, -".git".length))
+    .filter((name) => NAME.test(name) && !name.includes(".."))
+    .sort()
+    .slice(0, LIST_LIMIT);
+  const found: HostRepository[] = [];
+  for (const name of names) {
+    const { hub, checkout } = hostRepositoryPaths(root, name);
+    if (!(await isHub(transport, hub)) || (await checkoutOf(transport, checkout, hub)) !== "yes") continue;
+    const refs = await run(
+      transport,
+      ["git", "-C", hub, "for-each-ref", "--format=%(refname)", "refs/heads/"],
+      LIST_TIMEOUT_MS,
+    );
+    if (refs.code !== 0) continue;
+    const branches = refs.stdout
+      .split("\n")
+      .filter((ref) => REF.test(ref) && ref.startsWith("refs/heads/") && !ref.split("/").includes(".."))
+      .slice(0, LIST_LIMIT);
+    const head = (
+      await run(transport, ["git", "-C", hub, "symbolic-ref", "-q", "HEAD"], LIST_TIMEOUT_MS)
+    ).stdout.trim();
+    found.push({ name, checkout, branches, ...(branches.includes(head) ? { head } : {}) });
+  }
+  return found;
 }
 
 /** Whether the checkout is one this push's repository backs, so the daemon can work there. */

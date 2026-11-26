@@ -276,9 +276,11 @@ left as it is, and so is anything at that path whose `origin` is another reposit
 needs `git`. When there is a checkout of the pushed repository, the command prints the
 `workspace:` settings (`provider: git-worktree`, `repo:` the checkout,
 `allowedRefs:` the pushed branches) for the server's `orca.config.yaml`, so delegated steps can
-name a pushed `gitRef`. To set them from this computer, connect the app to the machine's profile
-and use Config > Raw: Validate and review, Save reviewed changes, then Apply saved
-configuration.
+name a pushed `gitRef`. To set them from this computer, connect the app to the machine's profile:
+Config lists the repositories pushed there, and **Use as workspace** puts those settings into
+the draft (with `baseBranch` the branch last pushed). If the workspace is already that checkout,
+**Allow pushed branches** only adds the pushed branches it does not allow yet; any other workspace
+is left alone and Config says why. Review, save and apply the draft as with any other change.
 
 **Installing and signing in agents there** (#1236). The host needs no npm, no access to the npm
 registry and no terminal:
