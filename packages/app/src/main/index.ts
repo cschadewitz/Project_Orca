@@ -37,6 +37,7 @@ import type { LaunchReview, PreflightParams } from "../configuration-launch-cont
 import { RunsAdmitResultSchema, ServerPathSchema } from "@orca/protocol";
 import { ConnectionTarget, ConnectionRefusal, connectionFailure, callInConnection } from "./connection-target.js";
 import { RemoteProfiles } from "./remote-profiles.js";
+import { AgentSignIns } from "./agent-sign-ins.js";
 import { ServerUpdater } from "./server-update.js";
 import { isUpdateAction, prepareDrafts } from "./update-ipc.js";
 import { Updates, type UpdateGuards } from "./updates.js";
@@ -81,7 +82,6 @@ import { callWorkflowDraft } from "../client/workflow-draft-client.js";
 import {
   daemonEndpoint,
   type DaemonConnectionRequest,
-  type AgentSignInView,
   type LoginApprovalView,
   type ProfileResult,
   type TailnetMachinesView,
@@ -218,8 +218,8 @@ const preferences = new PreferencesFile(join(app.getPath("userData"), "preferenc
 /** Saved SSH profiles, their pinned host keys and sealed credentials (#874). Main only. */
 /** The last Tailscale SSH approval page each profile was sent to (#1228), already checked. */
 const loginApprovals = new Map<string, string>();
-/** The last sign-in page each profile's agent printed (#1236), already checked against its origin. */
-const agentSignIns = new Map<string, string>();
+/** Agent sign-ins on managed servers (#1236), each bound to the window that started it. */
+const agentSignIns = new AgentSignIns();
 const remoteProfiles = new RemoteProfiles({
   dir: join(app.getPath("userData"), "remote-daemons"),
   cipher: safeStorage,
@@ -1563,36 +1563,21 @@ ipcMain.handle("orca:profiles.installHostAgent", (_event, id: unknown, agent: un
     remoteProfiles.installHostAgent(ProfileIdSchema.parse(id), AgentIdSchema.parse(agent), serverSetupScripts()),
   ),
 );
-ipcMain.handle("orca:profiles.signInHostAgent", (_event, id: unknown, agent: unknown) =>
+ipcMain.handle("orca:profiles.signInHostAgent", (event, id: unknown, agent: unknown) =>
   profileResult(async () => {
     const profileId = ProfileIdSchema.parse(id);
     const agentId = AgentIdSchema.parse(agent);
-    const key = `${profileId} ${agentId}`;
-    try {
-      // The page is kept here and opened only on the person's click; the renderer learns its
-      // host and the code to enter, never the URL.
-      await remoteProfiles.signInHostAgent(profileId, agentId, serverSetupScripts(), (prompt) => {
-        if (prompt.url) agentSignIns.set(key, prompt.url);
-        const view: AgentSignInView = {
-          profileId,
-          agent: agentId,
-          ...(prompt.url ? { host: new URL(prompt.url).host } : {}),
-          ...(prompt.code ? { code: prompt.code } : {}),
-        };
-        for (const win of BrowserWindow.getAllWindows())
-          if (!win.isDestroyed()) win.webContents.send("orca:profiles.agentSignIn", view);
-      });
-      return null;
-    } finally {
-      agentSignIns.delete(key);
-    }
+    // The page is kept in main and opened only on a click in the window that asked; that window
+    // learns its host and the code to enter, never the URL, and no other window learns anything.
+    await agentSignIns.run(event.sender, profileId, agentId, (onPrompt, signal) =>
+      remoteProfiles.signInHostAgent(profileId, agentId, serverSetupScripts(), onPrompt, signal),
+    );
+    return null;
   }),
 );
-ipcMain.handle("orca:profiles.openAgentSignIn", (_event, id: unknown, agent: unknown) =>
+ipcMain.handle("orca:profiles.openAgentSignIn", (event, id: unknown, agent: unknown) =>
   profileResult(async () => {
-    const url = agentSignIns.get(`${ProfileIdSchema.parse(id)} ${AgentIdSchema.parse(agent)}`);
-    if (!url) throw new ConnectionRefusal("That agent's sign-in is not waiting for you.");
-    await shell.openExternal(url);
+    await shell.openExternal(agentSignIns.url(event.sender, ProfileIdSchema.parse(id), AgentIdSchema.parse(agent)));
     return null;
   }),
 );
@@ -2197,6 +2182,7 @@ app.on("will-quit", (event) => {
     () => false,
   );
   // Tunnels close after the workspace has let go of its client; nothing waits on them.
+  agentSignIns.close();
   void Promise.allSettled([workspaceClosed, fleet.close()]).finally(() =>
     remoteProfiles.close().catch(() => undefined),
   );
