@@ -10,12 +10,13 @@
 # or from a `Release: vX.Y.Z` line in the milestone description, which overrides them —
 # that is how a release candidate or a deliberate 1.0.0 is expressed. See docs/RELEASING.md.
 #
-# Where it is cut from (docs/RELEASING.md, "Release lines"): a new minor or major (`X.Y.0`
-# and its candidates) from `main`; a patch (`X.Y.Z`, Z > 0) from its release line branch
-# `release/X.Y`, so work merged to `main` for the next minor never ships in it. The line is
-# named by the pin, else by a milestone title that is a version (`0.7.1`), else by the next
-# version of `main`. A missing line is created from the newest `vX.Y.*` final tag. A patch
-# milestone holding a `release:minor` or `release:major` issue is refused.
+# Where it is cut from (docs/RELEASING.md, "Release lines"): every release of `X.Y` from its
+# release line branch `release/X.Y`, so work merged to `main` for the next minor never ships in
+# it. The line is named by the pin, else by a milestone title that is a version (`0.9.0`,
+# `0.8.1`), else by the next version of `main`. A missing line is created: for a new minor or
+# major (`X.Y.0` or its candidate) from `main`'s head, which is the cut that lets `main` take the
+# next minor's work at once; for a patch from the newest `vX.Y.*` final tag. A patch milestone
+# holding a `release:minor` or `release:major` issue is refused.
 #
 # With the variable ORCA_RELEASE_APP_ID and the secret ORCA_RELEASE_APP_PRIVATE_KEY set in the
 # main-only `release-bot` environment (a GitHub App with contents and pull-requests write), the
@@ -121,7 +122,8 @@ jobs:
             target=$(node "$tools/release.js" version --bump "$bump")
           fi
           base=$(node "$tools/release.js" line "$target")
-          if [ "$base" != main ]; then
+          line="${base#release/}"
+          if [ "$(node -p 'Number(process.argv[1].split(/[.-]/)[2])' "$target")" != 0 ]; then
             # Patch content is the line's: no issue meant for the next minor or major.
             bumps=$(jq -r '[.[] | select(.labels | any(. == "release:minor" or . == "release:major"))
               | "#\(.number) \(.title)"] | join(", ")' <<<"$issues")
@@ -129,24 +131,30 @@ jobs:
               echo "::error::milestone #$NUMBER ($title) is a $base patch but holds minor/major work: $bumps; move it to the next minor's milestone"
               exit 1
             fi
-            if ! git rev-parse -q --verify "refs/remotes/origin/$base" >/dev/null; then
-              line="${base#release/}"
+          fi
+          if ! git rev-parse -q --verify "refs/remotes/origin/$base" >/dev/null; then
+            if [ "$(node -p 'Number(process.argv[1].split(/[.-]/)[2])' "$target")" = 0 ]; then
+              # The cut: a new minor's line starts at main's head, and main is free for the
+              # next minor from here on.
+              from=main
+            else
               from=$(git tag -l "v$line.*" --sort=-v:refname | grep -E "^v$line\.[0-9]+$" | head -n 1 || true)
               if [ -z "$from" ]; then
                 echo "::error::$base does not exist and no v$line.* final is tagged to start it from"
                 exit 1
               fi
-              git push origin "$(git rev-parse "$from^{commit}"):refs/heads/$base"
-              git fetch -q origin "$base"
-              echo "Created \`$base\` from \`$from\`." >> "$GITHUB_STEP_SUMMARY"
             fi
-            # Only a protected line is a release source (tools/release-lane.js).
-            node "$tools/release-lane.js" verify "$(git rev-parse "refs/remotes/origin/$base")" "$target" >/dev/null
-            git checkout -q --detach "refs/remotes/origin/$base"
+            cut=$(git rev-parse "refs/remotes/origin/$from^{commit}" 2>/dev/null || git rev-parse "$from^{commit}")
+            git push origin "$cut:refs/heads/$base"
+            git fetch -q origin "$base"
+            echo "Created \`$base\` from \`$from\` ($cut)." >> "$GITHUB_STEP_SUMMARY"
+            echo "::notice title=release line cut::$base created from $from at $cut"
           fi
+          # Only a protected line is a release source (tools/release-lane.js).
+          node "$tools/release-lane.js" verify "$(git rev-parse "refs/remotes/origin/$base")" "$target" >/dev/null
+          git checkout -q --detach "refs/remotes/origin/$base"
           version=$(node "$tools/release.js" version --bump "$bump" ${pin:+--pin "$pin"})
-          if [ "$(node "$tools/release.js" line "$version")" != "$base" ] ||
-            { [ "$base" != main ] && [ "$version" != "$target" ]; }; then
+          if [ "$(node "$tools/release.js" line "$version")" != "$base" ] || [ "$version" != "$target" ]; then
             echo "::error::milestone #$NUMBER ($title) names $target but its labels give v$version from $base; fix the labels or pin the version"
             exit 1
           fi

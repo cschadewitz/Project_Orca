@@ -18,6 +18,7 @@ import {
   receiptMessage,
   LINE_CHECKS,
   guardRunProblems,
+  isNewLine,
   laneOf,
   protectionProblems,
   releaseDiffProblems,
@@ -37,18 +38,16 @@ afterEach(() => rmSync(work, { recursive: true, force: true }));
 
 describe("the branch a version is cut from", () => {
   it.each([
-    ["0.8.0", "main"],
-    ["0.8.0-rc.1", "main"],
-    ["1.0.0", "main"],
+    ["0.8.0", "release/0.8"],
+    ["0.9.0-rc.1", "release/0.9"],
+    ["1.0.0", "release/1.0"],
     ["0.7.1", "release/0.7"],
     ["0.7.12", "release/0.7"],
     ["0.7.1-rc.2", "release/0.7"],
+    ["0.8.1", "release/0.8"],
+    ["1.2.3", "release/1.2"],
   ])("%s comes from %s", (version, branch) => {
     expect(release(work, "line", version).trim()).toBe(branch);
-  });
-
-  it.each(["0.8.1", "1.2.3", "0.9.1-rc.1"])("refuses %s: line releases stop at 0.7 until the server bundle is", (v) => {
-    expect(() => release(work, "line", v)).toThrow(/built only from main/);
   });
 
   it("refuses something that is not a version", () => {
@@ -88,6 +87,25 @@ describe("recording a line release on main", () => {
     expect(read()).toBe(before);
     write("line.md", header + section("0.7.1", "something else"));
     expect(() => release(work, "sync", "0.7.1", "line.md")).toThrow(/different 0\.7\.1 section/);
+  });
+
+  it("raises main's version to a new minor or its candidate released from its line, never for a patch", () => {
+    const version = () => JSON.parse(readFileSync(join(work, "package.json"), "utf8")).version;
+    write("package.json", `${JSON.stringify({ name: "orca", version: "0.8.0" }, null, 2)}\n`);
+    write("CHANGELOG.md", header + section("0.8.0", "minor"));
+    write("line.md", header + section("0.8.1", "patch") + "\n" + section("0.8.0", "minor"));
+    release(work, "sync", "0.8.1", "line.md");
+    expect(version()).toBe("0.8.0");
+    write("line.md", header + section("0.9.0-rc.1", "candidate") + "\n" + section("0.8.0", "minor"));
+    release(work, "sync", "0.9.0-rc.1", "line.md");
+    expect(version()).toBe("0.9.0-rc.1");
+    write("line.md", header + section("0.9.0", "final") + "\n" + section("0.8.0", "minor"));
+    release(work, "sync", "0.9.0", "line.md");
+    expect(version()).toBe("0.9.0");
+    // An older minor's record, after main has moved on, leaves the version alone.
+    write("line.md", header + section("0.8.0", "minor"));
+    release(work, "sync", "0.8.0", "line.md");
+    expect(version()).toBe("0.9.0");
   });
 
   it("refuses a source without the section", () => {
@@ -156,7 +174,7 @@ describe("the release line guard", () => {
     ["with the label on another head", releasePr({ head: "fix-crash" }), /head must be release\/vX\.Y\.Z/],
     ["from a fork", releasePr({ sameRepository: false }), /from this repository/],
     ["for another line", releasePr({ head: "release/v0.6.1" }), /cut from release\/0\.6, not release\/0\.7/],
-    ["for a minor", releasePr({ head: "release/v0.7.0" }), /cut from main, not release\/0\.7/],
+    ["for the next minor", releasePr({ head: "release/v0.8.0" }), /cut from release\/0\.8, not release\/0\.7/],
     [
       "that changes code",
       releasePr({
@@ -217,6 +235,56 @@ describe("the release line guard", () => {
     expect(problems.join("\n")).toMatch(message);
   });
 
+  describe("while the line stabilizes its .0 (no vX.Y.0 tag yet)", () => {
+    const stabilizing = { stabilizing: true };
+    const next = (over = {}) => pr({ base: "release/0.9", ...over });
+
+    it("reads the line's .0 milestone as the line's only then", () => {
+      expect(inLine("0.9.0", { major: 0, minor: 9 }, { zero: true })).toBe(true);
+      expect(inLine("0.9.0", { major: 0, minor: 9 })).toBe(false);
+      expect(inLine("0.10.0", { major: 0, minor: 9 }, { zero: true })).toBe(false);
+    });
+
+    it("passes a fix whose issue is in the .0 milestone, with the minor bump it ships with", () => {
+      expect(checkLinePullRequest(next(), { 10: issue("0.9.0", ["release:minor"]) }, stabilizing)).toEqual([]);
+      expect(
+        checkLinePullRequest(
+          next({ milestone: "0.9.0", labels: ["release:minor"] }),
+          { 10: issue("0.9.0") },
+          stabilizing,
+        ),
+      ).toEqual([]);
+    });
+
+    it("passes the release preparation of the .0 or its candidate", () => {
+      const candidate = {
+        ...preparation,
+        basePackage: { ...preparation.basePackage, version: "0.8.0" },
+        headPackage: { ...preparation.headPackage, version: "0.9.0-rc.1" },
+      };
+      expect(
+        checkLinePullRequest(
+          next({ ...releasePr({ head: "release/v0.9.0-rc.1", release: candidate }), base: "release/0.9" }),
+          {},
+          stabilizing,
+        ),
+      ).toEqual([]);
+    });
+
+    it.each([
+      ["the next minor's issue", { 10: issue("0.10.0", ["release:minor"]) }, /milestone "0\.10\.0"/],
+      ["a minor issue outside the .0 milestone", { 10: issue("0.9.1", ["release:minor"]) }, /labelled release:minor/],
+    ])("still refuses %s", (_, issues, message) => {
+      expect(checkLinePullRequest(next(), issues, stabilizing).join("\n")).toMatch(message);
+    });
+
+    it("refuses the .0 milestone once the .0 is tagged", () => {
+      expect(checkLinePullRequest(next(), { 10: issue("0.9.0", ["release:minor"]) }).join("\n")).toMatch(
+        /release:minor[\s\S]*not a 0\.9\.x patch milestone/,
+      );
+    });
+  });
+
   it("runs from main for every pull request into a line, and runs none of its code", () => {
     const guard = workflow("release-line-guard.yml");
     expect(Object.keys(guard.on)).toEqual(["pull_request_target"]);
@@ -247,15 +315,17 @@ describe("the lane policy", () => {
     },
   ];
 
-  it("refuses a line patch from the server bundle's 0.8 line on, which only main can build", () => {
-    expect(() => laneOf("0.8.1")).toThrow(/server bundle, which is built only from main/);
-    expect(() => laneOf("1.0.1")).toThrow(/server bundle/);
-    expect(laneOf("0.9.0")).toBe("main");
+  it("puts every release of a minor, its .0 and candidates included, on that minor's line", () => {
+    expect(laneOf("0.8.1")).toBe("release/0.8");
+    expect(laneOf("1.0.1")).toBe("release/1.0");
+    expect(laneOf("0.9.0")).toBe("release/0.9");
+    expect(isNewLine("0.9.0-rc.1")).toBe(true);
+    expect(isNewLine("0.9.1")).toBe(false);
   });
 
   it.each([
-    ["0.8.0", "main"],
-    ["0.8.0-rc.2", "main"],
+    ["0.8.0", "release/0.8"],
+    ["0.8.0-rc.2", "release/0.8"],
     ["0.7.1", "release/0.7"],
     ["0.7.1-rc.1", "release/0.7"],
   ])("puts %s on %s", (version, lane) => {
@@ -487,6 +557,9 @@ describe("a real release's reviewed-commit check", () => {
     // The same version as the line's release commit, with more in its tree.
     commit(origin, "package.json", manifest("0.7.1"));
     commits.reworked = commit(origin, "packages/app/extra.ts", "// not reviewed\n");
+    // A new minor's line, cut from main, with its first candidate.
+    git(origin, "checkout", "-qb", "release/0.9", commits.main);
+    commits.candidate = commit(origin, "package.json", manifest("0.9.0-rc.1"));
     git(origin, "checkout", "-q", "main");
     git(origin, "reset", "-q", "--hard", commits.main);
     clone = join(work, "clone");
@@ -603,8 +676,8 @@ describe("a real release's reviewed-commit check", () => {
     return file;
   };
 
-  it("accepts a new minor's commit on main", () => {
-    expect(run({ sha: commits.main })).toMatch(/v0\.7\.0\) from main/);
+  it("accepts a new minor's candidate on its own line, cut from main", () => {
+    expect(run({ sha: commits.candidate })).toMatch(/v0\.9\.0-rc\.1\) from release\/0\.9/);
   });
 
   it("accepts a patch on its own protected line", () => {
@@ -614,7 +687,8 @@ describe("a real release's reviewed-commit check", () => {
   it.each([
     ["a patch on main", () => commits.patchOnMain, protectedRules, /is not on release\/0\.7/],
     ["a patch on another line", () => commits.otherLine, protectedRules, /is not on release\/0\.7/],
-    ["a minor on a line", () => commits.minorOnLine, protectedRules, /is not on main/],
+    ["a minor on another line", () => commits.minorOnLine, protectedRules, /is not on release\/0\.8/],
+    ["a minor on main", () => commits.main, protectedRules, /is not on release\/0\.7/],
     ["a patch on an unprotected line", () => commits.line, "[]", /not protected as a release line/],
   ])("refuses %s", (_, sha, rules, message) => {
     expect(refused(() => run({ sha: sha(), rules }))).toMatch(message);
@@ -758,17 +832,13 @@ describe("a real release's reviewed-commit check", () => {
     ).toMatch(/no release line check, as main runs it, for #906/);
   });
 
-  it("binds a minor's release pull request on main to its version and reviewed tree too", () => {
+  it("refuses a minor's release pull request merged into main: its lane is its own line", () => {
     const head = { ref: "release/v0.7.0", sha: commits.main, repo: { full_name: "o/r" } };
     expect(
-      run({ sha: commits.main, event: "pull_request", eventFile: merged({ head, base: { ref: "main" } }) }),
-    ).toMatch(/v0\.7\.0\) from main/);
-    const stale = { ...head, ref: "release/v0.8.0" };
-    expect(
       refused(() =>
-        run({ sha: commits.main, event: "pull_request", eventFile: merged({ head: stale, base: { ref: "main" } }) }),
+        run({ sha: commits.main, event: "pull_request", eventFile: merged({ head, base: { ref: "main" } }) }),
       ),
-    ).toMatch(/says 0\.7\.0, not 0\.8\.0/);
+    ).toMatch(/is not on release\/0\.7/);
   });
 
   it("refuses a merge commit whose tree is not the reviewed head's", () => {

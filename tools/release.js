@@ -9,6 +9,9 @@
 //   node tools/release.js notes --unreleased                        -> prints what changelog.d/ holds
 //   node tools/release.js line 0.7.1                                -> prints the branch it is cut from
 //   node tools/release.js sync 0.7.1 <other CHANGELOG.md>           -> copies that section into CHANGELOG.md
+//                                                                      (and, for a new minor's X.Y.0
+//                                                                      or candidate, raises package.json
+//                                                                      to it when it is behind)
 //
 // The notes themselves are not written here: a pull request drops a fragment into
 // `changelog.d/` (tools/changelog.js) and `prepare` renders the lot into the dated
@@ -166,8 +169,12 @@ function sectionOf(lines, version) {
 
 /**
  * Copies `version`'s section from a line branch's CHANGELOG into this one, in version
- * order, so `main` records a patch that was released from `release/X.Y`. Running it again
+ * order, so `main` records a release that was cut from `release/X.Y`. Running it again
  * changes nothing; a different section already here for the version is a stop.
+ *
+ * A new minor (`X.Y.0` or its candidate) is released from its line too, so `main` would never
+ * learn its version, and the next minor's prepare would compute `X.Y.0` again. Its record
+ * therefore also raises `package.json` to it when `main` is behind. A patch never does.
  */
 function sync(version, sourcePath) {
   parse(version);
@@ -184,6 +191,7 @@ function sync(version, sourcePath) {
     while (existing.length && existing[existing.length - 1].trim() === "") existing.pop();
     if (existing.join("\n") === section.join("\n")) {
       console.error(`${CHANGELOG} already has the ${version} section; nothing changed`);
+      raiseVersion(version);
       return;
     }
     die(`${CHANGELOG} already has a different ${version} section; reconcile it by hand`);
@@ -197,6 +205,19 @@ function sync(version, sourcePath) {
   if (at === -1) at = lines.length;
   writeFileSync(CHANGELOG, [...lines.slice(0, at), ...section, "", ...lines.slice(at)].join("\n"));
   console.error(`${CHANGELOG}: added the ${version} section from ${sourcePath}`);
+  raiseVersion(version);
+}
+
+/** Raises package.json to a new minor's released version when it is behind; else nothing. */
+function raiseVersion(version) {
+  if (parse(version).patch !== 0) return;
+  const current = currentVersion();
+  if (compare(version, current) <= 0) return;
+  const pkgText = readFileSync(PKG, "utf8");
+  const bumped = pkgText.replace(/^(\s*"version":\s*")[^"]+(")/m, `$1${version}$2`);
+  if (bumped === pkgText) die(`could not rewrite the version field in ${PKG}`);
+  writeFileSync(PKG, bumped);
+  console.error(`${PKG}: raised from ${current} to ${version}`);
 }
 
 /** What `prepare` would render today, without writing anything. */

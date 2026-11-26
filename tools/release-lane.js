@@ -1,16 +1,22 @@
 // The one version-to-lane policy every release workflow uses (docs/RELEASING.md, "Release
-// lines"). A new minor or major (`X.Y.0` and its candidates) is cut from `main`; a patch
-// (`X.Y.Z`, Z > 0, and its candidates) only from its protected release line `release/X.Y`.
-// Nothing else is eligible: a patch on `main`, or a `.0` release on a line, is refused.
+// lines"). Every release of `X.Y`, its `.0` and that `.0`'s candidates included, is cut from its
+// protected release line `release/X.Y`. The line of a new minor or major is created from `main`
+// when its first candidate (or its `.0`, without candidates) is prepared, so `main` keeps taking
+// the next minor's work while `X.Y.0` stabilizes; the line of an older minor is created from its
+// newest final tag. Nothing else is eligible: a release commit that is not on its line is refused.
 //
 // A line is trusted only while a ruleset protects it: pull requests only, no force pushes or
-// deletion, and both the CI check and the release line check required. Prepare, publish and
-// signing check that with the rules API before they build, sign or open anything from a line.
+// deletion, and both the CI check and the release line check required. Prepare, publish,
+// signing and the server bundle check that with the rules API before they build, sign or open
+// anything from a line.
 //
 // Usage (tools only: no dependencies, runs from main's checkout against any repository):
-//   node tools/release-lane.js lane <version>              -> main | release/X.Y
+//   node tools/release-lane.js lane <version>              -> release/X.Y
 //   node tools/release-lane.js verify <sha> <version>      -> "<lane> <head sha>", from the cwd's
 //                                                             git repository and `gh api`
+//   node tools/release-lane.js on-lane <sha> <version>     -> "<lane>", from `gh api` alone (no
+//                                                             checkout): the commit is on its
+//                                                             protected lane
 //   node tools/release-lane.js release-pr <event.json>     -> checks a merged release pull
 //                                                             request before it is published
 //   node tools/release-lane.js guard-evidence <pr> <base> <head>
@@ -22,24 +28,20 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const LINE_CHECKS = ["check (node 24)", "release line check"];
-// From this line on a release must carry the signed server bundle, which is built and signed
-// only from main (SERVER_FROM in tools/deploy/release-attach.sh). Until that path accepts a
-// line, a patch of such a line has no lane at all and is refused before anything runs.
-export const SERVER_FROM = { major: 0, minor: 8 };
 const SEMVER = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/;
 
-/** The branch a version may be cut from. */
+/** The branch a version may be cut from: its line, `release/X.Y`, for every version of X.Y. */
 export function laneOf(version) {
   const m = SEMVER.exec(String(version ?? ""));
   if (!m) throw new Error(`not a semver version: ${version}`);
-  const [major, minor, patch] = [Number(m[1]), Number(m[2]), Number(m[3])];
-  if (patch === 0) return "main";
-  if (major > SERVER_FROM.major || (major === SERVER_FROM.major && minor >= SERVER_FROM.minor))
-    throw new Error(
-      `v${version} would be cut from release/${major}.${minor}, but from ${SERVER_FROM.major}.${SERVER_FROM.minor} on a ` +
-        "release needs the server bundle, which is built only from main; line releases stop at 0.7 until it is",
-    );
-  return `release/${major}.${minor}`;
+  return `release/${Number(m[1])}.${Number(m[2])}`;
+}
+
+/** Whether a version is a new minor or major (`X.Y.0` or one of its candidates). */
+export function isNewLine(version) {
+  const m = SEMVER.exec(String(version ?? ""));
+  if (!m) throw new Error(`not a semver version: ${version}`);
+  return Number(m[3]) === 0;
 }
 
 // GitHub Actions' app id: a required check pinned to it can only be satisfied by a workflow.
@@ -127,12 +129,36 @@ function verify(sha, version) {
   } catch {
     die(`${lane}, the only branch v${version} may come from, does not exist`);
   }
-  if (lane !== "main") {
-    const problems = protectionProblems(ghJson(`repos/${repo()}/rules/branches/${lane}`));
-    if (problems.length) die(`${lane} is not protected as a release line: ${problems.join("; ")}`);
-  }
+  const problems = protectionProblems(ghJson(`repos/${repo()}/rules/branches/${lane}`));
+  if (problems.length) die(`${lane} is not protected as a release line: ${problems.join("; ")}`);
   if (!isAncestor(sha, head)) die(`${sha} (v${version}) is not on ${lane}, the only branch it may come from`);
   console.log(`${lane} ${head}`);
+}
+
+/**
+ * `verify` without a checkout: the commit is on its version's protected lane, read through the
+ * compare and rules APIs only. For jobs that check out nothing but main's tooling (the server
+ * bundle's resolve job).
+ */
+function onLane(sha, version) {
+  if (!/^[0-9a-f]{40}$/.test(sha ?? "")) die(`not a full commit sha: ${sha}`);
+  let lane;
+  try {
+    lane = laneOf(version);
+  } catch (error) {
+    die(error.message);
+  }
+  const problems = protectionProblems(ghJson(`repos/${repo()}/rules/branches/${lane}`));
+  if (problems.length) die(`${lane} is not protected as a release line: ${problems.join("; ")}`);
+  let status;
+  try {
+    status = ghJson(`repos/${repo()}/compare/${sha}...${lane}`).status;
+  } catch {
+    die(`${lane}, the only branch v${version} may come from, does not exist or cannot be compared with ${sha}`);
+  }
+  if (status !== "ahead" && status !== "identical")
+    die(`${sha} (v${version}) is not on ${lane} (${status}), the only branch it may come from`);
+  console.log(lane);
 }
 
 export const GUARD_WORKFLOW = ".github/workflows/release-line-guard.yml";
@@ -276,10 +302,9 @@ function guardEvidence({ number, base, head }) {
 
 /**
  * A merged release pull request may start publication only if it is the release preparation
- * that was reviewed: from this repository, `release/vV` into V's lane, package.json saying V
- * at both the reviewed head and the merge commit, and the merge commit's tree equal to that
- * head's tree (on either lane). On a line, the release line guard as main runs it must also
- * have passed on that exact head.
+ * that was reviewed: from this repository, `release/vV` into V's line, package.json saying V
+ * at both the reviewed head and the merge commit, the merge commit's tree equal to that head's
+ * tree, and the release line guard as main runs it passed on that exact head.
  */
 function releasePr(eventPath, sha) {
   const pr = JSON.parse(readFileSync(eventPath, "utf8")).pull_request;
@@ -310,9 +335,7 @@ function releasePr(eventPath, sha) {
   }
   if (git("rev-parse", `${sha}^{tree}`) !== git("rev-parse", `${pr.head.sha}^{tree}`))
     die(`the merge commit ${sha} is not the reviewed head ${pr.head.sha}; update the branch and review again`);
-  if (lane !== "main") {
-    guardEvidence({ number: pr.number, base: lane, head: pr.head.sha });
-  }
+  guardEvidence({ number: pr.number, base: lane, head: pr.head.sha });
   console.log(`release pull request #${pr.number}: v${version} into ${lane}`);
 }
 
@@ -325,10 +348,11 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
       die(error.message);
     }
   } else if (command === "verify") verify(args[0], args[1]);
+  else if (command === "on-lane") onLane(args[0], args[1]);
   else if (command === "release-pr") releasePr(args[0], args[1]);
   else if (command === "guard-evidence") guardEvidence({ number: Number(args[0]), base: args[1], head: args[2] });
   else
     die(
-      "usage: node tools/release-lane.js lane <version> | verify <sha> <version> | release-pr <event.json> <sha> | guard-evidence <pr> <base> <head>",
+      "usage: node tools/release-lane.js lane <version> | verify <sha> <version> | on-lane <sha> <version> | release-pr <event.json> <sha> | guard-evidence <pr> <base> <head>",
     );
 }
