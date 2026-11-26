@@ -1,14 +1,17 @@
 # Backport pull requests from a label (docs/RELEASING.md, "Release lines"; #1239).
 #
-# A pull request merged into main with a `backport:X.Y` label gets a cherry-pick of its merge
-# commit into a new pull request against `release/X.Y`, from the branch `backport/<pr>-X.Y`.
+# A pull request merged into main with a `backport:X.Y` label gets a cherry-pick of its complete
+# change (the merge commit, the squash commit, or a rebase merge's whole range; refused when
+# that cannot be established) into a new pull request against `release/X.Y`, from the branch `backport/<pr>-X.Y`.
 # Adding the label after the merge works too. The new pull request names the issues the
 # original fixed (tools/backport.js), so the release line guard checks it like any other, and
 # Cal is asked to review it. Nothing here merges anything.
 #
 # A cherry-pick that does not apply opens nothing: the original pull request gets a comment
 # listing the conflicting files and the `backport-conflict` label, for its owner to backport by
-# hand. A rerun skips a line whose backport branch already exists.
+# hand. A rerun skips a line that already has a backport pull request, opens the pull request
+# for a branch an earlier run pushed only when that branch is exactly the expected picks, and
+# otherwise reports it without rewriting it.
 #
 # `pull_request_target`, so this file and tools/backport.js always come from main. It checks out
 # main and the line, never runs the pull request's code, and only moves commits that already
@@ -31,9 +34,12 @@ concurrency:
 jobs:
   backport:
     name: open backport pull requests
+    # Decided here, before the release-bot environment and its token: a routine merge with no
+    # backport label never enters the job.
     if: >-
       github.event.pull_request.merged == true &&
-      (github.event.action == 'closed' || startsWith(github.event.label.name, 'backport:'))
+      ((github.event.action == 'closed' && contains(join(github.event.pull_request.labels.*.name, ' '), 'backport:')) ||
+      (github.event.action == 'labeled' && startsWith(github.event.label.name, 'backport:')))
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     environment: release-bot

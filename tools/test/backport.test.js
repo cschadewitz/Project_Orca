@@ -42,6 +42,11 @@ describe("the workflow", () => {
     expect(workflow.on).toEqual({ pull_request_target: { branches: ["main"], types: ["closed", "labeled"] } });
     const job = workflow.jobs.backport;
     expect(job.if).toContain("github.event.pull_request.merged == true");
+    // A routine merge without a backport label never enters the release-bot environment.
+    expect(job.if).toContain(
+      "github.event.action == 'closed' && contains(join(github.event.pull_request.labels.*.name, ' '), 'backport:')",
+    );
+    expect(job.if).toContain("github.event.action == 'labeled' && startsWith(github.event.label.name, 'backport:')");
     expect(job.environment).toBe("release-bot");
     const checkout = job.steps.find((s) => String(s.uses).startsWith("actions/checkout@"));
     expect(checkout.with.ref).toBe("${{ github.event.repository.default_branch }}");
@@ -81,7 +86,17 @@ describe("tools/backport.sh", () => {
     mkdirSync(join(work, "bin"));
     writeFileSync(
       join(work, "bin", "gh"),
-      '#!/bin/sh\nprintf "%s\\n" "$*" >> "$LOG"\ncase "$1 $2" in "pr create") echo https://x/pull/9;; esac\nexit 0\n',
+      [
+        "#!/bin/sh",
+        'printf "%s\\n" "$*" >> "$LOG"',
+        'case "$1 $2" in',
+        '  "pr create") if [ -f "$FAILONCE" ]; then rm "$FAILONCE"; echo "HTTP 502" >&2; exit 1; fi',
+        '    touch "$CREATED"; echo https://x/pull/9;;',
+        '  "pr list") if [ -f "$CREATED" ]; then echo https://x/pull/9; fi;;',
+        "esac",
+        "exit 0",
+        "",
+      ].join("\n"),
       { mode: 0o755 },
     );
   });
@@ -92,7 +107,13 @@ describe("tools/backport.sh", () => {
     writeFileSync(
       event,
       JSON.stringify({
-        pull_request: { number: 1300, title: "fix: two", body: "Fixes #12", labels: labels.map((name) => ({ name })) },
+        pull_request: {
+          number: 1300,
+          title: "fix: two",
+          body: "Fixes #12",
+          commits: over.COMMITS ?? 1,
+          labels: labels.map((name) => ({ name })),
+        },
       }),
     );
     return spawnSync("bash", ["tools/backport.sh"], {
@@ -112,15 +133,31 @@ describe("tools/backport.sh", () => {
         GITHUB_EVENT_PATH: event,
         GITHUB_STEP_SUMMARY: join(work, "summary"),
         RUNNER_TEMP: work,
+        CREATED: join(work, "created"),
+        FAILONCE: join(work, "fail-once"),
         ...over,
       },
     });
   };
-  const merged = () => {
-    const sha = commit(origin, "app.txt", "one\nTWO\nthree\n", "fix: two");
+  // A pull request branch from main, squash-merged: one commit on main with the same change.
+  const merged = (extra) => {
+    git(origin, "checkout", "-q", "-b", "pr");
+    commit(origin, "app.txt", "one\nTWO\nthree\n", "fix: two, first try");
+    commit(origin, "app.txt", "one\nTWO\nthree\n\n", "fix: two, review");
+    commit(origin, "app.txt", "one\nTWO\nthree\n", "fix: two, revert blank");
+    git(origin, "update-ref", "refs/pull/1300/head", "pr");
+    git(origin, "checkout", "-q", "main");
+    git(origin, "branch", "-q", "-D", "pr");
+    writeFileSync(join(origin, "app.txt"), "one\nTWO\nthree\n");
+    if (extra) writeFileSync(join(origin, "extra.txt"), extra);
+    const sha = commit(origin, "app.txt", "one\nTWO\nthree\n", "fix: two (#1300)");
     git(clone, "fetch", "-q", "origin", "main");
     return sha;
   };
+  const picked = (ref) =>
+    git(origin, "log", "--reverse", "--format=%B", `release/0.9..${ref}`)
+      .split("\n")
+      .filter((l) => l.startsWith("(cherry picked from commit "));
 
   it("cherry-picks the merge commit onto the line and opens a pull request into it", () => {
     const sha = merged();
@@ -143,7 +180,70 @@ describe("tools/backport.sh", () => {
     expect(run(sha, ["backport:0.9"], { ACTION: "labeled", ADDED: "backport:0.9" }).status).toBe(0);
     const again = run(sha, ["backport:0.9"]);
     expect(again.status).toBe(0);
-    expect(readFileSync(join(work, "summary"), "utf8")).toContain("already exists; skipped");
+    expect(readFileSync(join(work, "summary"), "utf8")).toContain("already has backport pull request");
+  });
+
+  it("backports every commit of a multi-commit rebase merge, not only the last", () => {
+    commit(origin, "unrelated.txt", "main moved\n");
+    git(origin, "checkout", "-q", "-b", "pr", "HEAD~1");
+    commit(origin, "app.txt", "one\nTWO\nthree\n", "fix: two");
+    commit(origin, "added.txt", "new file\n", "fix: two, part two");
+    git(origin, "update-ref", "refs/pull/1300/head", "pr");
+    git(origin, "checkout", "-q", "main");
+    for (const c of git(origin, "rev-list", "--reverse", "main..pr").split("\n"))
+      git(origin, "-c", "user.name=t", "-c", "user.email=t@t", "cherry-pick", c);
+    git(origin, "branch", "-q", "-D", "pr");
+    const sha = git(origin, "rev-parse", "main");
+    git(clone, "fetch", "-q", "origin", "main");
+    const result = run(sha, ["backport:0.9"], { COMMITS: 2 });
+    expect(result.status, result.stderr).toBe(0);
+    const head = git(origin, "rev-parse", "refs/heads/backport/1300-0.9");
+    expect(git(origin, "show", `${head}:app.txt`)).toBe("one\nTWO\nthree");
+    expect(git(origin, "show", `${head}:added.txt`)).toBe("new file");
+    expect(() => git(origin, "show", `${head}:unrelated.txt`)).toThrow();
+    expect(picked(head)).toEqual([
+      `(cherry picked from commit ${git(origin, "rev-parse", "main~1")})`,
+      `(cherry picked from commit ${sha})`,
+    ]);
+  });
+
+  it("refuses when the change on main is not the pull request's whole diff", () => {
+    const result = run(merged("not in the pull request\n"), ["backport:0.9"], { COMMITS: 3 });
+    expect(result.status, result.stderr).toBe(0);
+    expect(git(origin, "branch", "--list", "backport/*")).toBe("");
+    const calls = readFileSync(log, "utf8");
+    expect(calls).not.toContain("pr create");
+    expect(calls).toMatch(/pr comment 1300 [\s\S]*could not be established/);
+    expect(calls).toContain("pr edit 1300 --repo o/r --add-label backport-conflict");
+  });
+
+  it("opens exactly one pull request when an earlier run pushed but failed to open it", () => {
+    const sha = merged();
+    writeFileSync(join(work, "fail-once"), "");
+    expect(run(sha, ["backport:0.9"], { COMMITS: 3 }).status).not.toBe(0);
+    const pushed = git(origin, "rev-parse", "refs/heads/backport/1300-0.9");
+    const retry = run(sha, ["backport:0.9"], { COMMITS: 3 });
+    expect(retry.status, retry.stderr).toBe(0);
+    expect(git(origin, "rev-parse", "refs/heads/backport/1300-0.9")).toBe(pushed);
+    expect(readFileSync(join(work, "summary"), "utf8")).toContain("exists without a pull request; opening it");
+    expect(run(sha, ["backport:0.9"], { COMMITS: 3 }).status).toBe(0);
+    const creates = readFileSync(log, "utf8")
+      .split("\n")
+      .filter((l) => l.startsWith("pr create"));
+    expect(creates).toHaveLength(2); // the failed one and the one that opened it
+    expect(readFileSync(join(work, "summary"), "utf8")).toContain("already has backport pull request");
+  });
+
+  it("leaves a backport branch that is not the expected picks alone and reports it", () => {
+    git(origin, "checkout", "-q", "-b", "backport/1300-0.9", "release/0.9");
+    const foreign = commit(origin, "app.txt", "one\nsomething else\nthree\n", "by hand");
+    git(origin, "checkout", "-q", "main");
+    const result = run(merged(), ["backport:0.9"], { COMMITS: 3 });
+    expect(result.status, result.stderr).toBe(0);
+    expect(git(origin, "rev-parse", "refs/heads/backport/1300-0.9")).toBe(foreign);
+    const calls = readFileSync(log, "utf8");
+    expect(calls).not.toContain("pr create");
+    expect(calls).toMatch(/pr comment 1300 [\s\S]*is not the expected cherry-pick/);
   });
 
   it("opens nothing on a conflict and says so on the original pull request", () => {
