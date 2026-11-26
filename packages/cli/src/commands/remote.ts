@@ -15,10 +15,20 @@
  *
  * It issues no credential and prints none: sign in from the app, whose profile for the
  * machine runs the managed launcher this prints (`ServerSetupResult.command`).
+ *
+ * With the incubating `tailnet-hosts` flag (#1225), `--tailnet` names a machine on this
+ * computer's tailnet instead of a host (`build-1`, its full MagicDNS name, or its node ID): ssh
+ * dials that node's current address, a Tailscale SSH check-mode login prints its approval link,
+ * and the host keys the tailnet advertises are what ssh checks the server against (#1227).
+ * `--push-bundle` carries the signed bundle from this computer for a host with no internet
+ * access (#1234). `orca remote push-repo` puts a repository on such a server from this computer,
+ * through the host key `remote add` pinned (#1235). `orca remote agent install|status|login`
+ * installs a pinned agent there from this computer and signs it in with the agent's own device
+ * code, approved in this computer's browser (#1236).
  */
-import { existsSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { OrcaError } from "@orca/core";
 import { ConnectionProfileSchema, profileIdFor, SshTunnel } from "@orca/protocol/remote-access";
@@ -38,6 +48,39 @@ import {
   type SetupOutcome,
   type SetupTunnel,
 } from "@orca/protocol/server-setup";
+import {
+  bindingFor,
+  findTailnetPeer,
+  readTailnet,
+  tailnetEnabled,
+  tailnetHostResolver,
+  tailnetLoginOrigins,
+  type ReadTailnetOptions,
+  type TailnetPeer,
+} from "@orca/protocol/tailnet";
+import { dropCourier, httpsFetch, prepareCourier, pushCourier, type CourierFetch } from "@orca/protocol/server-courier";
+import {
+  bundleRepository,
+  localGit,
+  pushRepository,
+  refsToPush,
+  repositoryName,
+  RepositoryRefused,
+  workspaceSnippet,
+  type LocalGit,
+} from "@orca/protocol/server-repository";
+import {
+  hostAgent,
+  hostAgentSettings,
+  hostAgentSignInCommand,
+  hostAgentsProgram,
+  hostAgentStatus,
+  HostAgentRefused,
+  HOST_AGENTS,
+  installHostAgent,
+  prepareHostAgent,
+  signInHostAgent,
+} from "@orca/protocol/server-agents";
 import { readOrcaVersion } from "../version.js";
 import type { CommandContext } from "./index.js";
 import { remoteEnrollCommand } from "./remote-enroll.js";
@@ -85,15 +128,23 @@ export async function remoteCommand(
     tunnel?: (options: ConstructorParameters<typeof SshTunnel>[0]) => SetupTunnel;
     scripts?: string;
     version?: string;
+    /** Test seams for `--tailnet` and `--push-bundle`. */
+    tailnet?: ReadTailnetOptions;
+    courierFetch?: CourierFetch;
+    cacheDir?: string;
+    /** Test seam for `push-repo`: git on this computer. */
+    git?: LocalGit;
   } = {},
 ): Promise<number> {
   // `orca remote enroll <id>` (#883): delegation's one-time trust step for a configured remote.
   if (ctx.positionals[0] === "enroll") return remoteEnrollCommand(ctx);
   const [sub, destination, ...extra] = ctx.positionals;
+  if (sub === "push-repo" && destination && !extra.length) return pushRepoCommand(ctx, destination, deps);
+  if (sub === "agent" && destination && extra.length === 1) return agentCommand(ctx, destination, extra[0]!, deps);
   if (sub !== "add" || !destination || extra.length)
     throw new OrcaError(
       "CONFIG_INVALID",
-      "usage: orca remote add [user@]host [--ssh-port N] [--identity FILE] [--port N] [--confirm CODE], or orca remote enroll <id> [--host-key SHA256:...]",
+      "usage: orca remote add [user@]host [--tailnet] [--ssh-port N] [--identity FILE] [--port N] [--push-bundle] [--confirm CODE], orca remote push-repo [user@]host [--tailnet] [--repo DIR] [--name NAME] [--ref REF]..., orca remote agent install|status|login [user@]host [--tailnet] [--agent ID], or orca remote enroll <id> [--host-key SHA256:... | --tailnet]",
     );
   const scripts = deps.scripts ?? setupScripts();
   if (!scripts)
@@ -101,31 +152,27 @@ export async function remoteCommand(
       "CONFIG_INVALID",
       "orca remote add runs from a source checkout; in the desktop app, use Add a machine in the connection dialog.",
     );
-  const sshPort = port(ctx.flags["ssh-port"], "--ssh-port");
-  const daemonPort = port(ctx.flags.port, "--port") ?? 6722;
-  const identity = ctx.flags.identity;
-  if (identity !== undefined && typeof identity !== "string")
-    throw new OrcaError("CONFIG_INVALID", "--identity takes a key file");
-  const parsed = ConnectionProfileSchema.safeParse({
-    id: profileIdFor(destination, new Set()),
-    name: destination,
-    destination,
-    remotePort: daemonPort,
-    ...(sshPort ? { sshPort } : {}),
-    ...(identity ? { identityFile: identity } : {}),
-  });
-  if (!parsed.success) throw new OrcaError("CONFIG_INVALID", parsed.error.issues[0]?.message ?? "Invalid destination");
-  const profile = parsed.data;
+  if (ctx.flags["push-bundle"] && !tailnetEnabled(deps.tailnet?.features))
+    throw new OrcaError("CONFIG_INVALID", "--tailnet and --push-bundle are not available in this build.");
+  const { profile, peer, base } = await profileFor(ctx, destination, deps);
   const version = deps.version ?? ORCA_VERSION;
   const confirm = ctx.flags.confirm;
   if (confirm !== undefined && typeof confirm !== "string")
     throw new OrcaError("CONFIG_INVALID", "--confirm takes the code the first run printed");
-  const base = { profile, knownHostsFile: pinFile(profile.id) };
   const make = deps.tunnel ?? ((options: ConstructorParameters<typeof SshTunnel>[0]) => new SshTunnel(options));
   const program = setupProgram(scripts);
 
   ctx.err(`Checking ${destination} (read only).`);
-  const discovery = await discoverServer({ base, tunnel: make, version, program });
+  const discovery = await discoverServer({
+    base,
+    tunnel: make,
+    version,
+    program,
+    // A machine shared in from another tailnet is vouched for by that tailnet, not yours: confirm by hand.
+    ...(peer?.sshHostKeys.length && !peer.sharedIn
+      ? { advertised: { alias: `orca-${profile.id}`, keys: peer.sshHostKeys } } // rename-keep: the HostKeyAlias tunnelHops pins under
+      : {}),
+  });
   const found = discovery.outcome;
   if (found.kind !== "inspected") {
     dropDiscovery(discovery);
@@ -142,6 +189,7 @@ export async function remoteCommand(
           kind: "confirm",
           fingerprints,
           firstUse: discovery.firstUse,
+          ...(discovery.advertised ? { advertised: true } : {}),
           account,
           root,
           current,
@@ -151,7 +199,9 @@ export async function remoteCommand(
       );
     else {
       for (const key of fingerprints.server)
-        ctx.out(`Host key: ${key}${discovery.firstUse ? " (not pinned yet)" : " (pinned)"}`);
+        ctx.out(
+          `Host key: ${key}${discovery.advertised ? " (advertised by your tailnet's coordination server)" : discovery.firstUse ? " (not pinned yet)" : " (pinned)"}`,
+        );
       ctx.out(`Account: ${account}`);
       ctx.out(
         current
@@ -166,7 +216,7 @@ export async function remoteCommand(
       return 2;
     }
     ctx.err(
-      `${discovery.firstUse ? "Check that the host key is the server's own (ssh-keygen -lf on the server). " : ""}To set it up, run again with --confirm ${code}`,
+      `${discovery.firstUse && !discovery.advertised ? "Check that the host key is the server's own (ssh-keygen -lf on the server). " : ""}To set it up, run again with --confirm ${code}`,
     );
     return 3;
   }
@@ -176,23 +226,298 @@ export async function remoteCommand(
   const tunnel = make({ ...base, pinnedOnly: true, expectKeys: discovery.keys });
   ctx.err(`Setting up ORCA ${version} on ${destination} as ${account}. This takes a few minutes.`);
   let outcome: SetupOutcome;
+  const courier = ctx.flags["push-bundle"]
+    ? await prepareCourier({
+        version,
+        cacheDir: deps.cacheDir ?? cacheDir(),
+        ...(deps.courierFetch ? { fetch: deps.courierFetch } : {}),
+      })
+    : undefined;
   try {
     await tunnel.open();
-    // Only the setup that was confirmed counts: what the server reports must match it.
-    outcome = confirmedResult(
-      readSetup(
-        await tunnel.exec(
-          setupCommand(version, profile.remotePort, { account, root, current }),
-          SETUP_TIMEOUT_MS,
-          program,
+    if (courier) ctx.err(`Copying the signed server bundle to ${destination}.`);
+    const transport = {
+      exec: (command: readonly string[], timeoutMs?: number) => tunnel.exec(command, timeoutMs),
+      upload: (path: string, remotePath: string, timeoutMs?: number) => {
+        if (!tunnel.upload) throw new OrcaError("CONFIG_INVALID", "This connection cannot copy files to the server.");
+        return tunnel.upload(path, remotePath, timeoutMs);
+      },
+    };
+    const scratch = courier ? await pushCourier(transport, courier) : undefined;
+    try {
+      // Only the setup that was confirmed counts: what the server reports must match it.
+      outcome = confirmedResult(
+        readSetup(
+          await tunnel.exec(
+            setupCommand(version, profile.remotePort, { account, root, current }, scratch?.path),
+            SETUP_TIMEOUT_MS,
+            program,
+          ),
         ),
-      ),
-      { version, port: profile.remotePort, account, root },
-    );
+        { version, port: profile.remotePort, account, root },
+      );
+    } finally {
+      if (scratch) await dropCourier(transport, scratch);
+    }
   } finally {
     await tunnel.close();
   }
   return finish(ctx, destination, outcome);
+}
+
+type RemoteDeps = NonNullable<Parameters<typeof remoteCommand>[1]>;
+
+/**
+ * The profile a destination names, as `remote add` and `push-repo` both build it: the same id,
+ * so the same pin file. With `--tailnet`, bound to the node and dialled at its current address.
+ */
+async function profileFor(ctx: CommandContext, destination: string, deps: RemoteDeps) {
+  const sshPort = port(ctx.flags["ssh-port"], "--ssh-port");
+  const daemonPort = port(ctx.flags.port, "--port") ?? 6722;
+  const identity = ctx.flags.identity;
+  if (identity !== undefined && typeof identity !== "string")
+    throw new OrcaError("CONFIG_INVALID", "--identity takes a key file");
+  if (ctx.flags.tailnet && !tailnetEnabled(deps.tailnet?.features))
+    throw new OrcaError("CONFIG_INVALID", "--tailnet and --push-bundle are not available in this build.");
+  const peer = ctx.flags.tailnet ? await tailnetPeer(ctx, destination, deps.tailnet) : undefined;
+  const at = destination.lastIndexOf("@");
+  const user = at < 0 ? "" : destination.slice(0, at + 1);
+  const parsed = ConnectionProfileSchema.safeParse({
+    id: profileIdFor(peer ? peer.dnsName.split(".")[0]! : destination, new Set()),
+    name: peer ? peer.dnsName : destination,
+    destination: peer ? `${user}${peer.dnsName}` : destination,
+    ...(peer ? { tailnet: bindingFor(peer) } : {}),
+    remotePort: daemonPort,
+    ...(sshPort ? { sshPort } : {}),
+    ...(identity ? { identityFile: identity } : {}),
+  });
+  if (!parsed.success) throw new OrcaError("CONFIG_INVALID", parsed.error.issues[0]?.message ?? "Invalid destination");
+  const profile = parsed.data;
+  const base = {
+    profile,
+    knownHostsFile: pinFile(profile.id),
+    ...(profile.tailnet ? { resolveHost: tailnetHostResolver(profile.tailnet, deps.tailnet) } : {}),
+    // Only for a machine on the tailnet, and only a page on its control plane (#1228).
+    ...(profile.tailnet
+      ? {
+          onLoginApproval: (url: string) =>
+            ctx.err(`Tailscale asks you to approve this login. Open this page, then wait here: ${url}`),
+          approvalOrigins: tailnetLoginOrigins(),
+        }
+      : {}),
+  };
+  return { profile, peer, base };
+}
+
+/**
+ * `orca remote push-repo [user@]host` (#1235): put this repository's current branch (or each
+ * `--ref`) on a server `remote add` set up, over its pinned ssh only. The host needs no git
+ * credentials; it fetches from a bundle this computer carries. Prints the workspace settings
+ * that point the server's daemon at the checkout.
+ */
+async function pushRepoCommand(ctx: CommandContext, destination: string, deps: RemoteDeps): Promise<number> {
+  if (!tailnetEnabled(deps.tailnet?.features))
+    throw new OrcaError("CONFIG_INVALID", "orca remote push-repo is not available in this build.");
+  const repoFlag = ctx.flags.repo;
+  if (repoFlag !== undefined && typeof repoFlag !== "string")
+    throw new OrcaError("CONFIG_INVALID", "--repo takes a directory");
+  const nameFlag = ctx.flags.name;
+  if (nameFlag !== undefined && typeof nameFlag !== "string")
+    throw new OrcaError("CONFIG_INVALID", "--name takes a name");
+  const refFlag = ctx.flags.ref;
+  const requested = refFlag === undefined ? [] : Array.isArray(refFlag) ? refFlag.map(String) : [String(refFlag)];
+  const git = deps.git ?? localGit;
+  const repo = resolve(ctx.cwd, repoFlag ?? ".");
+  const top = await git(["rev-parse", "--show-toplevel"], repo);
+  if (top.code !== 0) throw new OrcaError("CONFIG_INVALID", `${repo} is not in a git repository.`);
+  const worktree = top.stdout.trim();
+  try {
+    const name = repositoryName(nameFlag ?? basename(worktree));
+    const refs = await refsToPush(git, worktree, requested);
+    const { base } = await profileFor(ctx, destination, deps);
+    // Only through a host key `remote add` already pinned: a push never trusts a key on first use.
+    const make = deps.tunnel ?? ((options: ConstructorParameters<typeof SshTunnel>[0]) => new SshTunnel(options));
+    const tunnel = make({ ...base, pinnedOnly: true });
+    ctx.err(`Bundling ${refs.join(", ")}.`);
+    const bundle = await bundleRepository(git, worktree, refs);
+    try {
+      await tunnel.open();
+      ctx.err(`Copying it to ${destination}.`);
+      const pushed = await pushRepository(
+        {
+          exec: (command, timeoutMs) => tunnel.exec(command, timeoutMs),
+          upload: (path, remotePath, timeoutMs) => {
+            if (!tunnel.upload)
+              throw new OrcaError("CONFIG_INVALID", "This connection cannot copy files to the server.");
+            return tunnel.upload(path, remotePath, timeoutMs);
+          },
+        },
+        bundle,
+        { name, refs },
+      );
+      if (ctx.flags.json) ctx.out(JSON.stringify(pushed));
+      else {
+        ctx.out(`Pushed ${refs.join(", ")} to ${pushed.hub}.`);
+        ctx.out(
+          pushed.checkoutState.kind === "kept"
+            ? `The checkout ${pushed.checkout} was left as it was: ${pushed.checkoutState.reason}.`
+            : `Checkout: ${pushed.checkout} (${pushed.checkoutState.kind}).`,
+        );
+        const snippet = workspaceSnippet(pushed);
+        if (snippet) {
+          ctx.out("To work there, set this in the server's orca.config.yaml, then apply it:");
+          ctx.out(snippet);
+        } else ctx.err(`There is no checkout of ${pushed.hub} to work in yet. Fix the above, then push again.`);
+      }
+      return workspaceSnippet(pushed) ? 0 : 1;
+    } finally {
+      rmSync(bundle.dir, { recursive: true, force: true });
+      await tunnel.close();
+    }
+  } catch (error) {
+    if (error instanceof RepositoryRefused) throw new OrcaError("CONFIG_INVALID", error.message);
+    throw error;
+  }
+}
+
+/**
+ * `orca remote agent install|status|login [user@]host --agent ID` (#1236): on a server `remote
+ * add` set up, over its pinned ssh only. `install` carries the agent's pinned packages from
+ * this computer (downloaded once, then from the cache) and prints the server config that runs
+ * it; `login` runs the agent's own sign-in there and prints its link and code to approve in a
+ * browser here; `status` lists each agent's installed versions and whether it is signed in.
+ * Claude Code is never signed in by ORCA: the person runs its own sign-in on the server, with
+ * the command `install` and `status` print.
+ */
+async function agentCommand(ctx: CommandContext, action: string, destination: string, deps: RemoteDeps) {
+  if (!tailnetEnabled(deps.tailnet?.features))
+    throw new OrcaError("CONFIG_INVALID", "orca remote agent is not available in this build.");
+  if (!["install", "status", "login"].includes(action))
+    throw new OrcaError("CONFIG_INVALID", "usage: orca remote agent install|status|login [user@]host [--agent ID]");
+  const scripts = deps.scripts ?? setupScripts();
+  if (!scripts) throw new OrcaError("CONFIG_INVALID", "orca remote agent runs from a source checkout.");
+  // `--agent` may be given more than once for other commands; here it names exactly one.
+  const agentValue = ctx.flags.agent;
+  const agentFlag = Array.isArray(agentValue) ? (agentValue.length === 1 ? agentValue[0] : undefined) : agentValue;
+  if (action !== "status" && typeof agentFlag !== "string")
+    throw new OrcaError("CONFIG_INVALID", `--agent names the agent: ${Object.keys(HOST_AGENTS).join(" or ")}.`);
+  try {
+    const agent = action === "status" ? undefined : hostAgent(agentFlag as string);
+    // Refused before any profile, connection or prompt: ORCA offers no sign-in for it.
+    if (agent && action === "login" && agent.signIn === "yourself")
+      throw new HostAgentRefused(
+        `ORCA does not sign ${agent.name} in. Sign it in on ${destination} yourself: orca remote agent status ${destination} names the command to run there.`,
+      );
+    const program = hostAgentsProgram(scripts);
+    const { base } = await profileFor(ctx, destination, deps);
+    // Only through a host key `remote add` already pinned, as for push-repo.
+    const make = deps.tunnel ?? ((options: ConstructorParameters<typeof SshTunnel>[0]) => new SshTunnel(options));
+    const tunnel = make({ ...base, pinnedOnly: true });
+    const transport = {
+      exec: (command: readonly string[], timeoutMs?: number, input?: string) => tunnel.exec(command, timeoutMs, input),
+      upload: (path: string, remotePath: string, timeoutMs?: number) => {
+        if (!tunnel.upload) throw new OrcaError("CONFIG_INVALID", "This connection cannot copy files to the server.");
+        return tunnel.upload(path, remotePath, timeoutMs);
+      },
+    };
+    try {
+      if (agent && action === "install") {
+        ctx.err(`Getting ${agent.name} ${agent.version} ready on this computer.`);
+        const prepared = await prepareHostAgent(agent.id, {
+          fetch: deps.courierFetch ?? httpsFetch,
+          cacheDir: join(deps.cacheDir ?? cacheDir(), "agents"),
+        });
+        try {
+          await tunnel.open();
+          ctx.err(`Copying it to ${destination}.`);
+          const installed = await installHostAgent(transport, prepared, program);
+          if (ctx.flags.json) ctx.out(JSON.stringify(installed));
+          else {
+            ctx.out(
+              installed.result === "ok"
+                ? `${agent.name} ${installed.version} was already installed at ${installed.dir}.`
+                : `Installed ${agent.name} ${installed.version} at ${installed.dir}.`,
+            );
+            ctx.out("To run it there, add this to the server's orca.config.yaml, then apply it:");
+            ctx.out(hostAgentSettings(installed));
+            const yourself = hostAgentSignInCommand(installed);
+            if (agent.signIn === "yourself")
+              ctx.out(
+                `Then sign it in yourself on ${destination} (ORCA does not take part)${
+                  yourself ? `, by running there: ${yourself}` : ": orca remote agent status names the command."
+                }`,
+              );
+            else ctx.out(`Then sign it in: orca remote agent login ${destination} --agent ${agent.id}`);
+          }
+          return 0;
+        } finally {
+          rmSync(prepared.dir, { recursive: true, force: true });
+        }
+      }
+      await tunnel.open();
+      if (agent) {
+        if (!tunnel.execStreaming)
+          throw new OrcaError("CONFIG_INVALID", "This connection cannot follow a sign-in on the server.");
+        const stream = tunnel.execStreaming.bind(tunnel);
+        ctx.err(`Starting ${agent.name}'s sign-in on ${destination}.`);
+        await signInHostAgent(stream, agent.id, program, (prompt) => {
+          if (prompt.url && prompt.code)
+            ctx.err(`Open ${prompt.url} in your browser and enter the code ${prompt.code}, then wait here.`);
+          else if (prompt.url) ctx.err(`Open ${prompt.url} in your browser to sign in, then wait here.`);
+          else ctx.err(`Enter the code ${prompt.code} where ${agent.name} asks for it, then wait here.`);
+        });
+        ctx.out(`${agent.name} is signed in on ${destination}.`);
+        return 0;
+      }
+      const status = await hostAgentStatus(transport, program);
+      if (ctx.flags.json) ctx.out(JSON.stringify(status));
+      else
+        for (const item of status)
+          ctx.out(
+            `${HOST_AGENTS[item.agent]!.name}: ${
+              item.versions.length ? `installed ${item.versions.join(", ")}` : "not installed"
+            }; signed in: ${item.signedIn}${item.problem ? `. Not usable: ${item.problem}` : ""}${
+              item.signInCommand ? `. Sign it in yourself by running this on the server: ${item.signInCommand}` : ""
+            }`,
+          );
+      return 0;
+    } finally {
+      await tunnel.close();
+    }
+  } catch (error) {
+    if (error instanceof HostAgentRefused) throw new OrcaError("CONFIG_INVALID", error.message);
+    throw error;
+  }
+}
+
+/** Where the CLI caches what it carries to servers (#1234). */
+function cacheDir(): string {
+  const base = process.env.XDG_CACHE_HOME || join(homedir(), ".cache");
+  return join(base, "orca", "courier");
+}
+
+/** The machine `--tailnet` names, from this computer's own Tailscale client (#1226). */
+async function tailnetPeer(
+  ctx: CommandContext,
+  destination: string,
+  options: ReadTailnetOptions | undefined,
+): Promise<TailnetPeer> {
+  const read = await readTailnet(options);
+  if (read.state !== "running")
+    throw new OrcaError("CONFIG_INVALID", "Tailscale is not installed, running and signed in on this computer.");
+  const name = destination.slice(destination.lastIndexOf("@") + 1);
+  const peer = findTailnetPeer(read.snapshot, name);
+  if (!peer) throw new OrcaError("CONFIG_INVALID", `No single machine named ${name} on your tailnet.`);
+  if (!peer.hostSupported)
+    throw new OrcaError("CONFIG_INVALID", `${peer.dnsName} is not a Linux machine; ORCA servers run on Linux.`);
+  if (!peer.online) throw new OrcaError("CONFIG_INVALID", `${peer.dnsName} is offline on your tailnet.`);
+  if (peer.sharedIn)
+    ctx.err(`${peer.dnsName} is shared from another tailnet: check its host key by hand before you confirm.`);
+  if (!peer.tailscaleSsh)
+    ctx.err(
+      `${peer.dnsName} does not run Tailscale SSH, so its host key is not advertised and it needs its own sshd. To log in with Tailscale SSH instead, run this on it: sudo tailscale set --ssh`,
+    );
+  return peer;
 }
 
 function finish(ctx: CommandContext, destination: string, outcome: SetupOutcome | InspectOutcome): number {

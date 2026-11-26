@@ -81,7 +81,9 @@ export function ConfigField({
     <div className="orca-field">
       <label className={`orca-field__label ${textClass("label-strong")}`} htmlFor={controlId}>
         {label}
-        <span className={`orca-field__path ${textClass("mono-id")}`}>{path}</span>
+        <span className={`orca-field__path ${textClass("mono-id")}`} title={path}>
+          {path}
+        </span>
       </label>
       <div className="orca-field__control">
         {children(control)}

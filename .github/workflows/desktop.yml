@@ -276,6 +276,124 @@ jobs:
             pnpm --filter @orca/app exec electron-builder --publish never -c.extraMetadata.version="$VERSION"
           fi
 
+      # The PATH edit itself (#1207), case by case against the real HKCU\Environment\Path:
+      # absent, empty and REG_SZ values, unexpanded entries, trailing empty segments, an entry
+      # the user already had, edits after install, a moved install. Same fresh-VM rule as below.
+      - name: The installer's PATH edit round-trips the user PATH exactly
+        if: matrix.name == 'windows' && runner.environment == 'github-hosted'
+        shell: pwsh
+        run: pwsh -NoLogo -NoProfile -NonInteractive -File packages/app/test/windows/orca-cli-path.cases.ps1 -Script packages/app/build/win/orca-cli-path.ps1
+
+      # The CLI (#1207). A fresh GitHub-hosted VM only: this installs the app for the runner's
+      # account and edits that account's PATH, which no persistent host should have done to
+      # it. The x64 installer, silently and per user, as a person's default install is. A
+      # step's own environment is the runner's, not the registry's, so every PATH check
+      # reads HKCU\Environment the way a new terminal would.
+      - name: The Windows installer puts orca-cli on the user PATH and takes it off again
+        if: matrix.name == 'windows' && runner.environment == 'github-hosted'
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installers = @(Get-ChildItem "packages/app/dist/release/x64/ORCA-*-win-x64.exe")
+          if ($installers.Count -ne 1) { throw "expected one x64 installer, found $($installers.Count)" }
+          # The raw value, unexpanded, and its registry type.
+          $userPath = {
+            $k = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment')
+            if ($null -eq $k -or $k.GetValueNames() -notcontains 'Path') { '' }
+            else { "$($k.GetValueKind('Path')):" + $k.GetValue('Path', '', 'DoNotExpandEnvironmentNames') }
+          }
+          $before = & $userPath
+          $p = Start-Process -FilePath $installers[0].FullName -ArgumentList '/S', '/currentuser' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "the installer exited $($p.ExitCode)" }
+          $exe = @(Get-ChildItem "$env:LOCALAPPDATA\Programs\*\ORCA.exe")
+          if ($exe.Count -ne 1) { throw "expected one installed ORCA.exe, found $($exe.Count)" }
+          $app = $exe[0].DirectoryName
+          $bin = Join-Path $app 'resources\bin'
+          Write-Output "installed at $app"
+          # Exactly one entry added, at the end, and nothing else changed.
+          $after = & $userPath
+          $expected = if ($before -eq '') { "ExpandString:$bin" } elseif ($before.EndsWith(';') -or $before.EndsWith(':')) { $before + $bin } else { "$before;$bin" }
+          if ($after -cne $expected) { throw "user PATH after install: '$after', expected '$expected'" }
+          if (@(Get-ChildItem $bin).Name -join ',' -ne 'orca-cli.cmd') { throw "resources\bin holds more than orca-cli.cmd" }
+          # As a new terminal would find it: the machine PATH, then the user's, as Windows
+          # composes them, and PATHEXT resolving `orca-cli` to the .cmd.
+          $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
+          if ((Get-Command orca-cli).Source -ne (Join-Path $bin 'orca-cli.cmd')) { throw "orca-cli resolved to $((Get-Command orca-cli).Source)" }
+          $out = orca-cli --version
+          if ($LASTEXITCODE -ne 0) { throw "orca-cli --version exited $LASTEXITCODE" }
+          if (($out | Select-Object -Last 1) -ne $env:VERSION) { throw "orca-cli --version said '$out', expected '$env:VERSION'" }
+          if (-not ((orca-cli --help) -match 'Orchestration Runtime for Coding Agents')) { throw "orca-cli --help did not print ORCA's usage" }
+          orca-cli no-such-command *> $null
+          if ($LASTEXITCODE -eq 0) { throw "orca-cli passed a failing exit code through as 0" }
+          Write-Output "orca-cli $env:VERSION from a new terminal's PATH"
+          # The uninstaller hands itself to a copy in %TEMP% and returns, so wait for its effect.
+          $uninstaller = Join-Path $app 'Uninstall ORCA.exe'
+          Start-Process -FilePath $uninstaller -ArgumentList '/S', '/currentuser' -Wait
+          $deadline = (Get-Date).AddSeconds(120)
+          while ((Test-Path (Join-Path $bin 'orca-cli.cmd')) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 2 }
+          if (Test-Path (Join-Path $bin 'orca-cli.cmd')) { throw "the uninstaller did not remove the app" }
+          $final = & $userPath
+          if ($final -cne $before) { throw "user PATH after uninstall: '$final', expected '$before'" }
+          Write-Output "uninstalled; user PATH restored"
+          # pwsh steps exit with the last native exit code, here the deliberate failing command's.
+          exit 0
+
+      # The updater's download cache (#1109). Same fresh-VM rule as above: this installs and
+      # uninstalls for the runner's own account. An update runs the old uninstaller with
+      # --updated, and the next differential download starts from that cache, so it stays; a
+      # real uninstall removes it. A sibling folder under %LOCALAPPDATA% stands for everything
+      # else there, which neither uninstall may touch.
+      - name: The Windows uninstaller removes the updater cache, except during an update
+        if: matrix.name == 'windows' && runner.environment == 'github-hosted'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installers = @(Get-ChildItem "packages/app/dist/release/x64/ORCA-*-win-x64.exe")
+          if ($installers.Count -ne 1) { throw "expected one x64 installer, found $($installers.Count)" }
+          $cache = Join-Path $env:LOCALAPPDATA '@orcaapp-updater'
+          $sibling = Join-Path $env:LOCALAPPDATA 'orca-uninstall-sibling'
+          $install = {
+            $p = Start-Process -FilePath $installers[0].FullName -ArgumentList '/S', '/currentuser' -Wait -PassThru
+            if ($p.ExitCode -ne 0) { throw "the installer exited $($p.ExitCode)" }
+            $exe = @(Get-ChildItem "$env:LOCALAPPDATA\Programs\*\ORCA.exe")
+            if ($exe.Count -ne 1) { throw "expected one installed ORCA.exe, found $($exe.Count)" }
+            $exe[0]
+          }
+          # The uninstaller hands itself to a copy in %TEMP% and returns: wait for the app to go
+          # and for that copy to exit, so its last step (the cache) has run.
+          $uninstall = {
+            param($exe, [string[]]$arguments)
+            $uninstaller = Join-Path $exe.DirectoryName 'Uninstall ORCA.exe'
+            Start-Process -FilePath $uninstaller -ArgumentList $arguments -Wait
+            $deadline = (Get-Date).AddSeconds(120)
+            while (((Test-Path $exe.FullName) -or (Get-Process -Name 'Un_*' -ErrorAction SilentlyContinue)) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 2 }
+            if (Test-Path $exe.FullName) { throw "the uninstaller ($($arguments -join ' ')) did not remove the app" }
+            if (Get-Process -Name 'Un_*' -ErrorAction SilentlyContinue) { throw "the uninstaller ($($arguments -join ' ')) is still running" }
+          }
+          $seed = {
+            New-Item -ItemType Directory -Force -Path (Join-Path $cache 'pending') | Out-Null
+            Set-Content -Path (Join-Path $cache 'pending\update.exe') -Value 'cached download'
+          }
+          New-Item -ItemType Directory -Force -Path $sibling | Out-Null
+          Set-Content -Path (Join-Path $sibling 'keep.txt') -Value 'not ORCA''s'
+
+          $exe = & $install
+          & $seed
+          & $uninstall $exe @('/S', '/currentuser', '--updated')
+          if (-not (Test-Path (Join-Path $cache 'pending\update.exe'))) { throw "an update-mode uninstall removed the updater cache" }
+          Write-Output "update-mode uninstall kept $cache"
+
+          $exe = & $install
+          & $seed
+          & $uninstall $exe @('/S', '/currentuser')
+          if (Test-Path $cache) { throw "a real uninstall left the updater cache at $cache" }
+          Write-Output "real uninstall removed $cache"
+
+          if ((Get-Content (Join-Path $sibling 'keep.txt')) -ne 'not ORCA''s') { throw "an uninstall touched $sibling" }
+          Write-Output "$sibling untouched"
+
       # GitHub-hosted fallback only; never runs on a self-hosted runner. Ubuntu 24.04 keeps
       # unprivileged user namespaces, which Chromium's sandbox needs, behind AppArmor. Rather
       # than lift that for the whole VM, load a profile that grants `userns` to the one
@@ -366,6 +484,8 @@ jobs:
       # removal of ORCA's package untouched: same version, same owner of its files.
       - name: The .deb installs and launches sandboxed on stock Ubuntu
         if: matrix.name == 'linux' && runner.environment == 'github-hosted'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
           shopt -s nullglob
@@ -463,6 +583,8 @@ jobs:
           test "$(readlink -f /usr/bin/orca-desktop)" = /opt/ORCA/orca-desktop
           test "$(readlink -f "$(command -v orca-desktop)")" = /opt/ORCA/orca-desktop
           grep -qx 'Exec=/opt/ORCA/orca-desktop %U' /usr/share/applications/orca-desktop.desktop
+          # The window's class must name this entry, or the dock shows a generic icon (#1109).
+          grep -qx 'StartupWMClass=orca-desktop' /usr/share/applications/orca-desktop.desktop
           if grep -q '^MimeType=' /usr/share/applications/orca-desktop.desktop; then
             echo "::error::the desktop entry declares MIME types this package does not document"; exit 1
           fi
@@ -471,6 +593,15 @@ jobs:
           fi
           # The launch below is the runner's own unprivileged account, never sudo.
           test "$(id -u)" != 0
+
+          # The CLI (#1207): /usr/bin/orca-cli belongs to this package, and with the screen
+          # reader installed beside it, the command reaches this build of ORCA.
+          test "$(dpkg -S /usr/bin/orca-cli)" = 'orca-desktop: /usr/bin/orca-cli'
+          test "$(stat -c '%a %u:%g' /usr/bin/orca-cli /opt/ORCA/resources/bin/orca-cli)" = "$(printf '755 0:0\n755 0:0')"
+          test "$(command -v orca-cli)" = /usr/bin/orca-cli
+          test "$(orca-cli --version)" = "$VERSION"
+          orca-cli --help | grep -q 'Orchestration Runtime for Coding Agents'
+          test "$(reader)" = "$before"
 
           profile=$(mktemp -d "$RUNNER_TEMP/orca-deb-profile.XXXXXX")
           workspace=$(mktemp -d "$RUNNER_TEMP/orca-deb-workspace.XXXXXX")
@@ -527,6 +658,7 @@ jobs:
 
           sudo apt-get remove -y -q orca-desktop
           test ! -e /etc/apparmor.d/orca-desktop
+          test ! -e /usr/bin/orca-cli
           if sudo grep -q '^orca-desktop ' /sys/kernel/security/apparmor/profiles; then
             echo "::error::removing the package left its AppArmor profile loaded"; exit 1
           fi

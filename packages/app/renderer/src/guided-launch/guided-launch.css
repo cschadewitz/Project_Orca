@@ -12,3 +12,28 @@
   flex-wrap: wrap;
   gap: var(--space-2);
 }
+
+/* The Config > Launch work page around the form: its sentences, the sample binding and the
+   two sample buttons are separate blocks with the page's gap between them. Left as inline
+   spans in a bare div, two sentences ran together ("…unavailable.Harmless…") and the two
+   buttons touched (#1200, #1112). */
+.orca-launch-route {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.orca-launch-route > p {
+  margin: 0;
+}
+/* Each fact of a launch card on a line of its own (#1200). They were inline spans, so the
+   endpoint, the generation, the provenance and the publication note ran into one line. Ids
+   and paths are long and unbroken, so a line breaks anywhere rather than past the card. */
+.orca-guided-launch__facts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.orca-guided-launch__facts > * {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}

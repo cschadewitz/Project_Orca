@@ -346,3 +346,186 @@ it("shows a profile connection by name in the Config header (#874)", () => {
   render(<ConnectionSource bridge={bridge} />);
   expect(screen.getByText(/Lab \(ssh casey@lab\)/)).toBeTruthy();
 });
+
+it("adds a machine picked from the tailnet, and passes Tailscale SSH approval on (#1226, #1227, #1228)", async () => {
+  stubMatchMedia(1200);
+  const h = harness();
+  const r = rig();
+  const saved = {
+    id: "build-1",
+    name: "build-1",
+    destination: "casey@build-1.example-tailnet.ts.net",
+    remotePort: 6722,
+    tailnet: { node: "nBuild1", name: "build-1.example-tailnet.ts.net" },
+    hasCredential: false,
+    hostKeyPinned: false,
+  };
+  let views: (typeof saved)[] = [];
+  let approve!: (approval: { profileId: string; host: string }) => void;
+  const machine = (node: string, name: string, extra: Record<string, unknown> = {}) => ({
+    node,
+    name,
+    hostName: name.split(".")[0],
+    os: "linux",
+    online: true,
+    tailscaleSsh: true,
+    sharedIn: false,
+    hostSupported: true,
+    ...extra,
+  });
+  const profiles = {
+    list: vi.fn(async () => views),
+    save: vi.fn(async () => {
+      views = [saved];
+      return { ok: true as const, value: saved };
+    }),
+    remove: vi.fn(),
+    importCredential: vi.fn(),
+    forgetHostKey: vi.fn(),
+    useAutomaticSignIn: vi.fn(),
+    inspectServer: vi.fn(async () => {
+      approve({ profileId: "build-1", host: "login.tailscale.com" });
+      return new Promise(() => {});
+    }),
+    setUpServer: vi.fn(),
+    tailnetMachines: vi.fn(async () => ({
+      ok: true as const,
+      value: {
+        state: "running" as const,
+        machines: [
+          machine("nBuild1", "build-1.example-tailnet.ts.net"),
+          machine("nWin", "desk.example-tailnet.ts.net", { os: "windows", hostSupported: false }),
+          machine("nOff", "old.example-tailnet.ts.net", { online: false }),
+        ],
+      },
+    })),
+    onLoginApproval: vi.fn((listener: typeof approve) => {
+      approve = (approval) => act(() => listener(approval));
+      return () => {};
+    }),
+    openLoginApproval: vi.fn(async () => ({ ok: true as const, value: null })),
+  };
+  render(
+    <h.Providers>
+      <ConnectionDialog bridge={{ ...r.bridge, profiles } as never} target={r.target} close={() => {}} />
+    </h.Providers>,
+  );
+  fireEvent.click(await screen.findByText("Add a machine…"));
+  const group = screen.getByRole("group", { name: "New profile" });
+  await within(group).findByText("Machine on your tailnet");
+  const select = group.querySelector("select")!;
+  const option = (name: string) => [...select.options].find((o) => o.textContent?.startsWith(name))!;
+  // Setting up needs a Linux machine that is online.
+  expect(option("desk.").disabled).toBe(true);
+  expect(option("desk.").textContent).toContain("not Linux");
+  expect(option("old.").disabled).toBe(true);
+  const inputs = () => [...group.querySelectorAll("input")];
+  fireEvent.change(inputs()[1]!, { target: { value: "casey@" } });
+  fireEvent.change(select, { target: { value: "nBuild1" } });
+  expect(inputs()[0]!.value).toBe("build-1");
+  expect(inputs()[1]!.value).toBe("casey@build-1.example-tailnet.ts.net");
+  // A machine on the tailnet is reached directly.
+  expect(within(group).queryByText("Jump host")).toBeNull();
+  fireEvent.click(screen.getByText("Save profile"));
+  await waitFor(() =>
+    expect(profiles.save).toHaveBeenCalledWith({
+      name: "build-1",
+      destination: "casey@build-1.example-tailnet.ts.net",
+      tailnet: { node: "nBuild1", name: "build-1.example-tailnet.ts.net" },
+    }),
+  );
+  // Tailscale SSH check mode: the page's host is shown, and main opens it on the person's click.
+  const waiting = await screen.findByText(/Tailscale SSH is waiting for you to approve the connection to build-1/);
+  expect(waiting.textContent).toContain("login.tailscale.com");
+  fireEvent.click(screen.getByText("Open approval page"));
+  expect(profiles.openLoginApproval).toHaveBeenCalledWith("build-1");
+  await screen.findByText("On your tailnet");
+  h.dispose();
+});
+
+it("lists no tailnet while the flag is off, and says why Tailscale is not listed", async () => {
+  stubMatchMedia(1200);
+  const h = harness();
+  const r = rig();
+  let state: string = "off";
+  const profiles = {
+    list: vi.fn(async () => []),
+    save: vi.fn(),
+    remove: vi.fn(),
+    importCredential: vi.fn(),
+    forgetHostKey: vi.fn(),
+    useAutomaticSignIn: vi.fn(),
+    tailnetMachines: vi.fn(async () => ({ ok: true as const, value: { state } })),
+  };
+  render(
+    <h.Providers>
+      <ConnectionDialog bridge={{ ...r.bridge, profiles } as never} target={r.target} close={() => {}} />
+    </h.Providers>,
+  );
+  fireEvent.click(await screen.findByText("Add profile…"));
+  await waitFor(() => expect(profiles.tailnetMachines).toHaveBeenCalled());
+  expect(screen.queryByText("Machine on your tailnet")).toBeNull();
+  expect(screen.queryByText(/Tailscale/)).toBeNull();
+  fireEvent.click(within(screen.getByRole("group", { name: "New profile" })).getByText("Cancel"));
+  state = "stopped";
+  fireEvent.click(await screen.findByText("Add profile…"));
+  await screen.findByText(/Tailscale is not connected on this computer/);
+  h.dispose();
+});
+
+it("lets a machine on the tailnet download the bundle itself instead of carrying it (#1234)", async () => {
+  stubMatchMedia(1200);
+  const h = harness();
+  const r = rig();
+  const view = {
+    id: "build-1",
+    name: "build-1",
+    destination: "casey@build-1.example-tailnet.ts.net",
+    remotePort: 6722,
+    tailnet: { node: "nBuild1", name: "build-1.example-tailnet.ts.net" },
+    hasCredential: false,
+    hostKeyPinned: false,
+  };
+  const profiles = {
+    list: vi.fn(async () => [view]),
+    save: vi.fn(),
+    remove: vi.fn(),
+    importCredential: vi.fn(),
+    forgetHostKey: vi.fn(),
+    useAutomaticSignIn: vi.fn(),
+    inspectServer: vi.fn(async () => ({
+      ok: true as const,
+      value: {
+        inspection: {
+          confirmation: "abcd-ef01-2345",
+          destination: view.destination,
+          account: "casey",
+          fingerprints: { server: ["ssh-ed25519 SHA256:Q2FzZXlzTGFiS2V5"] },
+          firstUse: true,
+          advertised: true as const,
+          version: "0.9.0",
+          root: "/home/casey/.local/share/orca-server",
+          current: null,
+          scope: "install-and-sign-in" as const,
+        },
+      },
+    })),
+    setUpServer: vi.fn(() => new Promise(() => {})),
+  };
+  render(
+    <h.Providers>
+      <ConnectionDialog bridge={{ ...r.bridge, profiles } as never} target={r.target} close={() => {}} />
+    </h.Providers>,
+  );
+  fireEvent.click(await screen.findByText("Set up ORCA server"));
+  const confirm = await screen.findByRole("group", { name: "Confirm server setup" });
+  expect(confirm.textContent).toContain("Your tailnet's coordination server advertises these host keys");
+  const carry = within(confirm).getByRole<HTMLInputElement>("checkbox");
+  expect(carry.checked).toBe(true);
+  fireEvent.click(carry);
+  fireEvent.click(within(confirm).getByText("Set up"));
+  await waitFor(() =>
+    expect(profiles.setUpServer).toHaveBeenCalledWith("build-1", "abcd-ef01-2345", { carryBundle: false }),
+  );
+  h.dispose();
+});

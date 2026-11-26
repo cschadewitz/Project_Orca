@@ -25,6 +25,22 @@ install side by side; this package declares no conflict with the screen reader a
 its files.
 <!-- rename-keep-end -->
 
+## The command line
+
+The package also installs ORCA's command line as **`orca-cli`** (#1207), `/usr/bin/orca-cli`:
+
+```sh
+orca-cli --help
+orca-cli remote enroll build-box --host-key SHA256:...
+```
+
+It is the same CLI the app runs as its background service, started by the installed app's own
+binary, so it is always the installed version. It is `orca-cli` for the same reason the app
+is `orca-desktop`: plain `orca` is the screen reader. The docs write every command as
+`orca-cli …`, and a remote profile you create in the app uses it unless you name another
+command ([MULTI-MACHINE.md](MULTI-MACHINE.md)). From the archive, run
+`resources/bin/orca-cli` in the unpacked directory, or link it onto your `PATH`.
+
 ## Updating
 
 The package does not update itself. About 15 seconds after start, and every six hours after that,

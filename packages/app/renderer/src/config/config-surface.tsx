@@ -52,6 +52,7 @@ import { DraftBar } from "./draft-bar.js";
 import { PermissionsView } from "./permissions-view.js";
 import { JudgeSetup } from "./judge-setup.js";
 import { PreferencesSection } from "./preferences-section.js";
+import { RemotesSection } from "./remotes-section.js";
 import { StorageSection } from "./storage-section.js";
 import { RawView } from "./raw-view.js";
 import { agentPolicies, buildSections, fieldPaths, patchFrom, placeErrors } from "./config-model.js";
@@ -72,11 +73,12 @@ export interface ConfigSurfaceProps {
   open?: ConfigDocument;
   launch?: ReactNode;
   onLaunch?: () => void;
+  onCloseLaunch?: () => void;
 }
 
 type View = "form" | "raw";
 
-export function ConfigSurface({ connection, open, launch, onLaunch }: ConfigSurfaceProps): JSX.Element {
+export function ConfigSurface({ connection, open, launch, onLaunch, onCloseLaunch }: ConfigSurfaceProps): JSX.Element {
   const feed = useConfig();
   if (window.orca.daemonConnection || (feed.state.phase === "ready" && feed.state.data.formSchema !== undefined))
     return (
@@ -84,6 +86,7 @@ export function ConfigSurface({ connection, open, launch, onLaunch }: ConfigSurf
         connection={connection}
         {...(launch ? { launch } : {})}
         {...(onLaunch ? { onLaunch } : {})}
+        {...(onCloseLaunch ? { onCloseLaunch } : {})}
         {...(open ? { open } : {})}
       />
     );
@@ -273,6 +276,7 @@ function LegacyConfigSurface({ connection, open }: ConfigSurfaceProps): JSX.Elem
             autoFocus={open === "permissions"}
           />
 
+          <RemotesSection />
           <StorageSection />
           <PreferencesSection surfaces={SURFACES.map((surface) => ({ id: surface.id, label: surface.label }))} />
 

@@ -5,7 +5,10 @@ the reference for node types, routing, gates, permissions, completion, session c
 to another daemon, MCP servers, skills, secrets and templates.
 
 Workflows are YAML or JSON files matching `WorkflowDefinitionSchema`. Check them with
-`orca validate` (errors block, warnings inform) and draw one with `orca graph <id>`.
+`orca-cli validate` (errors block, warnings inform) and draw one with `orca-cli graph <id>`.
+
+`orca-cli` is the command line desktop installs put on `PATH`
+([MULTI-MACHINE.md](MULTI-MACHINE.md); `pnpm run orca …` in a source checkout).
 
 ```yaml
 id: ai-sdlc            # kebab-case, unique
@@ -93,7 +96,7 @@ starting with `=` is an expression; anything else is a literal:
 `vars: { slug: "=vars.workItem.slug", stage: "build" }`.
 
 **Custom nodes.** A plugin executor with `validate(node)` checks its node's fields during
-`orca validate` and bootstrap, so a missing field fails before any agent turn
+`orca-cli validate` and bootstrap, so a missing field fails before any agent turn
 ([EXTENSIBILITY](EXTENSIBILITY.md)). A custom type no loaded plugin registers is a warning that
 its fields were not checked.
 
@@ -135,8 +138,8 @@ in the `ClaimStore`. Two fan-outs over the same items cannot both launch one. Th
 skipped with `reason: claimed`, and under `join: all` its step fails. A run re-claims its own
 branches, so resume and retry work. Claims are never released automatically.
 
-- `orca claims` lists who holds what, with the owner's status.
-- `orca claims release <workItemId>` frees an item whose owner finished or whose log is gone.
+- `orca-cli claims` lists who holds what, with the owner's status.
+- `orca-cli claims release <workItemId>` frees an item whose owner finished or whose log is gone.
   Add `--force` for a run that is paused and abandoned.
 
 A request-scoped fan-out over `custom:materialize-work-items`' `vars.leafWorkItems` looks like
@@ -208,10 +211,10 @@ An option is a bare word or a record. You can mix both in one list.
 
 | Channel | Behaviour |
 | --- | --- |
-| `pause` (default) | The run parks (`human.requested`, `step.waiting`, `run.paused`) and the process exits with code 3, printing the request id. Parents park with their children. `orca answer <requestId> <option>` from any process with store access appends `human.answered`, resumes the topmost run and re-attaches to the same children. `orca answer` alone lists open questions; `orca status <runId>` shows them too. |
+| `pause` (default) | The run parks (`human.requested`, `step.waiting`, `run.paused`) and the process exits with code 3, printing the request id. Parents park with their children. `orca-cli answer <requestId> <option>` from any process with store access appends `human.answered`, resumes the topmost run and re-attaches to the same children. `orca-cli answer` alone lists open questions; `orca-cli status <runId>` shows them too. |
 | `cli` | Prompts on the terminal running ORCA. |
 | `auto` | Picks the first option, or `option:`. For demos and tests. |
-| ACP host (`orca acp`) | Gates are forwarded as `session/request_permission`. |
+| ACP host (`orca-cli acp`) | Gates are forwarded as `session/request_permission`. |
 
 Agent `ask` permissions cannot be parked; see [Unanswerable asks](#unanswerable-asks).
 
@@ -367,7 +370,7 @@ decides against the same three layers, read fresh each time:
 
 Until the checks pass, the session is **held**: started, but ORCA answers none of its file reads
 or writes and forwards none of its asks. A session that fails is refused everything it asked for
-while waiting. Only the daemon's session factory installs the hook. `orca ping` with no daemon
+while waiting. Only the daemon's session factory installs the hook. `orca-cli ping` with no daemon
 answering, and `orca-daemon` delegation, refuse an agent with `nativeToolHook: experimental`
 instead of starting it unhooked. Ping it through a running daemon.
 
@@ -404,7 +407,7 @@ command (`write_stdin`) and hosted web search never reach it, and Codex's hook r
 lets a call through if the hook cannot run, which is why ORCA probes it at session open.
 
 **Other agents.** Gemini and pi take no hook yet (#705). With `nativeToolHook: experimental` they
-are refused; without it, ORCA decides only what they ask about. `orca agents` shows an advisory
+are refused; without it, ORCA decides only what they ask about. `orca-cli agents` shows an advisory
 (not a guard) of settings it sees in an agent's command line and environment that let calls skip
 ORCA: for Gemini CLI, YOLO or auto-edit in a trusted workspace, allowed-tools and policy flags, a
 trusted workspace, the user's own Gemini home; for pi, always, because pi never asks. It reads no
@@ -453,7 +456,7 @@ event records `ask:allow`, `ask:deny`, `ask:cancelled` or `ask:no-answerer`.
 | Field | Meaning |
 | --- | --- |
 | `mode: turn-end` (default) | Wait for the prompt turn to end, then collect. |
-| `mode: artifact-present` | Poll while the turn runs and cancel it once all **required** files exist. Optional files are not watched, so all-optional deliverables behave like `turn-end` (`orca validate` warns). One host round trip per poll, about every 1.5 s, never overlapping; a slow host is polled less often, up to 30 s apart. |
+| `mode: artifact-present` | Poll while the turn runs and cancel it once all **required** files exist. Optional files are not watched, so all-optional deliverables behave like `turn-end` (`orca-cli validate` warns). One host round trip per poll, about every 1.5 s, never overlapping; a slow host is polled less often, up to 30 s apart. |
 | `maxFollowUps` | "Your deliverable is missing or invalid" follow-ups in the same session before the attempt fails. |
 | `maxAttempts` | Whole-step retries with a fresh session. Any node can set it; on an agent node the node-level value wins over `completion.maxAttempts`. A step is retried only for a retryable failure that cannot have acted outside ORCA. An agent step that already sent a prompt is not retried; it waits for a [side-effect review](recovery.md#side-effect-review). So for agent nodes, `maxAttempts` covers failures before the first prompt. |
 | `timeoutMs` | Per-turn wall clock (default: the agent's `turnTimeoutMs`). ORCA then sends `session/cancel`. An agent that does not end the turn within `cancelGraceMs` (default 10 s) is killed and the step fails with `AGENT_TRANSPORT`. |
@@ -480,7 +483,7 @@ agents:
    cleaned up. A queued open never starts beside a process still shutting down.
 3. **Waiting.** Runs are admitted at once. A step without a slot waits before spawning anything,
    with `step.waiting`, `on: agent-slot` and a detail such as
-   `waiting for an agent slot: 3 of 3 in use on host box-b`. `orca plan explain <slug>` shows it.
+   `waiting for an agent slot: 3 of 3 in use on host box-b`. `orca-cli plan explain <slug>` shows it.
    Cancelling removes the step from the queue. A daemon restart loses nothing.
 4. **Order.** Plan steps by plan priority, others by age, the two sides by age. A step for a
    different host or agent is not held up by a full one.
@@ -532,7 +535,7 @@ agents:
 # on build-box: its host key's fingerprint
 ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
 # on this machine
-orca remote enroll build-box --host-key SHA256:...    # plus --jump-host-key for a jump host
+orca-cli remote enroll build-box --host-key SHA256:...    # plus --jump-host-key for a jump host
 ```
 
 1. **Host keys.** Enrollment trusts a key only if it is pinned in
@@ -543,14 +546,21 @@ orca remote enroll build-box --host-key SHA256:...    # plus --jump-host-key for
    <each delegated workflow>` (plus `--config <serverConfig>` when set). It may start only those
    workflows and see only its own runs. It is saved as `auth/remotes/<id>.<credential id>.token`,
    readable only by this user. Enrolling again reuses it while route and host keys are unchanged;
-   `orca remote enroll <id> --issue` replaces it. The ssh login must be able to run
-   `remotes[].serverCommand` (default `orca`).
+   `orca-cli remote enroll <id> --issue` replaces it. The ssh login must be able to run
+   `remotes[].serverCommand`: `orca-cli` for a desktop install; omitted, it is `orca`, as before
+   0.8.1, which on Ubuntu Desktop is the screen reader.
 3. **Checks.** Before saving, enrollment checks that the remote takes delegated runs and that the
    credential can start every delegated workflow. An issued credential must be scoped to exactly
    those workflows and its own runs; one that no longer fits is replaced.
 4. **Record.** Enrollment pins the keys and writes `auth/remotes/<id>.json` last, naming the
    remote's workspace, principal and credential id (never the secret). A failed or interrupted
    enrollment leaves the previous one in use.
+
+A workspace the desktop app set up in first-run refuses `orca-cli remote enroll`, because only the
+daemon the app launched may write it. Enroll there from the app's Config surface, under
+**Remote daemons**: the app's daemon runs the same enrollment through `remotes.enroll`, with
+the same lock, checks and files ([#1206](https://github.com/cschadewitz/Project_Orca/issues/1206),
+[multi-machine setup 4](MULTI-MACHINE.md#4-a-parent-daemon-delegating-to-remote-daemons)).
 
 Rules around enrollment:
 
@@ -565,7 +575,7 @@ Rules around enrollment:
   replaces it. A listed credential is revoked only on the daemon that issued it, over the same
   route and keys, once that daemon lists the label. Anything that cannot be proven or revoked
   stays listed with a reason and a warning; the next enrollment retries. Otherwise run
-  `orca auth revoke <credential id>` on that daemon and remove the entry.
+  `orca-cli auth revoke <credential id>` on that daemon and remove the entry.
 - Enroll again after replacing the credential, or after the remote's workspace or host keys
   change on purpose (delete the old `known_hosts` file first for new keys).
 
@@ -573,7 +583,7 @@ To use a hand-issued credential, save it, then enroll as above:
 
 ```sh
 # on build-box, in the remote daemon's workspace
-orca auth issue parent-daemon --preset client --json > build-box.token
+orca-cli auth issue parent-daemon --preset client --json > build-box.token
 # on this machine
 install -m 600 build-box.token auth/remotes/build-box.token   # or set remotes[].credentialFile
 ```
@@ -679,7 +689,7 @@ workspace:
 ## MCP servers and skills for agent steps
 
 ORCA can give an agent session **outbound** MCP servers (in ACP `session/new`) and **skills**
-(#335). This is unrelated to ORCA's **inbound** MCP interface (`orca mcp`,
+(#335). This is unrelated to ORCA's **inbound** MCP interface (`orca-cli mcp`,
 [MCP operator](mcp-operator.md)).
 
 Define each server and skill once in a catalog, then select at four scopes, each applied over the
@@ -746,7 +756,7 @@ session only when, at that session open (#337):
 
 1. **One** current credential of the run's owner has `capabilities.use` with a grant covering the
    step's whole set, each server as defined now, on the agent's host and endpoint
-   (`orca auth issue <principal> --mcp-server github@local`, or `--mcp-server '*'`; the `owner`
+   (`orca-cli auth issue <principal> --mcp-server github@local`, or `--mcp-server '*'`; the `owner`
    preset grants all). Grants on two credentials do not combine. A grant does not follow a server
    redefined to another command or a host id moved to another machine. The decision is asked
    again after a slot wait, right before `session/new`, and before every prompt. A `per-run`
@@ -762,7 +772,7 @@ What a named grant covers:
 
 | Part | Rule |
 | --- | --- |
-| Executable | Only a **trusted executable**, checked on the agent's host at every delivery: an absolute, canonical path (no symlink, `.` or `..`, no extension appended, no `PATH`), an executable regular file, owned with every parent directory up to `/` by root or the agent's account, writable by neither group nor others, with no ACL. Anything else (under `/tmp`, a symlinked `/bin/...`, a group-writable `/usr/local`, any Windows host) needs `'*'`. Bare names and relative paths need `'*'`; `orca auth issue` refuses a named grant for them. |
+| Executable | Only a **trusted executable**, checked on the agent's host at every delivery: an absolute, canonical path (no symlink, `.` or `..`, no extension appended, no `PATH`), an executable regular file, owned with every parent directory up to `/` by root or the agent's account, writable by neither group nor others, with no ACL. Anything else (under `/tmp`, a symlinked `/bin/...`, a group-writable `/usr/local`, any Windows host) needs `'*'`. Bare names and relative paths need `'*'`; `orca-cli auth issue` refuses a named grant for them. |
 | Arguments | Passed exactly as configured and pinned by the grant. |
 | Environment | The server's `env` is pinned, with secret references read on the agent's host under `secrets.use`. Anything else is inherited from the agent process; ORCA does not control that. |
 
@@ -784,7 +794,7 @@ A skill is a directory or single file on the daemon's machine. ORCA never fetche
   starts with each skill file as an ACP `resource` block, inline, named
   `orca-skill://<id>/<file>?digest=<sha256:...>`. Skills reach SSH hosts the same way.
 - **Grant:** the run owner's single credential with `capabilities.use` must cover servers and
-  skills together. A named skill grant pins the digest (`orca auth issue <principal> --skill review`),
+  skills together. A named skill grant pins the digest (`orca-cli auth issue <principal> --skill review`),
   so an edited skill needs a new grant. `--skill '*'` and the `owner` preset cover all skills.
   Wildcards are per kind. The decision is asked again before every prompt.
 - **Reading:** once at session open, hashed over exactly the bytes sent. The path is resolved once;
@@ -822,12 +832,12 @@ agents:
 - **Delivered only under a grant.** At every session open the daemon asks whether the run's owner
   (the root run's recorded starter) may use each secret, with its provider, on its host, from
   their credentials as they are now. One credential must cover the whole use, the run's workflow
-  included. Grant with `orca auth issue <principal> --secret github-token@local` (repeatable) or
+  included. Grant with `orca-cli auth issue <principal> --secret github-token@local` (repeatable) or
   `--secret '*'`. The `owner` preset (used by the local bootstrap credential) grants all; no other
   preset grants any. A denial fails the step before anything is read, with `reason: unauthorized`.
   - Standalone mode (no credentials file): the verified OS user owns the config and its secrets.
-  - `orca serve --unauthenticated-loopback`: every local run may use every reference.
-  - A direct `orca run` with `--cwd` or `--agent`/`--model` records no owner and cannot use
+  - `orca-cli serve --unauthenticated-loopback`: every local run may use every reference.
+  - A direct `orca-cli run` with `--cwd` or `--agent`/`--model` records no owner and cannot use
     references. `agents.ping` never starts an agent that uses one.
   - See [secret use authority](secret-use-authority.md).
 - **Only the location is configured.** `provider: env` reads a variable from the host's
@@ -846,7 +856,7 @@ agents:
   and MCP env), then becomes the agent. The remote needs `base64` and `printenv`.
 - **Never on a command line.** Values travel only through environment and shell variables.
 - **Only through a reference.** Every variable a `provider: env` secret reads is removed from what
-  agents on that host inherit, `orca agent ping` included.
+  agents on that host inherit, `orca-cli agent ping` included.
 - **Never written.** Config, drafts, launch records, events and logs hold the reference, not the
   value. A read value is also replaced with `[REDACTED]` in later events and logs of the run and
   its parents, in artifact bodies before they are stored or parsed, and in session errors and
@@ -872,7 +882,7 @@ nodes:
     secretEnv: { DEPLOY_TOKEN: deployToken }
 ```
 
-- **The launcher names a secret, never a value:** `orca run deploy --var deployToken=prod-deploy`.
+- **The launcher names a secret, never a value:** `orca-cli run deploy --var deployToken=prod-deploy`.
   An unknown id, or one bound to another host than the step's agent, is refused before the run is
   written (`reason` `not-found` or `wrong-host`).
 - **Agent environment only.** The session gets `{ secret: <id> }` under that variable and reads it
@@ -911,7 +921,7 @@ loads it.
   `overrides.templatePack` (selection record).
 - Every agent step resolves `<pack>/<id>` first, then `<id>`. Partials are not looked up in the
   pack.
-- `orca validate --template-pack <name>` lists which templates the pack overrides and which are
+- `orca-cli validate --template-pack <name>` lists which templates the pack overrides and which are
   inherited. A pack that overrides nothing fails with `TEMPLATE_NOT_FOUND`, and `run`, `submit`
   and `plan dispatch` refuse it the same way.
 - The shipped example is `templates/strict/`, which replaces `sdlc/review`.
@@ -922,21 +932,21 @@ loads it.
 | --- | --- |
 | `workflows/ai-sdlc.yaml` | plan → design → spec-gate → await-deps → build ⇄ test → review ⇄ build → deploy. High-risk specs stop at the gate; `await-deps` holds the build until build-phase dependencies are met; test and review loop back with bounded budgets. |
 | `workflows/program.yaml` | decompose → register → assess-risks → decide (a matrix per open decision) → schedule → plan-gate → dispatch → summarize. |
-| `workflows/plan-resume.yaml` | schedule → gate → dispatch with `scope: plan`. Picks up deferred work (`orca plan dispatch`). |
+| `workflows/plan-resume.yaml` | schedule → gate → dispatch with `scope: plan`. Picks up deferred work (`orca-cli plan dispatch`). |
 
 **Which item workflow runs.** Neither shipped program pins it on `custom:plan-dispatch`. Both
-default `vars.itemWorkflow` to `ai-sdlc`, and `orca submit` and `orca plan dispatch` set it from
+default `vars.itemWorkflow` to `ai-sdlc`, and `orca-cli submit` and `orca-cli plan dispatch` set it from
 `program.itemWorkflow` in `orca.config.yaml`. First match wins:
 
 1. the item's own `workflowId`;
 2. the node's `workflow`;
-3. `overrides.itemWorkflow` (#186), set by `--item-workflow <id>` on `orca submit` and
-   `orca plan dispatch`;
+3. `overrides.itemWorkflow` (#186), set by `--item-workflow <id>` on `orca-cli submit` and
+   `orca-cli plan dispatch`;
 4. `vars.itemWorkflow`.
 
 A node pin that differs from the selection logs a warning. The dispatch result's
 `itemWorkflowSource` says which applied (`node`, `override`, `var`). `--workflow` on
-`orca plan dispatch` picks the program workflow to run instead of `plan-resume`, never the item
+`orca-cli plan dispatch` picks the program workflow to run instead of `plan-resume`, never the item
 workflow; one without a `custom:plan-dispatch` node is refused with `CONFIG_INVALID` (#126).
 
-Draw any of them as Mermaid with `pnpm run orca graph <id>` or `orca validate --mermaid`.
+Draw any of them as Mermaid with `pnpm run orca graph <id>` or `orca-cli validate --mermaid`.

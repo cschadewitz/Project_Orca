@@ -86,11 +86,18 @@ These are separate:
 | Ship group | Which issues ship together. |
 | Topic or area labels | What the issue is about. Keep useful existing ones. |
 | Release bump labels | `release:major`, `release:minor`, `release:patch` or `release:none` ([Releasing](docs/RELEASING.md)). |
-| Milestone | An explicitly chosen release plan. Leave new issues without one until milestone planning is asked for. Keep existing assignments. A group or dependency never assigns a version. |
+| Milestone | An explicitly chosen release plan. Leave new issues without one until milestone planning is asked for. Keep existing assignments. A group or dependency never assigns a version. One automatic exception: a pull request merged into `main` without a milestone gets the minor it ships in, the earliest open one whose line is not cut yet (Milestone on merge, docs/WORKSTREAMS.md). That is a planning assignment, not proof the change is in a release artifact. |
 
 The template's ship-group text is a proposal, not a label. Select the matching label when
 triaging; if it does not exist, agree the name before creating it. Nothing here automates labels
 or triggers releases.
+
+## Large work with no target release
+
+A large feature that should not wait for, or disturb, the next release is a workstream:
+follow [Workstreams](docs/WORKSTREAMS.md). By default it lands on `main` in small pull
+requests behind an incubating flag; a `feature/<name>` branch is only for work that
+cannot ship dark. Say which in the tracking issue.
 
 ## Make dependencies precise
 

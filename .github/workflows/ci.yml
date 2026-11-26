@@ -4,11 +4,13 @@ name: CI
 
 # Release line branches (`release/X.Y`, docs/RELEASING.md "Release lines") get the same
 # checks as main, so a fix backported to a line is verified before it can ship in a patch.
+# Long-lived feature branches (`feature/<name>`, docs/WORKSTREAMS.md) get them too, so work that
+# waits on an outside gate stays green until the day it lands.
 on:
   pull_request:
-    branches: [main, "release/[0-9]*"]
+    branches: [main, "release/[0-9]*", "feature/**"]
   push:
-    branches: [main, "release/[0-9]*"]
+    branches: [main, "release/[0-9]*", "feature/**"]
 
 permissions:
   contents: read

@@ -5,6 +5,7 @@ import { chmod, mkdtemp, mkdir, readFile, readdir, rename, rm, symlink, writeFil
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { parse as parseYaml } from "yaml";
 import { PROTOCOL_VERSION, type HelloResult } from "@orca/protocol";
 import type { DaemonClient } from "../src/client/daemon-client.js";
 import { FIRST_RUN_SAMPLE, FIRST_RUN_SAMPLE_FILES } from "../src/first-run-sample.js";
@@ -13,6 +14,7 @@ import {
   FIRST_RUN_STORE_DIR,
   FirstRunSetup,
   LEGACY_FIRST_RUN_CONFIG,
+  UNBOUND_CONFIGURATION,
   type FirstRunDeps,
 } from "../src/main/first-run/setup.js";
 import { ownedDirectory } from "../src/main/first-run/directories.js";
@@ -128,7 +130,7 @@ describe.skipIf(typeof process.getuid !== "function")("dedicated first-run proje
     const names = await readdir(f.workspace);
     expect(names).toContain(FIRST_RUN_CONFIG);
     if (LEGACY_FIRST_RUN_CONFIG !== FIRST_RUN_CONFIG) expect(names).not.toContain(LEGACY_FIRST_RUN_CONFIG);
-    const written = JSON.parse(await readFile(join(f.workspace, FIRST_RUN_CONFIG), "utf8")) as { storeDir: string };
+    const written = parseYaml(await readFile(join(f.workspace, FIRST_RUN_CONFIG), "utf8")) as { storeDir: string };
     expect(written.storeDir).toBe(FIRST_RUN_STORE_DIR);
     // Turn it into what a pre-rename app left: the old config name, naming the old store
     // directory, and a receipt keyed by the old name with that file's digest.
@@ -275,7 +277,12 @@ describe.skipIf(typeof process.getuid !== "function")("dedicated first-run proje
     expect(f.prepareConnection).not.toHaveBeenCalled();
     if (selected.state !== "review") throw new Error("expected review");
     expect(await f.setup.prepare(selected.review.id, f.assertCurrent)).toMatchObject({ state: "prepared" });
-    const config = JSON.parse(await readFile(join(f.workspace, "orca.config.yaml"), "utf8")) as Record<string, unknown>;
+    const configText = await readFile(join(f.workspace, "orca.config.yaml"), "utf8");
+    // Block YAML, never a JSON document in a `.yaml` file (#1200).
+    expect(configText.trimStart().startsWith("{")).toBe(false);
+    expect(configText).toMatch(/^version: 1$/m);
+    expect(configText).toMatch(/^humanInput:\n {2}mode: pause$/m);
+    const config = parseYaml(configText) as Record<string, unknown>;
     expect(config).toMatchObject({
       agents: [],
       roles: {},
@@ -483,7 +490,7 @@ async function configurationRig() {
   });
   owner.verify(f.hello);
   const path = join(f.workspace, "orca.config.yaml");
-  const before = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
+  const before = parseYaml(await readFile(path, "utf8")) as Record<string, unknown>;
   const config: Record<string, unknown> & {
     agents: { id: string; command: string; env: Record<string, string> }[];
     roles: Record<string, string>;
@@ -591,6 +598,28 @@ it("explicitly binds a private saved real-agent config, reopens it and preserves
   const { reserveFirstRunOwnership } = await import("../src/main/first-run/ownership.js");
   expect(() => reserveFirstRunOwnership(f.workspace)).not.toThrow();
 });
+it("names an unbound Config save as the reason the workspace will not reopen, and binding it reopens (#1192)", async () => {
+  const f = await configurationRig();
+  const status = await f.setup.status();
+  expect(status).toEqual({
+    state: "selection-required",
+    reason: UNBOUND_CONFIGURATION,
+    changedConfiguration: { workspace: f.workspace },
+  });
+  // A fresh selection that never verified says nothing about a changed configuration.
+  const fresh = new FirstRunSetup({ ...f.deps, receiptPath: join(f.home, "no-such-receipt.json") });
+  expect(await fresh.status()).not.toHaveProperty("changedConfiguration");
+  // What Config's save now does: review, then bind exactly that revision while the owner is live.
+  const reviewed = await f.setup.reviewConfiguration(f.assertCurrent);
+  if (reviewed.state !== "configuration-review") throw new Error("Expected config review");
+  expect(reviewed.review.revision).toBe(f.hash(JSON.stringify(f.config) + "\n"));
+  expect((await f.setup.bindConfiguration(reviewed.review.id, f.assertCurrent)).state).toBe("prepared");
+  expect((await new FirstRunSetup(f.deps).status()).state).toBe("prepared");
+  f.exit();
+  expect(f.owner.complete()).toBe(true);
+  const { reserveFirstRunOwnership } = await import("../src/main/first-run/ownership.js");
+  expect(() => reserveFirstRunOwnership(f.workspace)).not.toThrow();
+});
 it.each([
   "root",
   "store",
@@ -670,7 +699,7 @@ it("explicitly binds Save-before-Bind after app recreation, without a live daemo
   const { reserveFirstRunOwnership, inspectFirstRunOwnership } = await import("../src/main/first-run/ownership.js");
   reserveFirstRunOwnership(f.workspace);
   const path = join(f.workspace, "orca.config.yaml");
-  const config = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
+  const config = parseYaml(await readFile(path, "utf8")) as Record<string, unknown>;
   config.agents = [
     {
       id: "offline-agent",

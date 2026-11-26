@@ -96,3 +96,17 @@ it("retains Linux prerequisite refusals, smoke/type proof and native restart acc
   ])
     expect(proof.steps.some(({ run }) => run === command)).toBe(true);
 });
+
+it("runs the layout check on a GitHub-hosted runner only, so its installs never touch a persistent host", () => {
+  const layout = workflow.jobs.layout;
+  expect(layout["runs-on"]).toBe("ubuntu-24.04");
+  expect(layout.needs).toBeUndefined();
+  const run = layout.steps.find(({ name }) => name === "Layout check").run;
+  expect(run).toContain("sudo apt-get install");
+  expect(run).toContain("pnpm run app:layout");
+  // The Chromium sandbox stays on: a scoped userns exception, never --no-sandbox.
+  expect(layout.steps.some(({ name }) => name === "Prepare a GitHub-hosted Linux runner")).toBe(true);
+  expect(JSON.stringify(layout)).not.toContain("ORCA_SMOKE_NO_SANDBOX");
+  // And nothing in the self-hosted-capable smoke job runs it or installs for it.
+  expect(JSON.stringify(workflow.jobs.smoke)).not.toContain("app:layout");
+});

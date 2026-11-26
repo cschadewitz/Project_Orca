@@ -39,6 +39,8 @@ export interface RemoteProfileView extends RemoteProfileHop {
   serverConfig?: string;
   /** Credentials are issued with the read-only `viewer` preset. */
   readOnly?: true;
+  /** Picked from the tailnet (#1226): bound to this node's stable ID; `name` is its MagicDNS name then. */
+  tailnet?: { node: string; name: string };
   hasCredential: boolean;
   /** When the automatically issued credential expires; it is renewed well before. */
   credentialExpiresAt?: string;
@@ -60,6 +62,8 @@ export interface RemoteProfileInput extends RemoteProfileHop {
   serverCommand?: string;
   serverConfig?: string;
   readOnly?: boolean;
+  /** Bind to a tailnet node (#1226). Left out on an edit: the profile keeps the node it had. */
+  tailnet?: { node: string; name: string };
 }
 
 /**
@@ -107,6 +111,8 @@ export interface ServerInspectionView {
   account: string;
   fingerprints: { server: string[]; jump?: string[] };
   firstUse: boolean;
+  /** The keys are the ones the machine's tailnet advertises (#1227): shown as such, still confirmed. */
+  advertised?: true;
   version: string;
   root: string;
   current: string | null;
@@ -116,6 +122,70 @@ export interface ServerInspectionView {
 export interface ServerInspectionResultView {
   inspection?: ServerInspectionView;
   setup?: ServerSetupView["setup"];
+}
+
+/** A machine on this computer's tailnet (#1226), as Add a machine lists it. */
+export interface TailnetMachineView {
+  /** The stable node ID a profile is bound to. */
+  node: string;
+  /** Its MagicDNS name, without the trailing dot. */
+  name: string;
+  hostName: string;
+  os: string;
+  online: boolean;
+  /** Runs Tailscale SSH, so it advertises its host keys (#1227). */
+  tailscaleSsh: boolean;
+  /** Shared in from another tailnet: its host keys are confirmed by hand. */
+  sharedIn: boolean;
+  /** ORCA can set up a server there (Linux today, #1238). */
+  hostSupported: boolean;
+}
+/**
+ * The tailnet as Add a machine sees it: `off` (the `tailnet-hosts` flag is off: nothing is
+ * shown), Tailscale missing, stopped or unreadable here, or running with its machines.
+ */
+export type TailnetMachinesView =
+  | { state: "running"; tailnetName?: string; machines: TailnetMachineView[] }
+  | { state: "off" | "absent" | "stopped" | "signed-out" | "error"; detail?: string };
+
+/** Tailscale SSH asks the person to approve a connection (check mode, #1228). */
+export interface LoginApprovalView {
+  profileId: string;
+  /** The approval page's host, to name it; main opens the page itself. */
+  host: string;
+}
+
+/** One agent ORCA can put on a managed server (#1236), and its state there. */
+export interface HostAgentView {
+  agent: string;
+  name: string;
+  /** The version this ORCA pins. */
+  version: string;
+  /** That exact install is on the server, unchanged since it was installed. */
+  installed: boolean;
+  signedIn: "yes" | "no" | "unknown";
+  /** Why the install there cannot be used, when it is there but changed. */
+  problem?: string;
+  /**
+   * `device-code`: Sign in runs the agent's own sign-in there. `yourself`: the person signs it
+   * in on that machine (Claude Code); ORCA never takes part.
+   */
+  signIn: "device-code" | "yourself";
+  /** For `yourself`, once installed: what to run on that machine to sign it in. */
+  signInCommand?: string;
+  /** Once installed: the `agents:` entry that runs it in that machine's own config (#1235). */
+  entry?: { id: string; name: string; command: string; args: string[]; env: Record<string, string> };
+}
+
+/** An agent's sign-in on a server waits for the person (#1236): the page's host and the code to enter. */
+export interface AgentSignInView {
+  profileId: string;
+  agent: string;
+  /** Which sign-in this prompt is for: opening its page names it. */
+  attempt: string;
+  /** The sign-in page's host, to name it; main opens the page itself. */
+  host?: string;
+  code?: string;
 }
 
 /** Profile management. Every call is main-process work; secrets never cross this bridge. */
@@ -137,7 +207,32 @@ export interface RemoteProfilesBridge {
    * Make the profile's machine a managed ORCA server, or verify and repair it (#881), then sign
    * in, exactly as confirmed (`inspectServer`'s confirmation, used once). Runs for minutes.
    */
-  setUpServer?(this: void, id: string, confirmation: string): Promise<ProfileResult<ServerSetupView>>;
+  setUpServer?(
+    this: void,
+    id: string,
+    confirmation: string,
+    /**
+     * `carryBundle: false`: a machine on the tailnet fetches and verifies the bundle itself instead
+     * of this computer carrying it (#1234). Ignored for any other profile.
+     */
+    options?: { carryBundle?: boolean },
+  ): Promise<ProfileResult<ServerSetupView>>;
+  /** The machines on this computer's tailnet (#1226). `off` unless the `tailnet-hosts` flag is on. */
+  tailnetMachines?(this: void): Promise<ProfileResult<TailnetMachinesView>>;
+  /** Tailscale SSH waits for the person to approve a connection (#1228). */
+  onLoginApproval?(this: void, listener: (approval: LoginApprovalView) => void): () => void;
+  /** Open the approval page main last received for this profile, in the browser. */
+  openLoginApproval?(this: void, id: string): Promise<ProfileResult<null>>;
+  /** The agents on the profile's managed server (#1236). Absent unless the `tailnet-hosts` flag is on. */
+  hostAgents?(this: void, id: string): Promise<ProfileResult<HostAgentView[]>>;
+  /** Install the agent's pinned packages there from this computer; returns the server config that runs it. */
+  installHostAgent?(this: void, id: string, agent: string): Promise<ProfileResult<{ settings: string }>>;
+  /** Run the agent's own device-code sign-in there; resolves when it is signed in. */
+  signInHostAgent?(this: void, id: string, agent: string): Promise<ProfileResult<null>>;
+  /** An agent's sign-in waits for the person: the page to open and the code to enter. */
+  onAgentSignIn?(this: void, listener: (prompt: AgentSignInView) => void): () => void;
+  /** Open the sign-in page main last received for this profile and agent, in the browser. */
+  openAgentSignIn?(this: void, id: string, agent: string, attempt: string): Promise<ProfileResult<null>>;
 }
 export interface DaemonConnectionBridge {
   read(this: void): DaemonTargetSnapshot;

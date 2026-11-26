@@ -76,6 +76,22 @@ COSIGN_SHA256 = {
     "x86_64": ("cosign-linux-amd64", "424e2c97d0b45fd7a6b608a87f090f35633f4c23ece5f092d48bba11aaf4bbfa"),
     "aarch64": ("cosign-linux-arm64", "ade83b7aac62e131cacfe96d958948b2150cc9efec46a570a2649b8e27dedad2"),
 }
+# A host that cannot reach GitHub or Sigstore (#1234) is set up from files the client pushed into
+# the bundle directory beside the three bundle files: the pinned cosign under its release asset
+# name, still checked against COSIGN_SHA256, and a Sigstore trusted root, which cosign then uses
+# instead of fetching one. The signature is still checked here: the client is a courier. A pushed
+# trusted root is the client's word, as is everything else that client could already run as this
+# account over the ssh login that pushed it.
+PUSHED_TRUSTED_ROOT = "trusted_root.json"
+TRUSTED_ROOT_MAX = 1 << 20
+# The Sigstore public-good trusted roots this release accepts when one is carried to a host that
+# cannot reach Sigstore (#1234): sha256 of `trusted_root.json` as Sigstore's TUF targets list it.
+# A carried root is trusted only by this pin, never by its shape. When Sigstore publishes a new
+# root, a release adds its digest; until then an offline setup refuses and an online one is
+# unaffected. Must match `TRUSTED_ROOT_PINS` in packages/protocol/src/server-courier.ts.
+TRUSTED_ROOT_SHA256 = (
+    "6494e21ea73fa7ee769f85f57d5a3e6a08725eae1e38c755fc3517c9e6bc0b66",
+)
 SOURCE_ENTRY = "packages/cli/dist/main.js"
 # A bundle's runtime and entry are fixed, inside the release; nothing from a manifest or a
 # record can point them anywhere else.
@@ -338,6 +354,18 @@ def select(root, release):
     sync_dir(root)
 
 
+def pushed_trusted_root(directory):
+    """The Sigstore trusted root carried beside a bundle for an offline setup (#1234): a regular
+    file within its size limit (checked before it is read) whose digest this release pins.
+    Required: an offline setup has no other root, and never takes one on its shape."""
+    path = directory / PUSHED_TRUSTED_ROOT
+    if path.is_symlink() or not path.is_file() or path.stat().st_size > TRUSTED_ROOT_MAX:
+        raise RuntimeError("Pushed trusted root is missing, or not a regular file within its size limit")
+    if file_sha256(path) not in TRUSTED_ROOT_SHA256:
+        raise RuntimeError("Pushed trusted root is not one this release trusts; update ORCA, or set up with internet access")
+    return path
+
+
 def file_sha256(path):
     digest = hashlib.sha256()
     with open(path, "rb") as stream:
@@ -597,6 +625,9 @@ class BundleSource:
 
     def __init__(self, root):
         self.root = Path(root).resolve()
+        # A bundle directory the client pushed (#1234): where a pinned cosign may be found
+        # instead of downloaded. Set only while staging from such a directory.
+        self.pushed = None
 
     def typed_dispatch(self, operation, *args, **kwargs):
         return operation(*args, **kwargs)
@@ -615,11 +646,21 @@ class BundleSource:
         path = tools / f"cosign-{COSIGN_VERSION}-{machine}"
         if not path.exists():
             partial = Path(self.typed_dispatch(tempfile.mkdtemp, prefix="cosign-", dir=tools)) / name
+            pushed_dir = getattr(self, "pushed", None)
+            pushed = pushed_dir / name if pushed_dir is not None else None
             try:
-                self.typed_dispatch(download, f"https://github.com/sigstore/cosign/releases/download/{COSIGN_VERSION}/{name}",
-                                    partial, 256 << 20)
-                if file_sha256(partial) != digest:
-                    raise RuntimeError("Downloaded cosign does not match its pinned digest")
+                if pushed is not None:
+                    # Offline: the carried cosign or nothing. The network is never tried.
+                    if pushed.is_symlink() or not pushed.is_file() or pushed.stat().st_size > 256 << 20:
+                        raise RuntimeError("Pushed cosign is missing, or not a regular file within its size limit")
+                    shutil.copyfile(pushed, partial)
+                    if file_sha256(partial) != digest:
+                        raise RuntimeError("Pushed cosign does not match its pinned digest")
+                else:
+                    self.typed_dispatch(download, f"https://github.com/sigstore/cosign/releases/download/{COSIGN_VERSION}/{name}",
+                                        partial, 256 << 20)
+                    if file_sha256(partial) != digest:
+                        raise RuntimeError("Downloaded cosign does not match its pinned digest")
                 os.chmod(partial, 0o700)
                 os.replace(partial, path)
             finally:
@@ -677,6 +718,8 @@ class BundleSource:
         cosign = self.cosign()
         tuf = self.root / "tools" / "sigstore"
         tuf.mkdir(mode=0o700, parents=True, exist_ok=True)
+        # Only an offline stage carries a root, and it was checked against the pin when copied.
+        trust = pushed_trusted_root(directory) if getattr(self, "pushed", None) is not None else None
         # Each accepted repository is tried with its own exact identity; none is a pattern.
         for repository in BUNDLE_REPOSITORIES:
             result = self.typed_process(subprocess.run, [
@@ -687,6 +730,7 @@ class BundleSource:
                 "--certificate-github-workflow-repository", repository,
                 "--certificate-github-workflow-ref", "refs/heads/main",
                 "--certificate-github-workflow-trigger", BUNDLE_TRIGGER,
+                *(["--trusted-root", str(trust)] if trust else []),
             ], env={**os.environ, "TUF_ROOT": str(tuf), "HOME": str(tuf)}, text=True,
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
             if result.returncode == 0:
@@ -889,11 +933,17 @@ class Deployment(BundleSource):
         return release.resolve()
 
     @typed_operation("update")
-    def stage_bundle(self, source):
+    def stage_bundle(self, source, offline=False):
         """Stage a prebuilt signed server bundle: a published version (X.Y.Z, or X.Y.Z-rc.N
         for a release candidate) to download from its release page, or a directory holding the
         three release files. Needs Python 3 and
-        util-linux only (no gh, git, mise or pnpm); cosign is fetched pinned."""
+        util-linux only (no gh, git, mise or pnpm); cosign is fetched pinned.
+
+        `offline` (a directory only, asked for explicitly, #1234): the directory also carries the
+        pinned cosign and a Sigstore trusted root this release pins, and neither is fetched.
+        Without it, anything else in the directory is ignored."""
+        if offline and (os.sep not in source and not source.startswith(".")):
+            raise RuntimeError("An offline stage takes a bundle directory")
         assertion = self.typed_guard("update")
         self.retain_typed_inspection(assertion)
         if platform.system() != "Linux" or platform.machine() != "x86_64":
@@ -926,7 +976,15 @@ class Deployment(BundleSource):
                     if (local / name).is_symlink() or not (local / name).is_file():
                         raise RuntimeError(f"Bundle file missing: {name}")
                     shutil.copyfile(local / name, downloads / name)
-            manifest = self.verify_bundle(downloads, version)
+                # What the client carried with it, for a host with no internet access (#1234):
+                # checked (type, size, pinned digest) before it is copied, and checked again there.
+                if offline:
+                    shutil.copyfile(pushed_trusted_root(local), downloads / PUSHED_TRUSTED_ROOT)
+                    self.pushed = local
+            try:
+                manifest = self.verify_bundle(downloads, version)
+            finally:
+                self.pushed = None
             product = manifest["name"][:-len("-server")]
             # The exact signed bytes this release was verified from, kept as its durable receipt:
             # a later reuse (auto-update) must match all three digests, not just the commit.
@@ -1406,6 +1464,10 @@ def main():
             bundle = args[:1] == ["--bundle"]
             if bundle:
                 args = args[1:]
+            # Explicit only: a carried trusted root and cosign are never used on file presence.
+            offline = bundle and args[:1] == ["--offline"]
+            if offline:
+                args = args[1:]
             if len(args) != 1:
                 raise RuntimeError("Supply one published release tag" + (" or bundle directory" if bundle else ""))
             if deploy.pending.exists():
@@ -1415,7 +1477,7 @@ def main():
                 metadata(existing)
                 candidate = existing.resolve()
             elif bundle:
-                candidate = deploy.stage_bundle(args[0])
+                candidate = deploy.stage_bundle(args[0], offline=offline)
             else:
                 candidate = deploy.stage(args[0])
             if options.action == "update":

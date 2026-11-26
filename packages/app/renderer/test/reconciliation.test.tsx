@@ -173,7 +173,12 @@ describe("snapshot and subscription reconciliation", () => {
       resolution.resolve({ ok: true, result: { ...RUN_DETAILS[base.id]!, run: base, lastSeq: 19 } });
     });
     expect(hook.result.current.detailOf(base.id)?.run.status).toBe("succeeded");
-    expect(fake.calls.filter((c) => c.method === "runs.get")).toHaveLength(1);
+    /* Rerenders shared the one first read. The read predates the notification, so the run is
+       read once more (#1109); this fake answers that with the same older projection, which
+       must not undo the status the notification folded in. */
+    await waitFor(() => expect(fake.calls.filter((c) => c.method === "runs.get")).toHaveLength(2));
+    await act(async () => {});
+    expect(hook.result.current.detailOf(base.id)?.run.status).toBe("succeeded");
   });
   it.each([false, true])(
     "preserves completion and newly opened input during Attention reads (reattachment: %s)",

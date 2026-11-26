@@ -1,0 +1,78 @@
+# Backport pull requests from a label (docs/RELEASING.md, "Release lines"; #1239).
+#
+# A pull request merged into main with a `backport:X.Y` label gets a cherry-pick of its complete
+# change (the merge commit, the squash commit, or a rebase merge's whole range; refused when
+# that cannot be established) into a new pull request against `release/X.Y`, from the branch `backport/<pr>-X.Y`.
+# Adding the label after the merge works too. The new pull request names the issues the
+# original fixed (tools/backport.js), so the release line guard checks it like any other, and
+# Cal is asked to review it. Nothing here merges anything.
+#
+# A cherry-pick that does not apply opens nothing: the original pull request gets a comment
+# listing the conflicting files and the `backport-conflict` label, for its owner to backport by
+# hand. A rerun skips a line that already has a backport pull request, opens the pull request
+# for a branch an earlier run pushed only when that branch is exactly the expected picks, and
+# otherwise reports it without rewriting it.
+#
+# `pull_request_target`, so this file and tools/backport.js always come from main. It checks out
+# main and the line, never runs the pull request's code, and only moves commits that already
+# merged into main. Branch and pull request are made with the release App's token (the
+# main-only `release-bot` environment), so CI and the guard run on the backport.
+name: Backport
+
+on:
+  pull_request_target:
+    branches: [main]
+    types: [closed, labeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backport-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  backport:
+    name: open backport pull requests
+    # Decided here, before the release-bot environment and its token: a routine merge with no
+    # backport label never enters the job.
+    if: >-
+      github.event.pull_request.merged == true &&
+      ((github.event.action == 'closed' && contains(join(github.event.pull_request.labels.*.name, ' '), 'backport:')) ||
+      (github.event.action == 'labeled' && startsWith(github.event.label.name, 'backport:')))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: release-bot
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    steps:
+      - name: Release bot token (optional)
+        id: app
+        if: ${{ vars.ORCA_RELEASE_APP_ID != '' }}
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
+        with:
+          app-id: ${{ vars.ORCA_RELEASE_APP_ID }}
+          private-key: ${{ secrets.ORCA_RELEASE_APP_PRIVATE_KEY }}
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+          token: ${{ steps.app.outputs.token || github.token }}
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: Cherry-pick into each labelled line
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token || github.token }}
+          REPO: ${{ github.repository }}
+          ACTION: ${{ github.event.action }}
+          ADDED: ${{ github.event.label.name }}
+          NUMBER: ${{ github.event.pull_request.number }}
+          TITLE: ${{ github.event.pull_request.title }}
+          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+        run: bash tools/backport.sh
