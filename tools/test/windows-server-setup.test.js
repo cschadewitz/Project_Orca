@@ -31,6 +31,19 @@ it("trusts exactly the Windows release workflow's signer and cosign", () => {
   expect(value("BundlePlatform")).toBe("win-x64");
 });
 
+it("fetches a release's Windows bundle only by the record its release workflow writes", () => {
+  const attach = read("tools/deploy/release-attach.sh");
+  const token = attach.match(/^server_token\(\) \{ if \[\[ "\$SP" == win-x64 \]\]; then echo (\S+);/m)[1];
+  expect(value("BundleRecordToken")).toBe(token);
+  const pattern = setup.match(/^\$BundleRecordPattern = '([^']+)'$/m)[1];
+  expect(pattern).toBe(`<!-- ${token}: [0-9]+ sha256:([0-9a-f]{64}) sha256:([0-9a-f]{64}) sha256:([0-9a-f]{64}) -->`);
+  // The record lists the archive, the manifest and the signature, in that order.
+  expect(attach).toMatch(/echo "\$s\.\$ext \$s\.manifest\.json \$s\.manifest\.json\.sigstore\.json"/);
+  expect(setup).toContain(
+    "$names.archive = $records[0].Groups[1].Value; $names.manifest = $records[0].Groups[2].Value; $names.signature = $records[0].Groups[3].Value",
+  );
+});
+
 it("accepts a carried Sigstore root only by the pins orca-release.py has", () => {
   const pins = (text) => [...text.matchAll(/"([0-9a-f]{64})"/g)].map((match) => match[1]);
   const ours = pins(setup.match(/\$TrustedRootSha256 = @\(([^)]*)\)/)[1]);
