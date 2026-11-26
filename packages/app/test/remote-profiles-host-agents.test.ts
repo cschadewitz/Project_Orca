@@ -90,15 +90,20 @@ function store(features: { env: Record<string, string> } = ON, rig: Rig = {}) {
 }
 
 describe("agents on a profile's server", () => {
-  it("lists each pinned agent's state there over a pinned-only connection", async () => {
-    const { profiles, opened, pin } = store();
-    pin();
-    await expect(profiles.hostAgents("lab", scripts)).resolves.toEqual([
-      { agent: "codex", name: "Codex", version: "0.171.0", installed: false, signedIn: "no" },
-      { agent: "copilot", name: "GitHub Copilot CLI", version: "1.0.114", installed: false, signedIn: "no" },
-    ]);
-    expect(opened[0]).toMatchObject({ pinnedOnly: true });
-  });
+  // The agents' program runs on a Linux server (the bundle is linux-x64 only): a Windows runner
+  // has no POSIX home to stand in for one.
+  it.skipIf(process.platform === "win32")(
+    "lists each pinned agent's state there over a pinned-only connection",
+    async () => {
+      const { profiles, opened, pin } = store();
+      pin();
+      await expect(profiles.hostAgents("lab", scripts)).resolves.toEqual([
+        { agent: "codex", name: "Codex", version: "0.171.0", installed: false, signedIn: "no" },
+        { agent: "copilot", name: "GitHub Copilot CLI", version: "1.0.114", installed: false, signedIn: "no" },
+      ]);
+      expect(opened[0]).toMatchObject({ pinnedOnly: true });
+    },
+  );
 
   it("is refused with the flag off, before the server is set up, and for an unknown agent", async () => {
     const off = store({ env: {} });
