@@ -1,7 +1,7 @@
 /**
  * Visual sweep of the installed app on a seeded fresh install: first-run setup, the demo seed
  * (tools/demo-seed) applied through Config > Raw, then every surface and the main detail views,
- * at several window sizes and 150% zoom. Each capture also records an in-page layout audit
+ * at several window sizes, 150% zoom and in the dark theme. Each capture also records an in-page layout audit
  * (overlapping, covered, clipped and off-window controls) in audit.json.
  *
  * Opt-in and slow (a few minutes), so it runs only when SWEEP_OUT is set:
