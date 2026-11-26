@@ -33,13 +33,15 @@ const pinText = (pin: NonNullable<FirstRunAgentCheck["evidence"]["codexPin"]>): 
     ? `Its bytes match Codex ${pin.version}, a build ORCA pinned for this platform. That is not a check that it runs, or that you are signed in.`
     : pin.state === "unpinned"
       ? "Its bytes are not a Codex build ORCA pinned for this platform, so ORCA will not start it. An npm install's codex command is a Node script; point the command at the native codex binary of a pinned version."
-      : "Its bytes could not be read to the end, so whether it is a pinned Codex build is unknown, and ORCA will not start it.";
+      : pin.state === "no-platform-pin"
+        ? "ORCA pinned no Codex build for this platform, so it will not start Codex with this driver here. Its bytes were not read."
+        : "Its bytes could not be read to the end within the check's limits, or changed while being read, so whether it is a pinned Codex build is unknown, and ORCA will not start it.";
 
 /** What the experimental Codex app-server driver does not cover, shown before anyone relies on it (#1066, #1167). */
-function CodexAppServerCaveats({ pin }: { pin: NonNullable<FirstRunAgentCheck["evidence"]["codexPin"]> }): JSX.Element {
+function CodexAppServerCaveats({ pin }: { pin: FirstRunAgentCheck["evidence"]["codexPin"] }): JSX.Element {
   return (
     <>
-      <Text style="caption">Codex pin: {pinText(pin)}</Text>
+      {pin && <Text style="caption">Codex pin: {pinText(pin)}</Text>}
       <Text style="caption">
         Experimental. Codex decides which commands run inside its own sandbox without asking, so ORCA's rules are never
         consulted for those. A command ORCA allows can still connect to programs on this machine (a unix socket, a local
@@ -75,7 +77,9 @@ export function AgentPreflightReview({ checks }: { checks: readonly FirstRunAgen
           <Text style="caption">
             Exact-command approval: {check.evidence.exactCommand} (#594). This review cannot clear that hold.
           </Text>
-          {check.evidence.codexPin && <CodexAppServerCaveats pin={check.evidence.codexPin} />}
+          {check.evidence.configuredRoute === "codex-app-server-candidate" && (
+            <CodexAppServerCaveats pin={check.evidence.codexPin} />
+          )}
         </div>
       ))}
       <Text style="body">

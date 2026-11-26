@@ -8,7 +8,7 @@ import { constants } from "node:fs";
 import { access, lstat, open, realpath } from "node:fs/promises";
 import { delimiter, isAbsolute, join, win32 } from "node:path";
 import type { FirstRunAgentCheck } from "../../first-run-contract.js";
-import { pinnedCodexVersion } from "./codex-pins.js";
+import { CODEX_PINNED_IMAGES, pinnedCodexVersion } from "./codex-pins.js";
 /** Configured basename is a routing hint, never executable/artifact/source correspondence. */
 function configuredRoute(
   command: string,
@@ -34,21 +34,51 @@ export function machOArchitectureMismatch(header: Buffer, platform: string, arch
   const cpu = header.readUInt32LE(4);
   return cpu !== (arch === "arm64" ? 0x100000c : 0x1000007);
 }
-/** Reads the open file to its end through `file` and compares its digest with the pins. */
+/** The most bytes the pin check reads: well above any pinned build, so it never reads without bound. */
+export const CODEX_PIN_MAX_BYTES = 512 * 1024 * 1024;
+/** How long the pin check may take before it gives up: it is advisory and must not hold the review. */
+export const CODEX_PIN_TIMEOUT_MS = 15_000;
+
+/**
+ * Compares the open file's bytes, read through `file`, with the pins. Only on a platform that
+ * has a pin; never past `maxBytes` or `timeoutMs`; and `unreadable` unless the file is the same
+ * (inode, size, modification and change times) before and after, and was read to its end.
+ */
 async function codexPin(
   file: import("node:fs/promises").FileHandle,
   target: string,
-  pins?: Readonly<Record<string, Readonly<Record<string, string>>>>,
+  limits: {
+    pins?: Readonly<Record<string, Readonly<Record<string, string>>>>;
+    maxBytes?: number;
+    timeoutMs?: number;
+  },
 ): Promise<NonNullable<FirstRunAgentCheck["evidence"]["codexPin"]>> {
+  const pins = limits.pins ?? CODEX_PINNED_IMAGES;
+  if (!Object.values(pins).some((images) => images[target] !== undefined)) return { state: "no-platform-pin" };
+  const maxBytes = limits.maxBytes ?? CODEX_PIN_MAX_BYTES;
+  const deadline = Date.now() + (limits.timeoutMs ?? CODEX_PIN_TIMEOUT_MS);
   try {
+    const before = await file.stat();
+    if (before.size > maxBytes) return { state: "unreadable" };
     const hash = createHash("sha256");
     const chunk = Buffer.alloc(1 << 20);
-    for (let position = 0; ;) {
+    let position = 0;
+    for (;;) {
+      if (Date.now() > deadline) return { state: "unreadable" };
       const { bytesRead } = await file.read(chunk, 0, chunk.length, position);
       if (bytesRead === 0) break;
-      hash.update(chunk.subarray(0, bytesRead));
       position += bytesRead;
+      if (position > maxBytes) return { state: "unreadable" };
+      hash.update(chunk.subarray(0, bytesRead));
     }
+    const after = await file.stat();
+    const same =
+      position === before.size &&
+      after.size === before.size &&
+      after.ino === before.ino &&
+      after.mtimeMs === before.mtimeMs &&
+      after.ctimeMs === before.ctimeMs;
+    if (!same) return { state: "unreadable" };
     const version = pinnedCodexVersion(hash.digest("hex"), target, pins);
     return version ? { state: "pinned", version } : { state: "unpinned" };
   } catch {
@@ -63,8 +93,13 @@ export async function inspectLocalTool(
     driver?: string | undefined;
     env: Record<string, string>;
   },
-  /** This machine's pin key, and the pins: for tests only. */
-  codex: { target?: string; pins?: Readonly<Record<string, Readonly<Record<string, string>>>> } = {},
+  /** This machine's pin key, the pins and the pin check's bounds: for tests only. */
+  codex: {
+    target?: string;
+    pins?: Readonly<Record<string, Readonly<Record<string, string>>>>;
+    maxBytes?: number;
+    timeoutMs?: number;
+  } = {},
 ): Promise<FirstRunAgentCheck> {
   const target = codex.target ?? `${process.platform}-${process.arch}`;
   const result = (
@@ -119,7 +154,7 @@ export async function inspectLocalTool(
           return result("architecture");
         return result(
           "handshake-required",
-          agent.driver === "codex-app-server" ? await codexPin(file, target, codex.pins) : undefined,
+          agent.driver === "codex-app-server" ? await codexPin(file, target, codex) : undefined,
         );
       } finally {
         await file.close();

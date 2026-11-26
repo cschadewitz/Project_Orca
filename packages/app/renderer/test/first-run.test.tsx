@@ -336,6 +336,7 @@ it.each([
   [{ state: "pinned", version: "0.171.0" } as const, /match Codex 0\.171\.0, a build ORCA pinned/],
   [{ state: "unpinned" } as const, /not a Codex build ORCA pinned for this platform, so ORCA will not start it/],
   [{ state: "unreadable" } as const, /could not be read to the end/],
+  [{ state: "no-platform-pin" } as const, /ORCA pinned no Codex build for this platform/],
 ])("labels the Codex app-server driver experimental and shows its caveats and pin (%o)", async (pin, pinText) => {
   const check = toolCheck("handshake-required");
   const review = configReview();
@@ -354,6 +355,24 @@ it.each([
   expect(caveats.textContent).toMatch(/lets a call through\s+when the hook fails/);
   expect(caveats.textContent).toMatch(/Cancelling a turn does not prove a running command stopped/);
 });
+it.each(["missing", "unavailable", "architecture"] as const)(
+  "shows the Codex app-server caveats for the configured route with no pin result (%s)",
+  async (state) => {
+    const check = toolCheck(state);
+    const review = configReview(state);
+    if (review.state !== "configuration-review") throw new Error("unreachable");
+    review.review.checks = [
+      { ...check, evidence: { ...check.evidence, configuredRoute: "codex-app-server-candidate" } },
+    ];
+    setup({ status: async () => ({ ok: true, result: review }), bindConfiguration: vi.fn() });
+    await screen.findByText(/driver: codex-app-server, which is experimental and not yet available/);
+    const caveats = screen.getByText(/^Experimental\./);
+    expect(caveats.textContent).toMatch(/a unix socket, a local\s+port or a named pipe/);
+    expect(caveats.textContent).toMatch(/lets a call through\s+when the hook fails/);
+    expect(caveats.textContent).toMatch(/Cancelling a turn does not prove a running command stopped/);
+    expect(screen.queryByText(/Codex pin:/)).toBeNull();
+  },
+);
 it("shows no Codex app-server caveats for another route", async () => {
   setup({ status: async () => ({ ok: true, result: configReview() }), bindConfiguration: vi.fn() });
   await screen.findByText(/Executable file observed/);

@@ -164,9 +164,16 @@ it("for driver codex-app-server, compares the executable's bytes with the pinned
   });
   // the same bytes on another platform, or other bytes, are not pinned
   expect(
-    (await inspectLocalTool(agent, { target: "other-x64", pins: { "9.9.9": { "test-x64": sha } } })).evidence,
+    (
+      await inspectLocalTool(agent, {
+        target: "other-x64",
+        pins: { "9.9.9": { "test-x64": sha, "other-x64": "0".repeat(64) } },
+      })
+    ).evidence,
   ).toMatchObject({ codexPin: { state: "unpinned" } });
-  expect((await inspectLocalTool(agent)).evidence).toMatchObject({ codexPin: { state: "unpinned" } });
+  expect((await inspectLocalTool(agent, { target: "linux-x64" })).evidence).toMatchObject({
+    codexPin: { state: "unpinned" },
+  });
   await expect(readFile(sentinel)).rejects.toMatchObject({ code: "ENOENT" });
   expect(JSON.stringify(pinned)).not.toContain(f.root);
   // a missing Codex reports missing, with no pin claim
@@ -175,4 +182,30 @@ it("for driver codex-app-server, compares the executable's bytes with the pinned
   expect(missing.evidence.codexPin).toBeUndefined();
   // without the driver, a command named codex gets no pin check
   expect((await inspectLocalTool({ id: "codex", command, env: {} })).evidence.codexPin).toBeUndefined();
+});
+it("bounds the Codex pin check, and skips it where ORCA pinned no build", async () => {
+  const { createHash } = await import("node:crypto");
+  const f = await fixture();
+  const command = join(f.bin, "codex");
+  const bytes = "x".repeat(4096);
+  await writeFile(command, bytes);
+  await chmod(command, 0o700);
+  const sha = createHash("sha256").update(bytes).digest("hex");
+  const pins = { "9.9.9": { "test-x64": sha } };
+  const agent = { id: "codex", command, driver: "codex-app-server", env: {} };
+  const pinOf = async (codex: Parameters<typeof inspectLocalTool>[1]) =>
+    (await inspectLocalTool(agent, codex)).evidence.codexPin;
+  // within its bounds, it matches
+  expect(await pinOf({ target: "test-x64", pins, maxBytes: 4096, timeoutMs: 10_000 })).toEqual({
+    state: "pinned",
+    version: "9.9.9",
+  });
+  // a file past the size bound is not read, and is not called pinned
+  expect(await pinOf({ target: "test-x64", pins, maxBytes: 4095 })).toEqual({ state: "unreadable" });
+  // nor is one whose read runs past the time bound
+  expect(await pinOf({ target: "test-x64", pins, timeoutMs: -1 })).toEqual({ state: "unreadable" });
+  // a platform with no pin is not read at all
+  expect(await pinOf({ target: "plan9-mips", pins })).toEqual({ state: "no-platform-pin" });
+  // the executable is still reported found in each case
+  expect((await inspectLocalTool(agent, { target: "test-x64", pins, maxBytes: 1 })).state).toBe("handshake-required");
 });

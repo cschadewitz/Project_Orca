@@ -24,10 +24,12 @@ export interface FirstRunAgentCheck {
     /**
      * For `driver: codex-app-server` only (#1167): whether the executable's bytes are a Codex
      * native build ORCA pinned for this platform, by digest; nothing is executed. `unreadable`
-     * when its bytes could not be read to the end.
+     * when its bytes could not be read to the end within the check's bounds, or changed while
+     * read; `no-platform-pin` when ORCA pinned no build for this platform (nothing is read).
      */
     readonly codexPin?:
-      { readonly state: "pinned"; readonly version: string } | { readonly state: "unpinned" | "unreadable" };
+      | { readonly state: "pinned"; readonly version: string }
+      | { readonly state: "unpinned" | "unreadable" | "no-platform-pin" };
   };
 }
 export interface FirstRunReview {
