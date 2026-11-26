@@ -639,8 +639,11 @@ names that file. Enrolling again reuses it while the route and host keys are unc
 `orca remote enroll <id> --issue` replaces it. The ssh login must be able to run that CLI
 (`remotes[].serverCommand`, default `orca`).
 
-Enroll from a workspace the CLI owns. A workspace the desktop app set up refuses enrollment
-for now ([#1206](https://github.com/cschadewitz/Project_Orca/issues/1206)).
+A workspace the desktop app set up in first-run refuses `orca remote enroll`, because only the
+daemon the app launched may write it. Enroll there from the app's Config surface, under
+**Remote daemons**: the app's daemon runs the same enrollment through `remotes.enroll`, with
+the same lock, checks and files ([#1206](https://github.com/cschadewitz/Project_Orca/issues/1206),
+[multi-machine setup 4](MULTI-MACHINE.md#4-a-parent-daemon-delegating-to-remote-daemons)).
 
 Before anything is saved, enrollment checks what the credential may actually do there: the
 remote must take delegated runs, and the credential must be able to start every workflow this

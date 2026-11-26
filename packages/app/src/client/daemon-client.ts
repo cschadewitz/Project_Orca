@@ -10,6 +10,15 @@
  * daemon on the same port; a client that only reads never opens a socket.
  */
 import { PROTOCOL_VERSION } from "@orca/protocol";
+import {
+  REMOTES_ENROLL_METHOD,
+  REMOTES_LIST_METHOD,
+  RemotesEnrollResultSchema,
+  RemotesListResultSchema,
+  type RemotesEnrollParams,
+  type RemotesEnrollResult,
+  type RemotesListResult,
+} from "@orca/protocol";
 import { RevisionResultSchema, PendingRevisionViewSchema } from "@orca/protocol";
 import { MaintenanceResultSchema, type MaintenanceParams, type MaintenanceResult } from "@orca/protocol";
 import {
@@ -675,6 +684,19 @@ export class DaemonClient {
   /** Where the plain-language rule judge's setup stands (protocol 2.12, #701): read-only. */
   judgeStatus(): Promise<JudgeStatusResult> {
     return this.call(JUDGE_STATUS_METHOD, {}, JudgeStatusResultSchema);
+  }
+
+  /** The workspace's delegation remotes and what each enrollment record says (protocol 2.13, #1206). */
+  remotesList(): Promise<RemotesListResult> {
+    return this.call(REMOTES_LIST_METHOD, {}, RemotesListResultSchema);
+  }
+
+  /**
+   * Enroll one of them through the daemon that owns the workspace (protocol 2.13, #1206): pins the
+   * host keys the person gave and proves, or has the remote issue, the credential. A write.
+   */
+  remotesEnroll(params: RemotesEnrollParams): Promise<RemotesEnrollResult> {
+    return this.call(REMOTES_ENROLL_METHOD, params, RemotesEnrollResultSchema);
   }
 
   /** Every configured agent's handshake health, with what is claimed right now beside it. */

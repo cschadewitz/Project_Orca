@@ -134,9 +134,17 @@ ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
 orca remote enroll build-box --host-key SHA256:...
 ```
 
-The parent must be a workspace the CLI owns (one you run with `orca serve`). A workspace the
-desktop app set up in first-run refuses `orca remote enroll` ("First-run mutation requires owned
-daemon admission"), and the app has no enrollment screen yet
+In a workspace the desktop app set up in first-run, enroll from the app instead: only the
+daemon the app launched may write that workspace, so its first-run fence refuses
+`orca remote enroll` from the CLI ("First-run mutation requires owned daemon admission"). Add
+the `remotes:` entry and the `type: orca-daemon` agent in Config > Raw, then Validate and
+review, Save reviewed changes and Apply saved configuration. The remote is then listed under
+**Remote daemons** on the Config surface. Choose **Enroll**, enter the fingerprint (and the
+jump host's, if the route has one), and choose **Enroll remote**. The app's daemon pins the key
+and has the worker issue the credential exactly as `orca remote enroll` does. On Windows, where
+the worker cannot issue the credential during enrollment, paste the output of
+`orca auth issue <name> --preset client --json` from the worker into the Credential field; the
+daemon saves it beside the config, readable only by you
 ([#1206](https://github.com/cschadewitz/Project_Orca/issues/1206)).
 
 Enrollment pins exactly that host key and has the worker issue the parent a credential over
