@@ -33,6 +33,7 @@ vi.mock("../src/runs/timeline/timeline-entries.js", async (importOriginal) => {
 
 const { RunsSurface } = await import("../src/runs/runs-surface.js");
 const { installBridge, harness } = await import("./harness.js");
+const { RUN_DETAILS } = await import("./fixtures.js");
 type Harness = Awaited<ReturnType<typeof import("./harness.js").harness>>;
 type FakeBridge = ReturnType<typeof import("./fake-bridge.js").fakeBridge>;
 
@@ -352,6 +353,72 @@ describe("the run tree", () => {
       method: "runs.get",
       params: { runId: "run-parent" },
     });
+  });
+
+  /* A reconnect starts a new subscription generation while a re-read is still out. The old
+     answer is dropped, and it must not leave the run marked as being re-read, or every later
+     settle would only mark it dirty and Variables would stay stale. */
+  it("re-reads again after a reconnect that overtook an earlier re-read", async () => {
+    await openParent();
+    const reads = (): number => fake.calls.filter((c) => c.method === "runs.get").length;
+    const release = fake.hold("runs.get");
+
+    act(() => fake.notify(stepChanged({ stepRunId: "s-fan", status: "failed", event: "step.failed" })));
+    await waitFor(() => expect(reads()).toBe(2));
+
+    act(() => fake.connect({ ...fake.bridge.connection.read(), generation: 7 }));
+    await waitFor(() => expect(reads()).toBe(3));
+    await act(async () => {
+      release();
+    });
+    await waitFor(() => expect(ids()).toContain("run-parent/s-fan"));
+
+    act(() => fake.notify(stepChanged({ stepRunId: "s-fan", status: "failed", event: "step.failed", seq: 41 })));
+    await waitFor(() => expect(reads()).toBe(4));
+  });
+
+  it("re-reads again after a re-read the bridge rejected", async () => {
+    await openParent();
+    const reads = (): number => fake.calls.filter((c) => c.method === "runs.get").length;
+    let rejectNext = true;
+    fake.script({
+      "runs.get": ({ runId }) => {
+        if (!rejectNext) return { ok: true, result: RUN_DETAILS[runId]! };
+        rejectNext = false;
+        return Promise.reject(new Error("bridge gone"));
+      },
+    });
+
+    act(() => fake.notify(stepChanged({ stepRunId: "s-fan", status: "failed", event: "step.failed" })));
+    await waitFor(() => expect(reads()).toBe(2));
+    await act(async () => {});
+
+    act(() => fake.notify(stepChanged({ stepRunId: "s-fan", status: "failed", event: "step.failed", seq: 41 })));
+    await waitFor(() => expect(reads()).toBe(3));
+  });
+
+  /* The first read can predate a step that settles while it is out, and the status patch
+     queued behind it carries no variables: the run is read once more when that read lands. */
+  it("re-reads a run whose step settled while its first read was out", async () => {
+    const release = fake.hold("runs.get");
+    renderRuns();
+    await screen.findByRole("tree", { name: "Run tree" });
+    press("End", "End");
+    await act(async () => {
+      press("ArrowRight", "ArrowRight");
+    });
+    const reads = () => fake.calls.filter((c) => c.method === "runs.get");
+    await waitFor(() => expect(reads()).toHaveLength(1));
+
+    act(() => fake.notify(stepChanged({ stepRunId: "s-fan", status: "failed", event: "step.failed" })));
+    expect(reads()).toHaveLength(1);
+    await act(async () => {
+      release();
+    });
+
+    await waitFor(() => expect(reads()).toHaveLength(2));
+    expect(reads().at(-1)!.params).toEqual({ runId: "run-parent" });
+    await waitFor(() => expect(within(rows()[6]!).getByText(STATUS_PRESENTATION.failed.word)).toBeTruthy());
   });
 
   it("draws a step it has never seen, from the step.scheduled that introduces it", async () => {

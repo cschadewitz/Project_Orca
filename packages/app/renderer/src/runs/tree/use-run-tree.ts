@@ -69,21 +69,29 @@ export function useRunTree(roots: readonly RunSummaryView[]): RunTree {
      first answer is still out is read once. */
   const fetching = useRef(new Map<string, PendingChange[]>());
   const epoch = useRef(0);
+  /* Runs with a re-read in flight, each with whether it moved again while that read was out.
+     The entry is the request's own object, so a settling read only ever clears itself. */
+  const rereading = useRef(new Map<string, { again: boolean }>());
+  /* Runs that settled while their first read was still out: that read may predate the step's
+     variables, and the status patch queued behind it carries none, so it is read once more. */
+  const rereadAfterFetch = useRef(new Set<string>());
   useEffect(() => {
     epoch.current += 1;
     fetching.current.clear();
+    rereading.current.clear();
+    rereadAfterFetch.current.clear();
     setDetails(new Map());
     return () => {
       epoch.current += 1;
       fetching.current.clear();
+      rereading.current.clear();
+      rereadAfterFetch.current.clear();
     };
   }, [generation]);
 
   /* The projections as last rendered, for the re-read below, which runs outside a render. */
   const held = useRef(details);
   held.current = details;
-  /* Runs with a re-read in flight, and those that moved again while it was out. */
-  const rereading = useRef(new Map<string, boolean>());
 
   /*
    * A fresh `runs.get` for a run already held. The notifications carry status, not data: a
@@ -91,29 +99,44 @@ export function useRunTree(roots: readonly RunSummaryView[]): RunTree {
    * step detail's Variables) kept what the first read saw until the run was selected again
    * (#1109). So when a step of a held run settles, or the run itself changes, the projection is
    * read again and replaces the held one if it is not older. One read per run at a time; a
-   * change while one is out asks for one more.
+   * change while one is out asks for one more. A run whose first read is still out is read
+   * again once that read lands.
    */
-  const reread = useCallback((runId: string): void => {
-    if (!held.current.has(runId)) return;
-    if (rereading.current.has(runId)) {
-      rereading.current.set(runId, true);
+  const read = useCallback((runId: string): void => {
+    const inFlight = rereading.current.get(runId);
+    if (inFlight) {
+      inFlight.again = true;
       return;
     }
-    rereading.current.set(runId, false);
+    const entry = { again: false };
+    rereading.current.set(runId, entry);
     const requestEpoch = epoch.current;
-    void window.orca.runs.get({ runId }).then((result) => {
+    const settle = (result: Awaited<ReturnType<typeof window.orca.runs.get>> | undefined): void => {
+      // A reconnect cleared the map; a newer request may own the slot now, so only remove ours.
+      if (rereading.current.get(runId) === entry) rereading.current.delete(runId);
       if (requestEpoch !== epoch.current) return;
-      const again = rereading.current.get(runId) === true;
-      rereading.current.delete(runId);
-      if (result.ok)
+      if (result?.ok)
         setDetails((prev) => {
           const current = prev.get(runId);
           if (!current || current.lastSeq > result.result.lastSeq) return prev;
           return new Map(prev).set(runId, result.result);
         });
-      if (again) reread(runId);
-    });
+      if (entry.again) read(runId);
+    };
+    void window.orca.runs.get({ runId }).then(settle, () => settle(undefined));
   }, []);
+
+  const reread = useCallback(
+    (runId: string): void => {
+      if (fetching.current.has(runId)) {
+        rereadAfterFetch.current.add(runId);
+        return;
+      }
+      if (!held.current.has(runId)) return;
+      read(runId);
+    },
+    [read],
+  );
 
   const all = useMemo(() => buildTree({ roots, details, expanded }), [roots, details, expanded]);
   const rows = useMemo(() => (attentionOnly ? filterAttention(all) : all), [all, attentionOnly]);
@@ -127,10 +150,11 @@ export function useRunTree(roots: readonly RunSummaryView[]): RunTree {
       if (details.has(runId) || fetching.current.has(runId)) continue;
       const pending: PendingChange[] = [];
       fetching.current.set(runId, pending);
-      void window.orca.runs.get({ runId }).then((result) => {
+      const settle = (result: Awaited<ReturnType<typeof window.orca.runs.get>> | undefined): void => {
         if (requestEpoch !== epoch.current) return;
-        fetching.current.delete(runId);
-        if (!result.ok) return;
+        if (fetching.current.get(runId) === pending) fetching.current.delete(runId);
+        const again = rereadAfterFetch.current.delete(runId);
+        if (!result?.ok) return;
         const detail = pending.reduce((held, change) => {
           // The read may already include this transition. Child-run cursors are independent
           // of the parent's, so only compare a notification against its own run's cursor.
@@ -138,9 +162,11 @@ export function useRunTree(roots: readonly RunSummaryView[]): RunTree {
           return change.apply(held);
         }, result.result);
         setDetails((prev) => new Map(prev).set(runId, detail));
-      });
+        if (again) read(runId);
+      };
+      void window.orca.runs.get({ runId }).then(settle, () => settle(undefined));
     }
-  }, [all, details, wanted, generation]);
+  }, [all, details, wanted, generation, read]);
 
   useEffect(() => {
     /** Fold one notification into whichever projections hold the object it is about. */
