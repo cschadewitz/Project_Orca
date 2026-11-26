@@ -46,6 +46,7 @@ access invite developer insight; they do not require code changes or host access
 | [Independent maintenance MCP](maintenance-mcp.md) | inspect the read-only refusal-only preparation; it does not activate host controls |
 | [Installing on Linux](INSTALL-LINUX.md) | install the desktop app on Ubuntu 24.04+ with its sandbox on, and see why the `.deb` is the supported Linux path |
 | [Updating](UPDATING.md) / [releasing](RELEASING.md) / [held Mac composition](implementation/mac-native-provider-composition.md) | inspect Windows/Debian mechanisms, implemented but inactive Mac update/recovery and remaining signed/installed acceptance; operator recipes need their own scope |
+| [Workstreams](WORKSTREAMS.md) | land large features with no target release without holding or disrupting a release: feature branches, their CI and nightly sync with `main` |
 | [CI shadow selection](ci-shadow-selection.md) | understand advisory selection, full-check authority and uncompleted rollout/release parity |
 | [CI runner selection](ci-runners.md) | understand how `check` picks self-hosted (Tyler) or GitHub-hosted runners, how to force hosted, and what the self-hosted runners can reach |
 | [Performance evidence](performance/persistence-baseline/README.md), [credential admin](performance/mcp-credential-admin/README.md), [retry worker](performance/admission-retry-worker/README.md) | inspect exact synthetic workload pins and measurement limits |
