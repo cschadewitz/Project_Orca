@@ -252,6 +252,25 @@ jobs:
           fi
           xvfb-run -a pnpm run app:upgrade-launch
 
+      # The 0.8.1 layout fixes (#1112 #1193 #1194 #1200), measured on a daemon the demo seed
+      # filled, with a screenshot of each state under test-results/layout-shots. The spec
+      # starts its own Xvfb, session bus and unlocked keyring, so it needs those three tools
+      # rather than xvfb-run.
+      - name: Layout check
+        env:
+          LAYOUT_OUT: ${{ github.workspace }}/test-results/layout-shots
+        run: |
+          set -euo pipefail
+          if ! node -e 'process.exit(require("./package.json").scripts?.["app:layout"] ? 0 : 1)'; then
+            echo "::notice title=Layout check::not applicable: this ref predates the check"
+            exit 0
+          fi
+          if ! command -v dbus-daemon > /dev/null || ! command -v gnome-keyring-daemon > /dev/null; then
+            sudo apt-get update -q
+            sudo apt-get install -y -q --no-install-recommends dbus dbus-bin gnome-keyring
+          fi
+          pnpm run app:layout
+
       # Screenshots of both themes, the greyscale pictures, the axe results per surface and
       # a trace for anything that failed. None of these is a baseline — see the spec header.
       - name: Upload the smoke test's output

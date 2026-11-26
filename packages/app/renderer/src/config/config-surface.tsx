@@ -72,11 +72,12 @@ export interface ConfigSurfaceProps {
   open?: ConfigDocument;
   launch?: ReactNode;
   onLaunch?: () => void;
+  onCloseLaunch?: () => void;
 }
 
 type View = "form" | "raw";
 
-export function ConfigSurface({ connection, open, launch, onLaunch }: ConfigSurfaceProps): JSX.Element {
+export function ConfigSurface({ connection, open, launch, onLaunch, onCloseLaunch }: ConfigSurfaceProps): JSX.Element {
   const feed = useConfig();
   if (window.orca.daemonConnection || (feed.state.phase === "ready" && feed.state.data.formSchema !== undefined))
     return (
@@ -84,6 +85,7 @@ export function ConfigSurface({ connection, open, launch, onLaunch }: ConfigSurf
         connection={connection}
         {...(launch ? { launch } : {})}
         {...(onLaunch ? { onLaunch } : {})}
+        {...(onCloseLaunch ? { onCloseLaunch } : {})}
         {...(open ? { open } : {})}
       />
     );

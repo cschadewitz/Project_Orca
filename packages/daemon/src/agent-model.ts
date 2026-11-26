@@ -16,6 +16,8 @@
  * "and what is it working on", and a claim is the only record of that which outlives a step.
  * They are projected by `ReadModel` so there is one `ClaimView` in the daemon and not two.
  */
+import { statSync } from "node:fs";
+import { delimiter, isAbsolute, join } from "node:path";
 import type { AgentRegistry, AgentHealth } from "@orca/agents";
 import { describeError, resolveCapabilities, secretRefs, type Clock } from "@orca/core";
 import type { Orchestrator } from "@orca/engine";
@@ -179,5 +181,39 @@ function agentView(health: AgentHealth, registry: AgentRegistry): AgentView {
     ...(health.lastSeenAt === undefined ? {} : { lastSeenAt: health.lastSeenAt }),
     ...(health.roundTripMs === undefined ? {} : { roundTripMs: health.roundTripMs }),
     ...(health.lastError ? { lastError: health.lastError } : {}),
+    ...(spec && hostType === "local" && commandMissing(spec.command, spec.env)
+      ? { commandMissing: true as const }
+      : {}),
   };
+}
+
+/** A regular file at `path`, or a reason to say it is not there. */
+function isFile(path: string): boolean {
+  try {
+    return statSync(path).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether a local agent's command names nothing on this host (#1200): an absolute path with no
+ * file there, or a bare name found on no directory of the agent's `PATH` (its own `env.PATH`
+ * when the config sets one as a literal, else this daemon's). A relative path resolves against
+ * a run's workspace, which an agent read does not have, so it is never reported, and neither
+ * is an empty command: both are left to the handshake. Only "certainly missing" is said; a
+ * command that is there may still fail to start, which the handshake reports as `down`.
+ */
+function commandMissing(command: string, env: Record<string, unknown>): boolean {
+  if (command === "") return false;
+  if (isAbsolute(command)) return !isFile(command);
+  if (/[\\/]/.test(command)) return false;
+  const path = typeof env.PATH === "string" ? env.PATH : (process.env.PATH ?? "");
+  const extensions =
+    process.platform === "win32" ? ["", ...(process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";")] : [""];
+  for (const dir of path.split(delimiter)) {
+    if (dir === "") continue;
+    for (const extension of extensions) if (isFile(join(dir, command + extension))) return false;
+  }
+  return true;
 }

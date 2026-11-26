@@ -532,6 +532,28 @@ describe("agents.list and agents.ping", () => {
     expect(list.agents[0]!.lastSeenAt).toBeUndefined();
   });
 
+  it("says when a local agent's command is not there, and only then (#1200)", async () => {
+    const h = harness();
+    h.agents
+      .addAgent(AgentSpecSchema.parse({ id: "on-path", command: "node", hostId: "local" }))
+      .addAgent(AgentSpecSchema.parse({ id: "absolute", command: process.execPath, hostId: "local" }))
+      .addAgent(AgentSpecSchema.parse({ id: "gone", command: "/nonexistent/orca-agent-1200", hostId: "local" }))
+      .addAgent(AgentSpecSchema.parse({ id: "nowhere", command: "orca-agent-1200-not-on-path", hostId: "local" }))
+      .addAgent(AgentSpecSchema.parse({ id: "relative", command: "./bin/agent", hostId: "local" }))
+      .addAgent(AgentSpecSchema.parse({ id: "far", command: "/nonexistent/orca-agent-1200", hostId: "build-box" }));
+    const list = AgentsListResultSchema.parse((await call(h.ctx, "agents.list")).result);
+    const missing = (id: string) => list.agents.find((a) => a.id === id)!.commandMissing;
+    expect(missing("on-path")).toBeUndefined();
+    expect(missing("absolute")).toBeUndefined();
+    expect(missing("gone")).toBe(true);
+    expect(missing("nowhere")).toBe(true);
+    // A relative path resolves against a run's workspace, and a remote host is the handshake's.
+    expect(missing("relative")).toBeUndefined();
+    expect(missing("far")).toBeUndefined();
+    // Health is still what it was: nothing has been asked.
+    expect(list.agents.find((a) => a.id === "gone")!.state).toBe("unknown");
+  });
+
   it("says which transport each agent's host uses, and says nothing when the host has gone", async () => {
     const h = harness();
     const list = AgentsListResultSchema.parse((await call(h.ctx, "agents.list")).result);

@@ -382,7 +382,10 @@ export function App(): JSX.Element {
               connection={connection.state}
               {...(window.orca.guidedLaunch ? { onLaunch: () => navigate(launchUrl()) } : {})}
               {...(route?.kind === "launch"
-                ? { launch: <GuidedLaunchRoute onConfiguration={() => navigate(configUrl())} onClose={closeLaunch} /> }
+                ? {
+                    launch: <GuidedLaunchRoute onConfiguration={() => navigate(configUrl())} onClose={closeLaunch} />,
+                    onCloseLaunch: closeLaunch,
+                  }
                 : {})}
               {...(route?.kind === "config" ? { open: route.document } : {})}
             />
