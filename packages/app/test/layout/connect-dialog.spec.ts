@@ -16,7 +16,7 @@ import { _electron as electron, expect, test, type ElectronApplication, type Pag
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { Desktop } from "./desktop.js";
+import { Desktop, LARGE } from "./desktop.js";
 
 const appDir = resolve(fileURLToPath(new URL("../../", import.meta.url)));
 const keyringStore = fileURLToPath(new URL("./keyring-store.cjs", import.meta.url));
@@ -94,9 +94,9 @@ test("#1112 Connect to a daemon: a profile row and its controls stay inside the 
   await expect(dialog.getByText("Build server with a long profile name")).toBeVisible({ timeout: 30_000 });
 
   for (const [width, height, zoom] of [
-    [1280, 900, 1],
-    [1280, 900, 1.25],
-    [1280, 900, 1.5],
+    [...LARGE, 1],
+    [...LARGE, 1.25],
+    [...LARGE, 1.5],
     [800, 600, 1],
     [800, 600, 1.25],
     [800, 600, 1.5],
