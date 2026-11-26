@@ -171,16 +171,17 @@ try {
 
   Case "a failed repair registers the managed task back as it was, still this setup's, still running"
   $xml = [string](Export-ScheduledTask -TaskPath "\ORCA\" -TaskName "orca-server")
-  # Same owner, identity and trigger, another action: a repair registers it again.
-  $drifted = $xml.Replace("</Arguments>", " </Arguments>")
-  Assert ($drifted -ne $xml) "the task has no arguments to change"
+  # Same owner, identity and trigger, another action (cmd.exe by name, not by its full path):
+  # a repair registers it again.
+  $drifted = $xml -replace '<Command>[^<]*</Command>', '<Command>cmd.exe</Command>'
+  Assert ($drifted -ne $xml) "the task has no command to change"
   $null = Register-ScheduledTask -TaskPath "\ORCA\" -TaskName "orca-server" -Xml $drifted -Force
   $run = Invoke-Setup "fail-health"
   Assert ($run.code -eq 1) "exit $($run.code), not 1"
   Assert-Step $run "task" "changed"
   Assert-Step $run "cleanup" "ok"
   $restored = Get-Task
-  Assert ($restored.Actions[0].Arguments.EndsWith(" ")) "the task was not put back as it was: $($restored.Actions[0].Arguments)"
+  Assert ($restored.Actions[0].Execute -eq "cmd.exe") "the task was not put back as it was: $($restored.Actions[0].Execute)"
   Assert ([string]$restored.Description -like "orca-server-setup:*") "the restored task lost its owner: $($restored.Description)"
   Assert ([string]$restored.State -eq "Running") "the restored task is $($restored.State)"
   $run = Invoke-Setup "trust" -more @("-Inspect")
@@ -189,7 +190,7 @@ try {
   Assert ($run.code -eq 0) "exit $($run.code)"
   Assert-Step $run "task" "changed"
   Assert ((Get-Step $run "start").detail -match "healthy") "the repaired task's daemon is not healthy"
-  Assert (-not (Get-Task).Actions[0].Arguments.EndsWith(" ")) "the repair did not register the task again"
+  Assert ((Get-Task).Actions[0].Execute -ne "cmd.exe") "the repair did not register the task again"
 
   Case "a managed task whose privilege changed is refused, not reused, with the same action and description"
   $xml = [string](Export-ScheduledTask -TaskPath "\ORCA\" -TaskName "orca-server")
