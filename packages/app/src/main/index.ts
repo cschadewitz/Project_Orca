@@ -629,6 +629,9 @@ handle("orca:permissions.saveJudgedRule", (params: Parameters<DaemonClient["perm
 );
 // Protocol 2.12 (#701): where the judge's setup stands, read-only.
 handle("orca:judge.status", () => client().judgeStatus());
+// Protocol 2.13 (#1206): delegation remotes, and enrollment by the daemon that owns the workspace.
+handle("orca:remotes.list", () => client().remotesList());
+handle("orca:remotes.enroll", (params: Parameters<DaemonClient["remotesEnroll"]>[0]) => client().remotesEnroll(params));
 
 // The plan writes and `claims.release` (#169, #88). `--read-only` omits them exactly as it
 // omits the three above, so the same `useWritability()` answer covers all of them.
