@@ -70,6 +70,13 @@ import {
   type TailnetRead,
 } from "@orca/protocol/tailnet";
 import {
+  dropCourier,
+  prepareCourier,
+  pushCourier,
+  type CourierFetch,
+  type CourierPackage,
+} from "@orca/protocol/server-courier";
+import {
   CredentialRecords,
   CredentialSetupRefusal,
   DEFAULT_CREDENTIAL_POLICY,
@@ -248,6 +255,8 @@ export interface RemoteProfilesDeps {
    * #1228): show them `url`. The login waits for the approval, up to the tunnel's limit.
    */
   onLoginApproval?: (profileId: string, url: string) => void;
+  /** Test seam: how the courier downloads (#1234). Default: HTTPS from this computer. */
+  courierFetch?: CourierFetch;
   /** Test seam over how the local tailnet is read (`@orca/protocol/tailnet`, #1226). */
   tailnet?: ReadTailnetOptions;
   /** Test seam: ask the daemon, over the tunnel's streams, whether it accepts `token`. */
@@ -834,9 +843,21 @@ export class RemoteProfiles {
    */
   async setUpServer(
     id: string,
-    options: { version: string; scripts: string; confirmation: string },
+    options: {
+      version: string;
+      scripts: string;
+      confirmation: string;
+      /**
+       * Carry the signed bundle, cosign and Sigstore's trusted root from this computer instead of
+       * having the server download them (#1234): for a host with no internet access. The server
+       * still verifies the signature. Only with the `tailnet-hosts` flag on.
+       */
+      pushBundle?: boolean;
+    },
   ): Promise<ServerSetupResult> {
     if (this.closed) throw new ConnectionRefusal("The app is closing.");
+    if (options.pushBundle && !tailnetEnabled(this.deps.tailnet?.features))
+      throw new ConnectionRefusal("Setting up a server from this computer's copy is not available in this build.");
     this.assertIdle(id, "editing");
     const profile = this.get(id);
     if (!profile) throw new ConnectionRefusal("That profile no longer exists.");
@@ -854,14 +875,26 @@ export class RemoteProfiles {
       if (pending) dropDiscovery(pending.discovery);
       throw new ConnectionRefusal("That confirmation is not current. Check the server again, then confirm.");
     }
-    let command: string[];
     let program: string;
+    let courier: CourierPackage | undefined;
     try {
-      command = setupCommand(options.version, profile.remotePort, pending);
+      // Checked before anything is gathered: the command is built again with the scratch directory.
+      setupCommand(options.version, profile.remotePort, pending);
       program = setupProgram(options.scripts);
+      // Everything the server would download, fetched and checked here before it is enrolled.
+      if (options.pushBundle)
+        courier = await prepareCourier({
+          version: options.version,
+          cacheDir: join(this.deps.dir, "courier"),
+          ...(this.deps.courierFetch ? { fetch: this.deps.courierFetch } : {}),
+        });
     } catch (error) {
       dropDiscovery(pending.discovery);
       throw error;
+    }
+    if (this.revision(id) !== revision || this.closed) {
+      dropDiscovery(pending.discovery);
+      throw new ConnectionRefusal("The profile changed while the server bundle was fetched. Check it again.");
     }
     enrollDiscovered(pending.discovery, this.pins(id), profile.jump !== undefined);
     this.serverSetups.add(id);
@@ -870,13 +903,19 @@ export class RemoteProfiles {
       const tunnel = this.newTunnel(profile, true, pending.discovery.keys);
       try {
         await tunnel.open();
-        // Only the setup that was confirmed counts: what the server reports must match it.
-        setup = confirmedResult(readSetup(await tunnel.exec(command, SETUP_TIMEOUT_MS, program)), {
-          version: options.version,
-          port: profile.remotePort,
-          account: pending.account,
-          root: pending.root,
-        });
+        const scratch = courier ? await pushCourier(tunnel, courier) : undefined;
+        try {
+          const command = setupCommand(options.version, profile.remotePort, pending, scratch);
+          // Only the setup that was confirmed counts: what the server reports must match it.
+          setup = confirmedResult(readSetup(await tunnel.exec(command, SETUP_TIMEOUT_MS, program)), {
+            version: options.version,
+            port: profile.remotePort,
+            account: pending.account,
+            root: pending.root,
+          });
+        } finally {
+          if (scratch) await dropCourier(tunnel, scratch);
+        }
       } finally {
         await tunnel.close();
       }

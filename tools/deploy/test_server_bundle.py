@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import shutil
 import sys
 import tarfile
 import tempfile
@@ -101,6 +102,33 @@ class ServerBundleTests(unittest.TestCase):
         self.assertTrue(any(name.startswith(stem + "templates/") for name in members))
         self.assertEqual(self.manifest["compatibility"],
                          json.loads((Path(__file__).parents[2] / "release-compatibility.json").read_text()))
+
+    def test_a_pushed_trusted_root_is_used_for_an_offline_host(self):
+        # #1234: the client pushed the Sigstore trusted root beside the bundle; cosign is told
+        # to use it instead of fetching one, and the signature is still checked here.
+        root = {"mediaType": "application/vnd.dev.sigstore.trustedroot+json;version=0.1", "tlogs": []}
+        (self.files / release.PUSHED_TRUSTED_ROOT).write_text(json.dumps(root))
+        self.deployment.stage_bundle(str(self.files))
+        args = self.cosign_log.read_text().splitlines()
+        self.assertIn("--trusted-root", args)
+        self.assertTrue(args[args.index("--trusted-root") + 1].endswith(release.PUSHED_TRUSTED_ROOT))
+        self.assertIsNone(self.deployment.pushed)
+
+    def test_a_pushed_trusted_root_of_another_shape_is_refused_before_cosign(self):
+        for text in ("not json", json.dumps({"mediaType": "application/json"}), json.dumps([1])):
+            with self.subTest(text=text):
+                (self.files / release.PUSHED_TRUSTED_ROOT).write_text(text)
+                with self.assertRaisesRegex(RuntimeError, "Pushed trusted root"):
+                    self.deployment.stage_bundle(str(self.files))
+                self.assertFalse(self.cosign_log.exists())
+        (self.files / release.PUSHED_TRUSTED_ROOT).unlink()
+        (self.files / release.PUSHED_TRUSTED_ROOT).symlink_to(self.archive())
+        with self.assertRaisesRegex(RuntimeError, "Pushed trusted root"):
+            self.deployment.stage_bundle(str(self.files))
+
+    def test_without_a_pushed_trusted_root_cosign_fetches_its_own(self):
+        self.deployment.stage_bundle(str(self.files))
+        self.assertNotIn("--trusted-root", self.cosign_log.read_text().splitlines())
 
     def test_stages_a_verified_bundle_with_relative_runtime(self):
         staged = self.deployment.stage_bundle(str(self.files))
@@ -314,6 +342,52 @@ class CosignPinTests(unittest.TestCase):
             (root / "tools" / f"cosign-{release.COSIGN_VERSION}-{machine}").write_text("not cosign")
             with self.assertRaisesRegex(RuntimeError, "does not match the pinned cosign digest"):
                 deployment.cosign()
+
+
+class PushedCosignTests(unittest.TestCase):
+    """#1234: a host with no internet access takes the pinned cosign the client pushed, by digest."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.source = release.BundleSource(self.tmp / "root")
+        (self.tmp / "root").mkdir()
+        self.pushed = self.tmp / "pushed"
+        self.pushed.mkdir()
+        self.binary = b"#!/bin/sh\necho cosign\n"
+        digest = hashlib.sha256(self.binary).hexdigest()
+        for target, value in ((release.platform, ("machine", lambda: "x86_64")),
+                              (release, ("COSIGN_SHA256", {"x86_64": ("cosign-linux-amd64", digest)}))):
+            patcher = patch.object(target, *value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+        def no_download(*_args, **_kwargs):
+            raise AssertionError("downloaded although cosign was pushed")
+        patcher = patch.object(release, "download", no_download)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_installs_a_pushed_cosign_that_matches_the_pin(self):
+        (self.pushed / "cosign-linux-amd64").write_bytes(self.binary)
+        self.source.pushed = self.pushed
+        path = self.source.cosign()
+        self.assertEqual(path.read_bytes(), self.binary)
+        self.assertEqual(path.stat().st_mode & 0o777, 0o700)
+
+    def test_refuses_a_pushed_cosign_that_does_not_match(self):
+        (self.pushed / "cosign-linux-amd64").write_bytes(b"something else")
+        self.source.pushed = self.pushed
+        with self.assertRaisesRegex(RuntimeError, "Pushed cosign does not match its pinned digest"):
+            self.source.cosign()
+        self.assertEqual(list((self.tmp / "root" / "tools").glob("cosign-*")), [])
+
+    def test_refuses_a_symlinked_pushed_cosign_by_downloading_instead(self):
+        (self.tmp / "elsewhere").write_bytes(self.binary)
+        (self.pushed / "cosign-linux-amd64").symlink_to(self.tmp / "elsewhere")
+        self.source.pushed = self.pushed
+        with self.assertRaisesRegex(AssertionError, "downloaded although"):
+            self.source.cosign()
 
 
 if __name__ == "__main__":

@@ -21,6 +21,7 @@
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import {
+  createReadStream,
   closeSync,
   existsSync,
   fsyncSync,
@@ -737,7 +738,7 @@ export class SshTunnel {
    * `input`, when given, is the command's standard input (a program for `python3 -`, say),
    * written once and closed; otherwise the command reads an empty standard input.
    */
-  async exec(command: readonly string[], timeoutMs = 60_000, input?: string): Promise<RemoteResult> {
+  async exec(command: readonly string[], timeoutMs = 60_000, input?: string | Readable): Promise<RemoteResult> {
     if (this.closed || !this.hops) throw new TunnelRefusal("closed");
     if (!this.jumpUp()) throw new TunnelRefusal("unreachable");
     const hop = this.hops.daemon;
@@ -826,8 +827,27 @@ export class SshTunnel {
       });
       // A command that exits before reading all of it closes the pipe: that is its result, not ours.
       child.stdin?.on("error", () => {});
-      child.stdin?.end(input);
+      if (input !== undefined && typeof input !== "string") {
+        input.once("error", () => child.kill());
+        if (child.stdin) input.pipe(child.stdin);
+      } else child.stdin?.end(input);
     });
+  }
+
+  /**
+   * Copy a local file to `remotePath` on the server of an open tunnel (#1234): `cp /dev/stdin
+   * <path>`, fed from the file, through the same sealed pins as `exec`. The path is one remote
+   * word, so nothing in it is read by a shell. Rejects unless the copy exited 0; the caller checks
+   * what arrived (by digest), since a copy that ran is not proof of what it wrote.
+   */
+  async upload(localPath: string, remotePath: string, timeoutMs = 30 * 60_000): Promise<void> {
+    const source = createReadStream(localPath);
+    try {
+      const result = await this.exec(["cp", "/dev/stdin", remotePath], timeoutMs, source);
+      if (result.code !== 0) throw new TunnelRefusal("ssh-failed");
+    } finally {
+      source.destroy();
+    }
   }
 
   /**

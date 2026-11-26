@@ -69,7 +69,15 @@ export interface ConfirmedServer {
  * as confirmed: the setup refuses, before it changes anything, unless it runs as that
  * effective account, in that canonical directory, as that kind of run (install or repair).
  */
-export function setupCommand(version: string, port: number, confirmed: ConfirmedServer): string[] {
+export function setupCommand(
+  version: string,
+  port: number,
+  confirmed: ConfirmedServer,
+  /** A directory on the server holding the bundle the client pushed (#1234), for a host with no internet access. */
+  bundleDir?: string,
+): string[] {
+  if (bundleDir !== undefined && (!SERVER_DIR.test(bundleDir) || bundleDir.split("/").includes("..")))
+    throw new Error(`Not a bundle directory: ${bundleDir}`);
   if (!VERSION.test(version)) throw new Error(`Not a release version: ${version}`);
   if (!ACCOUNT.test(confirmed.account)) throw new Error(`Not an account name: ${confirmed.account}`);
   if (!SERVER_DIR.test(confirmed.root) || confirmed.root.split("/").includes(".."))
@@ -89,6 +97,7 @@ export function setupCommand(version: string, port: number, confirmed: Confirmed
     confirmed.root,
     "--expect-current",
     confirmed.current ?? "none",
+    ...(bundleDir !== undefined ? ["--bundle", bundleDir] : []),
   ];
 }
 

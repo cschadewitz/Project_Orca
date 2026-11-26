@@ -66,6 +66,14 @@ COSIGN_SHA256 = {
     "x86_64": ("cosign-linux-amd64", "424e2c97d0b45fd7a6b608a87f090f35633f4c23ece5f092d48bba11aaf4bbfa"),
     "aarch64": ("cosign-linux-arm64", "ade83b7aac62e131cacfe96d958948b2150cc9efec46a570a2649b8e27dedad2"),
 }
+# A host that cannot reach GitHub or Sigstore (#1234) is set up from files the client pushed into
+# the bundle directory beside the three bundle files: the pinned cosign under its release asset
+# name, still checked against COSIGN_SHA256, and a Sigstore trusted root, which cosign then uses
+# instead of fetching one. The signature is still checked here: the client is a courier. A pushed
+# trusted root is the client's word, as is everything else that client could already run as this
+# account over the ssh login that pushed it.
+PUSHED_TRUSTED_ROOT = "trusted_root.json"
+TRUSTED_ROOT_MAX = 1 << 20
 SOURCE_ENTRY = "packages/cli/dist/main.js"
 # A bundle's runtime and entry are fixed, inside the release; nothing from a manifest or a
 # record can point them anywhere else.
@@ -295,6 +303,22 @@ def select(root, release):
     temporary.symlink_to(release, target_is_directory=True)
     os.replace(temporary, root / "current")
     sync_dir(root)
+
+
+def pushed_trusted_root(directory):
+    """The Sigstore trusted root pushed beside a bundle (#1234), checked for shape, or None."""
+    path = directory / PUSHED_TRUSTED_ROOT
+    if not path.exists() and not path.is_symlink():
+        return None
+    if path.is_symlink() or not path.is_file() or path.stat().st_size > TRUSTED_ROOT_MAX:
+        raise RuntimeError("Pushed trusted root is not a regular file within its size limit")
+    try:
+        media = json.loads(path.read_text()).get("mediaType", "")
+    except (ValueError, AttributeError, UnicodeDecodeError):
+        raise RuntimeError("Pushed trusted root is not JSON") from None
+    if not str(media).startswith("application/vnd.dev.sigstore.trustedroot"):
+        raise RuntimeError("Pushed trusted root is not a Sigstore trusted root")
+    return path
 
 
 def file_sha256(path):
@@ -531,6 +555,9 @@ class BundleSource:
 
     def __init__(self, root):
         self.root = Path(root).resolve()
+        # A bundle directory the client pushed (#1234): where a pinned cosign may be found
+        # instead of downloaded. Set only while staging from such a directory.
+        self.pushed = None
 
     def typed_dispatch(self, operation, *args, **kwargs):
         return operation(*args, **kwargs)
@@ -549,11 +576,20 @@ class BundleSource:
         path = tools / f"cosign-{COSIGN_VERSION}-{machine}"
         if not path.exists():
             partial = Path(self.typed_dispatch(tempfile.mkdtemp, prefix="cosign-", dir=tools)) / name
+            pushed_dir = getattr(self, "pushed", None)
+            pushed = pushed_dir / name if pushed_dir is not None else None
             try:
-                self.typed_dispatch(download, f"https://github.com/sigstore/cosign/releases/download/{COSIGN_VERSION}/{name}",
-                                    partial, 256 << 20)
-                if file_sha256(partial) != digest:
-                    raise RuntimeError("Downloaded cosign does not match its pinned digest")
+                if pushed is not None and not pushed.is_symlink() and pushed.is_file():
+                    if pushed.stat().st_size > 256 << 20:
+                        raise RuntimeError("Pushed cosign exceeds its size limit")
+                    shutil.copyfile(pushed, partial)
+                    if file_sha256(partial) != digest:
+                        raise RuntimeError("Pushed cosign does not match its pinned digest")
+                else:
+                    self.typed_dispatch(download, f"https://github.com/sigstore/cosign/releases/download/{COSIGN_VERSION}/{name}",
+                                        partial, 256 << 20)
+                    if file_sha256(partial) != digest:
+                        raise RuntimeError("Downloaded cosign does not match its pinned digest")
                 os.chmod(partial, 0o700)
                 os.replace(partial, path)
             finally:
@@ -602,6 +638,7 @@ class BundleSource:
         cosign = self.cosign()
         tuf = self.root / "tools" / "sigstore"
         tuf.mkdir(mode=0o700, parents=True, exist_ok=True)
+        trust = pushed_trusted_root(directory)
         result = self.typed_process(subprocess.run, [
             str(cosign), "verify-blob", str(manifest_path),
             "--bundle", str(directory / signature),
@@ -610,6 +647,7 @@ class BundleSource:
             "--certificate-github-workflow-repository", BUNDLE_REPOSITORY,
             "--certificate-github-workflow-ref", "refs/heads/main",
             "--certificate-github-workflow-trigger", BUNDLE_TRIGGER,
+            *(["--trusted-root", str(trust)] if trust else []),
         ], env={**os.environ, "TUF_ROOT": str(tuf), "HOME": str(tuf)}, text=True,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         if result.returncode != 0:
@@ -847,7 +885,16 @@ class Deployment(BundleSource):
                     if (local / name).is_symlink() or not (local / name).is_file():
                         raise RuntimeError(f"Bundle file missing: {name}")
                     shutil.copyfile(local / name, downloads / name)
-            manifest = self.verify_bundle(downloads, version)
+                # What the client pushed with it, for a host with no internet access (#1234).
+                if (local / PUSHED_TRUSTED_ROOT).exists() or (local / PUSHED_TRUSTED_ROOT).is_symlink():
+                    if (local / PUSHED_TRUSTED_ROOT).is_symlink():
+                        raise RuntimeError("Pushed trusted root is not a regular file within its size limit")
+                    shutil.copyfile(local / PUSHED_TRUSTED_ROOT, downloads / PUSHED_TRUSTED_ROOT)
+                self.pushed = local
+            try:
+                manifest = self.verify_bundle(downloads, version)
+            finally:
+                self.pushed = None
             # The exact signed bytes this release was verified from, kept as its durable receipt:
             # a later reuse (auto-update) must match all three digests, not just the commit.
             receipt = {}

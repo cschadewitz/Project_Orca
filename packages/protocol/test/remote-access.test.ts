@@ -672,6 +672,33 @@ describe("commands on the server (#875)", () => {
     expect(sessions()).toEqual([]);
   });
 
+  it("uploads a file as cp /dev/stdin <path>, fed from the file, and refuses a failed copy (#1234)", async () => {
+    const pins = pinned();
+    const source = join(dir(), "bundle.tar.xz");
+    writeFileSync(source, Buffer.alloc(200_000, 7));
+    let code = 0;
+    const commands: (readonly string[])[] = [];
+    const { tunnel, spawned } = fakeTunnel(
+      (ssh, _n, args) => {
+        ssh.say(authed);
+        if (args.includes("-W")) return;
+        commands.push(args.slice(args.indexOf("--") + 2));
+        const done = () => setImmediate(() => ssh.exit(code));
+        if (ssh.stdin.writableFinished) done();
+        else ssh.stdin.on("finish", done);
+      },
+      { knownHostsFile: pins },
+    );
+    await tunnel.open();
+    await tunnel.upload(source, "/tmp/tmp.Ab12Cd/bundle.tar.xz", 5_000);
+    expect(commands[0]).toEqual(["cp", "/dev/stdin", "/tmp/tmp.Ab12Cd/bundle.tar.xz"]);
+    expect(spawned[1]!.received.length).toBe(200_000);
+    code = 1;
+    await expect(tunnel.upload(source, "/tmp/tmp.Ab12Cd/again", 5_000)).rejects.toMatchObject({ code: "ssh-failed" });
+    await expect(tunnel.upload(source, "/tmp/a b", 5_000)).rejects.toThrow();
+    await tunnel.close();
+  });
+
   it("hands a command its standard input when given one, and an empty one otherwise (#881)", async () => {
     const pins = pinned();
     const { tunnel, spawned } = fakeTunnel(

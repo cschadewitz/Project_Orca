@@ -30,6 +30,10 @@
       "types": "./dist/server-setup.d.ts",
       "import": "./dist/server-setup.js"
     },
+    "./server-courier": {
+      "types": "./dist/server-courier.d.ts",
+      "import": "./dist/server-courier.js"
+    },
     "./tailnet": {
       "types": "./dist/tailnet.d.ts",
       "import": "./dist/tailnet.js"

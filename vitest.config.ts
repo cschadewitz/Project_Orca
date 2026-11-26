@@ -31,6 +31,7 @@ export default defineConfig({
       "@orca/protocol/remote-access": src("protocol", "remote-access"),
       "@orca/protocol/server-setup": src("protocol", "server-setup"),
       "@orca/protocol/tailnet": src("protocol", "tailnet"),
+      "@orca/protocol/server-courier": src("protocol", "server-courier"),
       "@orca/protocol": pkg("protocol"),
       "@orca/daemon": pkg("daemon"),
       "@orca/design": pkg("design"),

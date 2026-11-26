@@ -164,3 +164,13 @@ describe("tailnet profiles", () => {
     await expect(profiles.tailnetMachines()).resolves.toEqual({ state: "off" });
   });
 });
+
+describe("setting up a server from this computer's copy (#1234)", () => {
+  it("is refused while the tailnet-hosts flag is off, before anything is fetched", async () => {
+    const { profiles } = store(tailnet([], { env: {} }));
+    profiles.save({ name: "Lab", destination: "casey@lab" });
+    await expect(
+      profiles.setUpServer("lab", { version: "0.9.0", scripts: "/nowhere", confirmation: "x", pushBundle: true }),
+    ).rejects.toThrow(/not available in this build/);
+  });
+});
