@@ -942,8 +942,15 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
       }
     }
     if (!opened) {
+      // No `cwd`: the app-server already runs in it. A `thread/start` that names a cwd Codex
+      // has no trust recorded for, with a sandbox that can write it, has Codex write that
+      // project as trusted into the user's own config.toml (0.171.0
+      // `thread_processor.rs`, `requested_cwd.is_some() && …`), a lasting change to their
+      // profile that also puts the project's config, hooks and exec policies in force. The
+      // thread's cwd is still checked against ORCA's in the answer.
+      const { cwd: _cwd, ...startPolicy } = policyParams();
       const params: ThreadStartParams = {
-        ...policyParams(),
+        ...startPolicy,
         ...(agent.defaultModel ? { model: agent.defaultModel } : {}),
       };
       opened = acceptThread("thread/start", await conn.client.request("thread/start", params));

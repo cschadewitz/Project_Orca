@@ -8,7 +8,7 @@
  * - a new session that resumes the thread, as after a daemon restart, replays its history and
  *   takes a prompt on it.
  */
-import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, onTestFailed } from "vitest";
@@ -119,6 +119,7 @@ describe.skipIf(!CODEX)("recovery and resume against the real pinned Codex", () 
   }, 120_000);
 
   it("resumes the thread in a new session, replays its history, and takes a prompt on it", async () => {
+    const profile = await readFile(join(codexHome, "config.toml"), "utf8");
     const first = await open(watchedHost().host);
     const threadId = first.acpSessionId;
     try {
@@ -152,5 +153,7 @@ describe.skipIf(!CODEX)("recovery and resume against the real pinned Codex", () 
     } finally {
       await second.close();
     }
+    // neither the start nor the resume changed the user's Codex profile (#1160)
+    expect(await readFile(join(codexHome, "config.toml"), "utf8")).toBe(profile);
   }, 120_000);
 });

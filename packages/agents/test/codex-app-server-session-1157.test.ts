@@ -260,8 +260,8 @@ describe("opening a session", () => {
     expect(lists).toEqual([{ cwds: [CWD] }, { threadId: "thr_1" }]);
     expect(s.peer.received.find((m) => m.method === "config/read")?.params).toEqual({ includeLayers: true, cwd: CWD });
     expect(s.peer.received.find((m) => m.method === "account/read")?.params).toEqual({});
+    // no cwd: the process runs in it, and a named cwd has Codex record the project as trusted
     expect(s.peer.received.find((m) => m.method === "thread/start")?.params).toEqual({
-      cwd: CWD,
       approvalPolicy: "on-request",
       approvalsReviewer: "user",
       sandbox: "workspace-write",

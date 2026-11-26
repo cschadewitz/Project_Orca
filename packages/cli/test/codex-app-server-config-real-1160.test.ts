@@ -7,9 +7,11 @@
  *   from the session flags;
  * - a user `config.toml` that sets another approval policy, adds an MCP server or a hook is
  *   refused with the setting named, before any thread starts;
- * - a project `.codex/config.toml` that sets another reviewer is refused once Codex trusts the
- *   project, which Codex does itself when a workspace-write thread starts there: the check on
- *   the thread catches it the first time, the check before the thread every time after.
+ * - a profile with the project untrusted stays byte-for-byte unchanged through a workspace-write
+ *   session that runs and through one that is refused (Codex records a project as trusted when
+ *   `thread/start` names its cwd, so ORCA does not name it);
+ * - a project `.codex/config.toml` that sets another reviewer is refused once the user trusts
+ *   the project, and is not in force before.
  */
 import { appendFile, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -17,7 +19,7 @@ import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { AgentSpecSchema, silentLogger, type OrcaError } from "@orca/core";
 import { LocalHost, openCodexAppServerSession, type CodexVerifiedConfig } from "@orca/agents";
-import { modelStandIn, script, type ModelStandIn } from "./codex-model-stand-in.js";
+import { modelStandIn, script, shell, type ModelStandIn } from "./codex-model-stand-in.js";
 
 const CODEX = process.env.ORCA_CODEX_BIN;
 
@@ -120,16 +122,41 @@ describe.skipIf(!CODEX)("Codex's config against the real pinned Codex", () => {
     expect(error.message).toContain("Codex would run the hook preToolUse (user)");
   }, 120_000);
 
-  it("refuses a project config that sets another reviewer once Codex trusts the project", async () => {
+  it("leaves an untrusted profile unchanged, whether the session runs or is refused", async () => {
+    // A project config that is not in force, since nothing has trusted the project.
     await mkdir(join(workspace, ".codex"));
     await writeFile(join(workspace, ".codex", "config.toml"), `approvals_reviewer = "auto_review"\n`);
-    const message = `the project config in ${join(workspace, ".codex")} sets approvals_reviewer = "auto_review"`;
-    // Untrusted, the project's config is not in force, so the check before the thread passes;
-    // starting the workspace-write thread has Codex trust the project in the user's
-    // config.toml, and the check on the thread refuses it.
-    expect((await refusal()).message).toContain(message);
-    expect(await readFile(join(codexHome, "config.toml"), "utf8")).toContain(`trust_level = "trusted"`);
-    // From then on it is refused before any thread starts.
-    expect((await refusal()).message).toContain(message);
+    const profile = join(codexHome, "config.toml");
+    const before = await readFile(profile, "utf8");
+
+    let verified: CodexVerifiedConfig | undefined;
+    const session = await open({ onVerifiedConfig: (c) => (verified = c) });
+    try {
+      expect(verified!.layers).toContainEqual({ type: "project", enabled: false });
+      await expect(
+        session.prompt(script(shell("echo orca-1160 > made.txt")), { timeoutMs: 60_000 }),
+      ).resolves.toMatchObject({
+        stopReason: "end_turn",
+      });
+      expect(await readFile(join(workspace, "made.txt"), "utf8")).toBe("orca-1160\n");
+    } finally {
+      await session.close();
+    }
+    expect(await readFile(profile, "utf8")).toBe(before);
+
+    await userConfig(`[mcp_servers.extra]`, `command = "echo"`);
+    const refusedProfile = await readFile(profile, "utf8");
+    expect((await refusal()).message).toContain("Codex's config adds the MCP server extra");
+    expect(await readFile(profile, "utf8")).toBe(refusedProfile);
+  }, 120_000);
+
+  it("refuses a project config that sets another reviewer when the user has trusted the project", async () => {
+    await mkdir(join(workspace, ".codex"));
+    await writeFile(join(workspace, ".codex", "config.toml"), `approvals_reviewer = "auto_review"\n`);
+    await userConfig(`[projects."${workspace}"]`, `trust_level = "trusted"`);
+    const error = await refusal();
+    expect(error.message).toContain(
+      `the project config in ${join(workspace, ".codex")} sets approvals_reviewer = "auto_review"`,
+    );
   }, 120_000);
 });

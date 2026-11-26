@@ -552,10 +552,13 @@ and again on it. The session is refused, naming the setting and where it comes f
   directory, extra roots, `/tmp` and `$TMPDIR` unless excluded) overlap a path ORCA protects.
 
 What ORCA verified (the three settings, the layer each came from, which layers were in force,
-and whether managed requirements were present) is logged with the session; no other config
-value is read into a log or an error. Note that Codex itself records the working directory as a
-trusted project in the user's `config.toml` when a `workspace-write` thread starts there, which
-puts that project's `.codex/config.toml` in force for later sessions; ORCA's checks then cover it.
+and whether managed requirements were present) is logged with the session. No other config
+value reaches a log or an error: a setting is repeated only when it is one of Codex's known
+values, and anything else is summarized. A path ORCA cannot resolve (a link it cannot follow,
+a `..` segment) is refused rather than guessed. ORCA's `thread/start` names no working
+directory (the app-server already runs in it), because Codex records a named directory as a
+trusted project in the user's own `config.toml` when the sandbox can write it; ORCA leaves the
+user's Codex profile unchanged.
 
 When the app-server exits under a session, the running turn fails, an ask it raised is never
 answered, and the next prompt starts a new app-server on the same thread (`thread/resume`, held

@@ -28,7 +28,7 @@
  * (`codexWritableRootsProblem`).
  */
 import { realpathSync } from "node:fs";
-import { isAbsolute, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { OrcaError } from "@orca/core";
 
 /** The policy ORCA runs a Codex thread with. */
@@ -94,17 +94,18 @@ const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "obj
 
 /** A layer as a person would find it: its type and, for a file, its path. Never its contents. */
 function describeLayer(name: Record<string, unknown>): string {
+  const at = (path: unknown) => (typeof path === "string" ? ` (${path})` : "");
   switch (name.type) {
     case "user":
-      return `the user config.toml (${String(name.file)})`;
+      return `the user config.toml${at(name.file)}`;
     case "project":
-      return `the project config in ${String(name.dotCodexFolder)}`;
+      return `the project config${typeof name.dotCodexFolder === "string" ? ` in ${name.dotCodexFolder}` : ""}`;
     case "system":
-      return `the system config.toml (${String(name.file)})`;
+      return `the system config.toml${at(name.file)}`;
     case "legacyManagedConfigTomlFromFile":
-      return `the managed config (${String(name.file)})`;
+      return `the managed config${at(name.file)}`;
     case "enterpriseManaged":
-      return `the enterprise-managed config "${String(name.name)}"`;
+      return "the enterprise-managed config";
     case "mdm":
     case "legacyManagedConfigTomlFromMdm":
       return "the managed config from device management";
@@ -116,6 +117,59 @@ function describeLayer(name: Record<string, unknown>): string {
 }
 
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+
+/**
+ * The values Codex 0.171.0 defines for each setting ORCA checks. Only these are ever repeated
+ * in an error or its details; anything else (a granular policy object, a value from a newer
+ * Codex, a stray string) is summarized, so no raw config value leaves the check.
+ */
+const KNOWN_VALUES: Record<string, readonly string[]> = {
+  approval_policy: ["untrusted", "on-request", "never"],
+  approvals_reviewer: ["user", "auto_review", "guardian_subagent"],
+  sandbox_mode: ["read-only", "workspace-write", "danger-full-access"],
+  allowedApprovalPolicies: ["untrusted", "on-request", "never"],
+  allowedSandboxModes: ["read-only", "workspace-write", "danger-full-access"],
+};
+/** `value` as it may appear in an error: a known enum value quoted, otherwise a summary. */
+function shown(setting: string, value: unknown): string {
+  if (value === null || value === undefined) return "nothing";
+  if (typeof value === "string" && KNOWN_VALUES[setting]?.includes(value)) return JSON.stringify(value);
+  return "a value ORCA does not know";
+}
+/** `value` as it may appear in an error's details: a known enum value, otherwise null. */
+const detail = (setting: string, value: unknown) =>
+  typeof value === "string" && KNOWN_VALUES[setting]?.includes(value) ? value : null;
+const HOOK_EVENTS = [
+  "preModelRequest",
+  "postModelRequest",
+  "preToolUse",
+  "permissionRequest",
+  "postToolUse",
+  "preCompact",
+  "postCompact",
+  "sessionStart",
+  "sessionEnd",
+  "userPromptSubmit",
+  "subagentStart",
+  "subagentStop",
+  "stop",
+  "interrupt",
+];
+const HOOK_SOURCES = [
+  "system",
+  "user",
+  "project",
+  "mdm",
+  "sessionFlags",
+  "plugin",
+  "cloudRequirements",
+  "cloudManagedConfig",
+  "legacyManagedConfigFile",
+  "legacyManagedConfigMdm",
+  "unknown",
+];
+/** An MCP server's name, when it is a plain identifier; never anything else from its entry. */
+const SERVER_NAME = /^[A-Za-z0-9_.-]{1,64}$/;
 
 /**
  * Check what Codex reports it will run with against ORCA's policy. `config` is `config/read`
@@ -175,10 +229,16 @@ export function codexConfigCheck(
     const from = origin?.name as Record<string, unknown> | undefined;
     if (!same(value, want) || typeof from?.type !== "string" || !LAYER_TYPES.includes(from.type))
       throw refuse(
-        `Codex would run with ${key} = ${JSON.stringify(value ?? null)}` +
-          (from ? ` from ${describeLayer(from)}` : "") +
+        `Codex would run with ${key} = ${shown(key, value)}` +
+          (from && typeof from.type === "string" && LAYER_TYPES.includes(from.type)
+            ? ` from ${describeLayer(from)}`
+            : "") +
           `, not ORCA's ${JSON.stringify(want)}`,
-        { setting: key, value: value ?? null, layer: from?.type ?? null },
+        {
+          setting: key,
+          value: detail(key, value),
+          layer: typeof from?.type === "string" && LAYER_TYPES.includes(from.type) ? from.type : null,
+        },
       );
     origins[key] = from.type as CodexConfigLayerType;
     // A setting in force below the session flags that says otherwise is the user's choice:
@@ -187,8 +247,8 @@ export function codexConfigCheck(
       if (!layer.enabled || layer.type === "sessionFlags" || !(key in layer.config)) continue;
       if (!same(layer.config[key], want))
         throw refuse(
-          `${describeLayer(layer.name)} sets ${key} = ${JSON.stringify(layer.config[key])}, not ORCA's ${JSON.stringify(want)}; remove it or set it to ${JSON.stringify(want)}`,
-          { setting: key, value: layer.config[key] ?? null, layer: layer.type },
+          `${describeLayer(layer.name)} sets ${key} = ${shown(key, layer.config[key])}, not ORCA's ${JSON.stringify(want)}; remove it or set it to ${JSON.stringify(want)}`,
+          { setting: key, value: detail(key, layer.config[key]), layer: layer.type },
         );
     }
   }
@@ -198,7 +258,7 @@ export function codexConfigCheck(
     if (!isObject(mcp)) throw malformed("config/read");
     const running = Object.entries(mcp)
       .filter(([, server]) => !(isObject(server) && server.enabled === false))
-      .map(([name]) => name);
+      .map(([name]) => (SERVER_NAME.test(name) ? name : "(a server whose name ORCA does not repeat)"));
     if (running.length > 0)
       throw refuse(`Codex's config adds the MCP server${running.length > 1 ? "s" : ""} ${running.join(", ")}`, {
         setting: "mcp_servers",
@@ -218,11 +278,8 @@ export function codexConfigCheck(
       if (!Array.isArray(allowed)) throw malformed("configRequirements/read");
       if (!allowed.some((a) => same(a, want)))
         throw refuse(
-          `Codex's managed requirements allow ${field} ${JSON.stringify(allowed)}, without ORCA's ${JSON.stringify(want)}`,
-          {
-            setting: field,
-            allowed,
-          },
+          `Codex's managed requirements allow ${field} ${allowed.map((a) => shown(field, a)).join(", ") || "nothing"}, without ORCA's ${JSON.stringify(want)}`,
+          { setting: field, allowed: allowed.map((a) => detail(field, a)) },
         );
     };
     allows("allowedApprovalPolicies", policy.approvalPolicy);
@@ -237,7 +294,13 @@ export function codexConfigCheck(
     if (!isObject(entry) || !Array.isArray(entry.hooks)) throw malformed("hooks/list");
     for (const hook of entry.hooks) {
       if (!isObject(hook) || typeof hook.enabled !== "boolean") throw malformed("hooks/list");
-      if (hook.enabled) hooks.push(`${String(hook.eventName)} (${String(hook.source)})`);
+      if (hook.enabled) {
+        const event =
+          typeof hook.eventName === "string" && HOOK_EVENTS.includes(hook.eventName) ? hook.eventName : "a hook";
+        const source =
+          typeof hook.source === "string" && HOOK_SOURCES.includes(hook.source) ? hook.source : "unknown source";
+        hooks.push(`${event} (${source})`);
+      }
     }
   }
   if (hooks.length > 0)
@@ -256,17 +319,35 @@ export function codexConfigCheck(
   };
 }
 
-const real = (p: string) => {
-  try {
-    return realpathSync(p);
-  } catch {
-    return resolve(p);
+/**
+ * `p` with every link it goes through resolved: the deepest ancestor that exists is resolved by
+ * the host, and the missing rest appended, so a sidecar not yet created under a linked
+ * directory resolves where it will be. `undefined` when that cannot be known: a relative path, a
+ * `..` segment (which a link before it would change), or an ancestor that cannot be resolved for
+ * any reason but not existing.
+ */
+function resolvedPath(p: string): string | undefined {
+  if (!isAbsolute(p) || p.split(/[\\/]/).includes("..")) return undefined;
+  const missing: string[] = [];
+  let at = resolve(p);
+  for (;;) {
+    try {
+      return join(realpathSync(at), ...missing.reverse());
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT" && code !== "ENOTDIR") return undefined;
+      const parent = dirname(at);
+      if (parent === at) return undefined;
+      missing.push(basename(at));
+      at = parent;
+    }
   }
-};
-/** Whether `inner` is `outer` or inside it. */
+}
+/** Whether `inner` is `outer` or inside it, compared segment by segment. */
 const within = (inner: string, outer: string) => {
-  const rel = relative(real(outer), real(inner));
-  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+  const a = inner.split(sep).filter(Boolean);
+  const b = outer.split(sep).filter(Boolean);
+  return b.length <= a.length && b.every((segment, i) => segment === a[i]);
 };
 
 /**
@@ -290,14 +371,27 @@ export function codexWritableRoots(sandbox: unknown, cwd: string, tmpdir: string
   ];
 }
 
-/** A writable root that overlaps a protected path, described; `undefined` when none does. */
+/**
+ * A writable root that overlaps a protected path, described; `undefined` when none does. Fails
+ * closed: a root or protected path whose real location cannot be resolved is a problem too.
+ */
 export function codexWritableRootsProblem(
   roots: readonly string[],
   protectedPaths: readonly string[],
 ): string | undefined {
-  for (const root of roots)
-    for (const p of protectedPaths)
-      if (within(p, root) || within(root, p))
+  if (protectedPaths.length === 0) return undefined;
+  const guarded: [string, string][] = [];
+  for (const p of protectedPaths) {
+    const real = resolvedPath(p);
+    if (real === undefined) return `ORCA could not resolve where its protected ${p} is`;
+    guarded.push([p, real]);
+  }
+  for (const root of roots) {
+    const real = resolvedPath(root);
+    if (real === undefined) return `ORCA could not resolve where the writable root ${root} is`;
+    for (const [p, realP] of guarded)
+      if (within(realP, real) || within(real, realP))
         return `the thread could write ${root}, which overlaps ORCA's protected ${p}`;
+  }
   return undefined;
 }
