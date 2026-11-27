@@ -32,7 +32,9 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
-import { appendFile, chmod, copyFile, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { appendFile, chmod, copyFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { closeSync, constants as fsConstants, existsSync, openSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -147,6 +149,31 @@ describe("reads what the SDK handed Claude from its command line", () => {
     // Absent flags are not taken as defaults.
     expect(settingsFrom(["claude"])).toEqual({ settingSources: undefined, permissionMode: undefined });
   });
+});
+
+describe("the timeout fixture releases its FIFO without blocking", () => {
+  it.skipIf(process.platform === "win32")(
+    "with no reader it removes the FIFO; with a waiting read it ends that read",
+    async () => {
+      const dir = await mkdtemp(join(tmpdir(), "orca-1129-fifo-"));
+      try {
+        const fifo = join(dir, "sidecar");
+        execFileSync("mkfifo", [fifo]);
+        expect(releaseFifo(fifo)).toBe(false);
+        expect(existsSync(fifo)).toBe(false);
+        expect(releaseFifo(fifo)).toBe(false);
+        execFileSync("mkfifo", [fifo]);
+        const read = readFile(fifo, "utf8");
+        // Give the read time to reach open(), where it waits for a writer.
+        await new Promise((done) => setTimeout(done, 300));
+        expect(releaseFifo(fifo)).toBe(true);
+        expect(existsSync(fifo)).toBe(false);
+        expect(await read).toBe("");
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    },
+  );
 });
 
 describe.skipIf(CLAUDE === undefined || process.platform !== "linux")("installed: claude sdk (#1128)", () => {
@@ -283,31 +310,51 @@ describe.skipIf(CLAUDE === undefined || process.platform !== "linux")("installed
     }
   }, 300_000);
 
-  // #1129: a decision that cannot be made in time blocks. The policy sidecar is a FIFO nobody
-  // writes, so reading it hangs; with every edit allowed by rule, only that hang can stop the
-  // write. The read is released after the check.
+  // #1129: a decision that cannot be made in time blocks. In a session already shown live and
+  // deciding (a first command runs), the policy sidecar becomes a FIFO nobody writes, so ORCA's
+  // policy read hangs. With every command allowed by rule, only that hang can stop the next
+  // one. Its decision time is measured between the model stand-in handing Claude the call and
+  // receiving its result, so session startup is outside it; a refusal for any other reason
+  // would come sooner than the deadline. The read is then released without blocking, and a
+  // third command in the same session runs at once, so nothing is left waiting.
   it("decision timeout: a call whose policy cannot be read in time is blocked, and nothing runs", async () => {
     const world = await realWorld();
     const sidecar = permissionPolicyPath(world.configDir);
+    let release = () => false;
     try {
-      world.configured = { rules: [{ match: { kind: "edit" }, decision: "allow" }] };
+      world.configured = { rules: [{ match: { kind: "execute" }, decision: "allow" }] };
+      const touch = (name) => ({ tool: "shell", command: `touch ${join(world.workspace, name)}` });
+      const ready = await live.decide(world, touch("ready.txt"));
+      expect(ready.outcome, JSON.stringify(ready.detail)).toBe("allow");
+      expect(ready.detail.effect).toBe("observed");
+
       execFileSync("mkfifo", [sidecar]);
-      const started = Date.now();
-      const got = await live.decide(world, { tool: "write", path: join(world.workspace, "timed-out.md") });
-      const waited = Date.now() - started;
+      release = () => releaseFifo(sidecar);
+      const got = await live.decide(world, touch("timed-out.txt"));
+      const decidedMs = decisionTime(model.log, got.detail.toolUseId);
+      // A reader was still waiting on the FIFO when the call was decided: the hang was the read.
+      const pendingRead = release();
       expect(got.outcome, JSON.stringify(got.detail)).toBe("block");
       expect(got.detail.effect).toBe("none");
       expect(got.detail.approvals).toEqual([]);
-      expect(waited, "the call was decided only after ORCA's decision timeout").toBeGreaterThanOrEqual(
+      expect(pendingRead, "ORCA's policy read was waiting on the sidecar").toBe(true);
+      expect(decidedMs, "decided at ORCA's decision deadline, not before").toBeGreaterThanOrEqual(
         CLAUDE_SDK_DECISION_TIMEOUT_MS,
       );
-      receipt.lifecycle.decisionTimeout = [
-        { ...record(got), waitedMs: waited, timeoutMs: CLAUDE_SDK_DECISION_TIMEOUT_MS },
-      ];
+      expect(decidedMs, "and soon after it").toBeLessThan(CLAUDE_SDK_DECISION_TIMEOUT_MS + 5_000);
+
+      const after = await live.decide(world, touch("after.txt"));
+      expect(after.outcome, JSON.stringify(after.detail)).toBe("allow");
+      expect(after.detail.effect).toBe("observed");
+      expect(decisionTime(model.log, after.detail.toolUseId)).toBeLessThan(CLAUDE_SDK_DECISION_TIMEOUT_MS);
+      receipt.lifecycle.decisionTimeout = {
+        ready: record(ready),
+        timedOut: { ...record(got), decidedMs, timeoutMs: CLAUDE_SDK_DECISION_TIMEOUT_MS, pendingRead },
+        after: record(after),
+      };
       receipt.checks.decisionTimeoutBlocks = "pass";
     } finally {
-      // Release the hung read: a writer that closes at once gives it an empty file.
-      await writeFile(sidecar, "").catch(() => undefined);
+      release();
       await world.dispose();
     }
   }, 120_000);
@@ -364,6 +411,33 @@ describe.skipIf(CLAUDE === undefined || process.platform !== "linux")("installed
     expect(model.log.errors, "the model stand-in answered every request").toEqual([]);
   });
 });
+
+/**
+ * Release whatever waits to read `fifo`, without ever blocking: a writer opened non-blocking
+ * succeeds only if a reader is waiting (else ENXIO), and closing it hands every waiting reader
+ * an empty file. The FIFO is removed first, so no later read can wait on it. Returns whether a
+ * reader was waiting; a second call finds nothing and returns false.
+ */
+function releaseFifo(fifo) {
+  let fd;
+  try {
+    fd = openSync(fifo, fsConstants.O_WRONLY | fsConstants.O_NONBLOCK);
+  } catch {
+    // ENXIO: no reader waiting. ENOENT: already released.
+  }
+  rmSync(fifo, { force: true });
+  if (fd === undefined) return false;
+  closeSync(fd);
+  return true;
+}
+
+/** How long Claude took to answer a call, as the model stand-in saw it: tool use to its result. */
+function decisionTime(log, toolUseId) {
+  const call = log.calls.find((c) => c.toolUseId === toolUseId);
+  const result = log.results.find((r) => r.toolUseId === toolUseId);
+  if (!call || !result) throw new Error(`the model stand-in did not see ${toolUseId} and its result`);
+  return result.at - call.at;
+}
 
 /** The tool's name on an ask from the SDK bridge (`askRequest` in permission-bridge.ts). */
 const sdkToolName = (req) => req.toolCall?._meta?.claudeAgentSdk?.toolName;
