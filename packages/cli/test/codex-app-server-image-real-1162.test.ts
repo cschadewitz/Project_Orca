@@ -8,9 +8,11 @@
  * - npm's `codex` command, a Node script that then starts the binary, is refused the same way;
  * - a process that does not run the very file ORCA checked (here a byte-identical copy, while
  *   the check is shown the original's inode) is started but stopped before ORCA sends it
- *   anything.
+ *   anything;
+ * - the pinned binary, with a bubblewrap it would prefer to its own on its PATH that the
+ *   user's own processes could replace, is refused before it starts (#1286).
  */
-import { appendFile, chmod, copyFile, mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
+import { appendFile, chmod, copyFile, mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -94,10 +96,25 @@ describe.skipIf(!CODEX)("the Codex image ORCA starts, against the real pinned Co
     await copyFile(CODEX!, copy);
     await chmod(copy, 0o755);
     const original = await fileImageIdentity(await realpath(CODEX!));
-    const { error, spawned } = await refusal(copy, { imageFile: async () => original });
+    // The copy has no package around it: that check (#1286) is not what this case is about.
+    const { error, spawned } = await refusal(copy, {
+      imageFile: async () => original,
+      packageCheck: async () => undefined,
+    });
     expect(spawned).toBe(1);
     expect(error.code).toBe("NOT_SUPPORTED");
     expect(error.message).toMatch(/the process ORCA started does not run the Codex file ORCA checked/);
     expect(error.details).toMatchObject({ reason: "codex-image-unverified" });
+  });
+
+  it("never starts Codex with a replaceable bubblewrap on its PATH (#1286)", async () => {
+    const bin = join(root, "path-bin");
+    await mkdir(bin);
+    await writeFile(join(bin, "bwrap"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+    const { error, spawned } = await refusal(CODEX!, { env: { PATH: `${bin}:/usr/bin:/bin` } });
+    expect(spawned).toBe(0);
+    expect(error.code).toBe("NOT_SUPPORTED");
+    expect(error.details).toMatchObject({ reason: "codex-image-unverified", check: "codex-package" });
+    expect(error.message).toContain(`Codex would run the bubblewrap at ${join(bin, "bwrap")} on its PATH`);
   });
 });

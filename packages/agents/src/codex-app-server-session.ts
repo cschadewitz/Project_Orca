@@ -42,6 +42,7 @@ import { randomUUID } from "node:crypto";
 import type * as acp from "@agentclientprotocol/sdk";
 import {
   newId,
+  literalEnv,
   OrcaError,
   redactSecretValues,
   silentLogger,
@@ -53,7 +54,7 @@ import {
   type SecretsConfig,
   type SessionConfigOption,
 } from "@orca/core";
-import type { AgentHost, AgentProcessHandle, ProcessExit } from "./host.js";
+import type { AgentHost, AgentProcessHandle, ProcessExit, SpawnAgentOptions } from "./host.js";
 import {
   codexAppServerLaunch,
   codexAppServerRequested,
@@ -75,6 +76,10 @@ import { processCleanup } from "./process-cleanup.js";
 import {
   CODEX_VERIFIED_IMAGES,
   codexImageTarget,
+  boundedCheck,
+  checkCodexPackage,
+  checkSystemBwrap,
+  CODEX_IMAGE_CHECK_TIMEOUT_MS,
   codexVersionForImage,
   fileImageIdentity,
   ownChildImageDigest,
@@ -245,6 +250,18 @@ export interface OpenCodexAppServerSessionOptions {
   imageDigest?: (pid: number | undefined) => Promise<ImageIdentity | { error: string }>;
   /** For tests: this machine's `<platform>-<arch>`, the key of the verified images. */
   imageTarget?: string;
+  /**
+   * For tests: how the package around a verified entrypoint, and the bubblewrap Codex would
+   * find on its PATH, are checked before ORCA starts it (#1286); why not, or undefined.
+   */
+  packageCheck?: (
+    command: string,
+    version: string,
+    signal: AbortSignal,
+    path: string | undefined,
+  ) => Promise<string | undefined>;
+  /** For tests: the one deadline for that whole check (#1286). */
+  packageCheckTimeoutMs?: number;
 }
 
 /** As `SessionContinuity` on the ACP route: the thread was resumed, or a new one started. */
@@ -848,6 +865,14 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
     throw codexImageRefusal(agent.id, imageTarget, `ORCA has no verified Codex build for ${imageTarget}`);
 
   const secretPlan = planSessionSecrets(opts.host, agent, opts.secrets);
+  // Codex's PATH decides which bubblewrap it runs (#1286): ORCA checks the PATH it starts
+  // Codex with, so no secret may set it. Refused before any value is read.
+  if (secretPlan.deliveries.some((d) => d.env.includes("PATH")))
+    throw new OrcaError(
+      "NOT_SUPPORTED",
+      `agent ${agent.id}: a Codex app-server's PATH cannot come from a secret, since ORCA checks the PATH it starts Codex with. Set PATH as a plain value`,
+      { agentId: agent.id, reason: "codex-path-secret" },
+    );
   await checkSecretUse(secretPlan, opts.host, agent.id, opts.authorizeSecretUse);
   // The agent's MCP servers (#1163), checked before anything starts; each process's threads
   // get them with the secrets that process's host read.
@@ -877,6 +902,29 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
     );
   }
   const spec: AgentSpec = { ...secretPlan.agent, command, args: launch.args };
+  /**
+   * The `PATH` Codex is started with (#1286), fixed once here: the one ORCA checks before each
+   * start, and the one each start is given explicitly (or withheld, when there is none), so a
+   * restart never inherits another. A secret cannot set it (refused above).
+   */
+  const childPath =
+    opts.env?.["PATH"] ??
+    literalEnv(spec.env)["PATH"] ??
+    (secretPlan.withheldEnv.includes("PATH") ? undefined : process.env["PATH"]);
+  const secretSpawn = ENV_SECRET_DELIVERY.spawnOptions(secretPlan);
+  const spawnEnv: Pick<SpawnAgentOptions, "env" | "withheldEnv"> =
+    childPath === undefined
+      ? {
+          ...(opts.env ? { env: opts.env } : {}),
+          withheldEnv: [...new Set([...(secretSpawn.withheldEnv ?? []), "PATH"])],
+        }
+      : {
+          env: { ...(opts.env ?? {}), PATH: childPath },
+          ...(secretSpawn.withheldEnv ? { withheldEnv: secretSpawn.withheldEnv } : {}),
+        };
+  const packageCheck = async (entrypoint: string, version: string, signal: AbortSignal, path: string | undefined) =>
+    (await checkCodexPackage(entrypoint, version, imageTarget, { signal })) ??
+    (await checkSystemBwrap(path, { signal }));
   /** The `$TMPDIR` Codex sees, which a workspace-write sandbox lets it write unless excluded. */
   const fromAgent = agent.env.TMPDIR;
   const tmpdir = opts.env?.TMPDIR ?? (typeof fromAgent === "string" ? fromAgent : process.env.TMPDIR);
@@ -1532,11 +1580,25 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
       if (replacement) breakSession(refusal);
       throw refusal;
     }
+    // The rest of the package Codex runs from it (its sandbox, code-mode host and rg), and any
+    // bubblewrap on its PATH that Codex would run instead of its own (#1286).
+    // One deadline for the whole check; a result that arrives after it, or after a close or
+    // cancel, never lets the start go on.
+    const packageProblem = await boundedCheck(opts.packageCheckTimeoutMs ?? CODEX_IMAGE_CHECK_TIMEOUT_MS, (signal) =>
+      (opts.packageCheck ?? packageCheck)(spec.command, fileVersion, signal, childPath),
+    );
+    const late = stopped();
+    if (late) throw late;
+    if (packageProblem !== undefined) {
+      const refusal = codexImageRefusal(agent.id, imageTarget, packageProblem, { check: "codex-package" });
+      if (replacement) breakSession(refusal);
+      throw refusal;
+    }
     const checked = file as ImageIdentity;
     const proc = await opts.host.spawnAgent(spec, {
       cwd: opts.cwd,
-      ...(opts.env ? { env: opts.env } : {}),
-      ...ENV_SECRET_DELIVERY.spawnOptions(secretPlan),
+      ...secretSpawn,
+      ...spawnEnv,
     });
     values.push(...(proc.secretValues?.values() ?? []));
     const cleanup = processCleanup(proc, opts.exitGraceMs);

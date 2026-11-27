@@ -936,6 +936,98 @@ describe("the Codex image ORCA starts (#1162)", () => {
     expect(t.spawnAgent).not.toHaveBeenCalled();
   });
 
+  it("checks the package and Codex's PATH bubblewrap for the verified version, and starts nothing when they fail (#1286)", async () => {
+    const t = scriptedHost(BASE);
+    const packageCheck = vi.fn(
+      async () => "the package's codex-resources/bwrap is not the file ORCA verified for Codex 0.171.0",
+    );
+    const error = (await open(t.host, { packageCheck }).catch((e: unknown) => e)) as OrcaError;
+    expect(packageCheck).toHaveBeenCalledWith(
+      realpathSync(process.execPath),
+      "0.171.0",
+      expect.any(AbortSignal),
+      process.env["PATH"],
+    );
+    expect(error.code).toBe("NOT_SUPPORTED");
+    expect(error.message).toMatch(
+      /the package's codex-resources\/bwrap is not the file ORCA verified for Codex 0\.171\.0\. ORCA verified Codex 0\.171\.0 for linux-x64\. ORCA does not start this session\./,
+    );
+    expect(error.details).toMatchObject({ reason: "codex-image-unverified", check: "codex-package" });
+    expect(t.spawnAgent).not.toHaveBeenCalled();
+  });
+
+  describe("the PATH Codex is started with (#1286)", () => {
+    const spawnOptions = (t: ReturnType<typeof scriptedHost>) =>
+      (t.spawnAgent.mock.calls[0] as unknown[])[1] as { env?: Record<string, string>; withheldEnv?: string[] };
+
+    it("refuses a PATH from a secret before any value is read or anything starts", async () => {
+      const t = scriptedHost(BASE);
+      const packageCheck = vi.fn(async () => undefined);
+      const authorizeSecretUse = vi.fn(async () => undefined);
+      const error = (await open(t.host, {
+        agent: agent({ env: { PATH: { secret: "path" } } }),
+        // A file that does not exist: a read would fail with another error.
+        secrets: { path: { host: "local", provider: "file", path: "/nonexistent/orca-1286/path" } },
+        authorizeSecretUse,
+        packageCheck,
+      }).catch((e: unknown) => e)) as OrcaError;
+      expect(error.code).toBe("NOT_SUPPORTED");
+      expect(error.details).toMatchObject({ reason: "codex-path-secret" });
+      expect(error.message).toMatch(/PATH cannot come from a secret/);
+      expect(authorizeSecretUse).not.toHaveBeenCalled();
+      expect(packageCheck).not.toHaveBeenCalled();
+      expect(t.spawnAgent).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ["the session's env", { env: { PATH: "/from-session" } }, { env: { PATH: "/from-agent" } }, "/from-session"],
+      ["the agent's literal env", {}, { env: { PATH: "/from-agent" } }, "/from-agent"],
+      ["the daemon's own env", {}, {}, process.env["PATH"]],
+    ])("checks, then starts Codex with, the PATH from %s", async (_, more, agentMore, expected) => {
+      const t = scriptedHost(BASE);
+      const packageCheck = vi.fn(async () => undefined);
+      const session = await open(t.host, { ...more, agent: agent(agentMore), packageCheck });
+      expect((packageCheck.mock.calls[0] as unknown[])[3]).toBe(expected);
+      expect(spawnOptions(t).env?.["PATH"]).toBe(expected);
+      await session.close();
+    });
+
+    it("withholds PATH at the start when the check saw none", async () => {
+      const t = scriptedHost(BASE);
+      const packageCheck = vi.fn(async () => undefined);
+      const saved = process.env["PATH"];
+      delete process.env["PATH"];
+      try {
+        const session = await open(t.host, { packageCheck });
+        expect((packageCheck.mock.calls[0] as unknown[])[3]).toBeUndefined();
+        expect(spawnOptions(t).env?.["PATH"]).toBeUndefined();
+        expect(spawnOptions(t).withheldEnv).toContain("PATH");
+        await session.close();
+      } finally {
+        process.env["PATH"] = saved;
+      }
+    });
+
+    it("refuses, without starting anything, a check that does not finish in time, whatever it says later", async () => {
+      const t = scriptedHost(BASE);
+      let finish!: (v: string | undefined) => void;
+      let seen: AbortSignal | undefined;
+      const packageCheck = vi.fn(
+        (_c: string, _v: string, signal: AbortSignal) =>
+          new Promise<string | undefined>((r) => ((seen = signal), (finish = r))),
+      );
+      const error = (await open(t.host, { packageCheck, packageCheckTimeoutMs: 20 }).catch(
+        (e: unknown) => e,
+      )) as OrcaError;
+      expect(error.details).toMatchObject({ reason: "codex-image-unverified", check: "codex-package" });
+      expect(error.message).toMatch(/ORCA's check of the Codex package did not finish within 20 ms/);
+      expect(seen?.aborted).toBe(true);
+      finish(undefined);
+      await settle();
+      expect(t.spawnAgent).not.toHaveBeenCalled();
+    });
+  });
+
   it.each([
     ["another inode", { ...PINNED_IMAGE, ino: PINNED_IMAGE.ino + 1 }],
     ["another digest", { ...PINNED_IMAGE, sha256: OTHER }],

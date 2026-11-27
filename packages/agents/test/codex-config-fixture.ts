@@ -66,6 +66,7 @@ export const VERIFIED_IMAGE = {
   imageTarget: "linux-x64",
   imageFile: async () => PINNED_IMAGE,
   imageDigest: async () => PINNED_IMAGE,
+  packageCheck: async () => undefined,
 };
 
 /** The command a fake app-server lists for ORCA's hook (#1161). */
