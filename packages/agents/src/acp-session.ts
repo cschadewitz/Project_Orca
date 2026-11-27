@@ -13,6 +13,7 @@ import { randomUUID } from "node:crypto";
 import * as acp from "@agentclientprotocol/sdk";
 import {
   describeError,
+  elicitationForm,
   literalEnv,
   newId,
   redactSecretValues,
@@ -21,6 +22,8 @@ import {
   systemClock,
   type AgentSpec,
   type Clock,
+  type ElicitationAnswer,
+  type ElicitationForm,
   type JudgedDecision,
   type Logger,
   type PermissionPolicy,
@@ -173,6 +176,20 @@ export interface OpenSessionOptions {
     invocation?: PermissionInvocation,
     judged?: JudgedDecision,
   ) => Promise<string | undefined>;
+  /**
+   * Puts an agent's question (an ACP form elicitation: Claude's `AskUserQuestion`, Codex's
+   * `request_user_input`, an MCP server's form) to a person (#1133, #1169). Given, the session
+   * advertises form elicitation at `initialize`; absent, it advertises none and refuses the
+   * method, as before. The form is ORCA's checked subset of the agent's schema
+   * (`elicitationForm`); undefined is no answer (nobody to ask, or the turn ended), which the
+   * agent is told as `cancel`. The permission policy, its rules and the judge never answer a
+   * question: only this callback does.
+   */
+  askElicitation?: (
+    form: ElicitationForm,
+    invocation: PermissionInvocation,
+    about: { toolCallId?: string },
+  ) => Promise<ElicitationAnswer | undefined>;
   /** Explicit opt-in only. Loading context never restores a pending tool callback. */
   resumeSessionId?: string;
   /**
@@ -1163,6 +1180,54 @@ async function openPlanned(
   // The stable builder has no MCP-over-ACP method of its own, so it takes the request as a
   // custom method with its own params check; the relay validates the rest.
   if (relay) app.onRequest(acpUnstable.methods.client.mcp.message, mcpMessageParams, relay.handleRequest);
+  // An agent's question (#1133, #1169), only where the session advertised form elicitation.
+  const askElicitation = opts.askElicitation;
+  if (askElicitation)
+    app.onRequest(acp.methods.client.elicitation.create, async (ctx): Promise<acp.CreateElicitationResponse> => {
+      const p = ctx.params as acp.CreateElicitationRequest & { sessionId?: string; toolCallId?: string | null };
+      // Nothing is asked of anybody for a session that has not been admitted.
+      if (!(await admitted)) return { action: "cancel" };
+      const turn = activeTurn;
+      // Only this session's live prompt may ask; a request-scoped or stale question is not one.
+      if (!turn || turn.abort.signal.aborted || p.sessionId !== acpSessionId) return { action: "cancel" };
+      // URL elicitation is not advertised: a page ORCA would send a person to is not shown.
+      if (p.mode !== "form" || !("requestedSchema" in p)) {
+        logger.debug("elicitation declined", { mode: p.mode, reason: "not a form" });
+        return { action: "decline" };
+      }
+      const checked = elicitationForm(typeof p.message === "string" ? p.message : "", p.requestedSchema);
+      if ("refused" in checked) {
+        logger.debug("elicitation declined", { reason: checked.refused });
+        return { action: "decline" };
+      }
+      const invocation: PermissionInvocation = {
+        sessionId: id,
+        turnId: turn.id,
+        invocationId: randomUUID(),
+        // The agent withdrawing its question ($/cancel_request) retires the ask with the turn.
+        signal: AbortSignal.any([turn.abort.signal, ctx.signal]),
+      };
+      let answer: ElicitationAnswer | undefined;
+      try {
+        answer = await askElicitation(
+          checked.form,
+          invocation,
+          typeof p.toolCallId === "string" ? { toolCallId: p.toolCallId } : {},
+        );
+      } catch (error) {
+        // As for a permission ask: a late rejection of a retired question fails nothing.
+        if (activeTurn !== turn || invocation.signal.aborted) return { action: "cancel" };
+        const failure =
+          error instanceof Error ? error : new OrcaError("INTERNAL", "question callback failed", {}, { cause: error });
+        turn.failure = failure;
+        turn.fail(failure);
+        requestCancel("question callback failed");
+        throw error;
+      }
+      if (!answer || activeTurn !== turn || invocation.signal.aborted) return { action: "cancel" };
+      logger.debug("elicitation answered", { action: answer.action });
+      return answer.action === "decline" ? { action: "decline" } : { action: "accept", content: answer.content };
+    });
   const conn = app.connect(proc.stream);
   const closed = conn.closed.then(() => undefined);
   // Losing the agent's transport ends everything the relay runs for it, not only the turn.
@@ -1241,6 +1306,9 @@ async function openPlanned(
         clientCapabilities: {
           fs: { readTextFile: true, writeTextFile: true },
           terminal: false,
+          // Form questions only, and only where somebody can be asked (#1133, #1169). URL
+          // elicitation would have ORCA send a person to a page; it is not offered.
+          ...(opts.askElicitation ? { elicitation: { form: {} } } : {}),
           // ORCA can set boolean config options as well as selects.
           session: { configOptions: { boolean: {} } },
         },

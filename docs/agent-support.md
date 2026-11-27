@@ -18,6 +18,10 @@ Every entry says how it is known, as in the hook coverage page:
 - **source**: read in the agent's documentation or source at the pinned version, not exercised;
 - **unknown**: not established, and treated as not covered.
 
+Agent questions (ACP form elicitation, #1133) are offered only to agents on the generic ACP
+session, such as Claude and Codex. The agents below are not offered them and refuse
+`elicitation/create` as before: see [agent-questions.md](agent-questions.md).
+
 ## Support levels
 
 | Agent (pinned) | A | B | C | Hook (`nativeToolHook: experimental`) |
