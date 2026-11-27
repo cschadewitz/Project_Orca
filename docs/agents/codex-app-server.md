@@ -70,7 +70,12 @@ signed in.
 - **A cancel is not proof that a command stopped.** Codex can end a cancelled turn while a
   command it started runs on (#1299). ORCA reports such a cancel as `unconfirmed` or
   `not-carried-out`, and then takes no further prompt on that session.
-- **A process of your own user.** The pins are checked by path, before Codex starts. They
-  catch a package that drifted or had a file swapped, not a process running as you that
-  changes Codex while it starts or runs (#1286).
+- **A process of your own user.** The driver assumes a trusted install: Codex, its package and
+  the directories on its `PATH` are changed only by you or by root. The pins are checked by
+  path, before Codex starts. They catch a package that drifted, an update ORCA has not
+  verified, or a file swapped before the start. They do not stop a process running as you,
+  which can replace a file between ORCA's check and Codex's start, or attach to the running
+  Codex (`ptrace`, `/proc/<pid>/mem`) and change what it does. Holding a program apart from
+  your own user takes process isolation, which ORCA plans with its 0.9 sandbox holder, not a
+  launch check (#1286).
 - **The judge advises on commands only** on this driver ([plain-language rules](../plain-language-rules.md#codex)).
