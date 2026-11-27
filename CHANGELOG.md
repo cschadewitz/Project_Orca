@@ -33,7 +33,9 @@ to read them as they stand.
 
 ### Store format
 
-No change.
+No change to the format marker or the stored data. The journal that an interrupted switch from
+SQLite back to files leaves now records the database's birth time, and a journal left by 0.8.0
+is kept for review instead of settled (#1344).
 
 ### Changed
 
@@ -155,6 +157,13 @@ On Windows, saving workspace state no longer fails with a permission error when 
   its contents never reached the disk (the boot id and a tag for this machine are now in the token's name too), so a
   managed server that lost power while a background tick held the retry journal's lock
   recovers on its own instead of failing every 5 s (#1197).
+- recovering an interrupted switch from SQLite back to files no longer drops a
+  replacement `metadata.sqlite` that a file system gave the original's inode number. The switch's
+  journal now records the database's birth time with its device and inode, and recovery drops
+  the database, puts the files back in front of it or ends the journal only when it can prove the
+  file is the one the switch started from. Otherwise, including a journal written by 0.8.0 or a
+  platform that cannot vouch for a birth time, it keeps the database and the journal and refuses
+  (`INTERRUPTED`), naming the switch's backup (#1344).
 
 ## 0.8.0 - 2026-11-26
 
