@@ -14,8 +14,10 @@
  * - `uncoveredRoutes`: every route the row lists as unsupported, shown refused here.
  * - `cases`: every case of `claude-sdk-hook` the live runner (`claude-sdk-connected`) can make
  *   and observe, run live, with each call's independent evidence and ORCA's decision. The
- *   route's other cases (`notRun`) are not in this receipt: a live agent cannot make them, or
- *   Claude refuses them before ORCA answers. They run on the route itself in the #706 suite.
+ *   route's installed diagnostics (`installed.diagnostic`, the row's `notAsserted`: a live agent
+ *   cannot make the call, or Claude refuses it before ORCA answers) run on the bridge from the
+ *   same bundle (`via: "bridge"`, #1129), each call keeping ORCA's answers so the outcome can be
+ *   re-derived (`bridgeDiagnosticProblems`). They count toward no tier.
  * - Lifecycle evidence for tier B (#1129), under `lifecycle`, each call's effect observed apart
  *   from ORCA: `checks.cancelledNoEffect` (a pending ask whose turn is cancelled has no effect,
  *   shown again after a wait, for an MCP call and a file write), `checks.freshSessionFreshDecision`
@@ -30,7 +32,7 @@
  * the agreement checks run. No tier rests on it until a signed run records it (#1128).
  */
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { appendFile, chmod, copyFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -41,12 +43,15 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   CLAUDE_AGENT_SDK_VERSION,
   CLAUDE_SDK_DECISION_TIMEOUT_MS,
+  CLAUDE_SDK_DENIALS,
   CLAUDE_SDK_VERIFIED_PAIRS,
   permissionPolicyPath,
 } from "@orca/agents";
 import { childBundle } from "@orca/testing/child-bundle";
 import {
   REPO_ROOT,
+  assertedCases,
+  bridgeDiagnosticProblems,
   casesFor,
   installedCaseProblems,
   installedInputProblems,
@@ -58,6 +63,7 @@ import {
   rowReceiptProblems,
   uncoveredRouteProblems,
 } from "../guard-qualification/check-support-matrix.js";
+import { claudeSdkHook } from "../guard-qualification/paths.js";
 import { SCENARIOS } from "../guard-qualification/scenarios.js";
 import { createWorld } from "../guard-qualification/world.js";
 import { modelStandIn } from "../guard-qualification/connected/model-stand-in.js";
@@ -74,20 +80,9 @@ const route = matrix.paths.find((p) => p.id === ROUTE);
 const runner = matrix.paths.find((p) => p.id === route.installed?.live);
 const row = matrix.agents.find((a) => a.id === "claude-sdk");
 
-/** The route's cases the live runner makes and observes; the rest are not in this receipt. */
-const liveCases = casesFor(route, catalogue).filter(
-  (id) => runner && casesFor(runner, catalogue).includes(id) && !(id in (runner.unobserved ?? {})),
-);
-const notRun = Object.fromEntries(
-  casesFor(route, catalogue)
-    .filter((id) => !liveCases.includes(id))
-    .map((id) => [
-      id,
-      id in (runner?.unobserved ?? {})
-        ? `Claude refuses the call before ORCA answers: ${runner.unobserved[id]}`
-        : "A live agent cannot make this call; it runs on claude-sdk-hook in the #706 suite.",
-    ]),
-);
+/** The route's asserted cases run live; its installed diagnostics run on the bundled bridge. */
+const liveCases = assertedCases(route, catalogue);
+const diagnostics = Object.keys(route.installed?.diagnostic ?? {});
 
 const realWorld = () =>
   createWorld({
@@ -131,9 +126,16 @@ describe("the SDK installed run and the matrix agree", () => {
     expect(Object.keys(PROBES).sort()).toEqual([...row.unsupportedRoutes].sort());
   });
 
-  it("the cases left out are exactly the ones the live runner cannot make or observe", () => {
+  it("every live case is one the live runner makes and observes, and the rest are diagnostics on the bridge", () => {
     expect(liveCases.length).toBeGreaterThan(0);
-    expect(Object.keys(notRun).sort()).toEqual(["A02", "A04", "B01", "F05", "P03"]);
+    for (const id of liveCases) {
+      expect(casesFor(runner, catalogue), id).toContain(id);
+      expect(runner.unobserved ?? {}, id).not.toHaveProperty(id);
+    }
+    expect(route.installed.diagnosticsOn).toBe("bridge");
+    expect([...diagnostics].sort()).toEqual([...(row.notAsserted ?? [])].sort());
+    for (const id of casesFor(route, catalogue).filter((x) => !liveCases.includes(x)))
+      expect(diagnostics, id).toContain(id);
   });
 });
 
@@ -148,6 +150,36 @@ describe("reads what the SDK handed Claude from its command line", () => {
     });
     // Absent flags are not taken as defaults.
     expect(settingsFrom(["claude"])).toEqual({ settingSources: undefined, permissionMode: undefined });
+  });
+});
+
+describe("the route's diagnostics keep evidence the checker re-derives (#1129)", () => {
+  it("each diagnostic on the bridge passes, and a call whose outcome does not follow from its answers is refused", async () => {
+    const cases = [];
+    for (const id of diagnostics) {
+      const world = await realWorld();
+      try {
+        await SCENARIOS[id](world, bridgeRecorded(world));
+        cases.push({ id, via: "bridge", result: "pass", calls: world.bridgeCalls });
+      } finally {
+        await world.dispose();
+      }
+    }
+    expect(bridgeDiagnosticProblems({ cases }, diagnostics)).toEqual([]);
+    const [first] = cases;
+    const tampered = {
+      ...first,
+      calls: first.calls.map((c, i) => (i === 0 ? { ...c, outcome: c.outcome === "allow" ? "deny" : "allow" } : c)),
+    };
+    expect(bridgeDiagnosticProblems({ cases: [tampered, ...cases.slice(1)] }, diagnostics)).toEqual([
+      expect.stringMatching(new RegExp(`^case ${first.id} \\(bridge\\): call 1: its answer shows `)),
+    ]);
+    expect(bridgeDiagnosticProblems({ cases: cases.slice(1) }, diagnostics)).toEqual([
+      `case ${first.id} (bridge): not run`,
+    ]);
+    expect(bridgeDiagnosticProblems({ cases: [{ ...first, via: "live" }, ...cases.slice(1)] }, diagnostics)).toEqual([
+      `case ${first.id} (bridge): ran via live, not the bridge`,
+    ]);
   });
 });
 
@@ -180,6 +212,7 @@ describe.skipIf(CLAUDE === undefined || process.platform !== "linux")("installed
   let model;
   let live;
   let bundle;
+  let factory;
   const receipt = { route: ROUTE, cases: [], uncoveredRoutes: [], checks: {}, lifecycle: {}, observed: undefined };
 
   beforeAll(async () => {
@@ -189,7 +222,8 @@ describe.skipIf(CLAUDE === undefined || process.platform !== "linux")("installed
     if (!built?.["factory"]) throw new Error("the session factory could not be bundled for this run");
     bundle = built["factory"];
     model = await modelStandIn();
-    live = claudeSdkConnected({ claude: CLAUDE, model, factory: await import(pathToFileURL(bundle).href) });
+    factory = await import(pathToFileURL(bundle).href);
+    live = claudeSdkConnected({ claude: CLAUDE, model, factory });
   });
 
   afterAll(async () => {
@@ -224,24 +258,27 @@ describe.skipIf(CLAUDE === undefined || process.platform !== "linux")("installed
       }
     }, 120_000);
 
-  for (const c of catalogue.cases.filter((x) => liveCases.includes(x.id)))
+  for (const c of catalogue.cases.filter((x) => casesFor(route, catalogue).includes(x.id))) {
+    const via = diagnostics.includes(c.id) ? "bridge" : "live";
     it(
-      `${c.id} (live) ${c.title}`,
+      `${c.id} (${via}) ${c.title}`,
       async () => {
         const world = await realWorld();
-        const entry = { id: c.id, contract: c.contract, via: "live", result: "fail" };
+        const entry = { id: c.id, contract: c.contract, via, result: "fail" };
         receipt.cases.push(entry);
         try {
-          await SCENARIOS[c.id](world, live);
+          if (via === "bridge") world.sdkBridge = factory.claudeSdkPermissionBridge;
+          await SCENARIOS[c.id](world, via === "bridge" ? bridgeRecorded(world) : live);
           entry.result = "pass";
         } finally {
-          entry.calls = world.callRecords ?? [];
+          entry.calls = (via === "live" ? world.callRecords : world.bridgeCalls) ?? [];
           await world.dispose();
         }
       },
       // L02 waits out a real one-minute grant.
       300_000,
     );
+  }
 
   // #1129: a pending ask whose turn is cancelled has no effect, and a fresh session decides
   // afresh. On this route an MCP call asks once (Claude's ask, in canUseTool) and the relay
@@ -386,10 +423,12 @@ describe.skipIf(CLAUDE === undefined || process.platform !== "linux")("installed
         ? "pass"
         : "fail";
     expect(receipt.checks.uncoveredRoutesRefused).toBe("pass");
-    expect(receipt.cases.map((c) => c.id)).toEqual(liveCases);
+    expect(receipt.cases.map((c) => c.id)).toEqual(casesFor(route, catalogue));
     const shaped = { ...receipt, kind: "installed", driver: "claude-agent-sdk", agent: row.id };
     expect(rowReceiptProblems(shaped, row)).toEqual([]);
     expect(installedCaseProblems(shaped, liveCases, loadAssertions(), route)).toEqual([]);
+    // The diagnostics hold too, though they count toward no tier.
+    expect(bridgeDiagnosticProblems(shaped, diagnostics)).toEqual([]);
     // The row is not pinned yet, so only the inputs' own shape and settings are checked here.
     const pinnedToThis = {
       ...row,
@@ -437,6 +476,34 @@ function decisionTime(log, toolUseId) {
   const result = log.results.find((r) => r.toolUseId === toolUseId);
   if (!call || !result) throw new Error(`the model stand-in did not see ${toolUseId} and its result`);
   return result.at - call.at;
+}
+
+/**
+ * The route path (`claudeSdkHook`) on the bridge the world names, keeping each call as an
+ * installed diagnostic records it: ORCA's answers at each step and the outcome derived from them.
+ */
+function bridgeRecorded(world) {
+  world.bridgeCalls = [];
+  // Its tool use ids are its own, never one of a live case's in the same receipt.
+  world.sdkIdPrefix = `bridge_${randomUUID().slice(0, 8)}_`;
+  return {
+    ...claudeSdkHook,
+    async decide(w, action, opts = {}) {
+      const got = await claudeSdkHook.decide(w, action, opts);
+      w.bridgeCalls.push({
+        tool: action.tool,
+        toolUseId: got.toolUseId,
+        outcome: got.outcome,
+        decision: got.decision,
+        hook: got.hook,
+        answer: got.answer,
+        relay: got.relay,
+        beforeHandoff: opts.beforeHandoff !== undefined,
+        failedText: CLAUDE_SDK_DENIALS.failed,
+      });
+      return got;
+    },
+  };
 }
 
 /** The tool's name on an ask from the SDK bridge (`askRequest` in permission-bridge.ts). */
@@ -520,7 +587,6 @@ async function writeReceipt(receipt, bundle) {
         lifecycle: receipt.lifecycle,
         uncoveredRoutes: receipt.uncoveredRoutes,
         cases: receipt.cases,
-        notRun,
       },
       null,
       2,

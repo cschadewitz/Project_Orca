@@ -405,6 +405,60 @@ export function programEvidenceProblems(receipt, neededCases, assertions = loadA
   return problems;
 }
 
+/**
+ * The diagnostic evidence of an installed receipt on a route decided in process
+ * (`installed.diagnosticsOn: "bridge"`, #1129): each diagnostic case ran on the bridge from the
+ * bundle the receipt's sessions ran (`via: "bridge"`), passed, and kept every call it made, with
+ * ORCA's answer and the outcome the route path derived from it. The outcome is re-derived here
+ * from the answer as `paths.js` does, not taken on its word. It counts toward no tier.
+ */
+export function bridgeDiagnosticProblems(receipt, neededCases) {
+  const problems = [];
+  const byId = new Map((receipt.cases ?? []).map((c) => [c.id, c]));
+  for (const id of neededCases) {
+    const c = byId.get(id);
+    const at = `case ${id} (bridge)`;
+    if (!c) {
+      problems.push(`${at}: not run`);
+      continue;
+    }
+    if (c.via !== "bridge") problems.push(`${at}: ran via ${c.via ?? "nothing"}, not the bridge`);
+    if (c.result !== "pass") problems.push(`${at}: did not pass`);
+    const calls = Array.isArray(c.calls) ? c.calls : [];
+    if (calls.length === 0) problems.push(`${at}: kept no calls`);
+    calls.forEach((call, i) => {
+      const derived = bridgeOutcome(call);
+      if (derived !== call.outcome)
+        problems.push(`${at}: call ${i + 1}: its answer shows ${derived}, not ${String(call.outcome)}`);
+    });
+  }
+  return problems;
+}
+
+/**
+ * The outcome of one bridge call from what ORCA answered: the hook's output, then (unless the
+ * hook denied) `canUseTool`'s, then the relay for an allowed MCP call. As `claudeSdkHook.decide`.
+ */
+function bridgeOutcome(call) {
+  const said = call.hook?.hookSpecificOutput;
+  if (said?.permissionDecision === "deny") return said.permissionDecisionReason === call.failedText ? "block" : "deny";
+  if (said !== undefined && said.permissionDecision !== "ask") return `invalid:hook-${String(said.permissionDecision)}`;
+  const answer = call.answer;
+  if (!answer) return "invalid:no-answer";
+  const decision = call.decision ?? "";
+  if (answer.behavior === "deny") {
+    if (decision === "ask:failed" || (decision === "" && answer.message === call.failedText)) return "block";
+    return decision.startsWith("ask:") ? "ask" : "deny";
+  }
+  if (answer.behavior !== "allow") return `invalid:answer-${String(answer.behavior)}`;
+  const answered = decision === "ask:allow_once";
+  if (said !== undefined && !answered) return `invalid:allowed-after-ask:${decision}`;
+  const outcome = answered ? "ask" : "allow";
+  if (call.relay === "refused-before-handoff") return "invalid:relay-refused";
+  if (call.relay === "refused") return call.beforeHandoff ? "deny" : "invalid:relay-refused";
+  return outcome;
+}
+
 /** The outcome Claude Code takes from one run of a command hook (as `paths.js` `hookOutcome`). */
 function programOutcome(call) {
   if (call.exitCode !== 0) return "block";
@@ -667,14 +721,22 @@ export function checkSupportMatrix(
     }
   }
 
-  // A route's installed diagnostics have their program runs and accepted outcomes committed.
+  // A route's installed diagnostics have their program runs and accepted outcomes committed. A
+  // route decided in the session's own process (`installed.diagnosticsOn: "bridge"`, #1129) has
+  // no program: its diagnostics are the route's own cases, run on the bridge the receipt's
+  // sessions ran (`bridgeDiagnosticProblems`), and there is no program inventory for it.
   for (const path of matrix.paths) {
     const program = path.installed?.diagnostic ?? {};
     const inventory = assertions.programs?.[path.id] ?? {};
     const runs = new Set(casesFor(path, catalogue));
+    const onBridge = path.installed?.diagnosticsOn === "bridge";
+    if (path.installed?.diagnosticsOn !== undefined && !onBridge)
+      problems.push(`path ${path.id}: installed.diagnosticsOn must be "bridge" when given`);
+    if (onBridge && Object.keys(inventory).length)
+      problems.push(`path ${path.id}: its diagnostics run on the bridge, so it has no program inventory`);
     for (const id of Object.keys(program)) {
       if (!runs.has(id)) problems.push(`path ${path.id}: lists ${id} as an installed diagnostic, but does not run it`);
-      if (!Array.isArray(inventory[id]))
+      if (!onBridge && !Array.isArray(inventory[id]))
         problems.push(`path ${path.id}: diagnostic case ${id} has no committed program inventory`);
     }
     for (const [id, entries] of Object.entries(inventory)) {

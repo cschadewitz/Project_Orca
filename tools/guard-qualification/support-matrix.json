@@ -119,7 +119,15 @@
         "P02": "No raw input or context file on this route (see F01 and F02)."
       },
       "installed": {
-        "live": "claude-sdk-connected"
+        "live": "claude-sdk-connected",
+        "diagnosticsOn": "bridge",
+        "diagnostic": {
+          "F05": "Claude Code refuses this call itself before ORCA answers, so ORCA's decision is run on the bundled bridge instead: Claude Code refuses a tool it does not offer (No such tool available) before any hook runs, so ORCA's decision is never observed. Run as a diagnostic: nothing runs, shown by the request's tool list.",
+          "A02": "Claude Code refuses this call itself before ORCA answers, so ORCA's decision is run on the bundled bridge instead: The relative Edit (../elsewhere/a.md) is refused by Claude Code (the file does not exist from its working directory) before any hook runs, so that assertion's ORCA decision is unobserved; the case's other calls are observed but cannot stand in for it.",
+          "A04": "A live agent cannot make this call: one session has one working directory, fixed when it opens; a live agent cannot make a call from another one. Run on the bundled bridge.",
+          "B01": "Claude Code refuses this call itself before ORCA answers, so ORCA's decision is run on the bundled bridge instead: Claude Code refuses Edits of ORCA files that do not exist yet, and a change to a file whose read ORCA denied, before any hook runs, so those assertions' ORCA decisions are unobserved; the denied writes in the same case cannot stand in for them.",
+          "P03": "Claude Code refuses this call itself before ORCA answers, so ORCA's decision is run on the bundled bridge instead: The call to a 4 KB unknown tool name is refused by Claude Code (not offered) before any hook runs, so ORCA's answer for it is unobserved; the other calls' short answers cannot stand in for it."
+        }
       },
       "verifies": "ORCA's answers on the route: the hook never allows, denies before the call runs, and sends every call the policy asks about (or that runs outside the workspace) to Claude's ask; canUseTool decides that ask again from the policy as it is now, by a rule only for a call the hook saw inside the workspace, otherwise by the run's answerer, for this call only; every allowed MCP call, a person's one-time allow included, is checked again by the relay and at its handoff. A refusal is observed in the answer ORCA hands Claude",
       "unverified": [
@@ -293,15 +301,17 @@
       "pin": null,
       "tier": "none",
       "routes": ["claude-sdk-hook"],
+      "notAsserted": ["A02", "A04", "B01", "F05", "P03"],
       "receipts": [],
       "unverified": [
-        "No signed installed receipt yet: enforcement-installed-claude-sdk-1128.test.js writes one in claude-sdk-acceptance.yml, unsigned, and its cases are only those the live runner observes (A02, A04, B01, F05 and P03 run on claude-sdk-hook in the #706 suite)",
+        "No signed installed receipt yet: enforcement-installed-claude-sdk-1128.test.js writes one in claude-sdk-acceptance.yml, unsigned",
         "bridgeSha256 names the bundle of the daemon's session factory that the run imported and drove (installed/claude-sdk-factory.js), built from the receipt's commit; it is not the digest of a release's orca-daemon.mjs",
+        "Cases outside a B claim (notAsserted): the installed agent cannot make them or refuses them before ORCA answers, so its handling is not observed; they run on the bundled bridge as diagnostics only",
         "That events and logs about its calls are redacted"
       ],
       "unsupportedRoutes": ["Remote sessions over SSH", "A Claude Code other than the pinned one"],
       "residualRisks": [],
-      "next": "#1128: sign and record the installed receipt (guard-receipts.yml), then a scoped A claim; #1129 tier B (lifecycle checks and the route's installed diagnostics). Held on feature/claude-agent-sdk until #1132"
+      "next": "#1128: sign and record the installed receipt (guard-receipts.yml), then a scoped A claim; #1129: a B claim proposal once signed. Held on feature/claude-agent-sdk until #1132; any signed receipt or tier change needs its own review and authorization"
     },
     {
       "id": "codex",

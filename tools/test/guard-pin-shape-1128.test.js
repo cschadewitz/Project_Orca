@@ -33,6 +33,8 @@ const sdkRow = (extra = {}) => ({
   tier: "none",
   pin: sdkPin,
   routes: ["claude-sdk-hook"],
+  // The route's installed diagnostics, as the matrix names them (#1129).
+  notAsserted: ["A02", "A04", "B01", "F05", "P03"],
   receipts: [],
   ...extra,
 });
