@@ -376,7 +376,7 @@ try {
   $code = Invoke-Case (New-State $true $false $false) "y" -fail "appeared"
   Assert ($code -eq 1) "exit $code"
   Assert (($script:changed -join ",") -eq "firewall") "changed $($script:changed -join ',')"
-  Assert ((& $all) -like "*Could not check that SSH is blocked from everywhere but Tailscale*rule ipsec (ipsec)*OverrideBlockRules*sshd was not started by this run*") "it said: $(& $all)"
+  Assert ((& $all) -like "*Could not check that SSH is blocked from everywhere but Tailscale*(OverrideBlockRules) and allow SSH: rule ipsec (ipsec)*sshd was not started by this run*") "it said: $(& $all)"
 
   Check "a listener changed to another port before the start is caught by the check, and sshd is not started"
   $code = Invoke-Case (New-State $true $false $false) "y" -fail "port"
