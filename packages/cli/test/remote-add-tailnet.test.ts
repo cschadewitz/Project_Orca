@@ -184,6 +184,20 @@ describe("orca remote add --tailnet", () => {
     expect(lines.join("\n")).toMatch(/\(not pinned yet\)/);
   });
 
+  it("points a Windows machine at the Windows OpenSSH Server, not Tailscale SSH (#1238)", async () => {
+    const { make } = fakeServer();
+    const { context, lines, errs } = ctx(["add", "build-1"], { tailnet: true });
+    await remoteCommand(context, {
+      tunnel: make,
+      scripts: scripts(),
+      version: "0.9.0",
+      tailnet: tailnet({ OS: "windows", sshHostKeys: undefined }),
+    });
+    expect(errs.join("\n")).toContain("run orca-windows-ssh.ps1 on it from an administrator PowerShell");
+    expect(errs.join("\n")).not.toContain("sudo tailscale");
+    expect(lines.join("\n")).toMatch(/\(not pinned yet\)/);
+  });
+
   it("never takes another tailnet's word for a shared-in machine's key", async () => {
     const { make } = fakeServer();
     const { context, lines, errs } = ctx(["add", "build-1"], { tailnet: true });

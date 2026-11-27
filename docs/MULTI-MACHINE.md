@@ -212,6 +212,7 @@ never treats tailnet membership as permission: every connection is still ORCA's 
 tunnel, and every daemon call still needs an ORCA credential.
 
 **On the new host** (Linux x64): install Tailscale and join your tailnet with Tailscale SSH on.
+For a Windows x64 host, see [Windows hosts](#windows-hosts) below.
 
 ```sh
 sudo tailscale up --ssh
@@ -233,7 +234,7 @@ tailnet. Pick one, enter the account to log in as (`you@`), and save: the app ch
 shows the host keys your tailnet advertises for it, and sets it up once you confirm, carrying the
 signed bundle over the tunnel. When Tailscale asks you to approve the login, the dialog says so
 and **Open approval page** opens it in your browser. Offline machines, and machines that are not
-Linux, cannot be picked for setup. **Add profile…** offers the same list for a machine that
+Linux or Windows, cannot be picked for setup. **Add profile…** offers the same list for a machine that
 already runs a daemon.
 
 - `build-1` is the machine's name on your tailnet (its short or full MagicDNS name, or its node
@@ -342,8 +343,53 @@ apply it as with any other change (#1235).
 (for example `tag:orca-server`), it leaves `autogroup:self`, so add a narrow SSH rule for your
 own devices and the account ORCA logs in as. Avoid broad `autogroup:member` rules.
 
-Windows hosts cannot be set up this way yet: Tailscale SSH has no Windows server (#1238). Without
-Tailscale, typed SSH profiles keep working over any VPN or LAN.
+Without Tailscale, typed SSH profiles keep working over any VPN or LAN.
+
+### Windows hosts
+
+Tailscale SSH has no Windows server, so a Windows x64 host uses the OpenSSH Server that Windows
+itself ships (#1238). ORCA does not bundle, update or reconfigure it: Windows Update installs and
+updates it, and you maintain nothing for it beyond Windows Update.
+
+**On the Windows host**, install Tailscale and sign in to your tailnet. Then run this once from an
+administrator PowerShell, with your ORCA version in place of `v0.9.0`:
+
+```powershell
+irm https://raw.githubusercontent.com/cschadewitz/Project_Orca/v0.9.0/tools/deploy/orca-windows-ssh.ps1 | iex
+```
+
+To read it first, download that file and run it with
+`powershell -NoProfile -ExecutionPolicy Bypass -File orca-windows-ssh.ps1`.
+
+- If the OpenSSH Server is already installed, starts automatically and is running, it changes
+  nothing and says so.
+- Otherwise it lists exactly what it would change and asks first. Anything but `y` changes
+  nothing ("Nothing was changed"). The changes, only those still needed:
+  1. Install the OpenSSH Server Windows feature from Windows Update, and disable the firewall
+     rule that feature adds for every network (`OpenSSH-Server-In-TCP`).
+  2. Set the `sshd` service to start automatically, and start it.
+  3. Allow inbound SSH (TCP 22) only over the Tailscale adapter, with the firewall rule
+     "ORCA: OpenSSH Server over Tailscale".
+- It refuses, changing nothing, outside an administrator session, without the Tailscale
+  adapter, or on a Windows too old to have the feature (before Windows 10 1809 or Windows
+  Server 2019).
+
+**From your own machine**, add it as above (`orca-cli remote add you@desk-1 --tailnet`, or **Add
+a machine…**). Its host key is not advertised by your tailnet, so you compare the fingerprint by
+hand before you confirm, as for any first-seen key. Signing in uses the key or password your
+Windows account accepts over SSH. For an administrator account, Windows reads its keys from
+`C:\ProgramData\ssh\administrators_authorized_keys`, not from the account's own
+`.ssh\authorized_keys`.
+
+The setup then runs as that account and needs no administrator rights of its own: it installs
+under `%LOCALAPPDATA%\orca-server`, downloads and verifies the signed Windows server bundle on
+the host (`--push-bundle` is Linux only for now), and registers the scheduled task
+`\ORCA\orca-server`.
+- **At boot, or at logon.** Where the account may register a task that starts at boot, the
+  daemon runs whether or not anyone is logged on. Otherwise the task starts when the account
+  logs on, and the setup says so; setting it up again while the account is an administrator
+  moves it to boot.
+- A setup directory whose path has a space is refused for now.
 
 ## How this is tested
 

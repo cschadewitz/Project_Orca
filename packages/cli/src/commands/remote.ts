@@ -530,7 +530,10 @@ async function tailnetPeer(
     ctx.err(`${peer.dnsName} is shared from another tailnet: check its host key by hand before you confirm.`);
   if (!peer.tailscaleSsh)
     ctx.err(
-      `${peer.dnsName} does not run Tailscale SSH, so its host key is not advertised and it needs its own sshd. To log in with Tailscale SSH instead, run this on it: sudo tailscale set --ssh`,
+      peer.os.toLowerCase() === "windows"
+        ? // Tailscale SSH has no Windows server: Windows' own OpenSSH Server it is (#1238).
+          `${peer.dnsName} is a Windows machine, so its host key is not advertised: check it by hand before you confirm. It needs the Windows OpenSSH Server; if that is not on yet, run orca-windows-ssh.ps1 on it from an administrator PowerShell (docs/MULTI-MACHINE.md, "Windows hosts").`
+        : `${peer.dnsName} does not run Tailscale SSH, so its host key is not advertised and it needs its own sshd. To log in with Tailscale SSH instead, run this on it: sudo tailscale set --ssh`,
     );
   return peer;
 }

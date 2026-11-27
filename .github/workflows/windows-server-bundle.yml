@@ -19,6 +19,7 @@ on:
       - tools/deploy/server-bundle.py
       - tools/deploy/server-bundle-smoke.mjs
       - tools/deploy/orca-server-setup.ps1
+      - tools/deploy/orca-windows-ssh.ps1
       - tools/deploy/tests/windows-setup/**
       - tools/test/windows-server-setup.test.js
       - tools/test/server-bundle-smoke.test.js

@@ -54,7 +54,11 @@ it("accepts a carried Sigstore root only by the pins orca-release.py has", () =>
 
 it("is run end to end on Windows by the Windows server bundle check, in Windows PowerShell", () => {
   const check = parse(read(".github/workflows/windows-server-bundle.yml"));
-  for (const path of ["tools/deploy/orca-server-setup.ps1", "tools/deploy/tests/windows-setup/**"])
+  for (const path of [
+    "tools/deploy/orca-server-setup.ps1",
+    "tools/deploy/orca-windows-ssh.ps1",
+    "tools/deploy/tests/windows-setup/**",
+  ])
     expect(check.on.pull_request.paths).toContain(path);
   const step = check.jobs.bundle.steps.find((candidate) => candidate.run?.includes("tests/windows-setup/run.ps1"));
   // Windows PowerShell 5.1, the one every Windows host has, not PowerShell 7.
@@ -74,4 +78,14 @@ it("gives the client's Windows setup session longer than every download deadline
   expect(downloads).toBeGreaterThan(0);
   // With room left for unpacking, verifying, the task and the daemon's health check.
   expect(minutes * 60).toBeGreaterThanOrEqual(downloads + 15 * 60);
+});
+
+it("documents the OpenSSH Server bootstrap line at the path it ships from, and tests it on Windows", () => {
+  const docs = read("docs/MULTI-MACHINE.md");
+  const line = docs.match(/^irm (https:\/\/\S+) \| iex$/m)?.[1];
+  expect(line).toBe(
+    "https://raw.githubusercontent.com/cschadewitz/Project_Orca/v0.9.0/tools/deploy/orca-windows-ssh.ps1",
+  );
+  expect(read("tools/deploy/orca-windows-ssh.ps1")).toContain("Windows Update");
+  expect(read("tools/deploy/tests/windows-setup/run.ps1")).toContain('"openssh.ps1"');
 });
