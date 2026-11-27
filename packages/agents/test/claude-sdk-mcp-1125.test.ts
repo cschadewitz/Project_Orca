@@ -5,14 +5,21 @@
  * (an in-memory transport to the in-process server), a real stdio MCP server stands behind the
  * relay, and the bridge's `canUseTool` plays the ask Claude makes before it calls a tool.
  */
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { OrcaError, silentLogger, type PermissionPolicy } from "@orca/core";
-import { LocalHost, checkClaudeSdkMcpServers, claudeSdkMcpServers, claudeSdkPermissionBridge } from "../src/index.js";
+import {
+  LocalHost,
+  checkClaudeSdkMcpServers,
+  claudeSdkMcpServers,
+  claudeSdkPermissionBridge,
+  openClaudeSdkSession,
+} from "../src/index.js";
 import { createMcpRelay, type McpRelay } from "../src/mcp-relay.js";
 
 const SECRET = "mcp-1125-secret-value";
@@ -200,5 +207,69 @@ describe("ORCA-run MCP servers on the Claude Agent SDK route (#1125)", () => {
       expect(() => checkClaudeSdkMcpServers("claude-sdk", [{ name }])).toThrow(OrcaError);
     expect(() => checkClaudeSdkMcpServers("claude-sdk", [{ name: "a" }, { name: "a" }])).toThrow(/two MCP servers/);
     expect(() => checkClaudeSdkMcpServers("claude-sdk", [{ name: "git-hub_tools2" }])).not.toThrow();
+  });
+});
+
+/** A whole session, with the SDK stand-in as Claude, which can list a server's tools on its own. */
+describe.runIf(process.platform !== "win32")("the relay's lifetime on a Claude Agent SDK session (#1125)", () => {
+  const STAND_IN = fileURLToPath(new URL("./fixtures/claude-sdk-stand-in.mjs", import.meta.url));
+  const open = async (env: Record<string, string>, startupTimeoutMs = 10_000) => {
+    const claude = join(dir, "claude");
+    await writeFile(claude, `#!/bin/sh\nexec "${process.execPath}" "${STAND_IN}" "$@"\n`);
+    await chmod(claude, 0o755);
+    return openClaudeSdkSession({
+      agent: { id: "claude-sdk", cancelGraceMs: 2_000 },
+      hostId: "local",
+      cwd: dir,
+      host: new LocalHost({ id: "local", type: "local" }),
+      mcpServers: [
+        { name: "tools", command: process.execPath, args: [join(dir, "server.cjs")], env: { SERVER_LOG: serverLog } },
+      ],
+      preflight: {
+        executable: claude,
+        env: { PATH: process.env.PATH ?? "", STAND_IN_LOG: join(dir, "claude.log"), ...env },
+      },
+      startupTimeoutMs,
+      exitGraceMs: 1_000,
+      logger: silentLogger,
+    });
+  };
+  const answers = async () =>
+    (await readFile(join(dir, "claude.log"), "utf8").catch(() => ""))
+      .split("\n")
+      .filter(Boolean)
+      .map((l) => JSON.parse(l) as { mcp?: unknown })
+      .filter((l) => l.mcp)
+      .map((l) => JSON.stringify(l.mcp));
+  const until = async (check: () => Promise<boolean>) => {
+    for (const end = Date.now() + 10_000; Date.now() < end; await new Promise((r) => setTimeout(r, 50)))
+      if (await check()) return;
+  };
+
+  it("serves a listing Claude sends while starting, once the session is ready", async () => {
+    const session = await open({ STAND_IN_MCP_EARLY: "tools" });
+    try {
+      await until(async () => (await answers()).length > 0);
+      expect((await answers())[0]).toContain('"name":"touch"');
+      expect(await log()).toContain("started");
+    } finally {
+      await session.close();
+    }
+  });
+
+  it("starts no server for a session that never became ready", async () => {
+    const failed = await open({ STAND_IN_MCP_EARLY: "tools", STAND_IN_STARTUP: "silent" }, 300).catch(
+      (e: unknown) => e,
+    );
+    expect(failed).toBeInstanceOf(OrcaError);
+    await until(async () => (await answers()).length > 0);
+    expect((await answers())[0]).toMatch(/not admitted|session closed/);
+    expect(await log()).toBe("");
+  });
+
+  it("starts no server once teardown has begun", async () => {
+    const session = await open({ STAND_IN_MCP_ON_END: "tools", STAND_IN_STUBBORN: "1" });
+    await session.close();
+    expect(await log()).toBe("");
   });
 });

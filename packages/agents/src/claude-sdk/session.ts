@@ -342,18 +342,23 @@ async function openClaudeSdkProcess(
   // ORCA's MCP relay (#1125): the real servers run on ORCA's side, started only for a request
   // the bridge allows; Claude is told a name and nothing else.
   const mcpServers = options.mcpServers ?? [];
+  // Admitted once Claude has answered `initialize` and the session is ready, refused if it never
+  // gets there or teardown begins first: no server starts for a session that is not open.
+  let admit: (ready: boolean) => void = () => undefined;
+  const ready = new Promise<boolean>((r) => (admit = r));
   let relay: McpRelay | undefined;
+  /** Every value the session read, the servers' own included: none of them reaches Claude through a server. */
+  const mcpSecretValues = [...(options.secretValues ?? [])];
   if (mcpServers.length > 0) {
     if (!options.host)
       throw new OrcaError("INTERNAL", `agent ${options.agent.id}: MCP servers need the session's host to run on`);
-    const secretValues = [...(options.secretValues ?? [])];
     relay = createMcpRelay({
       host: options.host,
       cwd,
       withheldEnv: options.withheldEnv,
-      redact: (text) => redactSecretValues(text, secretValues),
+      redact: (text) => redactSecretValues(text, mcpSecretValues),
       servers: mcpServers.map((m) => ({ name: m.name, command: m.command, args: [...m.args], env: { ...m.env } })),
-      admitted: Promise.resolve(true),
+      admitted: ready,
       authorize: authorizeMcp,
       logger,
       clientInfo: { ...ORCA_CLIENT_INFO },
@@ -374,7 +379,9 @@ async function openClaudeSdkProcess(
       persistSession: true,
       ...(resume ? { resume } : { sessionId: acpSessionId }),
       // Only ORCA's relayed servers; `strictMcpConfig` keeps every other MCP config out.
-      mcpServers: relay ? claudeSdkMcpServers(relay, mcpServers) : {},
+      mcpServers: relay
+        ? claudeSdkMcpServers(relay, mcpServers, (value) => redactSecretValues(value, mcpSecretValues))
+        : {},
       strictMcpConfig: true,
       systemPrompt: { type: "preset", preset: "claude_code" },
       canUseTool,
@@ -389,6 +396,10 @@ async function openClaudeSdkProcess(
   /** End the input, give claude `exitGraceMs` to exit, then kill its group. Settles either way. */
   const terminate = (): Promise<void> =>
     (terminating ??= (async () => {
+      // Retired first: nothing new is admitted or started once teardown begins.
+      admit(false);
+      sessionLive.abort();
+      const relayClosed = relay?.close().catch(() => undefined);
       input.end();
       if (spawned && !(await within(exited, exitGraceMs))) {
         logger.warn("claude did not exit after its input ended; killing it", { agentId: options.agent.id });
@@ -397,13 +408,12 @@ async function openClaudeSdkProcess(
         await within(exited, KILL_SETTLE_MS);
       }
       abort.abort();
-      sessionLive.abort();
       try {
         q.close();
       } catch {
         // already closed
       }
-      await relay?.close().catch(() => undefined);
+      await relayClosed;
       resolveClosed();
     })());
 
@@ -448,6 +458,7 @@ async function openClaudeSdkProcess(
   }
 
   // ---- the session -----------------------------------------------------------------------
+  admit(true);
   const models = claudeModelChoices(initResult.models);
   let model = initialModel(models);
   let effort = CLAUDE_SDK_DEFAULT_EFFORT;

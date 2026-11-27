@@ -15,6 +15,9 @@
  * holding its prompts, which `--resume <id>` continues and the `history` script reports. A resume
  * of an id with no file fails the way Claude Code does (an error result, then exit), and
  * `STAND_IN_RESUME_SILENT` makes a resume never answer initialize.
+ * `STAND_IN_MCP_EARLY=<server>` lists that in-process MCP server's tools as initialize arrives,
+ * before answering it (as Claude Code may), and logs the answer as `{ mcp }`.
+ * `STAND_IN_MCP_ON_END=<server>` lists them once its input has ended.
  */
 import { spawn } from "node:child_process";
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
@@ -102,6 +105,14 @@ const pending = new Map();
 let interrupted;
 /** The last `can_use_tool` answer, with the hook's decision, for the `call` script. */
 let lastAnswer;
+
+/** List an in-process MCP server's tools through the SDK, and log what came back. */
+const mcpList = (server) =>
+  ask({
+    subtype: "mcp_message",
+    server_name: server,
+    message: { jsonrpc: "2.0", id: nextRequest++, method: "tools/list" },
+  }).then((r) => log({ mcp: r }));
 
 /** Ask the SDK something (a hook callback or a permission) and wait for its answer. */
 function ask(request) {
@@ -284,7 +295,11 @@ async function turn(text) {
 }
 
 let queue = Promise.resolve();
-createInterface({ input: process.stdin }).on("line", (line) => {
+const lines = createInterface({ input: process.stdin });
+lines.on("close", () => {
+  if (process.env.STAND_IN_MCP_ON_END) void mcpList(process.env.STAND_IN_MCP_ON_END);
+});
+lines.on("line", (line) => {
   const m = JSON.parse(line);
   log({ in: m });
   if (m.type === "control_response") {
@@ -296,6 +311,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
   if (m.type === "control_request") {
     const req = m.request;
     if (req.subtype === "initialize") {
+      if (process.env.STAND_IN_MCP_EARLY) void mcpList(process.env.STAND_IN_MCP_EARLY);
       if (startup === "silent" || (resumed && process.env.STAND_IN_RESUME_SILENT)) return;
       hookId = req.hooks?.PreToolUse?.[0]?.hookCallbackIds?.[0];
       return out({

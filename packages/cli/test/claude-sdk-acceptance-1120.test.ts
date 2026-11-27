@@ -403,7 +403,7 @@ rl.on("line", (line) => {
   else if (m.method === "tools/list")
     send({ jsonrpc: "2.0", id: m.id, result: { tools: [{ name: "touch", description: "t", inputSchema: { type: "object", properties: {} } }] } });
   else if (m.method === "tools/call")
-    send({ jsonrpc: "2.0", id: m.id, result: { content: [{ type: "text", text: "orca-1125-served" }] } });
+    send({ jsonrpc: "2.0", id: m.id, result: { content: [{ type: "text", text: "orca-1125-served token=" + process.env.MCP_TOKEN }] } });
   else if (m.id !== undefined) send({ jsonrpc: "2.0", id: m.id, error: { code: -32601, message: "no" } });
 });
 `,
@@ -415,10 +415,16 @@ rl.on("line", (line) => {
         join(checkout, ".mcp.json"),
         JSON.stringify({ mcpServers: { "orca-1125-project": { command: "/bin/true" } } }),
       );
+      // A credential only the server is given, which it echoes back: it must not reach Claude.
+      const token = "orca-1125-synthetic-mcp-credential";
+      const tokenFile = join(root, "mcp-token");
+      await writeFile(tokenFile, `${token}\n`);
       const asked: string[] = [];
       const session = await open(
         {
           cwd: checkout,
+          secrets: { "mcp-token": { host: "local", provider: "file", path: tokenFile } },
+          authorizeSecretUse: () => Promise.resolve(),
           askPermission: (request) => {
             asked.push(request.toolCall.title ?? "");
             return Promise.resolve(request.options.find((o) => o.kind === "allow_once")!.optionId);
@@ -427,7 +433,12 @@ rl.on("line", (line) => {
         undefined,
         {
           mcpServers: [
-            { name: "orca-tools", command: process.execPath, args: [script], env: { SERVER_LOG: serverLog } },
+            {
+              name: "orca-tools",
+              command: process.execPath,
+              args: [script],
+              env: { SERVER_LOG: serverLog, MCP_TOKEN: { secret: "mcp-token" } },
+            },
           ],
         },
       );
@@ -441,9 +452,15 @@ rl.on("line", (line) => {
         expect(await readFile(serverLog, "utf8")).toContain("tools/call");
         const sent = JSON.stringify(model.requests.slice(before));
         expect(sent).not.toContain("orca-1125-project");
+        // The server had its credential, and the answer Claude saw had it taken out.
+        expect(sent).toContain("orca-1125-served token=[REDACTED]");
+        expect(sent).not.toContain(token);
+        expect(JSON.stringify(events)).not.toContain(token);
       } finally {
         await session.close();
       }
+      // Nor did it reach Claude's saved transcript.
+      expect(await filesContaining(join(root, "claude-config"), token)).toEqual([]);
     });
 
     it("cancels a turn, and close leaves no Claude Code behind", async () => {
@@ -463,6 +480,19 @@ rl.on("line", (line) => {
     });
   },
 );
+
+/** Files under `dir` whose text holds `needle`. */
+async function filesContaining(dir: string, needle: string): Promise<string[]> {
+  const { readdir } = await import("node:fs/promises");
+  const entries = await readdir(dir, { recursive: true, withFileTypes: true }).catch(() => []);
+  const hits: string[] = [];
+  for (const e of entries) {
+    if (!e.isFile()) continue;
+    const path = join(e.parentPath, e.name);
+    if ((await readFile(path, "utf8").catch(() => "")).includes(needle)) hits.push(path);
+  }
+  return hits;
+}
 
 /** Processes whose command line names this test's config directory: the session's Claude Code. */
 async function claudePids(root: string): Promise<number[]> {

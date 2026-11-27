@@ -7,7 +7,9 @@
  * checks: the relay starts the real server on ORCA's side, with its secrets and the session's
  * withheld environment, only for a request `authorize` allows; every request has its deadline;
  * a tool call is decided again at the handoff to the server. What reaches Claude for a refusal or
- * a failure is the relay's code and bounded message.
+ * a failure is the relay's code and bounded message. A server's answer passes `redact` before it
+ * leaves ORCA, so a secret value the session read (a server's own credential included) never
+ * reaches Claude's context or its saved transcript, even when the server echoes it.
  *
  * The in-process server speaks the MCP version Claude Code connects with (`initialize` is
  * answered here, from the configured name, with tools only), and relays `tools/list` and
@@ -55,6 +57,8 @@ export function checkClaudeSdkMcpServers(agentId: string, servers: readonly Pick
 export function claudeSdkMcpServers(
   relay: McpRelay,
   servers: readonly Pick<RelayedMcpServer, "name">[],
+  /** Applied to every answer and error detail before it reaches Claude. */
+  redact: <T>(value: T) => T = (value) => value,
 ): Record<string, McpSdkServerConfigWithInstance> {
   const out: Record<string, McpSdkServerConfigWithInstance> = {};
   for (const { name } of servers) {
@@ -66,9 +70,10 @@ export function claudeSdkMcpServers(
       toolUseId?: string,
     ) => {
       try {
-        return (await relay.serve(name, { method, params, signal }, { toolUseId })).result;
+        return redact((await relay.serve(name, { method, params, signal }, { toolUseId })).result);
       } catch (error) {
-        if (error instanceof acpUnstable.McpProtocolError) throw new McpError(error.code, error.message, error.data);
+        if (error instanceof acpUnstable.McpProtocolError)
+          throw new McpError(error.code, redact(error.message), redact(error.data));
         throw new McpError(-32603, "the request failed");
       }
     };

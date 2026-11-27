@@ -170,12 +170,16 @@ The agent's `mcpServers` work as on the ACP route (#1125), with the same checks.
 server itself and gives Claude only its name, as an in-process server: Claude never sees the
 server's command, arguments or environment, and its secrets stay on ORCA's side.
 
-- A server starts only when Claude first lists its tools or calls one, in a live session.
+- A server starts only when Claude first lists its tools or calls one, once the session is open.
+  Nothing starts for a session that failed to open, or once it has begun to close.
 - **A tool call** is decided by the agent's permission rules when Claude asks for it, as above
   (titles read `<server>: <tool>`). It reaches the server only inside the live turn, and only as
   the call that was decided, with the same arguments. A rule that denies the call since, or an
   automatic allow the rules no longer give, refuses it. Nobody is asked a second time.
 - Every request has the relay's deadline, and Claude is told only a short reason when one fails.
+- A server's answers pass the session's secret redaction before they reach Claude, so a value
+  ORCA read (the server's own credential too) never reaches Claude's context or its transcript,
+  even when the server echoes it.
 - A server's name may hold only letters, digits, `-` and single `_`, at most 64 characters, so
   Claude's tool names (`mcp__<server>__<tool>`) stay unambiguous. Another name refuses the
   session before anything starts.
