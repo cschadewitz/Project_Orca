@@ -25,12 +25,15 @@
  * followed.
  *
  * **The host stops it by itself.** `claude`'s stdin comes through a relay in the remote shell,
- * which forwards ORCA's lines and drops ORCA's heartbeat (`CLAUDE_SDK_REMOTE_PING`, every
- * `heartbeat.intervalMs` while the input is between lines). When the input ends (ORCA closed
- * it, or the connection did), the relay closes `claude`'s stdin and, after a grace, stops
- * every process of the launch; when no line or heartbeat arrives for `heartbeat.timeoutS`
- * (ORCA unreachable, the connection silently gone), it stops them at once. When `claude`
- * exits, the remote shell stops what it left. None of this needs a connection back.
+ * which forwards ORCA's lines, drops ORCA's heartbeat (`CLAUDE_SDK_REMOTE_PING`, every
+ * `heartbeat.intervalMs` while the input is between lines), and records a beat for every line it
+ * reads. A watchdog, a separate process that forwards nothing, stops every process of the launch
+ * when no beat is recorded for `heartbeat.timeoutS` (ORCA unreachable, the connection silently
+ * gone, or a `claude` that stopped reading so the relay is stuck writing to it), or
+ * `heartbeat.graceS` after the input ended (ORCA closed it, or the connection did). When
+ * `claude` exits, the remote shell stops what it left. None of this needs a connection back,
+ * and nothing but a marked process is ever signalled: the relay and the watchdog end by
+ * themselves once `claude` is done.
  *
  * **ORCA confirms it.** After every session end ORCA also runs the stop over a new SSH
  * connection and checks that nothing of the launch runs (`ClaudeSdkRemoteLaunch.stop`); its
@@ -240,48 +243,70 @@ export function claudeSdkRemoteScript(o: {
     `command -v ${command} >/dev/null 2>&1 || exit ${EXIT.missing}`,
     `orca_d=${STATE_DIR}`,
     `(umask 077 && mkdir -p "$orca_d") || exit ${EXIT.refused}`,
-    `find "$orca_d" -name '*.stop' -mmin +1440 -exec rm -f {} + 2>/dev/null`,
+    `find "$orca_d" -type f -mmin +1440 -exec rm -f {} + 2>/dev/null`,
     `orca_t="$orca_d/${o.token}.stop"`,
     `[ -e "$orca_t" ] && exit ${EXIT.stopped}`,
     ...ownershipFunctions(o.token),
-    // ORCA's lines to claude; its heartbeat dropped. 0: the input ended, 1: claude stopped
-    // reading, 2: nothing came for the timeout.
+    `orca_hb="$orca_d/${o.token}.beat"`,
+    `orca_eof="$orca_d/${o.token}.eof"`,
+    `orca_done="$orca_d/${o.token}.done"`,
+    // The relay: ORCA's lines to claude, its heartbeat dropped, each line read (heartbeat or
+    // not) recorded as a beat. It decides nothing and is never signalled: it ends when the input
+    // ends (recorded for the watchdog), when claude stops taking input, or once claude is done.
     `orca_relay() {`,
+    `  orca_buf=`,
     `  while :; do`,
-    `    IFS= read -r -t ${beat.timeoutS} orca_line`,
+    `    IFS= read -r -t 1 orca_line`,
     `    orca_r=$?`,
     `    if [ "$orca_r" -eq 0 ]; then`,
+    `      : > "$orca_hb"`,
+    `      orca_line=$orca_buf$orca_line`,
+    `      orca_buf=`,
     `      [ "$orca_line" = ${CLAUDE_SDK_REMOTE_PING} ] && continue`,
     `      printf '%s\\n' "$orca_line" || return 1`,
     `    elif [ "$orca_r" -gt 128 ]; then`,
-    `      return 2`,
+    `      if [ -n "$orca_line" ]; then orca_buf=$orca_buf$orca_line; : > "$orca_hb"; fi`,
+    `      [ -e "$orca_done" ] && return 1`,
     `    else`,
+    `      orca_line=$orca_buf$orca_line`,
     `      [ -n "$orca_line" ] && printf '%s' "$orca_line"`,
+    `      : > "$orca_eof"`,
     `      return 0`,
     `    fi`,
     `  done`,
     `}`,
+    `: > "$orca_hb" || exit ${EXIT.refused}`,
+    // The watchdog, apart from the relay so a relay blocked on a claude that stopped reading
+    // cannot hold it: no beat for the timeout, or the grace over after the input ended, and
+    // every process of the launch is stopped. It only ever signals through orca_reap.
+    `(`,
+    `  exec </dev/null >/dev/null 2>&1`,
+    `  orca_end=`,
+    `  while :; do`,
+    `    [ -e "$orca_done" ] && exit 0`,
+    `    orca_now=$(date +%s)`,
+    `    if [ -e "$orca_eof" ]; then`,
+    `      [ -z "$orca_end" ] && orca_end=$orca_now`,
+    `      [ $((orca_now - orca_end)) -ge ${beat.graceS} ] && { orca_reap; exit 0; }`,
+    `    else`,
+    `      orca_seen=$(stat -c %Y "$orca_hb" 2>/dev/null || echo 0)`,
+    `      [ $((orca_now - orca_seen)) -ge ${beat.timeoutS} ] && { orca_reap; exit 0; }`,
+    `    fi`,
+    `    sleep 1`,
+    `  done`,
+    `) &`,
     `exec 3<&0 </dev/null`,
-    // claude's input from the relay through a process substitution, so wait waits for claude alone.
-    `env "$orca_k" ${run} < <(`,
-    `  printf '%s\\n' "$BASHPID" > "$orca_d/${o.token}.relay"`,
-    `  orca_relay <&3`,
-    `  orca_rc=$?`,
-    // Nothing of the relay may hold the connection open once claude's input is closed.
-    `  exec 1>&- 2>/dev/null 3<&-`,
-    `  [ "$orca_rc" -eq 2 ] || sleep ${beat.graceS}`,
-    `  orca_reap`,
-    // fd 3 closed for claude only after the relay, expanded first, took it.
-    `) 3<&- &`,
+    // claude's input from the relay through a process substitution, so wait waits for claude
+    // alone; fd 3 closed for claude only after the relay, expanded first, took it.
+    `env "$orca_k" ${run} < <(exec 2>/dev/null; orca_relay <&3) 3<&- &`,
     `orca_p=$!`,
     `exec 3<&-`,
     // A stop that came while it started: it ends here too.
-    `if [ -e "$orca_t" ]; then orca_reap; rm -f "$orca_d/${o.token}.relay"; exit ${EXIT.stopped}; fi`,
+    `if [ -e "$orca_t" ]; then orca_reap; : > "$orca_done"; exit ${EXIT.stopped}; fi`,
     `wait "$orca_p"`,
     `orca_s=$?`,
-    `orca_r=$(cat "$orca_d/${o.token}.relay" 2>/dev/null)`,
-    `case $orca_r in '' | *[!0-9]*) ;; *) kill -9 "$orca_r" 2>/dev/null ;; esac`,
-    `rm -f "$orca_d/${o.token}.relay"`,
+    // Done: the relay and the watchdog end by themselves; what claude left is stopped.
+    `: > "$orca_done"`,
     `orca_reap`,
     `exit "$orca_s"`,
   ].join("\n");

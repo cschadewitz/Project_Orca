@@ -10,6 +10,7 @@
  * every model change, `STAND_IN_FLAGS_OK=n` every effort change after the first n;
  * `STAND_IN_CONFIG_DELAY_MS` answers changes that late.
  * `STAND_IN_STUBBORN`, when set, keeps it running after its input ends and through SIGTERM.
+ * `STAND_IN_DEAF`, when set, stops reading its input once it has answered initialize.
  * `STAND_IN_DESCENDANT`, when set, starts a long `sleep` that outlives it unless its process
  * group is killed, and logs that process's pid as `{ descendant }`.
  * `STAND_IN_LOG`, when set, gets one JSON line per input line and the argv.
@@ -451,6 +452,13 @@ lines.on("line", (line) => {
       if (process.env.STAND_IN_MCP_EARLY) void mcpList(process.env.STAND_IN_MCP_EARLY);
       if (startup === "silent" || (resumed && process.env.STAND_IN_RESUME_SILENT)) return;
       hookId = req.hooks?.PreToolUse?.[0]?.hookCallbackIds?.[0];
+      // Stops reading its input once it has answered, so whatever is sent next backs up.
+      if (process.env.STAND_IN_DEAF)
+        setImmediate(() => {
+          lines.pause();
+          process.stdin.pause();
+          log({ deaf: true });
+        });
       return out({
         type: "control_response",
         response: {

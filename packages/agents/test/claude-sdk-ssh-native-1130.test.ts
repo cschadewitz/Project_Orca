@@ -234,6 +234,51 @@ describe("Claude Code over a real sshd (#1130)", () => {
     }
   }, 90_000);
 
+  it("a claude that stopped reading: the host stops it, with no cleanup connection to be had", async (context) => {
+    if (!sshd) return context.skip("no /usr/sbin/sshd; set ORCA_REQUIRE_SSHD=1 to require it");
+    const own = (await loopbackSshd({ commands: true }))!;
+    const box = new SshHost(
+      HostSpecSchema.parse({
+        id: "deaf-box",
+        type: "ssh",
+        host: "127.0.0.1",
+        user: own.user,
+        sshArgs: own.sshArgs.slice(0, -1),
+        connectTimeoutMs: 2_000,
+      }) as never,
+      { sftp: false },
+    );
+    try {
+      const log = join(dir, "deaf.log");
+      const session = await open(
+        log,
+        { STAND_IN_DEAF: "1", STAND_IN_STUBBORN: "1", STAND_IN_DESCENDANT: "1" },
+        {},
+        box,
+        FAST,
+      );
+      sessions.splice(sessions.indexOf(session), 1);
+      const { pid, descendant } = await started(log);
+      // No new connection can be made: only the host itself can stop it.
+      const root = dirname(own.sshArgs[1]!);
+      const mine = (await allArgv()).filter(
+        (p) => p.ppid === process.pid && /sshd -D -f/.test(p.argv) && p.argv.includes(root),
+      );
+      expect(mine).toHaveLength(1);
+      process.kill(mine[0]!.pid, "SIGKILL");
+      // More than any pipe holds, to a claude that no longer reads: ORCA stays alive and beating.
+      const turn = session.prompt("x".repeat(1 << 20)).then(
+        () => undefined,
+        (e: unknown) => e,
+      );
+      await until(() => Promise.resolve(!alive(pid) && !alive(descendant)), 20_000);
+      expect(await turn).toBeInstanceOf(Error);
+      await session.close().catch(() => undefined);
+    } finally {
+      await own.close().catch(() => undefined);
+    }
+  }, 90_000);
+
   it("a cancelled open leaves nothing running there", async (context) => {
     if (!sshd) return context.skip("no /usr/sbin/sshd; set ORCA_REQUIRE_SSHD=1 to require it");
     const log = join(dir, "cancel.log");

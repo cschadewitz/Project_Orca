@@ -242,6 +242,24 @@ describe("the remote command line (#1130)", () => {
     child.stdin.end();
   });
 
+  it("stops a claude that stopped reading, though ORCA's heartbeat still arrives: the relay stuck writing cannot hold it", async () => {
+    const t = claudeSdkRemoteToken();
+    const pids = join(dir, "pids");
+    const child = launch(t, stubborn(pids), { intervalMs: 300, timeoutS: 2, graceS: 1 });
+    const [shell, sleeper] = await pidsIn(pids);
+    child.stdin.on("error", () => undefined);
+    // More than any pipe holds, then the heartbeat as a live ORCA would keep sending it.
+    const line = `${"x".repeat(1023)}\n`;
+    for (let i = 0; i < 1024; i++) child.stdin.write(line);
+    const beat = setInterval(() => child.stdin.write("ORCA-CLAUDE-SDK-PING\n"), 300);
+    try {
+      await until(() => Promise.resolve(!alive(shell) && !alive(sleeper)), 15_000);
+    } finally {
+      clearInterval(beat);
+      child.stdin.destroy();
+    }
+  });
+
   it("keeps claude while the heartbeat arrives, and stops it a grace after its input ends", async () => {
     const t = claudeSdkRemoteToken();
     const pids = join(dir, "pids");
