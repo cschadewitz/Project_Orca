@@ -61,6 +61,11 @@ const nonSecret = new Set([
   "agents[].models[].name",
   "agents[].defaultModel",
   "agents[].maxSessions",
+  // Policy enums (#1000, #1026): the native hook and the Codex gate are `on`/`off`/
+  // `experimental` choices, not command text. Withheld, Config could not say the hook is off
+  // or how to opt in (#1109).
+  "agents[].nativeToolHook",
+  "agents[].codexExecGate",
   "agents[].diagnostics",
   "agents[].diagnostics.toolCalls",
   "agents[].diagnostics.retainDays",

@@ -53,6 +53,17 @@ describe("appMenuTemplate", () => {
     expect(roles(menu(linux, "File"))).toContain("quit");
   });
 
+  it("binds Ctrl+Q to Quit on every platform, Windows included (#1209)", () => {
+    for (const platform of ["win32", "linux", "darwin"]) {
+      const template = appMenuTemplate(platform, "ORCA", NOTHING);
+      const quits = template
+        .flatMap((item) => (Array.isArray(item.submenu) ? item.submenu : []))
+        .filter((item) => item.role === "quit");
+      expect(quits, platform).toHaveLength(1);
+      expect(quits[0]?.accelerator, platform).toBe("CmdOrCtrl+Q");
+    }
+  });
+
   it("offers the inspector only where a developer is already running a dev server", () => {
     expect(roles(menu(appMenuTemplate("linux", "ORCA", NOTHING, true), "View"))).toContain("toggleDevTools");
     expect(roles(menu(appMenuTemplate("linux", "ORCA", NOTHING, false), "View"))).not.toContain("toggleDevTools");

@@ -302,7 +302,7 @@ export function GuidedLaunch({
           </Button>
         </div>
       ))}
-      <Card eyebrow="Target and configuration">
+      <Card eyebrow="Target and configuration" className="orca-guided-launch__facts">
         <Text style="mono-id">
           {context.target.endpointId} / {context.target.workspaceId}
         </Text>
@@ -316,7 +316,7 @@ export function GuidedLaunch({
         <Text style="caption">Publication is unavailable. Admission does not prove task completion.</Text>
       </Card>
       {review !== undefined && (
-        <Card eyebrow="Launch preview">
+        <Card eyebrow="Launch preview" className="orca-guided-launch__facts">
           <Text style="mono-id">
             {review.workflowId} / {review.workflowVersion} / {review.workflowRevision}
           </Text>

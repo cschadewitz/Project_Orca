@@ -227,6 +227,12 @@
    permanent kind the header describes: no token could sensibly name 1px-of-nothing. */
 .orca-visually-hidden {
   position: absolute;
+  /* Pinned to its containing block's corner rather than left at its place in the flow. Left
+     there, a hidden label inside a pane that scrolls sideways sat past the window's edge, and
+     an absolute box escapes a clip whose element is not its containing block, so the whole
+     window scrolled sideways under Plan, Workflows and the id chips (#1112). */
+  inset-block-start: 0;
+  inset-inline-start: 0;
   /* The note covers this line and the next, which is the whole of the exemption. */
   width: 1px; /* orca-allow-literal: the smallest rendered box, which is not a size — no token could sensibly name it, and a rung that did would name a family with one invisible member. Callers take the class, never these two numbers. */
   height: 1px;
@@ -1271,6 +1277,9 @@
   height: var(--risk-cell-height);
   width: var(--risk-cell-width);
   padding: var(--space-1);
+  /* The pins start under the score, which sits in the cell's top corner: a pin drawn from the
+     top edge covered it (#1112). */
+  padding-top: var(--space-5);
   vertical-align: top;
   position: relative;
 }
@@ -1312,6 +1321,14 @@
   border: var(--stroke-hairline) solid var(--border-control);
   border-radius: var(--radius-xs);
   padding: var(--stroke-hairline) var(--space-1);
+  /* As wide as its cell and never wider (#1112). A pin is one line cut at its end (rule 15),
+     but a `nowrap` label's own width used to be what the auto table layout sized its column
+     by, so a column with a pin in it took most of the matrix and the label still ran into the
+     next cell. Zero width with a full-width floor adds nothing to the column's intrinsic size
+     and still fills the cell. */
+  box-sizing: border-box;
+  width: 0;
+  min-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1674,6 +1691,8 @@
 /* type: label-strong */
 .orca-field__label {
   font-weight: 500;
+  /* Held to its column, so a long key beneath it truncates rather than widening the label. */
+  min-width: 0;
   /* Not a spacing decision — the label's line box is centred against the control beside it, so
      the inset is half of what the control is taller by. Written as the arithmetic rather than
      as its answer, so it follows if either the control height or the type scale moves (#244). */
@@ -1685,6 +1704,12 @@
   color: var(--ink-tertiary);
   display: block;
   font-weight: 400;
+  /* A key is machine text: cut at its end with the whole of it in `title`, never broken in the
+     middle of a word (rule 8). `overrides.model.cautious-designer` used to wrap mid-word in the
+     label column (#1112). */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .orca-field__control {
   display: flex;
@@ -1921,8 +1946,12 @@
   /* The chrome's min-content width must not widen the single surface column
      beyond a narrow/zoomed viewport. Surfaces own their bounded scroll regions. */
   grid-template-columns: minmax(0, 1fr);
-  /* A bar is a band of chrome, not a control — these are bar-*, never control-* (#244). */
-  grid-template-rows: var(--bar-title) 1fr var(--bar-status);
+  /* A bar is a band of chrome, not a control — these are bar-*, never control-* (#244). The
+     status bar's track is at least bar-status and otherwise its content's: it carries the
+     "Connect to a daemon…" button now, which is taller than the bar's one line of caption,
+     and a fixed track let the button stand out of the bar over the last row of every
+     surface (#1112). The surface above gives up the difference instead. */
+  grid-template-rows: var(--bar-title) 1fr auto;
   height: 100%;
   background: var(--surface-canvas);
 }
@@ -1979,6 +2008,7 @@
   /* A bar is one line; the read-only reason is what gives way (`.orca-truncate`). */
   white-space: nowrap;
   min-width: 0;
+  min-height: var(--bar-status);
   padding: 0 var(--space-3);
   border-top: var(--stroke-hairline) solid var(--border-hairline);
   background: var(--surface-canvas);
@@ -2011,6 +2041,14 @@
 }
 .orca-body[data-sidebar="collapsed"] .orca-sidebar {
   border-right: var(--stroke-hairline) solid var(--border-hairline);
+  /* Icons only, so nothing in it is wider than the track: no sideways scrollbar under the
+     glyphs (#1112). */
+  overflow-x: hidden;
+}
+/* The "Surfaces" heading does not fit an icon-wide track and was cut to "SURFAC" (#1112). The
+   nav keeps its accessible name, `aria-label="Surfaces"`, so the heading goes with the labels. */
+.orca-body[data-sidebar="collapsed"] .orca-sidebar > .orca-eyebrow {
+  display: none;
 }
 /* Below the panel breakpoint (BREAKPOINTS['bp-panel-overlay']): the panel floats over the
    primary pane instead of taking a grid column. Its width is the token's, for the same
@@ -2379,7 +2417,13 @@
   top: 100%;
   left: 0;
   z-index: var(--z-menu);
-  min-width: var(--panel-width);
+  /* Never wider than the widest side pane: one long workflow name made Launch work's menu
+     864px wide and ran it out of its pane (#1112). A label that does not fit is cut at its
+     end with the whole in `title` (rule 15). Nor wider than the room the menu has in the pane
+     it opens in, which `Menu` measures inside the pane's scrollbar (`--menu-room`); the floor
+     gives way to it too, since a min-width beats a max-width. */
+  min-width: min(var(--panel-width), var(--menu-room, var(--panel-width)));
+  max-width: min(var(--pane-max-side), var(--menu-room, var(--pane-max-side)));
   margin: var(--space-1) 0 0;
   padding: var(--space-1);
   list-style: none;
@@ -2418,6 +2462,12 @@
 }
 .orca-menu__item:hover {
   background: var(--surface-hover);
+}
+/* The label is what gives way in an item; the glyph and the trailing meta keep their width. */
+.orca-menu__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 /* A destructive choice (`MenuItem.danger`). The tone is on the item's text rather than a
    filled band, for the reason the palette's danger row gives — a red band reads as an error
@@ -2778,6 +2828,9 @@
   align-items: center;
   justify-content: center;
   gap: var(--space-3);
+  /* Shrinks with a flex row it sits in, as the Agents split, instead of holding the
+     skeleton's measure and pushing the window sideways at 800 px and 150% (#1112). */
+  min-width: 0;
   padding: var(--space-12) var(--space-8);
   text-align: center;
 }

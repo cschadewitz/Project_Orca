@@ -44,6 +44,7 @@ import { findNode } from "./layout.js";
 import { WorkflowCanvas } from "./workflow-canvas.js";
 import { counted } from "../ui/count.js";
 import { indexTraversal, useWorkflow } from "./use-workflow.js";
+import { NoDaemonView } from "../first-run/no-daemon-view.js";
 import "./workflow.css";
 
 export interface WorkflowSurfaceProps {
@@ -157,12 +158,7 @@ export function WorkflowSurface({
         action={{ label: "Try again", onClick: reload }}
       />
     ) : (
-      <StateView
-        kind="disconnected"
-        title="No daemon to read this workflow from"
-        body="Start one with orca serve, then try again."
-        action={{ label: "Try again", onClick: reload }}
-      />
+      <NoDaemonView title="No daemon to read this workflow from" onRetry={reload} />
     );
   }
 

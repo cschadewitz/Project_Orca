@@ -3,7 +3,7 @@
  * The CLI, the ACP facade and embedders all go through here.
  */
 import type { StoreStatus } from "@orca/protocol";
-import { enterFirstRunWriter } from "@orca/protocol/first-run-fence";
+import { enterFirstRunWriter, type FirstRunWriterHold } from "@orca/protocol/first-run-fence";
 import { assertNoUnownedTypedWorkspace } from "./typed-workspace-gate.js";
 import {
   enterConfiguredUpdateBootstrap,
@@ -198,6 +198,12 @@ export interface OrcaApp {
   storeSwitch?: DesktopSqliteSwitchOutcome | undefined;
   /** The store's backend and whether the app may switch it to SQLite (#339), for `hello`. */
   storeStatus?: StoreStatus | undefined;
+  /**
+   * This process's hold on a first-run workspace's writer fence, when the desktop app launched it
+   * for one (checks only, no release). Writes the daemon makes to such a workspace on a client's
+   * behalf, such as enrolling a remote (#1206), require it to be still held.
+   */
+  firstRunWriter?: FirstRunWriterHold | undefined;
 }
 
 export async function findConfig(cwd: string): Promise<string | undefined> {
@@ -1028,6 +1034,7 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<OrcaApp> {
     ...(configFile ? { configFile } : {}),
     ...(storeSwitchOutcome ? { storeSwitch: storeSwitchOutcome } : {}),
     ...(storeStatus ? { storeStatus } : {}),
+    ...(writer ? { firstRunWriter: writer } : {}),
     orchestrator,
     program,
     plan,

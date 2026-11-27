@@ -28,6 +28,7 @@ import { confidenceWord, decideParams, optionName, recommendedOf, reopenQuestion
 import type { DecisionsState } from "./use-decisions.js";
 import { useDecisionWrites } from "./use-decision-writes.js";
 import { InlineConfirmation, InlineConfirmationTrigger, useInlineConfirmation } from "./inline-confirmation.js";
+import { NoDaemonView } from "../first-run/no-daemon-view.js";
 
 export interface DecisionModeProps {
   planId: string;
@@ -54,12 +55,7 @@ export function DecisionMode(props: DecisionModeProps): JSX.Element {
         action={{ label: "Try again", onClick: onRetry }}
       />
     ) : (
-      <StateView
-        kind="disconnected"
-        title="No daemon to read the decisions from"
-        body="Start one with orca serve, then try again."
-        action={{ label: "Try again", onClick: onRetry }}
-      />
+      <NoDaemonView title="No daemon to read the decisions from" onRetry={onRetry} />
     );
   }
   return <DecisionSplit {...props} all={state.decisions} />;
@@ -110,6 +106,7 @@ function DecisionSplit({
             rowClassName={(_d, _i, isSelected) =>
               isSelected ? "orca-plan__decision-row orca-plan__row--selected" : "orca-plan__decision-row"
             }
+            header={<DecisionHead />}
             renderRow={(decision) => <DecisionRow decision={decision} onOpenKey={openKey} />}
             selectedIndex={selectedIndex}
             onSelect={(index) => {
@@ -140,6 +137,20 @@ function DecisionSplit({
         )}
       </div>
     </div>
+  );
+}
+
+/** The column headings, in the substrate's sticky header so they stay above the rows (#1112). */
+function DecisionHead(): JSX.Element {
+  return (
+    <span className={`orca-plan__decision-head ${textClass("caption")}`}>
+      <span>Status</span>
+      <span>Decision</span>
+      <span>Question</span>
+      <span>Due</span>
+      <span>Outcome</span>
+      <span>Supersedes</span>
+    </span>
   );
 }
 

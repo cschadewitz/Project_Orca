@@ -1,0 +1,74 @@
+# Keeps every long-lived feature branch (`feature/<name>`) current with main (#1239,
+# docs/WORKSTREAMS.md). A feature branch is the exception for unscheduled work that cannot ship
+# dark: an outside gate, or a store or protocol break. Left alone it falls behind main and its
+# landing pull request becomes a large conflict; this makes that cost daily and small.
+#
+# For each `feature/*` branch that does not already contain main, it merges main into a
+# `feature-sync/<name>` branch and opens (or refreshes) one pull request into the feature branch.
+# On a later run, a sync pull request whose head is exactly the bot's clean merge of the current
+# feature head and main, and on which CI's `check (node 24)` job passed, is merged with a merge
+# commit, so the feature branch keeps its own history. A head that is current but not that merge
+# is reported on the pull request and never merged. Unattended merging stays off until the
+# repository variable FEATURE_SYNC_AUTO_MERGE is `true`, which is set only once the `feature/*`
+# ruleset (pull request and an up-to-date `check (node 24)` required, which the script also
+# reads before every merge) is in place as a second layer. A merge that
+# conflicts opens nothing: one issue per branch, labelled `sync-conflict`, lists the files for
+# the workstream's owner, and is closed by the next clean sync.
+#
+# Runs nightly, after every push to main, and on dispatch. The merge only moves main's reviewed
+# commits; the workflow never runs a feature branch's code. Branches, pull requests and merges
+# use the release App's token (the main-only `release-bot` environment), so CI runs on them.
+name: Feature sync
+
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: feature-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: merge main into feature branches
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: release-bot
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      checks: read
+      actions: read
+    steps:
+      - name: Release bot token (optional)
+        id: app
+        if: ${{ vars.ORCA_RELEASE_APP_ID != '' }}
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
+        with:
+          app-id: ${{ vars.ORCA_RELEASE_APP_ID }}
+          private-key: ${{ secrets.ORCA_RELEASE_APP_PRIVATE_KEY }}
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ steps.app.outputs.token || github.token }}
+
+      - name: Sync each feature branch
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token || github.token }}
+          REPO: ${{ github.repository }}
+          # Unattended merging is off until the `feature/*` ruleset is in place (docs/WORKSTREAMS.md).
+          AUTO_MERGE: ${{ vars.FEATURE_SYNC_AUTO_MERGE }}
+          # Sync conflict issues use the workflow's own token (issues: write above); the release
+          # App is not granted Issues.
+          ISSUES_TOKEN: ${{ github.token }}
+        run: bash tools/feature-sync.sh

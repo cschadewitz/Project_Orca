@@ -35,6 +35,7 @@ import {
   sshOptionPath,
   SshTunnel,
   TunnelRefusal,
+  loginApprovalUrl,
   tunnelHops,
   tunnelKeyIdentity,
   hopArgs,
@@ -671,6 +672,33 @@ describe("commands on the server (#875)", () => {
     expect(sessions()).toEqual([]);
   });
 
+  it("uploads a file as cp /dev/stdin <path>, fed from the file, and refuses a failed copy (#1234)", async () => {
+    const pins = pinned();
+    const source = join(dir(), "bundle.tar.xz");
+    writeFileSync(source, Buffer.alloc(200_000, 7));
+    let code = 0;
+    const commands: (readonly string[])[] = [];
+    const { tunnel, spawned } = fakeTunnel(
+      (ssh, _n, args) => {
+        ssh.say(authed);
+        if (args.includes("-W")) return;
+        commands.push(args.slice(args.indexOf("--") + 2));
+        const done = () => setImmediate(() => ssh.exit(code));
+        if (ssh.stdin.writableFinished) done();
+        else ssh.stdin.on("finish", done);
+      },
+      { knownHostsFile: pins },
+    );
+    await tunnel.open();
+    await tunnel.upload(source, "/tmp/tmp.Ab12Cd/bundle.tar.xz", 5_000);
+    expect(commands[0]).toEqual(["cp", "/dev/stdin", "/tmp/tmp.Ab12Cd/bundle.tar.xz"]);
+    expect(spawned[1]!.received.length).toBe(200_000);
+    code = 1;
+    await expect(tunnel.upload(source, "/tmp/tmp.Ab12Cd/again", 5_000)).rejects.toMatchObject({ code: "ssh-failed" });
+    await expect(tunnel.upload(source, "/tmp/a b", 5_000)).rejects.toThrow();
+    await tunnel.close();
+  });
+
   it("hands a command its standard input when given one, and an empty one otherwise (#881)", async () => {
     const pins = pinned();
     const { tunnel, spawned } = fakeTunnel(
@@ -1263,4 +1291,118 @@ describe.skipIf(!live)("SshTunnel against a real sshd", () => {
         .join("\n"),
     ).toBe(true);
   }, 60_000);
+});
+
+describe("tailnet profiles and login approval (#1226, #1228)", () => {
+  const tailnet = { node: "nBuild1", name: "build-1.example-tailnet.ts.net" };
+
+  it("binds a profile to a node by stable ID, never with junk", () => {
+    expect(profile({ tailnet }).tailnet).toEqual(tailnet);
+    expect(() => profile({ tailnet: { node: "a b", name: tailnet.name } })).toThrow();
+    expect(() => profile({ tailnet: { node: "n1", name: "Build-1.example" } })).toThrow();
+    expect(() => profile({ tailnet: { ...tailnet, extra: 1 } })).toThrow();
+  });
+
+  it("dials the node's current address, under the profile's own alias", async () => {
+    const seen: (readonly string[])[] = [];
+    let lookups = 0;
+    const { tunnel } = fakeTunnel(
+      (ssh, _n, args) => {
+        seen.push(args);
+        ssh.say(authed);
+      },
+      {
+        profile: profile({ destination: "casey@build-1.example-tailnet.ts.net", tailnet }),
+        resolveHost: () => {
+          lookups += 1;
+          return Promise.resolve("100.101.102.103");
+        },
+      },
+    );
+    await tunnel.open();
+    expect(lookups).toBe(1);
+    expect(seen[0]!.at(-1)).toBe("casey@100.101.102.103");
+    expect(seen[0]).toContain("HostKeyAlias=orca-lab");
+    await tunnel.close();
+  });
+
+  it("refuses a tailnet profile without a resolver, or when the node moved, before ssh starts", async () => {
+    const bare = fakeTunnel((ssh) => ssh.say(authed), { profile: profile({ tailnet }) });
+    await expect(bare.tunnel.open()).rejects.toMatchObject({ code: "tailnet-unavailable" });
+    const moved = fakeTunnel((ssh) => ssh.say(authed), {
+      profile: profile({ tailnet }),
+      resolveHost: () => Promise.reject(new TunnelRefusal("tailnet-moved")),
+    });
+    await expect(moved.tunnel.open()).rejects.toMatchObject({ code: "tailnet-moved" });
+    const odd = fakeTunnel((ssh) => ssh.say(authed), {
+      profile: profile({ tailnet }),
+      resolveHost: () => Promise.resolve("100.64.0.1 -oProxyCommand=x"),
+    });
+    await expect(odd.tunnel.open()).rejects.toMatchObject({ code: "tailnet-unavailable" });
+    const broken = fakeTunnel((ssh) => ssh.say(authed), {
+      profile: profile({ tailnet }),
+      resolveHost: () => Promise.reject(new Error("boom")),
+    });
+    await expect(broken.tunnel.open()).rejects.toMatchObject({ code: "tailnet-unavailable" });
+    expect([...bare.spawned, ...moved.spawned, ...odd.spawned, ...broken.spawned]).toEqual([]);
+  });
+
+  it.each([
+    ["# To authenticate, visit: https://login.tailscale.com/a/l1a2b3c4", "https://login.tailscale.com/a/l1a2b3c4"],
+    // Any server can print a banner: a page anywhere but the control plane is not an approval link.
+    ["To authenticate, visit: https://headscale.example.org/check/abc\r", undefined],
+    ["# To authenticate, visit: https://login.tailscale.com.evil.example/a/x", undefined],
+    ["# To authenticate, visit: http://login.tailscale.com/a/x", undefined],
+    ["# To authenticate, visit: https://user:pw@login.tailscale.com/a/x", undefined],
+    ["# To authenticate, visit: javascript:alert(1)", undefined],
+    ["debug1: To authenticate, visit: https://login.tailscale.com/a/x", undefined],
+    ["# Tailscale SSH requires an additional check.", undefined],
+  ])("reads the approval link in %j", (line, url) => {
+    expect(loginApprovalUrl(line.replace(/\r$/, ""))).toBe(url);
+  });
+
+  it("takes another control plane's page only by explicit policy", () => {
+    const line = "# To authenticate, visit: https://headscale.example.org/check/abc";
+    expect(loginApprovalUrl(line, ["https://headscale.example.org"])).toBe("https://headscale.example.org/check/abc");
+    expect(loginApprovalUrl(line, ["https://headscale.example.org:8443"])).toBeUndefined();
+  });
+
+  it("shows a check-mode approval link and waits for it past the ordinary timeout", async () => {
+    const links: string[] = [];
+    const { tunnel } = fakeTunnel(
+      (ssh) => {
+        ssh.say("# Tailscale SSH requires an additional check.");
+        ssh.say("# To authenticate, visit: https://login.tailscale.com/a/l1a2b3c4");
+        setTimeout(() => ssh.say(authed), 80);
+      },
+      { readyTimeoutMs: 30, approvalTimeoutMs: 1_000, onLoginApproval: (url: string) => links.push(url) },
+    );
+    await tunnel.open();
+    expect(links).toEqual(["https://login.tailscale.com/a/l1a2b3c4"]);
+    await tunnel.close();
+  });
+
+  it("refuses an approval nobody gave as approval-timeout, and ignores links nobody asked to see", async () => {
+    const waiting = fakeTunnel((ssh) => ssh.say("# To authenticate, visit: https://login.tailscale.com/a/l1a2b3c4"), {
+      readyTimeoutMs: 1_000,
+      approvalTimeoutMs: 20,
+      onLoginApproval: () => {},
+    });
+    await expect(waiting.tunnel.open()).rejects.toMatchObject({ code: "approval-timeout" });
+    const unasked = fakeTunnel((ssh) => ssh.say("# To authenticate, visit: https://login.tailscale.com/a/l1a2b3c4"), {
+      readyTimeoutMs: 20,
+    });
+    await expect(unasked.tunnel.open()).rejects.toMatchObject({ code: "timeout" });
+  });
+
+  it("passes on no link from a server whose banner names another origin, and keeps the ordinary timeout", async () => {
+    const links: string[] = [];
+    const spoof = fakeTunnel((ssh) => ssh.say("# To authenticate, visit: https://phish.example/a/l1a2b3c4"), {
+      readyTimeoutMs: 20,
+      approvalTimeoutMs: 1_000,
+      onLoginApproval: (url: string) => links.push(url),
+    });
+    await expect(spoof.tunnel.open()).rejects.toMatchObject({ code: "timeout" });
+    expect(links).toEqual([]);
+  });
 });

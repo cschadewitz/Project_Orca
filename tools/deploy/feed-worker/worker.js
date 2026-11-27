@@ -17,7 +17,7 @@
  * bundle, its manifest and the manifest's Sigstore signature (as attached to the GitHub
  * release, #876) and `latest-linux-x64.yml`, and is served only once its own `complete.json`
  * exists. `server/latest-linux-x64.yml` resolves per token from rings.json's `server` rings;
- * `server/orca-server-<version>-linux-x64.*` is addressed by the version in its name. The
+ * `server/orca-server-<version>-linux-x64.*` (or `orrery-server-…`) is addressed by the version in its name. The
  * server verifies the signature itself (orca-release.py), so the feed is transport only.
  *
  * Responses are never cached and never redirect. Authorization is never logged.
@@ -25,7 +25,9 @@
 import { RINGS, isVersion, validateRings, versionFor } from "./rings.js";
 
 const CHANNEL = /^latest-(x64|arm64)\.yml$/;
-const PAYLOAD = /^ORCA-(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)-win-(x64|arm64)\.exe(?:\.blockmap)?$/;
+// Either product name (the Orrery rename bridge, #1311): v0.9 snapshots carry `Orrery-` and
+// `orrery-server-` files, and a v0.8 install must still reach them through this Worker.
+const PAYLOAD = /^(?:ORCA|Orrery)-(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)-win-(x64|arm64)\.exe(?:\.blockmap)?$/;
 /**
  * Architectures the feed can serve at all, matching `FEED_ARCHES` in feed-publish.yml;
  * anything else answers 404 even if the bucket holds it. Which of them one version serves is
@@ -38,7 +40,7 @@ const LEGACY_ARCHES = Object.freeze(["x64"]);
 const TOKEN = /^Bearer ([A-Za-z0-9_-]{32,256})$/;
 const SERVER_CHANNEL = "server/latest-linux-x64.yml";
 const SERVER_PAYLOAD =
-  /^server\/(orca-server-(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)-linux-x64\.(?:tar\.xz|manifest\.json|manifest\.json\.sigstore\.json))$/;
+  /^server\/((?:orca|orrery)-server-(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)-linux-x64\.(?:tar\.xz|manifest\.json|manifest\.json\.sigstore\.json))$/;
 
 function respond(status, extra = {}, body = null) {
   return new Response(body, { status, headers: { "Cache-Control": "no-store", ...extra } });

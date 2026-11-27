@@ -436,6 +436,11 @@ One-time setup (Casey):
    set the bucket and your custom domain, and run `npx wrangler deploy` in that directory.
    Deploy the Worker from current main before the first feed run, and again whenever
    `worker.js` changes: an older deployment may serve architectures the feed does not.
+   **Release-readiness gate for the first Orrery release (#1311):** redeploy the Worker from a
+   commit that carries the rename bridge (it serves both `ORCA-`/`orca-server-` and
+   `Orrery-`/`orrery-server-` files) **before** any `Orrery-` snapshot is fed. An older
+   Worker answers 404 for every `Orrery-` installer, blockmap and server bundle file, so v0.8
+   installs would see the new channel file and then fail to download it.
 3. Mint a token per person with `node tools/deploy/feed-token.js RING` (add `--server` for a
    server, so it reads only the server channel). Give each person their
    token; merge the printed entries into one JSON object and store it with

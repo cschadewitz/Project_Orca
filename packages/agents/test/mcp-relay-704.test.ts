@@ -9,7 +9,8 @@
  * finishes starting is stopped on its deadline or when the session closes.
  */
 import { execFileSync } from "node:child_process";
-import { link, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { link, mkdtemp, open, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -680,15 +681,23 @@ describe("ORCA serves a hooked session's MCP servers over ACP (#704)", () => {
       const fifo = join(dir, "fifo");
       let release!: () => void;
       const held = new Promise<void>((r) => (release = r));
+      // Waits on state, not time (#1216): which call reached the server first, and both decisions made.
+      let reached!: (name: string) => void;
+      const first = new Promise<string>((r) => (reached = r));
+      const decided = new Set<string>();
       const t = await setup({
         noList: true,
         permissionFiles: [sidecar],
-        requestTimeoutMs: 700,
-        host: (inner) => holdingServerInput(inner, '"name":"hold"', held),
+        // Only the stuck request's own end is timed; nothing before it waits on a clock.
+        requestTimeoutMs: 2_000,
+        onPermission: (info) => {
+          if (info.decision === "mcp:allow") decided.add(info.title.replace(/^.*: /, ""));
+        },
+        host: (inner) => holdingFirstToolCall(inner, held, reached),
       });
       const s = await t.open();
       await t.seen();
-      const first = t.turn(
+      const turn = t.turn(
         s,
         JSON.stringify([
           "PARALLEL",
@@ -696,24 +705,52 @@ describe("ORCA serves a hooked session's MCP servers over ACP (#704)", () => {
           ["tools/call", { name: "touch", arguments: {} }],
         ]),
       );
-      // Both were decided; now the policy file becomes one whose read never finishes.
-      await new Promise((r) => setTimeout(r, 200));
+      // The line hands calls over in the order they were decided, so either may be first: the
+      // first is held at the server's input, after its own read at the handoff; the other is
+      // queued behind it, already decided, and reads the policy again only when the line moves.
+      const sent = await first;
+      const stuck = sent === "hold" ? "touch" : "hold";
+      await vi.waitFor(() => expect([...decided].sort()).toEqual(["hold", "touch"]), { timeout: 10_000 });
+      // Now the policy file becomes one whose read never finishes.
       execFileSync("mkfifo", [fifo]);
       // A second name for the same pipe, so the test can open its other end later.
       await link(fifo, `${sidecar}.new`);
       await rename(`${sidecar}.new`, sidecar);
       release();
-      const [, touch] = await first;
-      expect(touch).toEqual({ acpError: expect.objectContaining({ data: { reason: "deadline" } }) });
+      const results = await turn;
+      expect(results[stuck === "hold" ? 0 : 1]).toEqual({
+        acpError: expect.objectContaining({ data: { reason: "deadline" } }),
+      });
       // The read is still stuck; the policy file is readable again for whatever comes next.
       await writeFile(join(dir, "plain.json"), "");
       await rename(join(dir, "plain.json"), sidecar);
       const [next] = await t.turn(s);
       expect(next).toEqual({ content: [{ type: "text", text: "secret is here" }] });
-      // The stuck read finishes late, with an allow: it dispatches nothing.
-      await writeFile(fifo, "").catch(() => undefined);
-      await new Promise((r) => setTimeout(r, 300));
-      expect((await t.serverLog()).split("\n").filter((l) => l === "tools/call touch")).toHaveLength(1);
+      // The stuck read is still open on the pipe (a writer can open it without blocking only
+      // while it is), and now finishes late, with an allow.
+      const pipe = await open(fifo, constants.O_WRONLY | constants.O_NONBLOCK);
+      await pipe.close();
+      await vi.waitFor(
+        async () => {
+          // ENXIO: nobody has the pipe open for reading any more, so the late read has settled.
+          const again = await open(fifo, constants.O_WRONLY | constants.O_NONBLOCK).then(
+            async (handle) => {
+              await handle.close();
+              return "still open for reading";
+            },
+            (error: unknown) => error,
+          );
+          expect(again).toMatchObject({ code: "ENXIO" });
+        },
+        { timeout: 10_000 },
+      );
+      // One more trip through the same line and server, after anything the late read could start.
+      const [listed] = await t.turn(s, JSON.stringify([["tools/list", {}]]));
+      expect(listed).toEqual({ tools: [{ name: "touch", inputSchema: { type: "object" } }] });
+      // It dispatched nothing: the stuck call never reached the server, and only the sent one
+      // and the next turn's touch did.
+      const calls = (await t.serverLog()).split("\n").filter((l) => l.startsWith("tools/call "));
+      expect(calls).toEqual([`tools/call ${sent}`, "tools/call touch"]);
     },
   );
 
@@ -839,6 +876,34 @@ function stallingServerInput(inner: AgentHost, onStuck: () => void): AgentHost {
 }
 
 /** The host, except that a write to a relayed server matching `match` waits for `held`. */
+/** Holds the first `tools/call` written to a relayed server until `held`, and says which tool it was. */
+function holdingFirstToolCall(inner: AgentHost, held: Promise<void>, reached: (name: string) => void): AgentHost {
+  const host = Object.create(inner) as AgentHost;
+  host.spawnAgent = async (agent, options) => {
+    const handle = await inner.spawnAgent(agent, options);
+    if (!agent.id.startsWith("mcp-")) return handle;
+    const writer = handle.stream.writable.getWriter();
+    let first = true;
+    const writable = new WritableStream<unknown>({
+      write: async (message) => {
+        const m = message as { method?: string; params?: { name?: string } };
+        if (first && m.method === "tools/call") {
+          first = false;
+          reached(String(m.params?.name));
+          await held;
+        }
+        await writer.write(message as never);
+      },
+      close: () => writer.close(),
+      abort: (reason) => writer.abort(reason),
+    });
+    return Object.assign(Object.create(handle) as typeof handle, {
+      stream: { readable: handle.stream.readable, writable },
+    });
+  };
+  return host;
+}
+
 function holdingServerInput(inner: AgentHost, match: string, held: Promise<void>): AgentHost {
   const host = Object.create(inner) as AgentHost;
   host.spawnAgent = async (agent, options) => {

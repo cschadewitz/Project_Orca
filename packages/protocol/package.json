@@ -29,6 +29,22 @@
     "./server-setup": {
       "types": "./dist/server-setup.d.ts",
       "import": "./dist/server-setup.js"
+    },
+    "./server-courier": {
+      "types": "./dist/server-courier.d.ts",
+      "import": "./dist/server-courier.js"
+    },
+    "./server-repository": {
+      "types": "./dist/server-repository.d.ts",
+      "import": "./dist/server-repository.js"
+    },
+    "./server-agents": {
+      "types": "./dist/server-agents.d.ts",
+      "import": "./dist/server-agents.js"
+    },
+    "./tailnet": {
+      "types": "./dist/tailnet.d.ts",
+      "import": "./dist/tailnet.js"
     }
   },
   "files": [

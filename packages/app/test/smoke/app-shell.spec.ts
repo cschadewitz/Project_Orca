@@ -215,6 +215,17 @@ test.afterAll(async () => {
   if (userData) await rm(userData, { recursive: true, force: true });
 });
 
+test("the real application menu binds Ctrl+Q to Quit (#1209)", async () => {
+  // Read from the menu Electron actually built, not the template: the `quit` role has no
+  // default accelerator on Windows, so the binding has to survive `buildFromTemplate`.
+  const quit = await app.evaluate(({ Menu }) => {
+    const items = (Menu.getApplicationMenu()?.items ?? []).flatMap((item) => item.submenu?.items ?? []);
+    const found = items.filter((item) => item.role?.toLowerCase() === "quit");
+    return found.map((item) => item.accelerator ?? null);
+  });
+  expect(quit).toEqual(["CmdOrCtrl+Q"]);
+});
+
 test("the window comes up on the built renderer with a bridge in it", async () => {
   expect(await page.title()).toBe("ORCA");
 
@@ -273,6 +284,9 @@ test("the window comes up on the built renderer with a bridge in it", async () =
     // #357's recovery intents (#932): confirmed retry/abandon of a reviewed checkpoint, whose key
     // lives in main. Added to `src/bridge.ts` without being recorded here; recorded with #905.
     "recoveryIntents",
+    // #1206: delegation remotes and their enrollment by the daemon that owns the workspace.
+    // Never a token: the renderer sends a fingerprint, and a credential only when one is pasted.
+    "remotes",
     "runs",
     // #702/#706's opaque review commands (3f72ee46), validated by the closed main-process
     // dispatcher. This bridge does not register the family on the production daemon.

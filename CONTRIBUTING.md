@@ -95,10 +95,21 @@ These are separate dimensions:
 - **Milestone:** an explicitly chosen release plan. Leave new issues unassigned until
   milestone planning is requested; preserve existing assignments unless asked to
   change them. A ship group or dependency does not assign a version or milestone.
+  One automatic exception: a pull request merged into `main` without a milestone gets
+  the minor it ships in, the earliest open one whose line is not cut yet (Milestone on
+  merge, docs/WORKSTREAMS.md). That is a planning assignment, not proof the change is in a
+  release artifact.
 
 The template's ship-group text is a proposal, not an automatic GitHub label. Select
 the matching label in GitHub when triaging; if it does not exist, agree on the name
 before creating it. This process adds no label automation or release triggers.
+
+## Large work with no target release
+
+A large feature that should not wait for, or disturb, the next release is a workstream:
+follow [Workstreams](docs/WORKSTREAMS.md). By default it lands on `main` in small pull
+requests behind an incubating flag; a `feature/<name>` branch is only for work that
+cannot ship dark. Say which in the tracking issue.
 
 ## Make dependencies precise
 
