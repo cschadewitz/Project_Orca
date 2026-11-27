@@ -109,6 +109,18 @@ export interface ClaudeSdkSessionOptions {
         attest?: typeof attestClaudeSdkRuntime | undefined;
       }
     | undefined;
+  /**
+   * Claude Code on another machine (#1130): how its process is started there (over SSH,
+   * `claudeSdkSshSpawner`) instead of as ORCA's own child, and the host's id. Its image is
+   * not attested (so `runtimeAttestation.required` is refused with it), and no call it makes
+   * is taken to run inside the workspace (`remoteWorkspace` in the bridge).
+   */
+  remote?:
+    | {
+        hostId: string;
+        spawn: (o: { command: string; args: string[]; cwd: string; env: Record<string, string> }) => ChildProcess;
+      }
+    | undefined;
   /** ORCA's own files, which no rule opens to a tool call (C4-01). */
   protectedPaths?: ProtectedPaths | undefined;
   /** Permission sidecars layered under the agent's configured rules, read again for every call. */
@@ -282,6 +294,13 @@ async function openClaudeSdkProcess(
   const exitGraceMs = options.exitGraceMs ?? CLAUDE_SDK_EXIT_GRACE_MS;
 
   if (process.platform === "win32") throw claudeSdkPlatformUnsupported(options.agent.id);
+  const remote = options.remote;
+  if (remote && options.runtimeAttestation?.required === true)
+    throw new OrcaError(
+      "NOT_SUPPORTED",
+      `agent ${options.agent.id} has nativeToolHook: experimental, but its Claude Code runs on host ${remote.hostId}, where ORCA cannot attest it.`,
+      { agentId: options.agent.id, host: remote.hostId },
+    );
   checkClaudeSdkMcpServers(options.agent.id, options.mcpServers ?? []);
   if (options.signal?.aborted)
     throw new OrcaError("CANCELLED", `opening agent ${options.agent.id} was cancelled before it started`);
@@ -319,14 +338,26 @@ async function openClaudeSdkProcess(
     spawned = true;
     const childEnv: NodeJS.ProcessEnv = {};
     for (const [k, v] of Object.entries(o.env)) if (v !== undefined) childEnv[k] = v;
-    const proc = spawn(o.command, o.args, {
-      cwd: o.cwd ?? cwd,
-      env: childEnv,
-      // stderr is not read: nothing the CLI prints is kept (see the module comment).
-      stdio: ["pipe", "pipe", "ignore"],
-      detached: true,
-      windowsHide: true,
-    });
+    const proc = remote
+      ? remote.spawn({
+          command: o.command,
+          args: [...o.args],
+          cwd: o.cwd ?? cwd,
+          env: childEnv as Record<string, string>,
+        })
+      : spawn(o.command, o.args, {
+          cwd: o.cwd ?? cwd,
+          env: childEnv,
+          // stderr is not read: nothing the CLI prints is kept (see the module comment).
+          stdio: ["pipe", "pipe", "ignore"],
+          detached: true,
+          windowsHide: true,
+        });
+    if (!proc.stdin || !proc.stdout) {
+      proc.kill("SIGKILL");
+      markExited();
+      throw new OrcaError("INTERNAL", `agent ${options.agent.id}: the Claude Code process has no stdin or stdout pipe`);
+    }
     child = proc;
     proc.once("exit", markExited);
     proc.once("error", () => {
@@ -335,7 +366,7 @@ async function openClaudeSdkProcess(
     });
     // The SDK's forwarded signal fires only after its own stdin-EOF grace: stop everything.
     o.signal.addEventListener("abort", () => killGroup("SIGKILL"), { once: true });
-    return proc;
+    return proc as SpawnedProcess;
   };
   // Once the process is gone, anything it started in its group goes too.
   const terminated: Promise<void> = exited.then(() => killGroup("SIGKILL"));
@@ -370,6 +401,7 @@ async function openClaudeSdkProcess(
     onAskFailed: (turnId, error) => failAsk(turnId, error),
     sessionSignal: sessionLive.signal,
     additionalDirectories: options.additionalDirectories,
+    remoteWorkspace: remote !== undefined,
     ...(telemetry ? { onToolCallTelemetry: (line: HookTelemetryLine) => telemetry.record(line) } : {}),
     logger,
   });
@@ -461,7 +493,14 @@ async function openClaudeSdkProcess(
   /** Ends a startup step that is still running when the open is refused. */
   const startupAbort = new AbortController();
   /** Which Claude Code runs (#1124), from ORCA's own side; see `runtimeAttestation`. */
-  const attest = options.runtimeAttestation?.attest ?? attestClaudeSdkRuntime;
+  // A `claude` on another machine is not ORCA's child: what it runs is not attested (#1130).
+  const attest: typeof attestClaudeSdkRuntime = remote
+    ? () =>
+        Promise.resolve({
+          verified: false,
+          reason: `Claude Code runs on host ${remote.hostId}, where ORCA does not attest it`,
+        })
+    : (options.runtimeAttestation?.attest ?? attestClaudeSdkRuntime);
   const required = options.runtimeAttestation?.required === true;
   let attestation: Promise<ClaudeSdkRuntimeAttestation> | undefined;
   const reportAttestation = (result: ClaudeSdkRuntimeAttestation) => {

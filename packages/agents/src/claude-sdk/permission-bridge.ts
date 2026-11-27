@@ -123,6 +123,11 @@ export interface ClaudeSdkPermissionBridgeOptions {
   sessionSignal?: AbortSignal | undefined;
   /** Other directories the session may work in; a call running in none of these and not the cwd asks. */
   additionalDirectories?: readonly string[] | undefined;
+  /**
+   * Claude runs on another machine (#1130), where ORCA cannot check a directory: no call is
+   * taken to run inside the workspace, so each one the policy allows is a person's to allow.
+   */
+  remoteWorkspace?: boolean | undefined;
   /** One line per call the hook decided, when the agent keeps tool-call telemetry (#1123, #1000). */
   onToolCallTelemetry?: ((line: HookTelemetryLine) => void) | undefined;
   logger: Logger;
@@ -253,7 +258,8 @@ export function claudeSdkPermissionBridge(o: ClaudeSdkPermissionBridgeOptions): 
     const roots = [o.cwd, ...(o.additionalDirectories ?? [])];
     // A call that does not say where it runs is not known to run in the workspace.
     const where = typeof hookInput.cwd === "string" && hookInput.cwd !== "" ? hookInput.cwd : undefined;
-    const inside = where !== undefined && roots.some((root) => existingDirectoryWithin(where, root));
+    const inside =
+      o.remoteWorkspace !== true && where !== undefined && roots.some((root) => existingDirectoryWithin(where, root));
     if (toolUseId) {
       for (const [id, entry] of workspaceScope) if (entry.turnId !== turn.id) workspaceScope.delete(id);
       // Forgetting the oldest only makes its call a person's to decide.

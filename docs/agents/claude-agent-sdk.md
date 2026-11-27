@@ -105,12 +105,44 @@ names: no error or log carries text the CLI printed.
    with code 0; a timeout, cancellation, signal, output over the cap, nonzero exit or an answer
    ORCA cannot read fails it.
 
-The agent must run on ORCA's own machine for now (SSH hosts: #1130). It takes no `args` (the SDK
-builds Claude's arguments) and no `codexExecGate`. ORCA's tool hook always runs on this route,
+The agent runs on ORCA's own machine or on an SSH host (see "On an SSH host" below). It takes
+no `args` (the SDK builds Claude's arguments) and no `codexExecGate`. ORCA's tool hook always runs on this route,
 in process (see "ORCA's tool hook" below). `nativeToolHook: experimental` additionally
 requires the Claude Code that runs to be one ORCA verified (see "Which Claude Code runs");
 `off` changes nothing, and `on` is refused when the session opens, as on the ACP route, until a
 hook is guard-qualified.
+
+### On an SSH host
+
+With `hostId` naming an `ssh` host (#1130), the SDK and ORCA's permission bridge stay on ORCA's
+machine, and only `claude` runs on the host. ORCA starts it over the host's own SSH
+configuration (identity file, port, `remoteShell`), the way the ACP route starts an agent
+there: `ssh -T … -- bash -lc 'cd <cwd> && exec env … claude …'`, with the SDK's stream-json on
+the connection's stdin and stdout. It runs as your own login on that machine, with the Claude
+Code found on its login-shell `PATH` (or `command`) and the sign-in kept there; ORCA reads no
+credentials there and offers no login. The two checks above (`claude --version`, then
+`claude auth status --json`) are asked on the host, each over its own SSH connection under the
+same deadline, and a `claude` that is not signed in is refused with "run `claude auth login` on
+<host>".
+
+What `claude` is given there is only what the session sets: the agent's own literal `env`, what
+ORCA adds, and the SDK's own variables, on top of the remote login shell's environment. None of
+the daemon's environment crosses. Variable names are checked, values are quoted for the remote
+shell, and Claude credential variables ORCA would otherwise carry are left out, as on ORCA's
+own machine.
+
+What does not hold on that machine yet, and so is refused or left out:
+
+- **No rule allows a call there.** The bridge cannot check a directory on another machine, so
+  no call is taken to run inside the workspace: each call the policy allows is still a
+  person's to allow. Deny rules, asks and protected paths apply as everywhere.
+- **No attestation.** The Claude Code that runs there is not ORCA's child, so it is not attested
+  (the result is logged as unverified), and `nativeToolHook: experimental` is refused on an SSH
+  host, as on the ACP route.
+- **No secret references.** Secrets are read only on ORCA's own machine, so an agent whose `env`
+  (or one of its MCP servers') refers to one is refused on an SSH host.
+
+The workspace must already be on the host (ORCA does not sync code), as for any SSH agent.
 
 ### Which Claude Code runs
 
