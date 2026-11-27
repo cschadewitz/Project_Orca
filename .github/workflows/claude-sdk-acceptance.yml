@@ -27,6 +27,7 @@ on:
       - packages/agents/src/claude-acp-title.ts
       - packages/agents/src/secrets.ts
       - packages/agents/src/mcp-relay.ts
+      - packages/agents/src/claude-code-options.ts
       - packages/agents/package.json
       - packages/cli/src/bootstrap.ts
       - packages/cli/test/claude-sdk-acceptance-1120.test.ts
@@ -84,6 +85,17 @@ jobs:
           chmod +x "$bin"
           "$bin" --version | grep -F "$CLAUDE_CODE_VERSION"
           echo "ORCA_CLAUDE_SDK_CLAUDE=$bin" >> "$GITHUB_ENV"
+
+      # Claude Code's command sandbox (sandbox: on, #1134) runs on bubblewrap and socat. Ubuntu
+      # 24.04 keeps unprivileged user namespaces behind AppArmor, which bubblewrap needs.
+      - name: Install Claude Code's sandbox prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq bubblewrap socat
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          bwrap --ro-bind / / true
 
       - name: Run the acceptance tests
         shell: bash

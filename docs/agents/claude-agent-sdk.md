@@ -266,10 +266,28 @@ ORCA does not yet own the whole process tree there. Leave `driver` out to run Cl
 
 ORCA starts Claude with a fixed setup:
 
-- **No settings files** (`settingSources: []`): your user settings and a checkout's
+- **No settings files** unless you list some: your user settings and a checkout's
   `.claude/settings.json` and `settings.local.json` are not loaded, so their hooks do not run and
-  their permission rules and `env` do not apply. Your login is still used. Loading them by choice
-  is not offered yet.
+  their permission rules and `env` do not apply. Your login is still used. To load some, list
+  them in the agent's `claudeCode.settingSources` (`user`, `project`, `local`; `project` also
+  brings CLAUDE.md), as on the ACP route. Unlike the ACP route, leaving it out loads none.
+  What a loaded file adds still cannot run a call ORCA would not: ORCA's hook sees every call
+  first, denies what its policy denies and asks about what its policy asks about, whatever
+  the file's allow rules, hooks or `defaultMode` say, and its MCP servers stay out. Its deny
+  rules and hooks can still refuse a call ORCA would allow, and its hooks run as your own
+  commands.
+- **Claude Code's command sandbox** with `claudeCode.sandbox: on` (#1134): Bash runs in Claude
+  Code's OS sandbox (bubblewrap and socat on Linux, Seatbelt on macOS) with the same settings as
+  on the ACP route, and the session fails to start without it. Every command is still decided
+  by ORCA. It needs `settingSources: []`, written out.
+
+```yaml
+  - id: claude
+    driver: claude-agent-sdk
+    claudeCode:
+      settingSources: []
+      sandbox: on
+```
 - **Only ORCA's MCP servers** (`--strict-mcp-config`): the agent's own `mcpServers`, run by ORCA
   (see below). A checkout's `.mcp.json` and your own Claude MCP config are not loaded.
 - Claude Code's own system prompt, and permission mode `default`.

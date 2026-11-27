@@ -1,0 +1,1 @@
+- **agents:** a `driver: claude-agent-sdk` agent's `claudeCode.settingSources` loads the Claude settings files it lists (none when left out), and `claudeCode.sandbox: on` runs Bash in Claude Code's command sandbox, as on the ACP route (#1126, #1134). A loaded file's allow rules, hooks and bypass mode still cannot run a call ORCA's policy denies or asks about.
