@@ -243,8 +243,13 @@ export interface PermissionRuleRecord {
  */
 function decideByRules(policy: PermissionPolicy, call: PolicyCall, ctx?: PermissionEvalContext): PermissionExplanation {
   const { kind, commandLike, claimed, claimedTitle, matches } = callFacts(call, ctx);
+  // Which form of the title this pass matches title rules by: the call's own, the claimed
+  // `server: tool` (#1021), or another route's form of it (#1119 review). Only the first can allow.
   let byClaim = false;
-  const matchesCall = (m: PermissionRule["match"], decision: PermissionDecision) => matches(m, decision, byClaim);
+  let form: string | undefined;
+  // A pass that only looks for a deny (#1119 review): see the end.
+  let denyOnly = false;
+  const matchesCall = (m: PermissionRule["match"], decision: PermissionDecision) => matches(m, decision, byClaim, form);
   // Once commands are restricted by their words, no allow decides an `execute`, an
   // unclassified call or one whose input carries a command (#702 review): skipping them lets a restriction later in the list still
   // be reached, and nothing approves a call whose command ORCA cannot vouch for.
@@ -253,6 +258,7 @@ function decideByRules(policy: PermissionPolicy, call: PolicyCall, ctx?: Permiss
     for (const [ruleIndex, rule] of policy.rules.entries()) {
       const m = rule.match;
       if ((restricted || claimed) && rule.decision === "allow") continue;
+      if (denyOnly && rule.decision !== "deny") continue;
       if (!matchesCall(m, rule.decision)) continue;
       if (m.command !== undefined) {
         // A command is only ever an `execute`'s, and a part that is not there matches no rule.
@@ -285,20 +291,38 @@ function decideByRules(policy: PermissionPolicy, call: PolicyCall, ctx?: Permiss
       decisions.find((d) => d.decision === "ask") ?? { decision: "ask", basis: "command-restricted" }
     );
   };
-  const plain = evaluate();
-  if (claimedTitle === undefined) return plain;
   // With first match wins, a rule one title form meets could shadow a stricter one later in the
-  // list that only the other form meets. So the call is decided once by the agent's title and
-  // once by the claimed `server: tool`, and the stricter answer stands. A call is never
-  // decided more loosely than its title alone would decide it, and a call with no claim is
-  // decided exactly as before (#1021 review).
-  byClaim = true;
-  const claimedAnswer = evaluate();
-  const stricter = strictness(claimedAnswer.decision) - strictness(plain.decision);
-  // On a tie only the attribution can differ: a rule the claim met is cited ahead of a fallthrough.
-  return stricter > 0 || (stricter === 0 && plain.basis !== "rule" && claimedAnswer.basis === "rule")
-    ? claimedAnswer
-    : plain;
+  // list that only another form meets. So the call is decided once by its own title, then once
+  // by each further form it has (the claimed `server: tool`, #1021; another route's title,
+  // #1119), each pass on its own, and the strictest answer stands. A call is never decided more
+  // loosely than its own title alone would decide it, and a call with no further form is decided
+  // exactly as before (#1021 review).
+  const plain = evaluate();
+  let answer = plain;
+  const consider = (candidate: PermissionExplanation) => {
+    const stricter = strictness(candidate.decision) - strictness(answer.decision);
+    // On a tie only the attribution can differ: a rule another form met is cited ahead of a fallthrough.
+    if (stricter > 0 || (stricter === 0 && answer.basis !== "rule" && candidate.basis === "rule")) answer = candidate;
+  };
+  if (claimedTitle !== undefined) {
+    byClaim = true;
+    consider(evaluate());
+    byClaim = false;
+  }
+  for (const other of call.titleForms ?? []) {
+    form = other;
+    consider(evaluate());
+  }
+  form = undefined;
+  // A call whose title is uncertain meets every title restriction, so an `ask` early in the
+  // list could stand in front of a `deny` later in it that the real title would meet. Any deny
+  // that may hold for it wins (#1119 review).
+  if (call.approximate) {
+    denyOnly = true;
+    const denied = evaluate();
+    if (denied.decision === "deny") consider(denied);
+  }
+  return answer;
 }
 
 /**
@@ -323,7 +347,9 @@ export function callFacts(
    * Whether a rule's `match` holds, its title tested against the agent's title or, with
    * `byClaim`, against the claimed `server: tool` (which no allow is ever matched by).
    */
-  matches: (m: PermissionRule["match"], decision: PermissionDecision, byClaim?: boolean) => boolean;
+  matches: (m: PermissionRule["match"], decision: PermissionDecision, byClaim?: boolean, form?: string) => boolean;
+  /** Other forms of the call's title (`PolicyCall.titleForms`): each can restrict, never allow. */
+  titleForms: readonly string[];
 } {
   const call = asPolicyCall(request);
   // An MCP tool the call's own metadata names (#1021): Gemini CLI leaves the server out of its
@@ -349,7 +375,12 @@ export function callFacts(
   // Both are false for a call with no locations, so `scope` never matches one (#140).
   const allInside = locations.length > 0 && locations.every((p) => workspaceRelativePath(p, cwd) !== undefined);
   const anyOutside = locations.some((p) => workspaceRelativePath(p, cwd) === undefined);
-  const titleMatches = (pattern: string, decision: PermissionDecision, byClaim: boolean): boolean => {
+  const titleMatches = (
+    pattern: string,
+    decision: PermissionDecision,
+    byClaim: boolean,
+    form: string | undefined,
+  ): boolean => {
     // A pattern that is not a regular expression fails closed (#701 review): it never matches
     // for an allow, and always matches for a deny or an ask.
     const test = (text: string): boolean => {
@@ -359,21 +390,28 @@ export function callFacts(
         return decision !== "allow";
       }
     };
+    // Another route's form of the title (#1119 review): it may restrict, never allow.
+    if (form !== undefined) return decision !== "allow" && test(form);
     if (!byClaim) {
       // A title ORCA reconstructed for another route (#1119 review): a title rule cannot be
       // shown not to hold, so every restriction holds and no allow does.
       if (call.approximate) return decision !== "allow";
-      return test(title) || (decision !== "allow" && (call.titleForms ?? []).some(test));
+      return test(title);
     }
     return decision !== "allow" && claimedTitle !== undefined && test(claimedTitle);
   };
-  const matchesCall = (m: PermissionRule["match"], decision: PermissionDecision, byClaim = false): boolean => {
+  const matchesCall = (
+    m: PermissionRule["match"],
+    decision: PermissionDecision,
+    byClaim = false,
+    form?: string,
+  ): boolean => {
     // A command rule also reaches a command-like call of another kind, so its restriction is
     // not dodged by leaving the kind out or giving a wrong one.
     if (m.kind && m.kind !== kind && !(m.command !== undefined && commandLike)) return false;
     if (m.scope === "workspace" && !allInside) return false;
     if (m.scope === "outside-workspace" && !anyOutside) return false;
-    if (m.titlePattern && !titleMatches(m.titlePattern, decision, byClaim)) return false;
+    if (m.titlePattern && !titleMatches(m.titlePattern, decision, byClaim, form)) return false;
     if (m.path !== undefined) {
       const wanted = permissionPathForms(m.path, cwd);
       if (!wanted.some((w) => paths.includes(w))) return false;
@@ -385,7 +423,7 @@ export function callFacts(
     return true;
   };
   const claimed = claim !== undefined || call.approximate === true;
-  return { kind, commandLike, claimed, claimedTitle, matches: matchesCall };
+  return { kind, commandLike, claimed, claimedTitle, matches: matchesCall, titleForms: call.titleForms ?? [] };
 }
 
 function strictness(decision: PermissionDecision): number {

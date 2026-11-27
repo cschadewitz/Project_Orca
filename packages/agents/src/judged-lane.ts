@@ -260,7 +260,7 @@ function gate(
   io: PlainRuleTargetIo | undefined,
   verify = true,
 ): Gate {
-  const { kind, commandLike, claimed, matches } = callFacts(request, ctx);
+  const { kind, commandLike, claimed, matches, titleForms } = callFacts(request, ctx);
   // A rule about one relayed MCP tool is the MCP lane's alone (#701): its match is deliberately empty.
   const candidates = (policy.judged ?? []).filter((rule) => rule.mcp === undefined && matches(rule.match, "allow"));
   if (candidates.length === 0) return { state: "closed" };
@@ -271,7 +271,9 @@ function gate(
       rule.decision !== "allow" &&
       (rule.match.command !== undefined
         ? commandLike
-        : matches(rule.match, rule.decision) || matches(rule.match, rule.decision, true)),
+        : matches(rule.match, rule.decision) ||
+          matches(rule.match, rule.decision, true) ||
+          titleForms.some((form) => matches(rule.match, rule.decision, false, form))),
   );
   if (restricted) return { state: "closed", verdict: "hard-boundary" };
   if (policy.commandsRestricted === true) return { state: "closed", verdict: "hard-boundary" };
@@ -306,7 +308,9 @@ function restricted(policy: PermissionPolicy, facts: ReturnType<typeof callFacts
       rule.decision !== "allow" &&
       (rule.match.command !== undefined
         ? facts.commandLike
-        : facts.matches(rule.match, rule.decision) || facts.matches(rule.match, rule.decision, true)),
+        : facts.matches(rule.match, rule.decision) ||
+          facts.matches(rule.match, rule.decision, true) ||
+          facts.titleForms.some((form) => facts.matches(rule.match, rule.decision, false, form))),
   );
 }
 

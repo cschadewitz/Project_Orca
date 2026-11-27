@@ -290,6 +290,102 @@ describe("one decision for a call on either route (#1119)", () => {
     expect(explainPermission(allowByHookForm, call, scope).decision).toBe("ask");
   });
 
+  describe("overlapping restrictions only get stricter (#1303 review)", () => {
+    const esc = (t: string) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const read = () => cases.find((c) => c.name === "a read inside the workspace")!;
+    const grep = () => cases.find((c) => c.name.startsWith("a grep"))!;
+    const decide = (rules: PermissionPolicy["rules"], c: Case) => {
+      const policy: PermissionPolicy = { default: "allow", rules };
+      return [explainPermission(policy, c.acp(), scope), explainPermission(policy, c.sdk(), scope)] as const;
+    };
+
+    it("an ask met only by the hook's form does not shadow a deny the ACP title meets", () => {
+      const [viaAcp, viaSdk] = decide(
+        [
+          { match: { kind: "read", titlePattern: `^Read ${esc(join(ws, "src"))}` }, decision: "ask" },
+          { match: { kind: "read", titlePattern: "^Read src/a" }, decision: "deny" },
+        ],
+        read(),
+      );
+      expect(viaAcp).toEqual({ decision: "deny", basis: "rule", ruleIndex: 1 });
+      expect(viaSdk).toEqual(viaAcp);
+    });
+
+    it("a deny met only by the hook's form holds over an ask the ACP title meets", () => {
+      const [viaAcp, viaSdk] = decide(
+        [
+          { match: { kind: "read", titlePattern: "^Read src/a" }, decision: "ask" },
+          { match: { kind: "read", titlePattern: `^Read ${esc(join(ws, "src"))}` }, decision: "deny" },
+        ],
+        read(),
+      );
+      expect(viaAcp.decision).toBe("ask");
+      expect(viaSdk).toEqual({ decision: "deny", basis: "rule", ruleIndex: 1 });
+    });
+
+    it("on an uncertain title, an earlier ask does not shadow a later deny", () => {
+      const rules: PermissionPolicy["rules"] = [
+        { match: { kind: "search", titlePattern: "^Find" }, decision: "ask" },
+        { match: { kind: "search", titlePattern: "password" }, decision: "deny" },
+      ];
+      const [viaAcp, viaSdk] = decide(rules, grep());
+      expect(viaAcp).toEqual({ decision: "deny", basis: "rule", ruleIndex: 1 });
+      expect(viaSdk).toEqual(viaAcp);
+      // An ask the ACP title itself meets first stays first on the ACP route, as before.
+      const acpFirst: PermissionPolicy["rules"] = [
+        { match: { kind: "search", titlePattern: "^grep" }, decision: "ask" },
+        rules[1]!,
+      ];
+      const [acpOnly, sdkStrict] = decide(acpFirst, grep());
+      expect(acpOnly).toEqual({ decision: "ask", basis: "rule", ruleIndex: 0 });
+      expect(sdkStrict).toEqual({ decision: "deny", basis: "rule", ruleIndex: 1 });
+    });
+
+    it("an earlier non-title ask does not shadow a deny on an uncertain title", () => {
+      const [, viaSdk] = decide(
+        [
+          { match: { kind: "search" }, decision: "ask" },
+          { match: { kind: "search", titlePattern: "password" }, decision: "deny" },
+        ],
+        grep(),
+      );
+      expect(viaSdk).toEqual({ decision: "deny", basis: "rule", ruleIndex: 1 });
+    });
+
+    /** Every order of these rules. */
+    const orders = <T>(xs: readonly T[]): T[][] =>
+      xs.length <= 1
+        ? [[...xs]]
+        : xs.flatMap((x, i) => orders([...xs.slice(0, i), ...xs.slice(i + 1)]).map((r) => [x, ...r]));
+
+    it("in every order of overlapping allows, asks and denies, the SDK call is never looser", () => {
+      const forRead: PermissionPolicy["rules"] = [
+        { match: { kind: "read", titlePattern: "^Read src/a" }, decision: "allow" },
+        { match: { kind: "read", titlePattern: "^Read src/" }, decision: "ask" },
+        { match: { kind: "read", titlePattern: `^Read ${esc(join(ws, "src"))}` }, decision: "ask" },
+        { match: { kind: "read", titlePattern: `^Read ${esc(ws)}` }, decision: "deny" },
+        { match: { kind: "read", scope: "workspace" }, decision: "allow" },
+      ];
+      const forGrep: PermissionPolicy["rules"] = [
+        { match: { kind: "search", titlePattern: "^grep" }, decision: "allow" },
+        { match: { kind: "search", titlePattern: "^Find" }, decision: "ask" },
+        { match: { kind: "search", titlePattern: "password" }, decision: "deny" },
+        { match: { kind: "search" }, decision: "ask" },
+        { match: { kind: "search", scope: "workspace" }, decision: "allow" },
+      ];
+      for (const [rules, c] of [
+        [forRead, read()],
+        [forGrep, grep()],
+      ] as const)
+        for (const order of orders(rules)) {
+          const [viaAcp, viaSdk] = decide(order, c);
+          expect(strictness(viaSdk.decision)).toBeGreaterThanOrEqual(strictness(viaAcp.decision));
+          // Any deny that may hold for the uncertain grep wins, wherever it sits.
+          if (c === grep()) expect(viaSdk.decision).toBe("deny");
+        }
+    });
+  });
+
   it("reproduces the adapter's titles, and claims none it cannot", () => {
     const t = (name: string, input: Record<string, unknown>) => claudeAcpTitle(name, input, ws);
     expect(t("Bash", { command: "ls -la" })).toBe("ls -la");
