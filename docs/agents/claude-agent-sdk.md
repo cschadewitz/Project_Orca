@@ -144,14 +144,18 @@ default `bash -lc`) and `flock` (util-linux); anything else is refused before `c
   signals a process only after reading that marker in `/proc/<pid>/environ` right before the
   signal, so a reused pid or group id, or another launch's process, is never signalled. A
   process that clears its own environment is not followed.
-- **One supervisor, explicit states.** Each launch has a state on the host (`starting`,
-  `running`, `stopped`, `done`), written only while holding the launch's lock (`flock`). The
-  remote shell holds the lock from before `claude` starts until `claude` carries the marker, and
-  again while it stops what `claude` left; every stop holds it while it marks the launch
-  `stopped` and kills what carries the marker. So a stop never runs while a launch is started
-  but not yet visible, a launch a stop overtook never starts, and `done` is written only once
-  nothing of the launch is left. A test holds a launch in that startup window and stops it
-  there.
+- **One supervisor, explicit states.** Each launch has a state on the host, written only while
+  holding the launch's lock (`flock`): `starting`, `admitted` (the one process allowed to become
+  `claude`, named by pid and start time), `running`, `stopping` (a stop asked for, not
+  confirmed), `stopped` and `done` (both confirmed). The process that becomes `claude` waits
+  until the state names it, and the remote shell holds the lock from before it starts until it
+  carries the marker. So a stop never runs while a launch is started but not yet visible, and a
+  launch a stop overtook never starts. A stop reaches `stopped` only on evidence: before
+  admission nothing may start `claude`; after it, the admitted process must be gone or carry
+  the marker, and every marked process must be gone. Otherwise the launch stays `stopping`, the
+  stop reports it unconfirmed, and the host's watchdog keeps trying every second. Tests hold a
+  launch inside admission and stop it there, kill the remote shell after admission and stop
+  what it admitted, and check that a stop it cannot confirm is reported so and signals nothing.
 - **The host stops it by itself.** `claude`'s input comes through a relay in the remote shell,
   which drops a heartbeat line ORCA sends every 5 seconds and records a beat for every line it
   reads. A separate watchdog, which forwards nothing, stops every process of the launch when no
@@ -169,10 +173,8 @@ default `bash -lc`) and `flock` (util-linux); anything else is refused before `c
   `remote-cleanup-unconfirmed`, so ORCA keeps the agent slot until it knows. The host's own
   stop is what remains.
 
-One case is not covered: the remote shell killed with SIGKILL during the startup window
-(nothing of ORCA sends it one, and hangup, interrupt and terminate are deferred there). A stop
-then finds `starting` with the lock free and looks again a second later; a child that takes the
-marker after that is not followed.
+Not covered: a host that crashes or a process that clears its own environment is not
+followed. A stop that cannot show the launch is gone says so rather than claiming closure.
 
 The real-sshd tests check each of these. After a close, a killed connection, a frozen ORCA
 (its ssh stopped, no stop sent), a cleanup connection that cannot be made, a `claude` that

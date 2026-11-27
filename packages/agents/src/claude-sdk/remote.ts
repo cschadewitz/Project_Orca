@@ -25,13 +25,15 @@
  * followed.
  *
  * **One supervisor, explicit states.** Each launch has a state file on the host (`starting`,
- * `running`, `stopped`, `done`) that is written only while holding the launch's lock (`flock`).
+ * `admitted`, `running`, `stopping`, `stopped`, `done`; see `supervisorFunctions`) that is
+ * written only while holding the launch's lock (`flock`).
  * The remote shell holds the lock from before `claude` starts until `claude` carries the
  * marker, and again while it stops what `claude` left; a stop (ORCA's, or the host's own)
- * holds it while it marks the launch `stopped` and kills what carries the marker. So a stop
- * never runs while a launch is started but not yet visible, a launch a stop overtook never
- * starts, and `done` is written only once nothing of the launch is left
- * (`claudeSdkRemoteScript`, `claudeSdkRemoteStopScript`).
+ * holds it while it marks the launch `stopping` and kills what carries the marker. So a stop
+ * never runs while a launch is started but not yet visible, and a launch a stop overtook never
+ * starts. `stopped` and `done` are written only on evidence that nothing of the launch runs or
+ * can start; otherwise it stays `stopping`, the stop is reported unconfirmed, and the watchdog
+ * keeps trying (`claudeSdkRemoteScript`, `claudeSdkRemoteStopScript`).
  *
  * **The host stops it by itself.** `claude`'s stdin comes through a relay in the remote shell,
  * which forwards ORCA's lines, drops ORCA's heartbeat (`CLAUDE_SDK_REMOTE_PING`, every
@@ -50,10 +52,9 @@
  * closure: the session's `terminated` rejects with reason `remote-cleanup-unconfirmed`, and the
  * host's own heartbeat stop is what remains.
  *
- * What the supervisor does not cover: the remote shell killed with SIGKILL during admission
- * (nothing of ORCA sends it one; hangup, interrupt and terminate are deferred there) leaves
- * `starting` with the lock free; the stop then looks again a second later, and a child that
- * takes the marker after that is not followed.
+ * What the supervisor does not cover: a host that crashes, and a process that clears its own
+ * environment. A stop that cannot show that nothing of the launch runs or can start leaves it
+ * `stopping` and reports it unconfirmed.
  *
  * What does not hold on that machine yet, and so is refused or left out:
  * - The pre-tool hook's qualification (`nativeToolHook: experimental`) is refused on any
@@ -179,15 +180,27 @@ function checkToken(token: string): void {
 }
 
 /**
- * The supervisor's shell functions, shared by the launch and the stop. Each launch has a state
- * file (`<token>.state`: `starting`, `running <pid>`, `stopped` or `done`) written only while
- * holding its lock (`<token>.lock`, `flock`), and every process it starts carries its marker.
+ * The supervisor's shell functions, shared by the launch, the watchdog and the stop. Each launch
+ * has a state file (`<token>.state`) written only while holding its lock (`<token>.lock`,
+ * `flock`), and every process it starts carries its marker. The states:
+ * - `starting`: admission began; `claude` may not start yet (its process waits for `admitted`).
+ * - `admitted <pid> <start>`: the one process that may start `claude`, named by pid and
+ *   `/proc` start time, is allowed to.
+ * - `running <pid> <start>`: that process carries the marker, or has exited.
+ * - `stopping [<pid> <start>]`: a stop was asked for and is not confirmed yet.
+ * - `stopped`: a stop confirmed that nothing of the launch runs and nothing can start.
+ * - `done`: `claude` exited and the launch confirmed that nothing of it is left.
  * - `orca_own` prints the pid of every process carrying the marker; `orca_reap` signals each
  *   one (after reading the marker again) until none is left, failing when one outlives about
  *   five seconds of kills.
- * - `orca_up` reads elapsed time (`/proc/uptime`, whole seconds) into `orca_u`, so no deadline
+ * - `orca_up` reads elapsed time (`/proc/uptime`, in hundredths of a second) into `orca_u`, so no deadline
  *   depends on the wall clock.
- * - `orca_state` reads the state into `orca_st` (and a pid into `orca_sp`); `orca_set` writes it.
+ * - `orca_state` reads the state into `orca_st` (a pid into `orca_sp`, its start time into
+ *   `orca_ss`); `orca_set` writes it.
+ * - `orca_is <pid> <start>` is true while that very process (pid and start time) runs and is
+ *   not a zombie; `orca_settle` waits, bounded, until it is gone or carries the marker.
+ * - `orca_stop`, with the lock held, takes the launch to `stopped` on evidence only, and leaves
+ *   it `stopping` (exit 4) when it cannot show that nothing of it runs or can start.
  */
 function supervisorFunctions(token: string): string[] {
   return [
@@ -217,9 +230,44 @@ function supervisorFunctions(token: string): string[] {
     `    sleep 0.1`,
     `  done`,
     `}`,
-    `orca_up() { IFS=' .' read -r orca_u _ < /proc/uptime; }`,
-    `orca_state() { orca_st=; orca_sp=; [ -f "$orca_sf" ] && read -r orca_st orca_sp < "$orca_sf"; return 0; }`,
+    `orca_up() { IFS=' .' read -r orca_u orca_cs _ < /proc/uptime; orca_u=$orca_u$orca_cs; }`,
+    `orca_state() { orca_st=; orca_sp=; orca_ss=; [ -f "$orca_sf" ] && read -r orca_st orca_sp orca_ss < "$orca_sf"; return 0; }`,
     `orca_set() { printf '%s\\n' "$1" > "$orca_sf"; }`,
+    // Field 22 of /proc/<pid>/stat, the start time, is the 20th after the command name.
+    `orca_ident() {`,
+    `  orca_z=`,
+    `  { read -r orca_z < "/proc/$1/stat"; } 2>/dev/null || return 1`,
+    `  orca_z=\${orca_z##*) }`,
+    `  set -f; set -- $orca_z; set +f`,
+    `  [ "$1" = Z ] && return 1`,
+    `  orca_id=\${20}`,
+    `}`,
+    `orca_is() { [ -n "$1" ] && orca_ident "$1" && [ "$orca_id" = "$2" ]; }`,
+    `orca_settle() {`,
+    `  orca_j=0`,
+    `  while orca_is "$1" "$2" && ! orca_mine "$1"; do`,
+    `    orca_j=$((orca_j + 1))`,
+    `    [ "$orca_j" -gt ${ADMIT_TRIES} ] && return ${EXIT.survived}`,
+    `    sleep 0.1`,
+    `  done`,
+    `  return 0`,
+    `}`,
+    `orca_stop() {`,
+    `  orca_state`,
+    `  case $orca_st in`,
+    // Nothing admitted: no process may start claude, and none will be allowed to now.
+    `    ''|starting) orca_set stopped || return ${EXIT.refused}`,
+    `      orca_reap && return 0`,
+    `      orca_set stopping; return ${EXIT.survived} ;;`,
+    `    done|stopped) orca_reap && return 0`,
+    `      orca_set stopping; return ${EXIT.survived} ;;`,
+    `  esac`,
+    // admitted, running or stopping: the one process that could still start claude is known.
+    `  orca_c="$orca_sp $orca_ss"`,
+    `  orca_set "stopping $orca_c" || return ${EXIT.refused}`,
+    `  orca_settle $orca_c && orca_reap && { orca_set stopped; return 0; }`,
+    `  return ${EXIT.survived}`,
+    `}`,
   ];
 }
 
@@ -245,22 +293,26 @@ const SUPPORTED = `[ -n "\${BASH_VERSION:-}" ] && [ -r /proc/self/environ ] && c
  * `names` read from stdin (`claudeSdkRemoteEnvInput`) and exported, then the launch, as a
  * supervisor with explicit states:
  *
- * 1. **Admission**, holding the lock: a `stopped` state ends it (137) before anything starts;
- *    otherwise `starting`, the relay and the watchdog, then `claude` started with the marker,
- *    and the lock is held until `claude` carries the marker (or has exited), so a stop can
- *    never find a launch that is started but not yet visible. A child that does not carry it
- *    within about ten seconds is killed by its pid, which is safe because it is the shell's own
- *    unreaped child. Hangup, interrupt and terminate are deferred meanwhile. Then `running <pid>`.
+ * 1. **Admission**, holding the lock: a stop that came first (`stopping` or `stopped`) ends
+ *    it (137) before anything starts. Otherwise `starting`, the relay and the watchdog, and the
+ *    process that will become `claude`, which waits until the state names it. The shell then
+ *    writes `admitted <pid> <start>`, and holds the lock until that process carries the marker
+ *    or has exited, so a stop never finds a launch that is started but not yet visible, and a
+ *    stop after a remote shell that died here knows which process to watch. A process that does
+ *    not carry it within about ten seconds is killed by its pid, which is safe because it is the
+ *    shell's own child, not yet waited for. Hangup, interrupt and terminate are deferred
+ *    meanwhile. Then `running <pid> <start>`.
  * 2. **Running**: `claude`'s input through the relay; the shell waits for it.
- * 3. **End**, holding the lock: every process of the launch stopped and checked gone, then
- *    `done`, unless a stop got there first (`stopped`, exit 137). When one outlives the kills
- *    the state stays `running`, so the watchdog keeps watching.
+ * 3. **End**, holding the lock: every process of the launch killed and checked gone, then
+ *    `done`. When one outlives the kills the state becomes `stopping`, so the watchdog keeps
+ *    trying. When a stop came first, the shell finishes it (`orca_stop`) and exits 137.
  *
- * The watchdog stops the launch the same way under the lock (`stopped`) when the heartbeat
- * ends; it and the relay end by themselves once the state is `done` or `stopped`. Exits 127
- * when `command` is not found there, 126 on a host without bash, `/proc` or `flock`, 125 on
- * input it refuses, 137 when a stop came first. Names are checked, the rest quoted; no value is
- * in it.
+ * The watchdog stops the launch the same way under the lock (`orca_stop`) when the heartbeat
+ * ends, and tries again every second while the state is `stopping`; it and the relay end by
+ * themselves once the state is `done` or `stopped`, the two states that are confirmed. Exits
+ * 127 when `command` is not found there, 126 on a host without bash, `/proc` or `flock`, 125
+ * on input it refuses, 137 when a stop came first. Names are checked, the rest quoted; no value
+ * is in it.
  */
 export function claudeSdkRemoteScript(o: {
   agentId: string;
@@ -306,13 +358,6 @@ export function claudeSdkRemoteScript(o: {
     ...supervisorFunctions(o.token),
     `orca_hb="$orca_d/${o.token}.beat"`,
     `orca_eof="$orca_d/${o.token}.eof"`,
-    // Exited, or a zombie not yet waited for: nothing of it can still take the marker.
-    `orca_gone() {`,
-    `  orca_z=`,
-    `  { read -r orca_z < "/proc/$1/stat"; } 2>/dev/null || return 0`,
-    `  orca_z=\${orca_z##*) }`,
-    `  [ "\${orca_z%% *}" = Z ]`,
-    `}`,
     // The relay: ORCA's lines to claude, its heartbeat dropped, each line read (heartbeat or
     // not) recorded as a beat (elapsed time). It decides nothing and is never signalled: it ends
     // when the input ends (recorded for the watchdog), when claude stops taking input, or once
@@ -344,8 +389,7 @@ export function claudeSdkRemoteScript(o: {
     `exec 9>>"$orca_lk" || exit ${EXIT.refused}`,
     `flock -w ${LOCK_WAIT_S} 9 || exit ${EXIT.refused}`,
     `orca_state`,
-    `[ "$orca_st" = stopped ] && exit ${EXIT.stopped}`,
-    `[ -z "$orca_st" ] || exit ${EXIT.refused}`,
+    `case $orca_st in stopped|stopping) exit ${EXIT.stopped} ;; '') ;; *) exit ${EXIT.refused} ;; esac`,
     `orca_up; printf '%s\\n' "$orca_u" > "$orca_hb" || exit ${EXIT.refused}`,
     `orca_set starting || exit ${EXIT.refused}`,
     `trap : HUP INT TERM`,
@@ -360,18 +404,17 @@ export function claudeSdkRemoteScript(o: {
     `    case $orca_st in done|stopped) exit 0 ;; esac`,
     `    orca_up; orca_w=`,
     `    if [ -f "$orca_eof" ]; then`,
-    `      read -r orca_w < "$orca_eof"; orca_lim=${beat.graceS}`,
+    `      read -r orca_w < "$orca_eof"; orca_lim=${beat.graceS * 100}`,
     `    else`,
-    `      read -r orca_w < "$orca_hb"; orca_lim=${beat.timeoutS}`,
+    `      read -r orca_w < "$orca_hb"; orca_lim=${beat.timeoutS * 100}`,
     `    fi`,
-    // A file read while it is rewritten reads empty: that round is skipped.
+    // A stop not confirmed yet is tried again every second; a file read while it is
+    // rewritten reads empty, and that round is skipped.
+    `    [ "$orca_st" = stopping ] && orca_w=0`,
     `    case $orca_w in ''|*[!0-9]*) sleep 1; continue ;; esac`,
     `    if [ $((orca_u - orca_w)) -ge "$orca_lim" ] && flock -w ${LOCK_WAIT_S} 8; then`,
-    `      orca_state`,
-    `      case $orca_st in done|stopped) exit 0 ;; esac`,
-    `      orca_set stopped`,
-    `      orca_reap`,
-    `      exit 0`,
+    `      orca_stop && exit 0`,
+    `      flock -u 8`,
     `    fi`,
     `    sleep 1`,
     `  done`,
@@ -380,16 +423,33 @@ export function claudeSdkRemoteScript(o: {
     // claude's input from the relay through a process substitution, so wait waits for claude
     // alone; fd 3 closed for claude only after the relay, expanded first, took it. Neither
     // keeps the lock's descriptor.
-    `env "$orca_k" ${run} < <(exec 2>/dev/null 9>&-; orca_relay <&3) 3<&- 9>&- &`,
+    // The process that becomes claude waits until the state names it (pid and start time),
+    // so nothing starts claude before the stop could know which process to watch; anything
+    // else (a stop, or no admission within the bound) ends it before claude starts.
+    `(`,
+    `  orca_i=0`,
+    `  until orca_state; [ "$orca_st" = admitted ] && [ "$orca_sp" = "$BASHPID" ]; do`,
+    `    case $orca_st in starting|'') ;; *) exit ${EXIT.stopped} ;; esac`,
+    `    orca_i=$((orca_i + 1))`,
+    `    [ "$orca_i" -gt ${ADMIT_TRIES} ] && exit ${EXIT.refused}`,
+    `    sleep 0.1`,
+    `  done`,
+    `  export "$orca_k"`,
+    `  exec ${run}`,
+    `) < <(exec 2>/dev/null 9>&-; orca_relay <&3) 3<&- 9>&- &`,
     `orca_p=$!`,
     `exec 3<&-`,
+    `orca_ident "$orca_p" || orca_id=0`,
+    `orca_ps=$orca_id`,
+    `orca_set "admitted $orca_p $orca_ps"`,
     `orca_i=0`,
-    `until orca_mine "$orca_p" || orca_gone "$orca_p"; do`,
+    `until orca_mine "$orca_p" || ! orca_is "$orca_p" "$orca_ps"; do`,
     `  orca_i=$((orca_i + 1))`,
+    // Still not claude: it is the shell's own child, not yet waited for, so its pid is its own.
     `  if [ "$orca_i" -gt ${ADMIT_TRIES} ]; then kill -9 "$orca_p" 2>/dev/null; break; fi`,
     `  sleep 0.1`,
     `done`,
-    `orca_set "running $orca_p"`,
+    `orca_set "running $orca_p $orca_ps"`,
     `flock -u 9`,
     `trap - HUP INT TERM`,
     `wait "$orca_p"`,
@@ -397,21 +457,28 @@ export function claudeSdkRemoteScript(o: {
     // The end, under the lock: what claude left is stopped and checked gone, then done.
     `flock -w ${LOCK_WAIT_S} 9 || exit "$orca_x"`,
     `orca_state`,
-    `if orca_reap && [ "$orca_st" = running ]; then orca_set done; fi`,
+    `orca_was=$orca_st`,
+    `if [ "$orca_was" = running ]; then`,
+    `  if orca_reap; then orca_set done; else orca_set "stopping $orca_sp $orca_ss"; fi`,
+    `else`,
+    `  orca_stop`,
+    `fi`,
     `flock -u 9`,
-    `[ "$orca_st" = stopped ] && exit ${EXIT.stopped}`,
+    `[ "$orca_was" = running ] || exit ${EXIT.stopped}`,
     `exit "$orca_x"`,
   ].join("\n");
 }
 
 /**
  * The remote shell script that stops the launch `token`, holding its lock (so never while a
- * launch is being admitted or ended): the state set to `stopped` (so a launch not yet admitted
- * never starts, and the watchdog and the relay end), then every process carrying the marker
- * signalled and checked gone. A `starting` state seen here means the remote shell died during
- * admission; the stop then checks again a second later. Exits 0 once nothing of it runs, 4
- * when one outlives the kills, 5 when the lock is not free in time, 126 on a host without
- * bash, `/proc` or `flock`.
+ * launch is being admitted or ended), through `orca_stop`: `stopped` only on evidence that
+ * nothing of the launch runs or can start, otherwise `stopping`, which the watchdog keeps
+ * trying. Before admission (no state, or `starting` left by a remote shell that died there)
+ * nothing may start `claude`, so `stopped` holds at once. Once a process was admitted, the stop
+ * waits until that process (pid and start time) is gone or carries the marker, then kills
+ * every marked process and checks them gone. Exits 0 when `stopped` (or `done`) is confirmed, 4
+ * when it is not (one outlived the kills, or the admitted process neither went nor took the
+ * marker), 5 when the lock is not free in time, 126 on a host without bash, `/proc` or `flock`.
  */
 export function claudeSdkRemoteStopScript(token: string): string {
   checkToken(token);
@@ -422,13 +489,7 @@ export function claudeSdkRemoteStopScript(token: string): string {
     ...supervisorFunctions(token),
     `exec 9>>"$orca_lk" || exit ${EXIT.refused}`,
     `flock -w ${LOCK_WAIT_S} 9 || exit ${EXIT.busy}`,
-    `orca_state`,
-    `orca_was=$orca_st`,
-    `[ "$orca_was" = done ] || orca_set stopped || exit ${EXIT.refused}`,
-    `orca_reap`,
-    `orca_r=$?`,
-    `if [ "$orca_was" = starting ]; then sleep 1; orca_reap; orca_r=$?; fi`,
-    `exit "$orca_r"`,
+    `orca_stop`,
   ].join("\n");
 }
 

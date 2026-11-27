@@ -114,7 +114,7 @@ describe("the remote command line (#1130)", () => {
     });
     expect(script).toContain("unset TOKEN || exit 125");
     expect(script).toContain(`cd '/work/o'\\''brien' || exit 125`);
-    expect(script).toContain(`env "$orca_k" '/opt/claude code/claude' --print 'it'\\''s $HOME' < <(`);
+    expect(script).toContain(`export "$orca_k"\n  exec '/opt/claude code/claude' --print 'it'\\''s $HOME'\n) < <(`);
     expect(script).toContain("case $orca_n in FOO) ;;");
     expect(script).not.toMatch(/\benv [A-Z]/);
   });
@@ -291,15 +291,41 @@ describe("the remote command line (#1130)", () => {
     await expect(readFile(marker)).rejects.toThrow();
   });
 
-  it("a stop during startup waits for admission and leaves nothing running: launch and stop share one lock", async () => {
-    const t = claudeSdkRemoteToken();
-    const pids = join(dir, "pids");
-    // An `env` that takes a second before it starts claude: the child exists, unmarked, all that time.
-    const slow = join(dir, "slow-bin");
-    await mkdir(slow);
-    const realEnv = spawnSync("sh", ["-c", "command -v env"]).stdout.toString("utf8").trim();
-    await writeFile(join(slow, "env"), `#!/bin/sh\ntouch ${join(dir, "entered")}\nsleep 1\nexec ${realEnv} "$@"\n`);
-    await chmod(join(slow, "env"), 0o755);
+  const stateDir = () => join(dir, ".cache", "orca", "claude-sdk");
+  const stateOf = async (t: string) => (await readFile(join(stateDir(), `${t}.state`), "utf8")).trim();
+  async function setState(t: string, state: string): Promise<void> {
+    await mkdir(stateDir(), { recursive: true });
+    await writeFile(join(stateDir(), `${t}.state`), `${state}\n`);
+  }
+  /** Field 22 of /proc/<pid>/stat: the start time that, with the pid, names one process. */
+  const startTime = (pid: number) => {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    return stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19]!;
+  };
+  /**
+   * A launch held inside admission: a `grep` first on its PATH blocks while the state is
+   * `admitted` and the `hold` file exists, so the remote shell stops in the middle of its check
+   * for the marker, holding the lock. The admitted process, which never calls grep, goes on.
+   */
+  async function heldLaunch(t: string, pids: string) {
+    const bin = join(dir, "hold-bin");
+    await mkdir(bin, { recursive: true });
+    const realGrep = spawnSync("sh", ["-c", "command -v grep"]).stdout.toString("utf8").trim();
+    const hold = join(dir, "hold");
+    const held = join(dir, "held");
+    await writeFile(hold, "");
+    await writeFile(
+      join(bin, "grep"),
+      `#!/bin/sh
+if [ -e "${hold}" ]; then
+  for f in "$HOME"/.cache/orca/claude-sdk/*.state; do
+    case "$(cat "$f" 2>/dev/null)" in admitted*) : > "${held}"; while [ -e "${hold}" ]; do sleep 0.05; done ;; esac
+  done
+fi
+exec ${realGrep} "$@"
+`,
+    );
+    await chmod(join(bin, "grep"), 0o755);
     const script = claudeSdkRemoteScript({
       agentId: "a",
       hostId: "h",
@@ -310,26 +336,117 @@ describe("the remote command line (#1130)", () => {
       token: t,
     });
     const child = spawn("bash", ["-c", script], {
-      env: { PATH: `${slow}:${process.env.PATH ?? ""}`, HOME: dir },
+      env: { PATH: `${bin}:${process.env.PATH ?? ""}`, HOME: dir },
       stdio: ["pipe", "ignore", "ignore"],
     });
     child.stdin.write(claudeSdkRemoteEnvInput({}));
-    const exited = new Promise<number | null>((r) => child.once("exit", (code) => r(code)));
-    const state = join(dir, ".cache", "orca", "claude-sdk", `${t}.state`);
-    await until(async () => (await readFile(join(dir, "entered")).catch(() => undefined)) !== undefined);
-    // The stop comes inside the window: it waits for the lock, then finds claude by its marker.
-    const began = Date.now();
-    const stop = spawnSync("bash", ["-c", claudeSdkRemoteStopScript(t)], {
-      env: { PATH: process.env.PATH ?? "", HOME: dir },
+    const exited = new Promise<number | null>((r) => child.once("exit", (code, signal) => r(signal ? 128 : code)));
+    await until(async () => (await readFile(held).catch(() => undefined)) !== undefined);
+    expect(await stateOf(t)).toMatch(/^admitted \d+ \d+$/);
+    return { child, exited, release: () => rm(hold, { force: true }) };
+  }
+  const stop = (t: string) =>
+    new Promise<number | null>((r) => {
+      const c = spawn("bash", ["-c", claudeSdkRemoteStopScript(t)], {
+        env: { PATH: process.env.PATH ?? "", HOME: dir },
+        stdio: "ignore",
+      });
+      c.once("exit", (code) => r(code));
     });
-    expect(stop.status).toBe(0);
-    expect(Date.now() - began).toBeGreaterThanOrEqual(500);
+
+  it("a stop during admission waits for the lock, then stops claude: stopped, and nothing left", async () => {
+    const t = claudeSdkRemoteToken();
+    const { child, exited, release } = await heldLaunch(t, join(dir, "pids"));
+    let stopped: number | null | undefined;
+    const stopping = stop(t).then((code) => (stopped = code));
+    await new Promise((r) => setTimeout(r, 700));
+    expect(stopped).toBeUndefined();
+    await release();
+    expect(await stopping).toBe(0);
     expect(markedBy(t)).toEqual([]);
-    await new Promise((r) => setTimeout(r, 1_500));
-    expect(markedBy(t)).toEqual([]);
+    expect(await stateOf(t)).toBe("stopped");
     expect(await exited).toBe(137);
-    expect((await readFile(state, "utf8")).trim()).toBe("stopped");
+    await new Promise((r) => setTimeout(r, 500));
+    expect(markedBy(t)).toEqual([]);
     child.stdin.end();
+  });
+
+  it("a remote shell that died after admitting claude: the stop watches the admitted process and stops it", async () => {
+    const t = claudeSdkRemoteToken();
+    const pids = join(dir, "pids");
+    const { child, exited, release } = await heldLaunch(t, pids);
+    // The admitted process goes on to become claude while the shell that admitted it is gone.
+    child.kill("SIGKILL");
+    await exited;
+    await release();
+    const [shell, sleeper] = await pidsIn(pids);
+    expect(markedBy(t)).toEqual(expect.arrayContaining([shell, sleeper]));
+    expect(await stop(t)).toBe(0);
+    expect(markedBy(t)).toEqual([]);
+    expect(await stateOf(t)).toBe("stopped");
+    child.stdin.end();
+  });
+
+  it("before admission nothing may start claude: stopped at once, and the launch never starts", async () => {
+    const t = claudeSdkRemoteToken();
+    await setState(t, "starting");
+    expect(await stop(t)).toBe(0);
+    expect(await stateOf(t)).toBe("stopped");
+    const marker = join(dir, "ran");
+    const script = claudeSdkRemoteScript({
+      agentId: "a",
+      hostId: "h",
+      command: "sh",
+      args: ["-c", `touch ${marker}`],
+      cwd: ws,
+      names: [],
+      token: t,
+    });
+    expect(runScript(script, claudeSdkRemoteEnvInput({})).code).toBe(137);
+    await expect(readFile(marker)).rejects.toThrow();
+  });
+
+  it("keeps a stop unconfirmed while the admitted process neither goes nor takes the marker, and never signals it", async () => {
+    const t = claudeSdkRemoteToken();
+    const other = spawn("sleep", ["600"], { stdio: "ignore" });
+    try {
+      const named = `${other.pid} ${startTime(other.pid!)}`;
+      await setState(t, `admitted ${named}`);
+      expect(await stop(t)).toBe(4);
+      expect(await stateOf(t)).toBe(`stopping ${named}`);
+      expect(alive(other.pid!)).toBe(true);
+      // A launch asked to stop does not start while that is unconfirmed.
+      const script = claudeSdkRemoteScript({
+        agentId: "a",
+        hostId: "h",
+        command: "true",
+        args: [],
+        cwd: ws,
+        names: [],
+        token: t,
+      });
+      expect(runScript(script, claudeSdkRemoteEnvInput({})).code).toBe(137);
+      // Once it is gone, the next stop confirms.
+      other.kill("SIGKILL");
+      await until(() => Promise.resolve(!alive(other.pid!)));
+      expect(await stop(t)).toBe(0);
+      expect(await stateOf(t)).toBe("stopped");
+    } finally {
+      other.kill("SIGKILL");
+    }
+  }, 30_000);
+
+  it("takes a pid with another start time for another process: it is not the admitted one", async () => {
+    const t = claudeSdkRemoteToken();
+    const other = spawn("sleep", ["600"], { stdio: "ignore" });
+    try {
+      await setState(t, `admitted ${other.pid} 1`);
+      expect(await stop(t)).toBe(0);
+      expect(await stateOf(t)).toBe("stopped");
+      expect(alive(other.pid!)).toBe(true);
+    } finally {
+      other.kill("SIGKILL");
+    }
   });
 
   it("writes done only after the end, under the lock, and a later stop confirms it", async () => {
