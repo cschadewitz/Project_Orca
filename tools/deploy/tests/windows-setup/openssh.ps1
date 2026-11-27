@@ -110,8 +110,10 @@ try {
         Start-Sleep -Milliseconds 500
         $info = Get-ScheduledTaskInfo -TaskPath "\ORCA-test\" -TaskName $task
         $state = [string](Get-ScheduledTask -TaskPath "\ORCA-test\" -TaskName $task).State
-      } while (((Get-Date) -lt $deadline) -and ($state -eq "Running" -or $info.LastRunTime -eq $before))
-      Assert ($state -ne "Running" -and $info.LastRunTime -ne $before) "the guard task did not finish"
+        # 0x41301: still running, as the result says before the state does.
+        $busy = $state -eq "Running" -or $info.LastRunTime -eq $before -or [int]$info.LastTaskResult -eq 0x41301
+      } while (((Get-Date) -lt $deadline) -and $busy)
+      Assert (-not $busy) "the guard task did not finish (result $($info.LastTaskResult))"
       return [int]$info.LastTaskResult
     }
     try {
