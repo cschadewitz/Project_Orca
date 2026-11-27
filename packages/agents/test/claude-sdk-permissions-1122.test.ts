@@ -385,6 +385,48 @@ describe("ORCA answers Claude's permission asks (#1122)", () => {
       expect(reads).toBe(2);
     });
 
+    describe("the policy changing between the verdict and the answer to Claude", () => {
+      const allowFetch: PermissionPolicy = { default: "ask", rules: [{ match: { kind: "fetch" }, decision: "allow" }] };
+      const askFetch: PermissionPolicy = { default: "ask", rules: [{ match: { kind: "fetch" }, decision: "ask" }] };
+      const denyFetch: PermissionPolicy = { default: "ask", rules: [{ match: { kind: "fetch" }, decision: "deny" }] };
+      const sequence = (...policies: PermissionPolicy[]) => {
+        let n = 0;
+        return () => Promise.resolve(policies[Math.min(n++, policies.length - 1)]!);
+      };
+      const yes = { askPermission: () => Promise.resolve("allow") };
+
+      it("an automatic allow is refused when the policy now asks: nobody answered", async () => {
+        const decisions: string[] = [];
+        const b = bridgeWith(sequence(allowFetch, askFetch), {
+          ...yes,
+          onPermission: (i: { decision: string }) => decisions.push(i.decision),
+        });
+        expect(await ask(b)).toMatchObject({ behavior: "deny", message: CLAUDE_SDK_DENIALS.askedSince });
+        expect(decisions).toEqual(["allow:ask-since"]);
+      });
+
+      it("an automatic allow stands when the policy still allows", async () => {
+        const b = bridgeWith(sequence(allowFetch, allowFetch));
+        expect(await ask(b)).toMatchObject({ behavior: "allow" });
+      });
+
+      it("a person's allow-once stands while the policy still asks", async () => {
+        const b = bridgeWith(sequence(askFetch, askFetch), yes);
+        expect(await ask(b)).toMatchObject({ behavior: "allow" });
+      });
+
+      it("a deny that appears meanwhile wins over an automatic allow and over a person's allow", async () => {
+        expect(await ask(bridgeWith(sequence(allowFetch, denyFetch)))).toMatchObject({
+          behavior: "deny",
+          message: CLAUDE_SDK_DENIALS.changed,
+        });
+        expect(await ask(bridgeWith(sequence(askFetch, denyFetch), yes))).toMatchObject({
+          behavior: "deny",
+          message: CLAUDE_SDK_DENIALS.changed,
+        });
+      });
+    });
+
     it("a tool input the mapping cannot read", async () => {
       const b = bridgeWith(() => Promise.resolve({ default: "allow", rules: [] }));
       const poisoned = new Proxy(

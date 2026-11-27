@@ -56,6 +56,8 @@ export const CLAUDE_SDK_DENIALS = {
   noTurn: "ORCA answers tool permission asks only during a live turn; this one was denied.",
   cancelled: "The turn was cancelled; the tool call was denied.",
   changed: "ORCA's permission policy denies this tool call now.",
+  askedSince:
+    "ORCA's permission policy now asks a person about this tool call, and nobody has answered it; it was denied.",
   failed: "ORCA could not decide this tool call; it was denied.",
 } as const;
 
@@ -264,9 +266,13 @@ export function claudeSdkPermissionBridge(o: ClaudeSdkPermissionBridgeOptions): 
         rule,
       );
     if (decision === "allow" || decision === "ask:allow_once") {
-      // An answer may have taken a while: a deny that appeared meanwhile wins.
+      // The policy may have changed meanwhile. A deny always wins. An automatic allow stands only
+      // while the policy still allows: if it now asks, nobody answered this call, so it is refused.
+      // A person's one-time allow stands while the policy still asks (or allows).
       const now = explainPermission(await policy(), call, scope);
       if (now.decision === "deny") return refuse(`${decision}:denied-since`, CLAUDE_SDK_DENIALS.changed, false, rule);
+      if (decision === "allow" && now.decision !== "allow")
+        return refuse("allow:ask-since", CLAUDE_SDK_DENIALS.askedSince, false, rule);
       if (!live()) return refuse(`${decision}:turn-ended`, CLAUDE_SDK_DENIALS.cancelled, true, rule);
       record(call, toolUseId, decision, rule);
       // This call only. No `updatedPermissions`: Claude remembers nothing, and asks again.
