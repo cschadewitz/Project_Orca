@@ -92,15 +92,18 @@ ruleset_problem() {
     if ! ruleset=$(gh api "repos/$REPO/rulesets/$id" 2>/dev/null); then
       seen+=("ruleset $id could not be read"); continue
     fi
-    # Why this candidate does not qualify, or empty when it does.
-    why=$(jq -r '
-      if .enforcement != "active" then "ruleset \(.id) is not active"
-      elif (.bypass_actors | type) != "array" then "ruleset \(.id) bypass list is not visible to this token"
-      elif (.bypass_actors | length) != 0 then "ruleset \(.id) has bypass actors"
-      elif any(.rules[]; .type == "pull_request") | not then "ruleset \(.id) does not require a pull request"
-      else "" end' <<<"$ruleset")
-    [ -n "$why" ] || return 0
-    seen+=("$why")
+    # "qualifies", or why this candidate does not. Only a successful parse that prints exactly
+    # "qualifies" counts; a jq failure or any other output leaves the ruleset unverified.
+    if ! why=$(jq -r --arg id "$id" '
+      if .enforcement != "active" then "ruleset \($id) is not active"
+      elif (.bypass_actors | type) != "array" then "ruleset \($id) bypass list is not visible to this token"
+      elif (.bypass_actors | length) != 0 then "ruleset \($id) has bypass actors"
+      elif any(.rules[]; .type == "pull_request") | not then "ruleset \($id) does not require a pull request"
+      else "qualifies" end' <<<"$ruleset" 2>/dev/null); then
+      seen+=("ruleset $id could not be parsed"); continue
+    fi
+    [ "$why" != "qualifies" ] || return 0
+    seen+=("${why:-ruleset $id gave no verdict}")
   done
   local detail=""
   [ "${#seen[@]}" -eq 0 ] || detail=" ($(IFS=';'; echo "${seen[*]}" | sed 's/;/; /g'))"
