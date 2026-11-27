@@ -1,0 +1,1 @@
+- **agents:** on a `driver: claude-agent-sdk` session, the note a person writes when declining a tool call reaches Claude with the decline (at most 2,000 characters, marked as theirs) (#1122).

@@ -385,6 +385,8 @@ export class LiveHumanInput implements HumanInputPort {
         }
         const delivered = this.pending.get(entry.target.requestId) === entry && !entry.binding.signal.aborted;
         entry.dispose();
+        // The person's note goes with the answer it was written for, and only a delivered one.
+        if (delivered && answer.note) entry.originalQuery.answerNote = answer.note;
         entry.resolve(delivered ? answer.optionId : undefined);
         return { answerRecorded: true, delivered };
       });

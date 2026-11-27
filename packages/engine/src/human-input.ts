@@ -59,6 +59,12 @@ export interface HumanInputQuery {
    */
   signal?: AbortSignal;
   /** In-process lifetime and ownership; never persisted or accepted from a client. */
+  /**
+   * The note a person's live answer carried (#1122), set by the port that accepted it just
+   * before the answer is delivered. Runtime only: the recorded answer event carries the note,
+   * and nothing here is emitted.
+   */
+  answerNote?: string;
   live?: LiveInputBinding;
 }
 
@@ -199,6 +205,8 @@ export async function askHumanInput(opts: {
   live?: LiveInputBinding;
   onRequested?: (query: HumanInputQuery) => void | Promise<void>;
   onSettled?: (query: HumanInputQuery) => Promise<void> | void;
+  /** Told the note a delivered answer carried, if any, before the answer is returned (#1122). */
+  onAnswerNote?: (note: string) => void;
 }): Promise<string | undefined> {
   const { emit, stepRunId } = opts;
   const query: HumanInputQuery = {
@@ -267,6 +275,7 @@ export async function askHumanInput(opts: {
     const answer = await (waiting ?? opts.port.ask(query));
     if (!opts.port.recordsAnswer?.(query))
       await emit({ type: "human.answered", payload: { stepRunId, requestId: query.requestId, answer: answer ?? "" } });
+    if (answer !== undefined && query.answerNote) opts.onAnswerNote?.(query.answerNote);
     return answer;
   } catch (error) {
     refusePublication(error);

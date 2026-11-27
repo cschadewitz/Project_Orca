@@ -17,6 +17,7 @@ import type * as acp from "@agentclientprotocol/sdk";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { silentLogger, type PermissionPolicy } from "@orca/core";
 import {
+  CLAUDE_SDK_DECLINE_NOTE_LIMIT,
   CLAUDE_SDK_DENIALS,
   claudeSdkPermissionBridge,
   openClaudeSdkSession,
@@ -172,6 +173,31 @@ describe("ORCA answers Claude's permission asks (#1122)", () => {
     });
     expect(first!.invocation?.turnId).toBeDefined();
     expect(first!.invocation?.turnId).not.toBe(second!.invocation?.turnId);
+  });
+
+  it("tells the model the person's decline note, marked as theirs and cut to its limit", async () => {
+    const notes = ["use make clean instead", "", "x".repeat(CLAUDE_SDK_DECLINE_NOTE_LIMIT + 10)];
+    let n = 0;
+    const session = await open({
+      askPermission: (_request: acp.RequestPermissionRequest, invocation?: PermissionInvocation) => {
+        invocation?.onAnswerNote?.(notes[n++]!);
+        return Promise.resolve("reject");
+      },
+    });
+    const bash = () => call(session, { name: "Bash", input: { command: "rm -rf build", description: "d" } });
+    expect((await bash()).answer?.message).toBe(`${CLAUDE_SDK_DENIALS.declined} Their note: use make clean instead`);
+    expect((await bash()).answer?.message).toBe(CLAUDE_SDK_DENIALS.declined);
+    expect((await bash()).answer?.message).toBe(
+      `${CLAUDE_SDK_DENIALS.declined} Their note: ${"x".repeat(CLAUDE_SDK_DECLINE_NOTE_LIMIT)}…`,
+    );
+    // A note with an allow is not told: only a decline says why.
+    const allowing = await open({
+      askPermission: (_request: acp.RequestPermissionRequest, invocation?: PermissionInvocation) => {
+        invocation?.onAnswerNote?.("fine this once");
+        return Promise.resolve("allow");
+      },
+    });
+    expect((await call(allowing, fetchCall)).answer).toMatchObject({ behavior: "allow" });
   });
 
   it("sends a call Claude would run by itself to the person when a rule asks about it", async () => {

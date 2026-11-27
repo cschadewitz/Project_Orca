@@ -3239,6 +3239,8 @@ export class Orchestrator {
             // card can show it where they answer: `askJudgeNote` keeps only what still holds, and
             // never the rule's revision (a content digest) or which judge configuration decided.
             context: { toolCall: req.toolCall, ...(judged ? { judge: askJudgeNote(judged) } : {}) },
+            // A session that carries a person's note to the agent (#1122) is told it with the answer.
+            ...(invocation?.onAnswerNote ? { onAnswerNote: invocation.onAnswerNote } : {}),
             onRequested: () => {
               pendingAsks++;
             },

@@ -358,7 +358,8 @@ rules, people and answerer as for Claude over ACP:
   that one call. Claude is never told to remember a yes, so the next identical call is decided
   again, by the rules as they are then.
 - **A person's answer** counts for that one call only. When they decline, Claude is told that
-  the person declined.
+  the person declined, followed by the note they wrote with the decline, if any (at most 2,000
+  characters, marked as theirs). A note given with an allow is recorded but not sent to Claude.
 - **Glob and Grep are denied:** a search can reach a protected folder below where it starts.
   `TodoWrite` always runs.
 - **An ask outside a live turn, or after the turn was cancelled,** is denied, and the tool
@@ -366,7 +367,8 @@ rules, people and answerer as for Claude over ACP:
 
 An ask card shows the call as ORCA's rules read it, together with what Claude said about it:
 why it asks, the path it was blocked on, and for a subagent's call, the tool call that started
-the subagent. A note the person writes beside a decline does not reach Claude yet.
+the subagent. A note reaches Claude only from an answer given while the turn is live. The ACP
+route has no place for one in its permission response, so there it is only recorded.
 
 ### ORCA's tool hook
 

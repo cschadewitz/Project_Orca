@@ -269,6 +269,12 @@ export interface PermissionInvocation {
   turnId: string;
   invocationId: string;
   signal: AbortSignal;
+  /**
+   * Set by a session that can tell the agent a person's note with their answer (the Claude
+   * Agent SDK route, #1122); the asker calls it with the note before returning the answer.
+   * ACP's permission response has no place for one, so the ACP route leaves it unset.
+   */
+  onAnswerNote?: (note: string) => void;
 }
 
 export interface SessionContinuity {
