@@ -1,7 +1,7 @@
 /**
  * The Claude Agent SDK session driver (#1120): one streaming `query()` per session, turns that
- * settle on `result`, interrupt and close, ACP-shaped updates, and the tool gate that holds
- * until ORCA answers Claude's permission asks (#1122).
+ * settle on `result`, interrupt and close, ACP-shaped updates. ORCA's permission answers on
+ * these sessions (#1122) are tested in `claude-sdk-permissions-1122.test.ts`.
  *
  * `claude` here is a stand-in (fixtures/claude-sdk-stand-in.mjs) that speaks the SDK's control
  * protocol, so no account and no model are involved.
@@ -20,7 +20,6 @@ import {
   openClaudeSdkSession,
   sessionUpdates,
   startupTermination,
-  toolRefusal,
   type AgentSession,
   type ClaudeSdkSessionOptions,
   type SessionUpdateEvent,
@@ -241,11 +240,12 @@ describe.runIf(process.platform !== "win32")("Claude Agent SDK session (#1120)",
     }
   });
 
-  it("lets only an unprotected Read and TodoWrite run, maps tool calls and plans, and denies every ask", async () => {
+  it("maps tool calls and plans; with nobody to answer, an asked call is denied", async () => {
     const session = await open();
     const events = collect(session);
     await session.prompt(`tools ${join(dir, "notes.txt")}`);
-    expect(JSON.parse(texts(events).at(-1)!)).toEqual({ read: "ran", bash: "denied", grep: "denied", todo: "ran" });
+    // The read is ORCA's default allow, Bash is asked and nobody answers, Grep is never run.
+    expect(JSON.parse(texts(events).at(-1)!)).toEqual({ read: "ran", bash: "deny", grep: "denied", todo: "ran" });
     const calls = events.filter((e) => e.summary.kind === "tool_call").map((e) => e.summary);
     expect(calls.map((c) => [c.title, c.toolKind])).toEqual([
       ["Read", "read"],
@@ -392,30 +392,6 @@ describe.runIf(process.platform !== "win32")("Claude Agent SDK session (#1120)",
     setTimeout(() => ac.abort(), 100);
     await expect(opening).rejects.toMatchObject({ code: "CANCELLED" });
     await expect(open({}, { signal: AbortSignal.abort() })).rejects.toMatchObject({ code: "CANCELLED" });
-  });
-});
-
-describe("tool gate (#1120 until #1122)", () => {
-  const cwd = "/work";
-  it("allows only TodoWrite and a Read of an unprotected file; denies everything else", () => {
-    expect(toolRefusal("Read", { file_path: "/work/a.ts" }, cwd, undefined)).toBeUndefined();
-    expect(toolRefusal("TodoWrite", { todos: [] }, cwd, undefined)).toBeUndefined();
-    for (const tool of ["Bash", "Edit", "Write", "WebFetch", "Task", "mcp__x__y", "NotebookEdit", "Glob", "Grep"])
-      expect(toolRefusal(tool, {}, cwd, undefined)).toMatch(/#1122/);
-    expect(toolRefusal("Read", {}, cwd, undefined)).toMatch(/#1122/);
-  });
-
-  it("denies a read of a path ORCA keeps from agents", () => {
-    const protectedPaths = { readOnly: ["/work/.orca"], noAccess: ["/home/me/.orca/auth"] };
-    expect(toolRefusal("Read", { file_path: "/home/me/.orca/auth/key" }, cwd, protectedPaths)).toMatch(/protects/);
-    expect(toolRefusal("Read", { file_path: "/work/.orca/config.yaml" }, cwd, protectedPaths)).toBeUndefined();
-  });
-
-  it("denies a search whose own path is free but which holds a protected path below it (#1274 review)", () => {
-    const protectedPaths = { readOnly: [], noAccess: ["/work/secrets"] };
-    expect(toolRefusal("Grep", { pattern: "token", path: "/work" }, cwd, protectedPaths)).toMatch(/#1122/);
-    expect(toolRefusal("Glob", { pattern: "**/*", path: "/work" }, cwd, protectedPaths)).toMatch(/#1122/);
-    expect(toolRefusal("Grep", { pattern: "token" }, cwd, protectedPaths)).toMatch(/#1122/);
   });
 });
 

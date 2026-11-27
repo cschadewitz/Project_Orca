@@ -104,22 +104,33 @@ list is refused with the list. A model that takes effort levels also has an `eff
 that does not take the chosen level goes back to `default`. A session starts on Claude Code's
 `default` model. Resuming a session is not there yet.
 
-## What a session may do, for now
+## What a session may do
 
-ORCA does not answer Claude's permission asks yet (#1122), so:
+ORCA decides every tool call Claude makes with the agent's permission rules (#1122), the same
+rules, people and answerer as for Claude over ACP:
 
-- **Read** runs, for a file ORCA does not keep from agents (its credential and key folders).
-- **Glob and Grep are denied**: a search can reach a protected folder below where it starts.
-- **TodoWrite** runs.
-- **Everything else is denied before it runs**: edits, writes, Bash, web fetches, subagents and
-  any other tool, also where Claude's own rules would have allowed it.
-- **Every permission ask is answered no**, for example a read outside the working directory.
+- **Denied by a rule, or touching ORCA's own files:** denied before it runs. Claude is told
+  why.
+- **Asked by a rule:** the run's answerer is asked, a person in the app or the client that
+  started the run, even when Claude would have run the call without asking, such as a read in
+  its working directory. With nobody to answer, the call is denied.
+- **Allowed by a rule:** Claude's own checks still apply. If Claude asks, ORCA answers yes for
+  that one call. Claude is never told to remember a yes, so the next identical call is decided
+  again, by the rules as they are then.
+- **A person's answer** counts for that one call only. When they decline, Claude is told that
+  the person declined.
+- **Glob and Grep are denied:** a search can reach a protected folder below where it starts.
+  `TodoWrite` always runs.
+- **An ask outside a live turn, or after the turn was cancelled,** is denied, and the tool
+  does not run. Cancelling while a person is being asked stops Claude's turn too.
 
+An ask card shows the call as ORCA's rules read it, together with what Claude said about it:
+why it asks, the path it was blocked on, and for a subagent's call, the tool call that started
+the subagent. A note the person writes beside a decline does not reach Claude yet.
 
-### How your permission rules will read these calls
+### How your permission rules read these calls
 
-When ORCA answers Claude's asks (#1122), it will decide each call with the same permission rules
-it uses for Claude over ACP (#1119). A rule that matches by title (`titlePattern`) is matched
+ORCA decides each call with the same permission rules it uses for Claude over ACP (#1119). A rule that matches by title (`titlePattern`) is matched
 against the title Claude's ACP adapter would show for that call, so a title rule you wrote for
 ACP sessions holds here too. ORCA reproduces that title for Bash and PowerShell, Read, Write,
 Edit, WebFetch, WebSearch and MCP tools. For other tools (Glob, Grep, NotebookEdit, subagents and
