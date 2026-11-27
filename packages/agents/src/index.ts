@@ -34,3 +34,4 @@ export * from "./owned-fs-io.js";
 export * from "./claude-sdk/session.js";
 export * from "./claude-sdk/config-options.js";
 export * from "./claude-sdk/permission-bridge.js";
+export * from "./claude-sdk/secrets.js";

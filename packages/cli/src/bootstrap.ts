@@ -50,6 +50,8 @@ import {
   openAcpSession,
   claudeSdkRequested,
   claudeSdkPreflight,
+  claudeSdkSecrets,
+  redactError,
   claudeSdkPlatformUnsupported,
   openClaudeSdkSession,
   withProviderGuards,
@@ -372,11 +374,25 @@ export function makeSessionFactory(
         );
       // Refused before anything runs: no tested process-tree ownership on Windows yet.
       if (process.platform === "win32") throw claudeSdkPlatformUnsupported(options.agent.id);
+      // Secret references (#1126) are planned, checked and read as on the ACP route, then given
+      // to Claude only in the variables the agent's env names; the values are redacted from
+      // everything after this, the run's events included.
+      const secrets = await claudeSdkSecrets({
+        host: options.host,
+        agent: options.agent,
+        secrets: options.secrets,
+        authorizeSecretUse: options.authorizeSecretUse,
+        delivery: options.secretDelivery,
+      });
+      if (secrets.values.length) options.onSecretValues?.([...secrets.values]);
       const preflight = await claudeSdkPreflight({
         agent: options.agent,
         cwd: options.cwd,
         orcaEnv: options.env ?? {},
+        secrets,
         signal: options.origin?.signal,
+      }).catch((error: unknown) => {
+        throw redactError(error, secrets.values);
       });
       return openClaudeSdkSession({
         agent: options.agent,
@@ -394,6 +410,8 @@ export function makeSessionFactory(
         logger: options.logger,
         clock: options.clock,
         cancelGraceMs: options.cancelGraceMs,
+        additionalDirectories: options.additionalDirectories,
+        secretValues: secrets.values,
       });
     }
     // ORCA's gate in Codex's executor path (#1026): its own route, which refuses every session

@@ -20,6 +20,8 @@
  *   for a read Claude would have run by itself;
  * - a closed session resumed by its id (#1121) continues its transcript: the model sees the
  *   earlier turn; a required resume of an unknown id is refused as a failed load;
+ * - a checkout's `.claude/settings.json` and `settings.local.json` do not load (#1126): its
+ *   hooks do not run and its permission rules do not apply;
  * - cancel ends a turn as `cancelled`, and close leaves no Claude Code process behind.
  */
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -353,6 +355,32 @@ describe.runIf(CLAUDE !== undefined && process.platform !== "win32")(
       );
       expect(refused?.code).toBe("AGENT_PROTOCOL");
       expect(refused?.details).toEqual({ contextRecoveryReason: "load-failed" });
+    });
+
+    it("loads none of a checkout's Claude settings: its hooks do not run, its rules do not apply (#1126)", async () => {
+      const checkout = join(root, "checkout");
+      const hookMarker = join(root, "project-hook-ran");
+      await mkdir(join(checkout, ".claude"), { recursive: true });
+      await writeFile(join(checkout, "notes.txt"), "orca-1126-checkout\n");
+      const settings = {
+        hooks: { PreToolUse: [{ matcher: "*", hooks: [{ type: "command", command: `touch ${hookMarker}` }] }] },
+        permissions: { deny: ["Read"] },
+      };
+      await writeFile(join(checkout, ".claude", "settings.json"), JSON.stringify(settings));
+      await writeFile(join(checkout, ".claude", "settings.local.json"), JSON.stringify(settings));
+      const session = await open({ cwd: checkout });
+      try {
+        const events: SessionUpdateEvent[] = [];
+        session.onUpdate((e) => events.push(e));
+        await session.prompt(
+          `CALL:${JSON.stringify({ name: "Read", input: { file_path: join(checkout, "notes.txt") } })}`,
+        );
+        // A loaded `deny: Read` would have refused this; a loaded hook would have left its marker.
+        expect(texts(events).join("")).toContain("orca-1126-checkout");
+        await expect(readFile(hookMarker, "utf8")).rejects.toThrow(/ENOENT/);
+      } finally {
+        await session.close();
+      }
     });
 
     it("cancels a turn, and close leaves no Claude Code behind", async () => {
