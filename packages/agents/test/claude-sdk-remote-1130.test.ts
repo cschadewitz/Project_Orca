@@ -449,6 +449,63 @@ exec ${realGrep} "$@"
     }
   });
 
+  it("fails closed on a state record it cannot read: the stop stays unconfirmed and no launch starts", async () => {
+    const records = ["admitted 12", "", "running x 1\n", "done extra\n", "admitted 12 34 56\n", "maybe\n"];
+    for (const record of records) {
+      const t = claudeSdkRemoteToken();
+      await mkdir(stateDir(), { recursive: true });
+      await writeFile(join(stateDir(), `${t}.state`), record);
+      expect(await stop(t), JSON.stringify(record)).toBe(6);
+      expect(await readFile(join(stateDir(), `${t}.state`), "utf8")).toBe(record);
+      const script = claudeSdkRemoteScript({
+        agentId: "a",
+        hostId: "h",
+        command: "true",
+        args: [],
+        cwd: ws,
+        names: [],
+        token: t,
+      });
+      expect(runScript(script, claudeSdkRemoteEnvInput({})).code).toBe(125);
+    }
+    // One that cannot be read at all (a directory where the record belongs).
+    const t = claudeSdkRemoteToken();
+    await mkdir(join(stateDir(), `${t}.state`), { recursive: true });
+    expect(await stop(t)).toBe(6);
+  });
+
+  it("kills what carries the marker even when the record is unreadable, and still reports it unconfirmed", async () => {
+    const t = claudeSdkRemoteToken();
+    const pids = join(dir, "pids");
+    const child = launch(t, stubborn(pids));
+    const [shell, sleeper] = await pidsIn(pids);
+    await writeFile(join(stateDir(), `${t}.state`), "garbage");
+    expect(await stop(t)).toBe(6);
+    expect(alive(shell) || alive(sleeper)).toBe(false);
+    expect(markedBy(t)).toEqual([]);
+    child.stdin.end();
+  });
+
+  it("propagates a state it cannot write: no stopped, no launch, unconfirmed", async () => {
+    const t = claudeSdkRemoteToken();
+    // A directory where the new record is written first: every write fails.
+    await mkdir(join(stateDir(), `${t}.state.new`), { recursive: true });
+    expect(await stop(t)).toBe(6);
+    await expect(readFile(join(stateDir(), `${t}.state`))).rejects.toThrow();
+    const marker = join(dir, "ran");
+    const script = claudeSdkRemoteScript({
+      agentId: "a",
+      hostId: "h",
+      command: "sh",
+      args: ["-c", `touch ${marker}`],
+      cwd: ws,
+      names: [],
+      token: t,
+    });
+    expect(runScript(script, claudeSdkRemoteEnvInput({})).code).toBe(125);
+    await expect(readFile(marker)).rejects.toThrow();
+  });
+
   it("writes done only after the end, under the lock, and a later stop confirms it", async () => {
     const t = claudeSdkRemoteToken();
     const script = claudeSdkRemoteScript({

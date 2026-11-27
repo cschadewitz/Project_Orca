@@ -152,10 +152,16 @@ default `bash -lc`) and `flock` (util-linux); anything else is refused before `c
   carries the marker. So a stop never runs while a launch is started but not yet visible, and a
   launch a stop overtook never starts. A stop reaches `stopped` only on evidence: before
   admission nothing may start `claude`; after it, the admitted process must be gone or carry
-  the marker, and every marked process must be gone. Otherwise the launch stays `stopping`, the
-  stop reports it unconfirmed, and the host's watchdog keeps trying every second. Tests hold a
+  the marker, and no process may carry the marker any more. Otherwise the launch stays
+  `stopping`, the stop reports it unconfirmed, and the host's watchdog keeps trying every
+  second. The record is replaced whole (written, then renamed) and checked when read: one that
+  cannot be read or written, or that is not a state, keeps any launch from starting and leaves
+  the stop unconfirmed, though what carries the marker is still killed. "Confirmed" covers the
+  supervised processes, those that carry the marker; a descendant that drops the marker from
+  its environment is not one of them, and an empty scan says nothing about it. Tests hold a
   launch inside admission and stop it there, kill the remote shell after admission and stop
-  what it admitted, and check that a stop it cannot confirm is reported so and signals nothing.
+  what it admitted, check that a stop it cannot confirm is reported so and signals nothing, and
+check records that are cut short, invalid, unreadable or cannot be written.
 - **The host stops it by itself.** `claude`'s input comes through a relay in the remote shell,
   which drops a heartbeat line ORCA sends every 5 seconds and records a beat for every line it
   reads. A separate watchdog, which forwards nothing, stops every process of the launch when no
@@ -166,9 +172,9 @@ default `bash -lc`) and `flock` (util-linux); anything else is refused before `c
   the remote shell stops what it left. None of this needs a connection back, and only marked
   processes are ever signalled: the relay and the watchdog end by themselves.
 - **ORCA confirms it.** Whenever a session ends (closed, cancelled while it opened, or its
-  connection lost), ORCA also runs the stop over a new SSH connection and checks that nothing
-  of the launch runs. A stop that cannot be confirmed (the host unreachable, or the lock not
-  free in time) is not
+  connection lost), ORCA also runs the stop over a new SSH connection and checks that no marked
+  process of the launch runs. A stop that cannot be confirmed (the host unreachable, the lock not
+  free in time, or its state record unreadable) is not
   reported as closure: `close()` throws and the session's termination is rejected with reason
   `remote-cleanup-unconfirmed`, so ORCA keeps the agent slot until it knows. The host's own
   stop is what remains.
