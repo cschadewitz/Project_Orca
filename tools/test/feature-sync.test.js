@@ -246,8 +246,16 @@ describe("tools/feature-sync.sh", () => {
     expect(attempt({ RULESET: ruleset({ enforcement: "evaluate" }) })).not.toContain(merge);
     // A bypass list the token cannot see is unverified, as is a ruleset that cannot be read.
     expect(attempt({ RULESET: ruleset({ bypass_actors: undefined }) })).not.toContain(merge);
+    expect(
+      attempt({ RULESET: ruleset({ bypass_actors: undefined, current_user_can_bypass: "always" }) }),
+    ).not.toContain(merge);
+    expect(
+      attempt({ RULESET: ruleset({ bypass_actors: undefined, current_user_can_bypass: "pull_requests_only" }) }),
+    ).not.toContain(merge);
     // The summary names why the candidate ruleset did not qualify.
-    expect(readFileSync(join(work, "summary"), "utf8")).toContain("ruleset 7 bypass list is not visible to this token");
+    expect(readFileSync(join(work, "summary"), "utf8")).toContain(
+      "ruleset 7 bypass list is not visible to this token and the token is not reported as never able to bypass",
+    );
     expect(attempt({ RULESET: "" })).not.toContain(merge);
     expect(readFileSync(join(work, "summary"), "utf8")).toContain("no active ruleset with no bypass actors");
     expect(readFileSync(join(work, "summary"), "utf8")).toContain("ruleset 7 could not be read");
@@ -262,6 +270,10 @@ describe("tools/feature-sync.sh", () => {
     expect(attempt({ FEATURE_REF: "b".repeat(40) })).not.toContain(merge);
     expect(readFileSync(join(work, "summary"), "utf8")).toContain("moved since sync #12 was checked");
     expect(attempt({})).toContain(merge);
+    // A token that cannot see the bypass list merges only when GitHub says it can never bypass.
+    expect(attempt({ RULESET: ruleset({ bypass_actors: undefined, current_user_can_bypass: "never" }) })).toContain(
+      merge,
+    );
   });
 
   it("reads a same-repository pull request's explicit false through the real filter", () => {
