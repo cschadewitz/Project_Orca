@@ -15,22 +15,27 @@ installs and keeps updated. ORCA does not bundle, update or configure it beyond 
 below, and you maintain nothing for it beyond Windows Update.
 
 If the OpenSSH Server is already installed, set to start automatically and running, this
-changes nothing, including its firewall rules, and says so. Otherwise it lists exactly what
+changes nothing, including its firewall rules, and says so (unless it set this machine up itself
+and a network adapter has been added since: then it offers to update its own adapter rule). Otherwise it lists exactly what
 it would change and asks first; anything but `y` changes nothing. Only the steps still needed,
 in this order:
 
 1. feature   Install the OpenSSH Server Windows feature (OpenSSH.Server), from Windows Update.
 2. firewall  Allow inbound SSH (TCP 22) over the Tailscale network adapter, with the rule
-             "ORCA: OpenSSH Server over Tailscale"; block inbound SSH from every address outside
-             Tailscale's (100.64.0.0/10 and fd7a:115c:a1e0::/48), with the rule
-             "ORCA: Block OpenSSH Server outside Tailscale"; and disable the rule the feature
-             adds for every network ("OpenSSH-Server-In-TCP").
-3. service   Check that SSH is then blocked from everywhere but Tailscale, and only then set the
+             "ORCA: OpenSSH Server over Tailscale"; block inbound SSH on every other network
+             adapter there is, with the rule "ORCA: Block OpenSSH Server on other network
+             adapters"; block it from every address outside Tailscale's (100.64.0.0/10 and
+             fd7a:115c:a1e0::/48) on any adapter, with the rule "ORCA: Block OpenSSH Server
+             outside Tailscale"; and disable the rule the feature adds for every network
+             ("OpenSSH-Server-In-TCP").
+3. service   Check that SSH is then blocked on every other adapter, and only then set the
              sshd service to start automatically and start it.
 
 A Windows Firewall block rule wins over every allow rule, local or a policy's, so other rules
-that allow inbound connections (Windows' own app rules, say) cannot open SSH elsewhere; they
-are listed, and left as they are. Before asking, it refuses, changing nothing, when that block
+that allow inbound connections (Windows' own app rules, say) cannot open SSH on another
+adapter; they are listed, and left as they are. An adapter added later is not named by the
+adapter rule until this runs again (the address rule still applies to it); run this again after
+adding one, and it updates its own rule. Before asking, it refuses, changing nothing, when that block
 would not hold: a Windows Firewall profile that is off or does not block inbound connections by
 default, a policy that turns local rules off (the ORCA rules would not apply), an enabled rule
 that lets SSH past block rules (OverrideBlockRules), a rule by one of its own names with another
@@ -58,6 +63,8 @@ $BlockDisplay = "ORCA: Block OpenSSH Server outside Tailscale"
 # Every address but Tailscale's: 100.64.0.0/10 and fd7a:115c:a1e0::/48.
 $OffTailnet = @("0.0.0.0-100.63.255.255", "100.128.0.0-255.255.255.255",
   "::-fd7a:115c:a1df:ffff:ffff:ffff:ffff:ffff", "fd7a:115c:a1e1::-ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff")
+$EdgeName = "ORCA-OpenSSH-Server-Block-Other-Adapters"
+$EdgeDisplay = "ORCA: Block OpenSSH Server on other network adapters"
 $BroadRule = "OpenSSH-Server-In-TCP"
 
 # -- what is there (read only) ------------------------------------------------------------------
@@ -146,8 +153,18 @@ function Read-OrcaFirewall {
     Allowing = Read-OrcaFirewallRules (Get-OrcaActiveRules @{ Direction = "Inbound"; Action = "Allow"; Enabled = "True" })
     Ours = @(Read-OrcaFirewallRules (Get-OrcaActiveRules @{ Name = $RuleName }))
     Block = @(Read-OrcaFirewallRules (Get-OrcaActiveRules @{ Name = $BlockName }))
+    Edge = @(Read-OrcaFirewallRules (Get-OrcaActiveRules @{ Name = $EdgeName }))
+    Adapters = Get-OrcaOtherAdapters
     Profiles = $profiles
   }
+}
+
+function Get-OrcaOtherAdapters {
+  # Every network interface but Tailscale's and loopback, connected or not: the ones SSH must not
+  # come in on. Read in full or not at all.
+  $names = @(Get-NetAdapter -ErrorAction Stop | ForEach-Object { [string]$_.Name }) +
+    @(Get-NetIPInterface -ErrorAction Stop | ForEach-Object { [string]$_.InterfaceAlias })
+  return @($names | Where-Object { $_ -and $_ -ne $Adapter -and $_ -notmatch '^Loopback Pseudo-Interface' } | Sort-Object -Unique)
 }
 
 function ConvertTo-OrcaAddressRanges([string[]]$addresses) {
@@ -227,6 +244,22 @@ function Test-OrcaBlockIsOurs($rule) {
   } catch { return $false }
 }
 
+function Measure-OrcaEdge($rules, [string[]]$adapters) {
+  # The rule that blocks SSH on every other adapter: "ok", "stale" (an adapter it does not name yet,
+  # which the firewall step adds), "wrong" (another scope), or "missing" (none, while one is needed).
+  if (-not $rules.Count) { if ($adapters.Count) { return "missing" } else { return "ok" } }
+  $rule = $rules[0]
+  if ($rules.Count -ne 1 -or -not ($rule.Enabled -and $rule.Direction -eq "Inbound" -and $rule.Action -eq "Block" -and $rule.Store -eq "Local" -and
+      $rule.Profile -eq "Any" -and $rule.Protocol -eq "TCP" -and $rule.LocalPort.Count -eq 1 -and $rule.LocalPort[0] -eq "22" -and
+      $rule.InterfaceType -eq "Any" -and (-not $rule.Program -or $rule.Program -eq "Any") -and -not $rule.Package -and
+      (-not $rule.Service -or $rule.Service -eq "Any") -and $rule.LocalAddress.Count -eq 1 -and $rule.LocalAddress[0] -eq "Any" -and
+      $rule.RemoteAddress.Count -eq 1 -and $rule.RemoteAddress[0] -eq "Any")) { return "wrong" }
+  # Never Tailscale's own adapter, nor every adapter (which would be Tailscale's too).
+  if (-not $rule.Interfaces.Count -or $rule.Interfaces -contains "Any" -or $rule.Interfaces -contains $Adapter) { return "wrong" }
+  if (@($adapters | Where-Object { $rule.Interfaces -notcontains $_ }).Count) { return "stale" }
+  return "ok"
+}
+
 function Measure-OrcaFirewall($firewall) {
   # What stands between sshd and every network but Tailscale's: nothing here changes anything.
   $one = {
@@ -245,6 +278,8 @@ function Measure-OrcaFirewall($firewall) {
   return [pscustomobject]@{
     Ours = & $one $firewall.Ours ${function:Test-OrcaRuleIsOurs}
     Block = & $one $firewall.Block ${function:Test-OrcaBlockIsOurs}
+    Edge = Measure-OrcaEdge @($firewall.Edge) @($firewall.Adapters)
+    Adapters = @($firewall.Adapters)
     Open = $open
     Local = $local
     # The feature's own every-network rule, which this may disable.
@@ -260,7 +295,7 @@ function Get-OrcaFirewallState {
   try {
     return Measure-OrcaFirewall (Read-OrcaFirewall)
   } catch {
-    return [pscustomobject]@{ Ours = "unknown"; Block = "unknown"; Open = @(); Local = @(); Broad = $false; Bypass = @(); Others = @(); Error = $_.Exception.Message }
+    return [pscustomobject]@{ Ours = "unknown"; Block = "unknown"; Edge = "unknown"; Adapters = @(); Open = @(); Local = @(); Broad = $false; Bypass = @(); Others = @(); Error = $_.Exception.Message }
   }
 }
 
@@ -332,6 +367,9 @@ function Get-OrcaFirewallRefusal($firewall) {
   if ($firewall.Block -eq "wrong") {
     return "The firewall rule `"$BlockDisplay`" ($BlockName) is there but does not block exactly inbound TCP 22 from every address outside Tailscale's. Remove it, then run this again."
   }
+  if ($firewall.Edge -eq "wrong") {
+    return "The firewall rule `"$EdgeDisplay`" ($EdgeName) is there but does not block exactly inbound TCP 22 on network adapters other than Tailscale's. Remove it, then run this again."
+  }
   if ($firewall.Open.Count) {
     return "Windows Firewall is off, or does not block inbound connections by default, for the $($firewall.Open -join ', ') profile(s), so SSH would be open on every network. Turn it on and block inbound by default, then run this again."
   }
@@ -358,6 +396,14 @@ function New-OrcaBlockRule([string]$name) {
     -Description "Added by orca-windows-ssh.ps1 (ORCA #1238): no SSH from addresses outside Tailscale's, whatever other rules allow."
 }
 
+function New-OrcaEdgeRule([string]$name, [string[]]$adapters) {
+  # Named adapters only: with none named, a rule would block every adapter, Tailscale's too.
+  if (-not $adapters.Count) { throw "no network adapters to block SSH on" }
+  $null = New-NetFirewallRule -PolicyStore PersistentStore -Name $name -DisplayName $EdgeDisplay -Direction Inbound -Action Block `
+    -Protocol TCP -LocalPort 22 -InterfaceAlias $adapters -Profile Any `
+    -Description "Added by orca-windows-ssh.ps1 (ORCA #1238): no SSH on network adapters other than Tailscale's, whatever other rules allow. Run it again after adding an adapter."
+}
+
 function Set-OrcaSshFirewall {
   # Changes are made to the local rules (PersistentStore) only, and checked in the effective policy.
   if (-not (Get-NetFirewallRule -Name $RuleName -PolicyStore PersistentStore -ErrorAction SilentlyContinue)) {
@@ -366,6 +412,13 @@ function Set-OrcaSshFirewall {
       -Description "Added by orca-windows-ssh.ps1 (ORCA #1238): SSH only over the Tailscale adapter."
   }
   if (-not (Get-NetFirewallRule -Name $BlockName -PolicyStore PersistentStore -ErrorAction SilentlyContinue)) { New-OrcaBlockRule $BlockName }
+  $adapters = Get-OrcaOtherAdapters
+  if ($adapters.Count) {
+    if (Get-NetFirewallRule -Name $EdgeName -PolicyStore PersistentStore -ErrorAction SilentlyContinue) {
+      # Its own rule, brought up to the adapters there are now.
+      $null = Set-NetFirewallRule -Name $EdgeName -PolicyStore PersistentStore -InterfaceAlias $adapters
+    } else { New-OrcaEdgeRule $EdgeName $adapters }
+  }
   # Added again by the feature when it is installed: disabled after that, every time.
   $broad = Get-NetFirewallRule -Name $BroadRule -PolicyStore PersistentStore -ErrorAction SilentlyContinue
   if ($broad -and [string]$broad.Enabled -eq "True") { $null = $broad | Disable-NetFirewallRule }
@@ -379,6 +432,7 @@ function Assert-OrcaSshTailnetOnly {
   if ($refusal) { throw $refusal }
   if ($firewall.Ours -ne "ok") { throw "the firewall rule `"$RuleDisplay`" is not in place" }
   if ($firewall.Block -ne "ok") { throw "the firewall rule `"$BlockDisplay`" is not in place" }
+  if ($firewall.Edge -ne "ok") { throw "the firewall rule `"$EdgeDisplay`" does not cover every network adapter but Tailscale's" }
   if ($firewall.Broad) { throw "the rule $BroadRule still allows SSH on every network" }
 }
 
@@ -395,7 +449,9 @@ function Read-OrcaConsent([string]$question) {
 
 function Invoke-OrcaWindowsSsh {
   $state = Get-OrcaSshState
-  if ($state.Installed -and $state.Automatic -and $state.Running) {
+  # Already on is left alone, unless it is this script's own setup with an adapter added since.
+  $ownStale = $state.Firewall.Ours -eq "ok" -and $state.Firewall.Edge -eq "stale"
+  if ($state.Installed -and $state.Automatic -and $state.Running -and -not $ownStale) {
     # Its firewall policy is the person's own: left as it is, and not called Tailscale-only.
     Write-Host "The OpenSSH Server is already on. Nothing was changed."
     return 0
@@ -428,13 +484,15 @@ function Invoke-OrcaWindowsSsh {
   # The firewall is set and checked on every run that starts sshd, before it starts.
   $firewall = @()
   if ($state.Firewall.Ours -ne "ok") { $firewall += "add the firewall rule `"$RuleDisplay`", which allows inbound SSH (TCP 22) only over the Tailscale adapter" }
-  if ($state.Firewall.Block -ne "ok") { $firewall += "add the firewall rule `"$BlockDisplay`", which blocks inbound SSH from every address outside Tailscale's (100.64.0.0/10 and fd7a:115c:a1e0::/48), whatever other rules allow" }
+  if ($state.Firewall.Edge -eq "missing") { $firewall += "add the firewall rule `"$EdgeDisplay`", which blocks inbound SSH on every network adapter but Tailscale's ($($state.Firewall.Adapters -join ', ')), whatever other rules allow" }
+  elseif ($state.Firewall.Edge -eq "stale") { $firewall += "update the firewall rule `"$EdgeDisplay`" to block inbound SSH on every network adapter but Tailscale's ($($state.Firewall.Adapters -join ', '))" }
+  if ($state.Firewall.Block -ne "ok") { $firewall += "add the firewall rule `"$BlockDisplay`", which also blocks inbound SSH from every address outside Tailscale's (100.64.0.0/10 and fd7a:115c:a1e0::/48), on any adapter" }
   if (-not $state.Installed) { $firewall += "disable the rule the feature adds for every network ($BroadRule)" }
   elseif ($state.Firewall.Broad) { $firewall += "disable the feature's rule that allows SSH on every network ($BroadRule)" }
   if ($firewall.Count) { $steps += , @(($firewall -join ", and "), "Set-OrcaSshFirewall") }
-  $steps += , @("check that SSH is blocked from everywhere but Tailscale, then set the sshd service to start automatically and start it", "Start-OrcaSshService")
+  $steps += , @("check that SSH is blocked on every other network adapter and from every address outside Tailscale's, then set the sshd service to start automatically and start it", "Start-OrcaSshService")
   if ($state.Firewall.Others.Count) {
-    Write-Host "These enabled firewall rules may allow inbound connections on other networks. They stay as they are; the ORCA block rule keeps SSH out of them: $($state.Firewall.Others -join '; ')."
+    Write-Host "These enabled firewall rules may allow inbound connections on other networks. They stay as they are; the ORCA block rules keep SSH out of them on other adapters: $($state.Firewall.Others -join '; ')."
   }
   Write-Host "To let ORCA reach this machine over your tailnet, this would, in order:"
   foreach ($step in $steps) { Write-Host "  - $($step[0].Substring(0, 1).ToUpper() + $step[0].Substring(1))." }
@@ -454,7 +512,7 @@ function Invoke-OrcaWindowsSsh {
       return 1
     }
   }
-  Write-Host "The OpenSSH Server is on, reachable over Tailscale only. Add this machine from ORCA: Add a machine, or orca-cli remote add you@this-machine --tailnet."
+  Write-Host "The OpenSSH Server is on. SSH is blocked on every network adapter but Tailscale's, and from every address outside Tailscale's; after adding a network adapter, run this again. Add this machine from ORCA: Add a machine, or orca-cli remote add you@this-machine --tailnet."
   return 0
 }
 

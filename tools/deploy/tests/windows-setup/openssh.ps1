@@ -30,12 +30,14 @@ function New-Rule([string]$name, [string]$protocol = "TCP", [string[]]$ports = @
 }
 $ours = New-Rule $RuleName -interfaces @("Tailscale")
 $block = New-Rule $BlockName -action "Block" -remote $OffTailnet
+$edge = New-Rule $EdgeName -action "Block" -interfaces @("Ethernet", "Wi-Fi")
 function New-Profile([string]$name, [bool]$enabled = $true, [string]$inbound = "Block", [string]$local = "NotConfigured") {
   return [pscustomobject]@{ Name = $name; Enabled = $enabled; DefaultInbound = $inbound; LocalRules = $local }
 }
 $on = @((New-Profile "Domain"), (New-Profile "Public" -local "True"))
-function Get-Measured([object[]]$allowing, [object[]]$mine = @($ours), [object[]]$profiles = $on, [object[]]$blocks = @($block)) {
-  return Measure-OrcaFirewall ([pscustomobject]@{ Allowing = $allowing; Ours = $mine; Block = $blocks; Profiles = $profiles })
+function Get-Measured([object[]]$allowing, [object[]]$mine = @($ours), [object[]]$profiles = $on, [object[]]$blocks = @($block),
+  [object[]]$edges = @($edge), [string[]]$adapters = @("Ethernet", "Wi-Fi")) {
+  return Measure-OrcaFirewall ([pscustomobject]@{ Allowing = $allowing; Ours = $mine; Block = $blocks; Edge = $edges; Adapters = $adapters; Profiles = $profiles })
 }
 
 try {
@@ -75,7 +77,45 @@ try {
       Remove-NetFirewallRule -Name $name -PolicyStore PersistentStore -ErrorAction SilentlyContinue
     }
     Assert (-not (Get-OrcaActiveRules @{ Name = $name }).Count) "the test's block rule is still there"
+
+    Check "the adapter rule, made on this machine for its adapters as the bootstrap makes it, reads back as covering them"
+    $adapters = Get-OrcaOtherAdapters
+    Microsoft.PowerShell.Utility\Write-Host "      adapters: $($adapters -join ', ')"
+    Assert ($adapters.Count -gt 0) "no network adapters found"
+    $name = "ORCA-test-edge-$([guid]::NewGuid().ToString('N'))"
+    try {
+      New-OrcaEdgeRule $name $adapters
+      $made = @(Read-OrcaFirewallRules (Get-OrcaActiveRules @{ Name = $name }))
+      Microsoft.PowerShell.Utility\Write-Host "      $(ConvertTo-Json -Compress $made)"
+      Assert ((Measure-OrcaEdge $made $adapters) -eq "ok") "the adapter rule as made does not cover this machine's adapters: $(ConvertTo-Json -Compress $made)"
+      Assert ((Measure-OrcaEdge $made @($adapters + "ORCA test adapter")) -eq "stale") "an adapter it does not name is taken as covered"
+    } finally {
+      Remove-NetFirewallRule -Name $name -PolicyStore PersistentStore -ErrorAction SilentlyContinue
+    }
+    Assert (-not (Get-OrcaActiveRules @{ Name = $name }).Count) "the test's adapter rule is still there"
+    $failed = ""
+    try { New-OrcaEdgeRule $name @() } catch { $failed = $_.Exception.Message }
+    Assert ($failed -like "*no network adapters*" -and -not (Get-OrcaActiveRules @{ Name = $name }).Count) "an adapter rule naming no adapter was made: $failed"
   }
+
+  Check "the adapter rule: every adapter but Tailscale's, named, and nothing else"
+  Assert ((Get-Measured @()).Edge -eq "ok") "the exact adapter rule is not ours"
+  Assert ((Get-Measured @() -adapters @("Ethernet")).Edge -eq "ok") "a rule naming an adapter since removed is not ours"
+  Assert ((Get-Measured @() -adapters @("Ethernet", "Wi-Fi", "vEthernet (Default Switch)")).Edge -eq "stale") "a new adapter is taken as covered"
+  Assert ((Get-Measured @() -edges @()).Edge -eq "missing") "no adapter rule is not missing"
+  Assert ((Get-Measured @() -edges @() -adapters @()).Edge -eq "ok") "no other adapter needs no rule"
+  foreach ($wrong in @(
+      (New-Rule $EdgeName -action "Block" -interfaces @("Ethernet", "Wi-Fi", "Tailscale")), (New-Rule $EdgeName -action "Block"),
+      (New-Rule $EdgeName -action "Block" -interfaces @()), (New-Rule $EdgeName -interfaces @("Ethernet", "Wi-Fi")),
+      (New-Rule $EdgeName -action "Block" -interfaces @("Ethernet", "Wi-Fi") -remote @("192.168.0.0/16")),
+      (New-Rule $EdgeName -action "Block" -interfaces @("Ethernet", "Wi-Fi") -ports @("2222")),
+      (New-Rule $EdgeName -action "Block" -interfaces @("Ethernet", "Wi-Fi") -profileName "Public"),
+      (New-Rule $EdgeName -action "Block" -interfaces @("Ethernet", "Wi-Fi") -enabled $false),
+      (New-Rule $EdgeName -action "Block" -interfaces @("Ethernet", "Wi-Fi") -store "GroupPolicy"),
+      (New-Rule $EdgeName -action "Block" -interfaces @("Ethernet", "Wi-Fi") -type "Wired"))) {
+    Assert ((Get-Measured @() -edges @($wrong)).Edge -eq "wrong") "an adapter rule by its name with another scope is taken as its own: $(ConvertTo-Json -Compress $wrong)"
+  }
+  Assert ((Get-Measured @() -edges @($edge, $edge)).Edge -eq "wrong") "two adapter rules by its name are taken as its own"
 
   Check "the block rule's scope: every spelling of exactly the addresses outside Tailscale's, and nothing else"
   Assert ((Get-Measured @()).Block -eq "ok") "the exact block rule is not ours"
@@ -181,7 +221,7 @@ try {
     [CmdletBinding()] param([string]$Name, [string]$Direction, [string]$Action, [string]$Enabled, [string]$PolicyStore)
     $null = $script:reads.Add("rule:$PolicyStore")
     $rules = @()
-    if ($script:mine) { $rules += New-CimRule $RuleName "Local"; $rules += New-CimRule $BlockName "Local" "Block" }
+    if ($script:mine) { $rules += New-CimRule $RuleName "Local"; $rules += New-CimRule $BlockName "Local" "Block"; $rules += New-CimRule $EdgeName "Local" "Block" }
     if ($PolicyStore -eq "ActiveStore" -and $script:policy) { $rules += New-CimRule "corp-ssh" "GroupPolicy" }
     if ($Name) { $rules = @($rules | Where-Object { $_.Name -eq $Name }) }
     if ($Action) { $rules = @($rules | Where-Object { $_.Action -eq $Action }) }
@@ -194,7 +234,9 @@ try {
     return [pscustomobject]@{ Name = "Domain"; Enabled = "True"; DefaultInboundAction = "Block"; AllowLocalFirewallRules = $(if ($script:nolocal) { "False" } else { "NotConfigured" }) }
   }
   function Get-NetFirewallPortFilter { param([Parameter(ValueFromPipeline = $true)]$rule) process { [pscustomobject]@{ InstanceID = $rule.InstanceID; Protocol = "TCP"; LocalPort = "22" } } }
-  function Get-NetFirewallInterfaceFilter { param([Parameter(ValueFromPipeline = $true)]$rule) process { [pscustomobject]@{ InstanceID = $rule.InstanceID; InterfaceAlias = $(if ($rule.Name -eq $RuleName) { "Tailscale" } else { "Any" }) } } }
+  function Get-NetFirewallInterfaceFilter { param([Parameter(ValueFromPipeline = $true)]$rule) process { [pscustomobject]@{ InstanceID = $rule.InstanceID; InterfaceAlias = $(if ($rule.Name -eq $RuleName) { "Tailscale" } elseif ($rule.Name -eq $EdgeName) { "Ethernet" } else { "Any" }) } } }
+  function Get-NetAdapter { [CmdletBinding()] param([string]$Name) [pscustomobject]@{ Name = "Tailscale" } }
+  function Get-NetIPInterface { [CmdletBinding()] param() @([pscustomobject]@{ InterfaceAlias = "Ethernet" }, [pscustomobject]@{ InterfaceAlias = "Loopback Pseudo-Interface 1" }, [pscustomobject]@{ InterfaceAlias = "Tailscale" }) }
   function Get-NetFirewallApplicationFilter { param([Parameter(ValueFromPipeline = $true)]$rule) process { if (-not $script:lost) { [pscustomobject]@{ InstanceID = $rule.InstanceID; Program = "Any"; Package = "" } } } }
   function Get-NetFirewallServiceFilter { param([Parameter(ValueFromPipeline = $true)]$rule) process { [pscustomobject]@{ InstanceID = $rule.InstanceID; Service = "Any" } } }
   function Get-NetFirewallAddressFilter { param([Parameter(ValueFromPipeline = $true)]$rule) process { [pscustomobject]@{ InstanceID = $rule.InstanceID; LocalAddress = "Any"; RemoteAddress = $(if ($rule.Name -eq $BlockName) { $OffTailnet } else { "Any" }) } } }
@@ -202,7 +244,7 @@ try {
   function Get-NetFirewallSecurityFilter { param([Parameter(ValueFromPipeline = $true)]$rule) process { [pscustomobject]@{ InstanceID = $rule.InstanceID; OverrideBlockRules = $script:override -and $rule.Name -eq "corp-ssh" } } }
   $script:lost = $false
   $measured = Measure-OrcaFirewall (Read-OrcaFirewall)
-  Assert ($measured.Ours -eq "ok" -and $measured.Block -eq "ok" -and -not $measured.Others.Count -and -not $measured.Open.Count -and -not $measured.Local.Count) "the local rules alone: $(ConvertTo-Json -Compress $measured)"
+  Assert ($measured.Ours -eq "ok" -and $measured.Block -eq "ok" -and $measured.Edge -eq "ok" -and ($measured.Adapters -join ",") -eq "Ethernet" -and -not $measured.Others.Count -and -not $measured.Open.Count -and -not $measured.Local.Count) "the local rules alone: $(ConvertTo-Json -Compress $measured)"
   Assert (@($script:reads | Where-Object { $_ -notlike "*:ActiveStore" }).Count -eq 0) "read from another store: $($script:reads -join ', ')"
   $script:policy = $true
   $measured = Measure-OrcaFirewall (Read-OrcaFirewall)
@@ -224,7 +266,6 @@ try {
   # policy's plain allow rule, which the block rule overrides, does not.
   function Get-Service { [CmdletBinding()] param([string]$Name) [pscustomobject]@{ StartType = "Manual"; Status = "Stopped" } }
   function Get-WindowsCapability { [CmdletBinding()] param([switch]$Online, [string]$Name) [pscustomobject]@{ State = "Installed" } }
-  function Get-NetAdapter { [CmdletBinding()] param([string]$Name) [pscustomobject]@{ Name = "Tailscale" } }
   function Test-OrcaElevated { return $true }
   function Read-OrcaConsent([string]$question) { return "y" }
   function Read-OrcaSshConfig { return $null }
@@ -235,7 +276,7 @@ try {
     $script:override = $case.Override; $script:nolocal = $false
     $script:reads.Clear()
     $state = Get-OrcaSshState
-    Assert ($state.Firewall.Ours -eq "missing" -and $state.Firewall.Block -eq "missing" -and -not $state.Firewall.Others.Count) "before the run: $(ConvertTo-Json -Compress $state.Firewall)"
+    Assert ($state.Firewall.Ours -eq "missing" -and $state.Firewall.Block -eq "missing" -and $state.Firewall.Edge -eq "missing" -and -not $state.Firewall.Others.Count) "before the run: $(ConvertTo-Json -Compress $state.Firewall)"
     # Local rules are turned off only once the run is under way.
     $script:later = $case.NoLocal
     $code = @(Invoke-OrcaWindowsSsh)[-1]
@@ -245,7 +286,7 @@ try {
   }
   foreach ($name in @("Get-NetFirewallRule", "Get-NetFirewallProfile", "Get-NetFirewallPortFilter", "Get-NetFirewallInterfaceFilter",
       "Get-NetFirewallApplicationFilter", "Get-NetFirewallServiceFilter", "Get-NetFirewallAddressFilter", "Get-NetFirewallInterfaceTypeFilter",
-      "Get-NetFirewallSecurityFilter", "Get-Service", "Get-WindowsCapability", "Get-NetAdapter",
+      "Get-NetFirewallSecurityFilter", "Get-Service", "Get-WindowsCapability", "Get-NetAdapter", "Get-NetIPInterface",
       "Test-OrcaElevated", "Read-OrcaConsent", "Read-OrcaSshConfig", "Set-OrcaSshFirewall", "Start-OrcaSshService")) {
     Remove-Item -LiteralPath "function:$name"
   }
@@ -268,7 +309,7 @@ try {
   function Set-OrcaSshFirewall {
     $null = $script:changed.Add("firewall")
     if ($script:fail -eq "firewall") { throw "the firewall refused the rule" }
-    $script:state.Firewall.Ours = "ok"; $script:state.Firewall.Block = "ok"; $script:state.Firewall.Broad = $false
+    $script:state.Firewall.Ours = "ok"; $script:state.Firewall.Block = "ok"; $script:state.Firewall.Edge = "ok"; $script:state.Firewall.Broad = $false
     if ($script:fail -eq "appeared") { $script:state.Firewall.Bypass = @("rule ipsec (ipsec)") }
     if ($script:fail -eq "port") { $script:state.Listen.Problem = "sshd is set to listen on port 2222" }
   }
@@ -276,12 +317,13 @@ try {
 
   function New-State([bool]$installed, [bool]$automatic, [bool]$running, [string]$ours = "missing", [bool]$broad = $false,
     [string[]]$others = @(), [string[]]$open = @(), [bool]$tailscale = $true, [bool]$available = $true, [string]$listen = "",
-    [string]$block = "", [string[]]$local = @(), [string[]]$bypass = @()) {
-    # Both ORCA rules alike, unless told otherwise.
+    [string]$block = "", [string[]]$local = @(), [string[]]$bypass = @(), [string]$edge = "") {
+    # The ORCA rules alike, unless told otherwise.
     if (-not $block) { $block = $ours }
+    if (-not $edge) { $edge = $ours }
     return [pscustomobject]@{
       Available = $available; Installed = $installed; Automatic = $automatic; Running = $running; Tailscale = $tailscale
-      Firewall = [pscustomobject]@{ Ours = $ours; Block = $block; Open = $open; Local = $local; Broad = $broad; Bypass = $bypass; Others = $others }
+      Firewall = [pscustomobject]@{ Ours = $ours; Block = $block; Edge = $edge; Adapters = @("Ethernet", "Wi-Fi"); Open = $open; Local = $local; Broad = $broad; Bypass = $bypass; Others = $others }
       Listen = [pscustomobject]@{ Ports = $(if ($listen) { @() } else { @(22) }); Problem = $listen }
     }
   }
@@ -305,6 +347,13 @@ try {
   Assert ($script:asked -eq 0 -and $script:changed.Count -eq 0) "it asked or changed something"
   Assert ((& $all) -eq "The OpenSSH Server is already on. Nothing was changed.") "it said: $(& $all)"
 
+  Check "already on with its own rules, and an adapter added since: its adapter rule is updated, asked first"
+  $code = Invoke-Case (New-State $true $true $true -ours "ok" -edge "stale") "y"
+  Assert ($code -eq 0) "exit $code"
+  Assert ($script:asked -eq 1 -and ($script:changed -join ",") -eq "firewall,service") "asked $script:asked, changed $($script:changed -join ',')"
+  Assert ((& $all) -like "*Update the firewall rule `"ORCA: Block OpenSSH Server on other network adapters`"*(Ethernet, Wi-Fi)*") "it said: $(& $all)"
+  & $nothing (Invoke-Case (New-State $true $true $true -ours "ok" -edge "stale") "y" -elevated $false) "administrator PowerShell"
+
   Check "not on: refused before asking, nothing changed, when it is not elevated, has no Tailscale or no feature"
   & $nothing (Invoke-Case (New-State $false $false $false) "y" -elevated $false) "administrator PowerShell"
   & $nothing (Invoke-Case (New-State $false $false $false -tailscale $false) "y") "Tailscale"
@@ -313,6 +362,7 @@ try {
   Check "a firewall where the block rule would not hold is refused before asking, and nothing changed"
   & $nothing (Invoke-Case (New-State $true $false $false -ours "wrong" -block "ok") "y") "not exactly inbound TCP 22 over the Tailscale adapter"
   & $nothing (Invoke-Case (New-State $true $false $false -ours "ok" -block "wrong") "y") "does not block exactly inbound TCP 22 from every address outside Tailscale's"
+  & $nothing (Invoke-Case (New-State $true $false $false -ours "ok" -edge "wrong") "y") "does not block exactly inbound TCP 22 on network adapters other than Tailscale's"
   & $nothing (Invoke-Case (New-State $false $false $false -open @("Public")) "y") "for the Public profile"
   & $nothing (Invoke-Case (New-State $false $false $false -local @("Domain")) "y") "turns off local firewall rules for the Domain profile"
   & $nothing (Invoke-Case (New-State $true $false $false -bypass @("rule ipsec (ipsec)", "rule gpo (gpo, set by GroupPolicy)")) "y") "(OverrideBlockRules) and allow SSH: rule ipsec (ipsec); rule gpo (gpo, set by GroupPolicy). This changes no rule it did not make"
@@ -327,7 +377,7 @@ try {
     $code = Invoke-Case (New-State $false $false $false) $answer
     Assert ($code -eq 2 -and $script:asked -eq 1 -and $script:changed.Count -eq 0) "answer '$answer': exit $code, asked $script:asked, changed $($script:changed -join ', ')"
     $text = & $all
-    Assert ($text -like "*Install the OpenSSH Server Windows feature*Add the firewall rule*only over the Tailscale adapter*, and add the firewall rule*ORCA: Block OpenSSH Server outside Tailscale*from every address outside Tailscale's (100.64.0.0/10 and fd7a:115c:a1e0::/48)*disable the rule the feature adds for every network (OpenSSH-Server-In-TCP)*Check that SSH is blocked from everywhere but Tailscale, then set the sshd service to start automatically and start it*") "the steps are not all listed in order: $text"
+    Assert ($text -like "*Install the OpenSSH Server Windows feature*Add the firewall rule*only over the Tailscale adapter*, and add the firewall rule*ORCA: Block OpenSSH Server on other network adapters*on every network adapter but Tailscale's (Ethernet, Wi-Fi)*, and add the firewall rule*ORCA: Block OpenSSH Server outside Tailscale*from every address outside Tailscale's (100.64.0.0/10 and fd7a:115c:a1e0::/48)*disable the rule the feature adds for every network (OpenSSH-Server-In-TCP)*Check that SSH is blocked on every other network adapter and from every address outside Tailscale's, then set the sshd service to start automatically and start it*") "the steps are not all listed in order: $text"
     Assert ($text -like "*Windows Update maintains it*") "it does not say who maintains it: $text"
     Assert ($script:said[-1] -eq "Nothing was changed.") "the last line is '$($script:said[-1])'"
   }
@@ -337,7 +387,7 @@ try {
     $code = Invoke-Case (New-State $false $false $false) $answer
     Assert ($code -eq 0) "answer '$answer': exit $code"
     Assert (($script:changed -join ",") -eq "feature,firewall,service") "answer '$answer': changed $($script:changed -join ',')"
-    Assert ($script:said[-1] -like "The OpenSSH Server is on, reachable over Tailscale only.*") "the last line is '$($script:said[-1])'"
+    Assert ($script:said[-1] -like "The OpenSSH Server is on. SSH is blocked on every network adapter but Tailscale's*run this again*") "the last line is '$($script:said[-1])'"
   }
 
   Check "installed but stopped, behind the feature's every-network rule: the firewall is set before sshd starts"
@@ -363,7 +413,7 @@ try {
   $code = Invoke-Case (New-State $true $false $false -others @("rule store-app (store-app)", "rule gpo (gpo, set by GroupPolicy)")) "y"
   Assert ($code -eq 0) "exit $code"
   Assert (($script:changed -join ",") -eq "firewall,service") "changed $($script:changed -join ',')"
-  Assert ((& $all) -like "*They stay as they are; the ORCA block rule keeps SSH out of them: rule store-app (store-app); rule gpo (gpo, set by GroupPolicy).*To let ORCA reach*") "it said: $(& $all)"
+  Assert ((& $all) -like "*They stay as they are; the ORCA block rules keep SSH out of them on other adapters: rule store-app (store-app); rule gpo (gpo, set by GroupPolicy).*To let ORCA reach*") "it said: $(& $all)"
 
   Check "only the block rule missing: only it is added, before sshd starts"
   $code = Invoke-Case (New-State $true $false $false -ours "ok" -block "missing") "y"
@@ -376,13 +426,13 @@ try {
   $code = Invoke-Case (New-State $true $false $false) "y" -fail "appeared"
   Assert ($code -eq 1) "exit $code"
   Assert (($script:changed -join ",") -eq "firewall") "changed $($script:changed -join ',')"
-  Assert ((& $all) -like "*Could not check that SSH is blocked from everywhere but Tailscale*(OverrideBlockRules) and allow SSH: rule ipsec (ipsec)*sshd was not started by this run*") "it said: $(& $all)"
+  Assert ((& $all) -like "*Could not check that SSH is blocked on every other network adapter*(OverrideBlockRules) and allow SSH: rule ipsec (ipsec)*sshd was not started by this run*") "it said: $(& $all)"
 
   Check "a listener changed to another port before the start is caught by the check, and sshd is not started"
   $code = Invoke-Case (New-State $true $false $false) "y" -fail "port"
   Assert ($code -eq 1) "exit $code"
   Assert (($script:changed -join ",") -eq "firewall") "changed $($script:changed -join ',')"
-  Assert ((& $all) -like "*Could not check that SSH is blocked from everywhere but Tailscale*port 2222*sshd was not started by this run*") "it said: $(& $all)"
+  Assert ((& $all) -like "*Could not check that SSH is blocked on every other network adapter*port 2222*sshd was not started by this run*") "it said: $(& $all)"
 
   Check "a rerun after a partial failure picks up where it stopped, and checks again before starting sshd"
   $state = New-State $false $false $false
@@ -393,7 +443,7 @@ try {
 
   Check "a service that fails to start says so"
   $code = Invoke-Case (New-State $true $false $false -ours "ok") "y" -fail "service"
-  Assert ($code -eq 1 -and (& $all) -like "*Could not check that SSH is blocked from everywhere but Tailscale, then set the sshd service*did not start*") "exit $code, said: $(& $all)"
+  Assert ($code -eq 1 -and (& $all) -like "*Could not check that SSH is blocked on every other network adapter*, then set the sshd service*did not start*") "exit $code, said: $(& $all)"
 
   Microsoft.PowerShell.Utility\Write-Host "  all $checks OpenSSH bootstrap checks passed"
 } catch {

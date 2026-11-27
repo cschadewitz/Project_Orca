@@ -368,21 +368,26 @@ way with `powershell -NoProfile -ExecutionPolicy Bypass -File orca-windows-ssh.p
 
 - If the OpenSSH Server is already installed, starts automatically and is running, it changes
   nothing, its firewall rules included, and says so. It does not then claim SSH is limited to
-  Tailscale: that policy is yours.
+  Tailscale: that policy is yours. The one exception is a machine it set up itself whose
+  adapter rule no longer names every adapter; then it offers to update that rule, as below.
 - Otherwise it lists exactly what it would change and asks first. Anything but `y` changes
   nothing ("Nothing was changed"). The changes, only those still needed, in this order:
   1. Install the OpenSSH Server Windows feature from Windows Update. Its `sshd` service stays
      stopped.
   2. Allow inbound SSH (TCP 22) over the Tailscale adapter, with the firewall rule
-     "ORCA: OpenSSH Server over Tailscale"; block inbound SSH from every address outside
-     Tailscale's (`100.64.0.0/10` and `fd7a:115c:a1e0::/48`), with the rule
-     "ORCA: Block OpenSSH Server outside Tailscale"; and disable the rule the feature adds for
-     every network (`OpenSSH-Server-In-TCP`).
-  3. Check that SSH is then blocked from everywhere but Tailscale, and only then set `sshd` to
-     start automatically and start it.
+     "ORCA: OpenSSH Server over Tailscale". Block inbound SSH on every other network adapter the
+     machine has, named one by one, with the rule "ORCA: Block OpenSSH Server on other network
+     adapters". Block it from every address outside Tailscale's (`100.64.0.0/10` and
+     `fd7a:115c:a1e0::/48`) on any adapter, with the rule "ORCA: Block OpenSSH Server outside
+     Tailscale". Disable the rule the feature adds for every network (`OpenSSH-Server-In-TCP`).
+  3. Check that SSH is then blocked on every other adapter, and only then set `sshd` to start
+     automatically and start it.
 - A Windows Firewall block rule wins over every allow rule, so other rules that allow inbound
-  connections, such as the ones Windows adds for its own apps, cannot open SSH on another network.
-  It lists them and leaves them as they are.
+  connections, such as the ones Windows adds for its own apps, cannot open SSH on another
+  adapter. It lists them and leaves them as they are.
+- A network adapter added later (a new VPN, say) is not named by the adapter rule until you run
+  the line again; until then only the address rule covers it. Run it again after adding one: on a
+  machine it set up, it updates its own rule, after asking.
 - It refuses, changing nothing, outside an administrator session, without the Tailscale
   adapter, on a Windows too old to have the feature (before Windows 10 1809 or Windows Server
   2019), or when the block would not hold: a firewall profile that is off or does not block
