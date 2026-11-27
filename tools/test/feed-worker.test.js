@@ -197,7 +197,7 @@ describe("payload files", () => {
       // A snapshot from before the rename, which only ever has the old name (the fixtures
       // above follow the rename, so this one is what keeps the two names apart).
       "0.8.1/complete.json": '{"format":1,"version":"0.8.1"}',
-      "0.8.1/ORCA-0.8.1-win-x64.exe": "orca-0.8.1", // rename-keep: a snapshot from before the rename
+      "0.8.1/ORCA-0.8.1-win-x64.exe": "pre-rename", // rename-keep: a snapshot from before the rename
     });
     for (const [path, body] of [
       ["/Orrery-0.9.0-win-x64.exe", "orrery-x64"],
@@ -218,7 +218,7 @@ describe("payload files", () => {
     // The old name still works beside it, and neither name reaches a file under the other.
     expect(await (await handle(get("/ORCA-0.7.0-win-x64.exe", { token: TOKENS.stable }), e)).text()).toBe("0123456789");
     const before = "/ORCA-0.8.1-win-x64.exe"; // rename-keep: the old name of a pre-rename snapshot
-    expect(await (await handle(get(before, { token: TOKENS.stable }), e)).text()).toBe("orca-0.8.1");
+    expect(await (await handle(get(before, { token: TOKENS.stable }), e)).text()).toBe("pre-rename");
     for (const path of [
       "/ORCA-0.9.0-win-x64.exe", // rename-keep: the old name never reaches a renamed snapshot
       "/Orrery-0.8.1-win-x64.exe",
@@ -474,7 +474,7 @@ describe("server bundle channel (#877)", () => {
       "server/0.9.0/complete.json": JSON.stringify({ format: 1, version: "0.9.0", platform: "linux-x64" }),
       // A bundle from before the rename, which only ever has the old name.
       "server/0.8.1/complete.json": JSON.stringify({ format: 1, version: "0.8.1", platform: "linux-x64" }),
-      "server/0.8.1/orca-server-0.8.1-linux-x64.tar.xz": "orca archive", // rename-keep: a pre-rename bundle
+      "server/0.8.1/orca-server-0.8.1-linux-x64.tar.xz": "pre-rename archive", // rename-keep: a pre-rename bundle
     });
     for (const [suffix, body] of [
       ["tar.xz", "orrery archive"],
@@ -496,7 +496,7 @@ describe("server bundle channel (#877)", () => {
       (await handle(get("/server/orca-server-0.8.0-rc.1-linux-x64.tar.xz", { token: SERVER_TOKEN }), e)).status,
     ).toBe(200);
     const before = "/server/orca-server-0.8.1-linux-x64.tar.xz"; // rename-keep: a pre-rename bundle's old name
-    expect(await (await handle(get(before, { token: SERVER_TOKEN }), e)).text()).toBe("orca archive");
+    expect(await (await handle(get(before, { token: SERVER_TOKEN }), e)).text()).toBe("pre-rename archive");
     for (const path of [
       "/server/orca-server-0.9.0-linux-x64.tar.xz", // rename-keep: the old name never reaches a renamed bundle
       "/server/orrery-server-0.8.1-linux-x64.tar.xz",
