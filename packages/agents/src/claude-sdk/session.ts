@@ -448,15 +448,21 @@ export async function openClaudeSdkSession(options: ClaudeSdkSessionOptions): Pr
     }, cancelGraceMs);
   };
 
-  // An answerer that failed fails the live turn it was asked in, as on the ACP route.
+  // An answerer that failed fails the live turn it was asked in, as on the ACP route, and the
+  // session is retired with it: Claude's turn has not ended, and whatever it sends later must
+  // never be taken for the next prompt's (#1306 review).
   failAsk = (turnId, error) => {
     const turn = activeTurn;
     if (!turn || turn.id !== turnId) return;
+    ended = new OrcaError(
+      "AGENT_TRANSPORT",
+      `agent ${options.agent.id}: the session was stopped after its permission answerer failed`,
+    );
     settle(
       turn,
       error instanceof Error ? error : new OrcaError("INTERNAL", "permission callback failed", {}, { cause: error }),
     );
-    void q.interrupt().catch(() => undefined);
+    void terminate();
   };
 
   return {

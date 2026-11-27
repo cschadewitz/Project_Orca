@@ -26,7 +26,7 @@
 import { randomUUID } from "node:crypto";
 import type * as acp from "@agentclientprotocol/sdk";
 import type { CanUseTool, HookCallback, HookJSONOutput } from "@anthropic-ai/claude-agent-sdk";
-import type { ConfiguredPermissionPolicy, JudgedDecision, Logger } from "@orca/core";
+import type { ConfiguredPermissionPolicy, JudgedDecision, Logger, PermissionPolicy } from "@orca/core";
 import type { PermissionInvocation } from "../acp-session.js";
 import { claudeToolPolicyCall } from "../claude-pre-tool-hook.js";
 import {
@@ -91,6 +91,14 @@ export interface ClaudeSdkPermissionBridgeOptions {
   parentOf: (toolUseId: string) => string | undefined;
   /** An answerer that failed: the turn is failed with it, as on the ACP route. */
   onAskFailed?: ((turnId: string, error: unknown) => void) | undefined;
+  /**
+   * How long reading and evaluating the policy may take before the call is denied: well inside
+   * the SDK's own callback timeout, so ORCA's denial is the answer Claude gets. A person's
+   * answer is not bounded by it.
+   */
+  decisionTimeoutMs?: number | undefined;
+  /** Reads the effective policy; the agent's rules over `permissionFiles` when left out (tests replace it). */
+  loadPolicy?: (() => Promise<PermissionPolicy>) | undefined;
   logger: Logger;
 }
 
@@ -109,14 +117,20 @@ export function claudeSdkPermissionBridge(o: ClaudeSdkPermissionBridgeOptions): 
   };
   const agent = { id: o.agent.id, permissions: o.agent.permissions ?? { rules: [] } };
   const warned = new Set<string>();
+  const decisionTimeoutMs = o.decisionTimeoutMs ?? CLAUDE_SDK_DECISION_TIMEOUT_MS;
+  // A policy that cannot be read in time decides nothing: the caller denies (#1306 review).
   const policy = () =>
-    loadEffectivePermissionPolicy(agent, o.permissionFiles ?? [], (file) => {
-      if (warned.has(file)) return;
-      warned.add(file);
-      o.logger.warn("permission sidecar unreadable; asking instead of allowing anything it could have refused", {
-        file,
-      });
-    });
+    bounded(
+      o.loadPolicy?.() ??
+        loadEffectivePermissionPolicy(agent, o.permissionFiles ?? [], (file) => {
+          if (warned.has(file)) return;
+          warned.add(file);
+          o.logger.warn("permission sidecar unreadable; asking instead of allowing anything it could have refused", {
+            file,
+          });
+        }),
+      decisionTimeoutMs,
+    );
   const record = (call: PolicyCall, toolUseId: string | undefined, decision: string, rule?: PermissionRuleRecord) =>
     o.onPermission?.({
       ...(toolUseId ? { toolCallId: toolUseId } : {}),
@@ -133,7 +147,18 @@ export function claudeSdkPermissionBridge(o: ClaudeSdkPermissionBridgeOptions): 
     hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason },
   });
 
-  const preToolUse: HookCallback = async (hookInput) => {
+  // Every failure on the way to a verdict is an explicit deny: a rejected callback is not one
+  // (#1306 review), and nothing here relies on how the SDK treats it.
+  const preToolUse: HookCallback = async (hookInput, toolUseId, options) => {
+    try {
+      return await gate(hookInput, toolUseId, options);
+    } catch (error) {
+      o.logger.warn("ORCA could not decide a Claude tool call; denying it", { error: errorName(error) });
+      return deny(CLAUDE_SDK_DENIALS.failed);
+    }
+  };
+
+  const gate: HookCallback = async (hookInput) => {
     if (hookInput.hook_event_name !== "PreToolUse") return {};
     const toolName = hookInput.tool_name;
     if (STATE_ONLY_TOOLS.has(toolName)) return {};
@@ -173,6 +198,15 @@ export function claudeSdkPermissionBridge(o: ClaudeSdkPermissionBridgeOptions): 
   };
 
   const canUseTool: CanUseTool = async (toolName, toolInput, ctx) => {
+    try {
+      return await answer(toolName, toolInput, ctx);
+    } catch (error) {
+      o.logger.warn("ORCA could not answer a Claude permission ask; denying it", { error: errorName(error) });
+      return { behavior: "deny", message: CLAUDE_SDK_DENIALS.failed, toolUseID: ctx.toolUseID };
+    }
+  };
+
+  const answer: CanUseTool = async (toolName, toolInput, ctx) => {
     const toolUseId = ctx.toolUseID;
     const parent = o.parentOf(toolUseId);
     const reason = claudeLabel(ctx.decisionReason, MAX_CONTEXT);
@@ -252,6 +286,24 @@ export function claudeSdkPermissionBridge(o: ClaudeSdkPermissionBridgeOptions): 
   };
 
   return { preToolUse, canUseTool };
+}
+
+/** The default for `decisionTimeoutMs`: the SDK waits far longer for a callback. */
+export const CLAUDE_SDK_DECISION_TIMEOUT_MS = 10_000;
+
+/** `p`, or a rejection once `ms` pass. */
+function bounded<T>(p: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    p,
+    new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("the permission policy was not read in time")), ms);
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
+function errorName(e: unknown): string {
+  return e instanceof Error ? e.name : typeof e;
 }
 
 function ruleOf(explained: ReturnType<typeof explainPermission>): PermissionRuleRecord {

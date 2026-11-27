@@ -15,7 +15,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type * as acp from "@agentclientprotocol/sdk";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { silentLogger } from "@orca/core";
+import { silentLogger, type PermissionPolicy } from "@orca/core";
 import {
   CLAUDE_SDK_DENIALS,
   claudeSdkPermissionBridge,
@@ -321,10 +321,97 @@ describe("ORCA answers Claude's permission asks (#1122)", () => {
     expect(people.asked).toHaveLength(0);
   });
 
-  it("fails the turn when the answerer fails, as the ACP route does", async () => {
+  it("fails the turn when the answerer fails, and retires the session so nothing late is taken for the next turn", async () => {
     const session = await open({
       askPermission: () => Promise.reject(new Error("the human-input store is gone")),
     });
     await expect(session.prompt(`call ${JSON.stringify(fetchCall)}`)).rejects.toThrow(/human-input store is gone/);
+    // Claude's own turn never ended: the session takes no further prompt that could be handed its result.
+    await expect(session.prompt("hello")).rejects.toThrow(/stopped after its permission answerer failed|ended/);
+    await session.terminated;
+  });
+
+  describe("every failure on the way to a verdict is an explicit deny (#1306 review)", () => {
+    const turn = { id: "turn-1", signal: new AbortController().signal };
+    const bridgeWith = (loadPolicy: () => Promise<PermissionPolicy>, extra: Record<string, unknown> = {}) =>
+      claudeSdkPermissionBridge({
+        agent: { id: "claude-sdk" },
+        sessionId: "sess_x",
+        cwd: ws,
+        liveTurn: () => turn,
+        parentOf: () => undefined,
+        loadPolicy,
+        decisionTimeoutMs: 100,
+        logger: silentLogger,
+        ...extra,
+      });
+    const hook = (b: ReturnType<typeof claudeSdkPermissionBridge>) =>
+      b.preToolUse(
+        {
+          hook_event_name: "PreToolUse",
+          tool_name: "WebFetch",
+          tool_input: fetchCall.input,
+          tool_use_id: "t1",
+        } as never,
+        "t1",
+        { signal: new AbortController().signal },
+      );
+    const ask = (b: ReturnType<typeof claudeSdkPermissionBridge>) =>
+      b.canUseTool("WebFetch", fetchCall.input, { signal: new AbortController().signal, toolUseID: "t1" } as never);
+    const failedHook = {
+      hookSpecificOutput: { permissionDecision: "deny", permissionDecisionReason: CLAUDE_SDK_DENIALS.failed },
+    };
+    const failedAsk = { behavior: "deny", message: CLAUDE_SDK_DENIALS.failed };
+
+    it("a policy read that throws", async () => {
+      const b = bridgeWith(() => Promise.reject(new Error("disk gone")));
+      expect(await hook(b)).toMatchObject(failedHook);
+      expect(await ask(b)).toMatchObject(failedAsk);
+    });
+
+    it("a policy read that never ends, well inside the SDK's own timeout", async () => {
+      const b = bridgeWith(() => new Promise<PermissionPolicy>(() => undefined));
+      const started = Date.now();
+      expect(await hook(b)).toMatchObject(failedHook);
+      expect(await ask(b)).toMatchObject(failedAsk);
+      expect(Date.now() - started).toBeLessThan(5_000);
+    });
+
+    it("the read again after an allow, before Claude is told yes", async () => {
+      let reads = 0;
+      const allowFetch: PermissionPolicy = { default: "ask", rules: [{ match: { kind: "fetch" }, decision: "allow" }] };
+      const b = bridgeWith(() => (++reads === 1 ? Promise.resolve(allowFetch) : Promise.reject(new Error("gone"))));
+      expect(await ask(b)).toMatchObject(failedAsk);
+      expect(reads).toBe(2);
+    });
+
+    it("a tool input the mapping cannot read", async () => {
+      const b = bridgeWith(() => Promise.resolve({ default: "allow", rules: [] }));
+      const poisoned = new Proxy(
+        {},
+        {
+          get: () => {
+            throw new Error("no");
+          },
+          ownKeys: () => {
+            throw new Error("no");
+          },
+        },
+      );
+      expect(
+        await b.preToolUse(
+          { hook_event_name: "PreToolUse", tool_name: "Read", tool_input: poisoned, tool_use_id: "t1" } as never,
+          "t1",
+          { signal: new AbortController().signal },
+        ),
+      ).toMatchObject(failedHook);
+      expect(
+        await b.canUseTool(
+          "Read",
+          poisoned as never,
+          { signal: new AbortController().signal, toolUseID: "t1" } as never,
+        ),
+      ).toMatchObject(failedAsk);
+    });
   });
 });
