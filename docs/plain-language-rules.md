@@ -81,6 +81,13 @@ ORCA has not verified that the judge's decisions or advice reach you in a Codex 
 
 Opting Codex in to the hook is not evidence that the judge is available for it. ORCA adds no other route and loosens no approval to fill this gap.
 
+## Claude through the Claude Agent SDK
+
+On the experimental `driver: claude-agent-sdk` route (held on its feature branch) the judge is
+not asked. Claude reads files itself there, so there is no read ORCA performs for the judge to
+allow, and every call your rules ask about goes to you. See
+[agents/claude-agent-sdk.md](agents/claude-agent-sdk.md).
+
 ## Turning it off
 
 Set `review.plainRules.enabled: false`, or remove it. New runs get no judge and nothing is sent; a run already going keeps the settings it started with, and stops getting a judge for new sessions as soon as its settings no longer match the active configuration. To stop sends for good, also revoke every credential that carries the disclosure grant (`orca auth list`, then `orca auth revoke <credentialId>`). Issuing another credential without `--judge-disclosure` does not take the grant away from one that is still valid.

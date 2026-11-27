@@ -1195,7 +1195,12 @@ export const AgentSpecSchema = z
      * How ORCA drives this agent's process (#1118): `acp` when left out. See `AgentDriverSchema`.
      * Only for `type: acp`.
      */
-    driver: AgentDriverSchema.optional(),
+    driver: AgentDriverSchema.optional().describe(
+      "How ORCA runs this agent. acp (the default) talks to an ACP adapter such as claude-agent-acp. " +
+        "claude-agent-sdk (experimental) runs your own signed-in claude through the Claude Agent SDK: " +
+        "bring your own Claude subscription or API key, one subscription per person; ORCA never signs you in, " +
+        "and SDK work draws from your plan's usage limits. Leave command empty to use claude from PATH, or set its path.",
+    ),
     /**
      * Whether ORCA installs its pre-tool hook in this agent (#704, #705), so that
      * `permissions` decides every tool call it hooks and not only the ones the agent asks

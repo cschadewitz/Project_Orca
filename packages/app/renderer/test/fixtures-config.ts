@@ -117,6 +117,13 @@ export const CONFIG_GET: ConfigGetResult = {
     { path: "agents[]", type: "object", required: false },
     { path: "agents[].id", type: "string", required: true },
     { path: "agents[].command", type: "string", required: true },
+    {
+      path: "agents[].driver",
+      type: "enum",
+      enum: ["acp", "claude-agent-sdk"],
+      required: false,
+      help: "How ORCA runs this agent. claude-agent-sdk (experimental) runs your own signed-in claude through the Claude Agent SDK: bring your own Claude subscription or API key, one subscription per person; ORCA never signs you in.",
+    },
     { path: "agents[].roles", type: "array", required: false, default: [] },
     { path: "humanInput", type: "object", required: false },
     { path: "humanInput.mode", type: "enum", enum: ["pause", "cli", "auto"], required: true },

@@ -49,6 +49,7 @@ const nonSecret = new Set([
   "agents[].id",
   "agents[].name",
   "agents[].command",
+  "agents[].driver",
   "agents[].hostId",
   "agents[].roles",
   "agents[].roles[]",

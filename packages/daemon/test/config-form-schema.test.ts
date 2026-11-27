@@ -20,6 +20,24 @@ describe("authoritative rich configuration metadata", () => {
     expect(hosts.item.branches.local).not.toHaveProperty("fields.host");
   });
 
+  it("offers an agent's driver as a choice, with the bring-your-own-sign-in note (#1131)", () => {
+    const { root } = ConfigFormSchemaSchema.parse(describeConfigFormSchema());
+    if (root.kind !== "object") throw new Error("root");
+    const agents = root.fields.agents;
+    if (agents?.kind !== "array" || agents.item.kind !== "object") throw new Error("agents");
+    const driver = agents.item.fields.driver;
+    expect(driver).toMatchObject({
+      kind: "scalar",
+      visibility: "non-secret",
+      acceptsAbsent: true,
+      field: { path: "agents[].driver", type: "enum", enum: ["acp", "claude-agent-sdk"] },
+    });
+    if (driver?.kind !== "scalar") throw new Error("driver");
+    expect(driver.field.help).toMatch(/experimental/);
+    expect(driver.field.help).toMatch(/ORCA never signs you in/);
+    expect(driver.field.help).toMatch(/one subscription per person/);
+  });
+
   it("distinguishes required nullable, optional nonnullable and defaulted values", () => {
     expect(describeFormNode(z.string().nullable())).toMatchObject({
       acceptsAbsent: false,

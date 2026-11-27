@@ -16,6 +16,8 @@ const recovery: Record<FirstRunAgentCheck["state"], string> = {
 const route: Record<FirstRunAgentCheck["evidence"]["configuredRoute"], string> = {
   "claude-code-acp-candidate":
     "Configured command name suggests a Claude Code ACP adapter; installed identity is unverified.",
+  "claude-agent-sdk-candidate":
+    "Configured for Claude through the Claude Agent SDK (experimental). It runs your own claude with your own sign-in: bring your own Claude subscription or API key, one subscription per person. ORCA never signs you in; sign in with `claude auth login` yourself. ORCA checks the sign-in when a session opens, not here. Work through the SDK draws from your plan's usage limits. See docs/agents/claude-agent-sdk.md.",
   "codex-acp-candidate": "Configured command name suggests a Codex ACP bridge; installed identity is unverified.",
   "cline-acp-candidate":
     "Configured command name suggests Cline CLI. ORCA opens it only at a verified version, with --acp and its own --config directory, sessions in the agent process and auto-update off; sign in with `cline auth` yourself. See docs/agents/cline.md.",

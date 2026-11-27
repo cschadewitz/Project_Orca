@@ -26,6 +26,15 @@ Every entry says how it is known, as in the hook coverage page:
 | OpenCode 1.19.4 (`opencode acp`), the npm builds for Linux x64 and macOS arm64 only (pinned by SHA-256), on the daemon's own computer, with an isolated profile ORCA has inspected | **Yes** (installed) | **Yes, with the limits listed** (installed) | No, after #706 | None: no supported hook, refused |
 | Cline CLI 3.0.75, the npm build for Linux x64 (pinned by SHA-256 per platform), on the daemon's own computer, with a config directory ORCA has inspected | **Yes** (installed) | **Yes, for the routes marked installed below** | No, after #706 | None: no Cline hook adapter |
 
+Claude Code through the Claude Agent SDK (`driver: claude-agent-sdk`, SDK 0.3.332 with Claude
+Code 2.1.332) is experimental and held on its feature branch until Anthropic's OK (#1132). It
+has an acceptance run against the real Claude Code with a scripted model
+(`claude-sdk-acceptance.yml`), but no support level is claimed for it yet: that is #1128. It
+runs your own signed-in `claude` on the daemon's own computer, with your own Claude
+subscription or API key (one subscription per person); ORCA never signs you in. See
+[agents/claude-agent-sdk.md](agents/claude-agent-sdk.md) and its row in
+[agent-hook-coverage.md](agent-hook-coverage.md).
+
 ## GitHub Copilot CLI
 
 Setup: [agents/copilot-cli.md](agents/copilot-cli.md). Acceptance:

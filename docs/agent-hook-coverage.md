@@ -55,6 +55,25 @@ acceptance suite passes; none yet).
 | Permission mode (outside the hook) | ORCA switches a recognized Claude session to `default` (Manual) when it opens, new or loaded (#1190), and again before each prompt, and refuses its own requests to switch it away. The adapter otherwise starts in `auto`, where Claude Code settles calls itself and an unhooked session never asks ORCA; a checkout can also start it in `acceptEdits` or `bypassPermissions`. Manual is not a guarantee that every call reaches ORCA: Claude's native rules still settle calls, and the mode is not watched during a turn. The rows above are what the hook guarantees | installed (new and loaded sessions) |
 | Outside the hook | What a shell command touches beyond its own text; ORCA's protected-path rules and Claude's sandbox still apply | by design |
 
+## Claude through the Claude Agent SDK (`driver: claude-agent-sdk`, SDK 0.3.332, Claude Code 2.1.332)
+
+Experimental, held on its feature branch until Anthropic's OK (#1132). Setup and limits:
+[agents/claude-agent-sdk.md](agents/claude-agent-sdk.md). Acceptance:
+`packages/cli/test/claude-sdk-acceptance-1120.test.ts`, run by `claude-sdk-acceptance.yml`.
+
+| What | Behaviour | Known by |
+| --- | --- | --- |
+| Calls hooked | Every tool call, MCP tools and a subagent's calls included: ORCA's hook is a `PreToolUse` callback in the daemon, not a program per call | installed |
+| ORCA allow | No decision: Claude's own check runs, and if Claude asks, ORCA answers yes for that one call, never remembered | installed |
+| ORCA ask | `permissionDecision: "ask"`: Claude asks ORCA through `canUseTool`, and the run's answerer decides | installed |
+| ORCA deny | `permissionDecision: "deny"`: nothing runs, and Claude is told why | installed |
+| Hook fails while deciding | An explicit deny; the hook is installed with `onFailure: "block"`, which a Claude Code without it refuses before the session opens | installed (refusal unit-tested) |
+| Outside the workspace | A call the rules allow outside the workspace (and `additionalDirectories`), or one that does not say where it runs, is asked about, and only a person can allow it | installed |
+| Glob and Grep | Denied: a search can reach a protected folder below where it starts. Claude Code 2.1.332 has no Grep tool and refuses it before any hook runs | installed |
+| MCP servers | ORCA runs them in process and serves them to Claude Code by name; a server starts only after the session is admitted, and a call reaches it only with the grant `canUseTool` gave that call | installed (relay checks unit-tested) |
+| Which Claude Code runs | With `nativeToolHook: experimental`, the `claude` file must be the pinned image, ORCA runs its own read-only copy of those bytes, and the running process's image is checked again before any work | installed (another image of the same version refused) |
+| Outside the hook | What a shell command touches beyond its own text; ORCA's protected-path rules and Claude's sandbox still apply | by design |
+
 ## Codex (`@agentclientprotocol/codex-acp` 2.9.0, Codex 0.171.0)
 
 ORCA hands Codex its hook through `CODEX_CONFIG`, which the adapter passes to Codex as session

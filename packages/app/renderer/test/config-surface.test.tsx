@@ -633,6 +633,22 @@ describe("what the form says out loud, and what it does not", () => {
     await screen.findByRole("group", { name: "Unsaved configuration changes" });
   });
 
+  it("offers an agent's driver as a choice, with the bring-your-own-sign-in note (#1131)", async () => {
+    renderConfig();
+    const agents = await screen.findByRole("region", { name: "Agents" });
+    const driver = within(agents).getByLabelText(/^Driver/);
+    expect(driver.tagName).toBe("BUTTON");
+    expect(agents.textContent).toMatch(/ORCA never signs you in/);
+    expect(agents.textContent).toMatch(/one subscription per person/);
+    // Left out, the default ACP route stays; choosing the SDK driver is a change to review.
+    expect(driver.textContent).toBe("Choose");
+    fireEvent.click(driver);
+    fireEvent.click(await screen.findByRole("menuitem", { name: "claude-agent-sdk" }));
+    const bar = await screen.findByRole("group", { name: "Unsaved configuration changes" });
+    expect(within(bar).getByText("1 change")).toBeTruthy();
+    expect(within(agents).getByLabelText(/^Driver/).textContent).toBe("claude-agent-sdk");
+  });
+
   it("reaches the preferences' theme control by its label too", async () => {
     renderConfig();
     await screen.findByRole("region", { name: "App preferences" });

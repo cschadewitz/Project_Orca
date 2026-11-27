@@ -142,3 +142,25 @@ it("names OpenCode's ACP route only for its acp subcommand (#710)", async () => 
     "unverified",
   );
 });
+
+it("names a driver: claude-agent-sdk agent's route, finds claude on PATH when no command is set, and runs nothing (#1131)", async () => {
+  const f = await fixture();
+  const claude = join(f.bin, "claude");
+  const sentinel = join(f.root, "not-executed");
+  await writeFile(claude, `#!/bin/sh\nprintf 'executed' > '${sentinel}'\n`);
+  await chmod(claude, 0o700);
+  const check = await inspectLocalTool({
+    id: "claude-sdk",
+    command: "",
+    driver: "claude-agent-sdk",
+    env: { PATH: [f.bin].join(delimiter) },
+  });
+  expect(check).toMatchObject({
+    state: "handshake-required",
+    evidence: { configuredRoute: "claude-agent-sdk-candidate", signIn: "unknown" },
+  });
+  await expect(readFile(sentinel)).rejects.toMatchObject({ code: "ENOENT" });
+  // The same command under the default driver is an unverified route, not the SDK's.
+  const acp = await inspectLocalTool({ id: "claude", command: claude, env: {} });
+  expect(acp.evidence.configuredRoute).toBe("unverified");
+});

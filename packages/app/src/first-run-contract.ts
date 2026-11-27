@@ -8,6 +8,7 @@ export interface FirstRunAgentCheck {
   readonly evidence: {
     readonly configuredRoute:
       | "claude-code-acp-candidate"
+      | "claude-agent-sdk-candidate"
       | "codex-acp-candidate"
       | "copilot-cli-acp-candidate"
       | "opencode-acp-candidate"

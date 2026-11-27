@@ -77,7 +77,12 @@ describe("the form", () => {
     expect(card.node).toBe("group");
     // Headed by the agent's own id rather than by "#1": ids are what config and runs use.
     expect(card.label).toBe("claude");
-    expect(card.children.map((child) => child.path)).toEqual(["agents[0].id", "agents[0].command", "agents[0].roles"]);
+    expect(card.children.map((child) => child.path)).toEqual([
+      "agents[0].id",
+      "agents[0].command",
+      "agents[0].driver",
+      "agents[0].roles",
+    ]);
   });
 
   it("draws a control per schema type, and reads the document's value into it", () => {
@@ -99,7 +104,7 @@ describe("the form", () => {
 
   it("shows what the schema cannot describe as read-only JSON, and says why", () => {
     const card = section("agents").nodes[0] as GroupNode;
-    const roles = card.children[2] as RawNode;
+    const roles = card.children[3] as RawNode;
     expect(roles.node).toBe("raw");
     expect(roles.json).toBe(JSON.stringify(["developer"], null, 2));
     expect(roles.reason).toContain("does not describe what this array holds");
@@ -111,6 +116,7 @@ describe("the form", () => {
       "storeDir",
       "agents[0].id",
       "agents[0].command",
+      "agents[0].driver",
       "humanInput.mode",
     ]);
   });

@@ -206,6 +206,10 @@ Requirements: key‑based auth (no prompts), the agent binary on the remote logi
 and the repository present on the remote (clone it there, or use a shared filesystem; ORCA
 does not sync code). Verify with `orca ping claude-remote`.
 
+An agent with `driver: claude-agent-sdk` (Claude through the Claude Agent SDK, experimental)
+runs only on ORCA's own machine for now and is refused on an SSH host (#1130); use the ACP
+route there.
+
 For a machine that runs a daemon of its own, delegating steps to it is the alternative; see
 [running across machines](MULTI-MACHINE.md#ssh-host-or-delegation) for when to use which.
 
