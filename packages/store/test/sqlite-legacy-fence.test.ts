@@ -198,6 +198,29 @@ describe("legacy fence (#339)", () => {
     await expectReadsOnSqlite(dir);
   });
 
+  it("still finishes an interrupted switch whose journal records the database without a birth time (an earlier build's)", async () => {
+    const dir = await populated();
+    await expect(
+      switchStoreToSqlite(dir, {
+        appVersion: "0.8.0",
+        afterMarkerRename: async () => {
+          throw new Error("EIO");
+        },
+      }),
+    ).rejects.toThrow("EIO");
+    // Finishing drops only the journal, so the device and inode an earlier build journaled are
+    // taken as before (#1344).
+    const info = await lstat(join(dir, SQLITE_METADATA_FILE), { bigint: true });
+    const path = join(dir, SQLITE_SWITCH_DIR, "journal.json");
+    const journal = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
+    expect(String(journal.database).startsWith(`${info.dev}:${info.ino}`)).toBe(true);
+    await writeFile(path, JSON.stringify({ ...journal, database: `${info.dev}:${info.ino}` }) + "\n");
+    expect(await enterStoreFormat(dir, { appVersion: "0.8.0", mode: "write" })).toMatchObject({ backend: "sqlite" });
+    expect(await readdir(dir)).not.toContain(SQLITE_SWITCH_DIR);
+    await expectFenced(dir);
+    await expectReadsOnSqlite(dir);
+  });
+
   it("finishes an interrupted switch only when the database is bound to the switch the journal names", async () => {
     const dir = await populated();
     await expect(

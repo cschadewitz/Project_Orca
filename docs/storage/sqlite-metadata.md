@@ -507,9 +507,15 @@ database naming another switch is refused and left as it is.
 
 Recovery acts on the store the switch left, not on whatever is bound to the same store
 by then. Either way, the journal records which database file the switch started from or
-built (its device and inode). Recovery keeps, fences or drops that file only. A copy or a
+built: its device, inode and birth time. Recovery keeps, fences or drops that file only. A copy or a
 restored backup put in its place is refused and left intact, even when it is bound to the
-same store. While a journal is pending, `orca store sqlite restore` and `import` refuse
+same store, and so is one that a file system gave the removed database's inode number,
+which is why the birth time is recorded (#1344). Recovery of a switch back to files settles
+the database and ends the journal only when it can prove the file is the journaled one; a
+journal without a birth time (written by 0.8.0, or on a file system that keeps none) is
+refused (`INTERRUPTED`) with the database and the journal kept, and the message names the
+switch's backup. A database that is already gone is not in question, so that switch back
+still finishes. While a journal is pending, `orca store sqlite restore` and `import` refuse
 (`SWITCH_PENDING`) under the format lock. Start ORCA on the store first, so that the
 switch is finished or undone.
 `sqlite-switch-back.test.ts` covers the round trip (files, SQLite with new work,
