@@ -364,6 +364,16 @@ async function turn(text) {
         });
       return result({ total_cost_usd: 0.01, modelUsage: u.modelUsage });
     }
+    case "flip": {
+      // `flip allowed|<resetsAt>`: the subscription limit reached during the turn, then lifted
+      // (`allowed`) or already past its reset; the turn then fails for another reason.
+      const how = text.split(/\s+/)[1];
+      const event = (info) =>
+        out({ type: "rate_limit_event", session_id: SESSION, uuid: `rl${nextRequest++}`, rate_limit_info: info });
+      event({ status: "rejected", rateLimitType: "five_hour", resetsAt: how === "allowed" ? 1795000000 : Number(how) });
+      if (how === "allowed") event({ status: "allowed", rateLimitType: "five_hour" });
+      return result({ is_error: true, result: "API Error: SENTINEL-1127-cli-text overloaded" });
+    }
     case "limit":
     case "throttle": {
       // `limit [resetsAt]`: the subscription limit is reached; `throttle`: an API key's HTTP 429.

@@ -123,11 +123,10 @@ export function rateLimitNotice(info: SDKRateLimitInfo): acp.SessionUpdate | und
 }
 
 /**
- * The step failure for a turn a limit ended. Only evidence from this turn counts: a call that
- * failed on a rate limit, an HTTP 429 result, or Claude Code reporting the subscription limit
- * reached during the turn. With that evidence, a subscription limit Claude Code reports as
- * reached (and not yet reset) names itself and when it resets; otherwise it is an API rate
- * limit (an API key's). Undefined when the turn did not end on a limit.
+ * The step failure for a turn a limit ended. A subscription limit: its latest status is still
+ * reached (not lifted since, reset not passed) and this turn has evidence of it (Claude Code
+ * reported it reached during the turn, or a call failed on a rate limit). An API rate limit (an
+ * API key's): a call failed on a rate limit, or the result is HTTP 429. Undefined otherwise.
  */
 export function usageLimitFailure(
   agentId: string,
@@ -137,11 +136,13 @@ export function usageLimitFailure(
   const failed = m.is_error || m.subtype !== "success";
   if (!failed) return undefined;
   const status = "api_error_status" in m ? m.api_error_status : undefined;
-  if (!o.rateLimitedCall && status !== 429 && !o.rejectedInTurn) return undefined;
-  // The last limit status Claude Code reported stands until it reports another, or its reset passes.
+  const apiEvidence = o.rateLimitedCall || status === 429;
+  // The latest limit status Claude Code reported, while its reset has not passed.
   const resetsAt = resetTime(o.rateLimit?.resetsAt);
   const reached = o.rateLimit?.status === "rejected" && (resetsAt === undefined || Date.parse(resetsAt) > o.now);
-  if (reached) {
+  // A subscription limit needs it still reached and this turn's evidence of it; an earlier or
+  // since-lifted status stays advisory.
+  if (reached && (o.rejectedInTurn || apiEvidence)) {
     const limit = limitType(o.rateLimit);
     return new OrcaError(
       "AGENT_TRANSPORT",
@@ -152,6 +153,7 @@ export function usageLimitFailure(
       { agentId, reason: "usage-limit", ...(limit ? { limit } : {}), ...(resetsAt ? { resetsAt } : {}) },
     );
   }
+  if (!apiEvidence) return undefined;
   return new OrcaError(
     "AGENT_TRANSPORT",
     `agent ${agentId}: Claude's API rate limit was hit (HTTP 429) and Claude Code stopped retrying, so the step ended. ` +

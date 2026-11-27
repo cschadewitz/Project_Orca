@@ -196,6 +196,19 @@ describe("usage on the Claude Agent SDK route (#1127)", () => {
     expect(JSON.stringify(throttled)).not.toContain(CLI_TEXT);
   });
 
+  it("does not call a failure a limit when the limit lifted or expired within the same turn (#1319 review)", async () => {
+    const session = await open(before);
+    // Reached, then allowed again, then the turn fails for another reason.
+    const lifted = (await session.prompt("flip allowed").catch((e: unknown) => e)) as OrcaError;
+    expect(lifted.code).toBe("AGENT_PROTOCOL");
+    // Reached with a reset already past, then the turn fails for another reason.
+    const expired = (await session
+      .prompt(`flip ${Math.floor((Date.parse(RESETS) - 120_000) / 1000)}`)
+      .catch((e: unknown) => e)) as OrcaError;
+    expect(expired.code).toBe("AGENT_PROTOCOL");
+    expect(JSON.stringify([lifted, expired])).not.toMatch(/HTTP 429|usage-limit|rate-limit/);
+  });
+
   it("does not take a reached limit whose reset has passed for the reason a later turn failed", async () => {
     let now = Date.parse(RESETS) - 60_000;
     const session = await open({ now: () => now });
