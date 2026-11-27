@@ -143,7 +143,7 @@ echo '{"loggedIn":false}'; exit 1
       await writeFile(
         ssh,
         `#!/bin/sh
-printf '%s\\n' "$*" >> "${log}"
+printf '%s' "$*" | tr '\\n' ' ' >> "${log}"; echo >> "${log}"
 while [ "$#" -gt 0 ] && [ "$1" != "--" ]; do shift; done
 shift
 exec env -i PATH="/usr/bin:/bin" HOME="${dir}" sh -c "$*"
@@ -187,10 +187,11 @@ exec "${process.execPath}" "${STAND_IN}" "$@"
       } finally {
         await session.close();
       }
-      // `--version`, `auth status`, then the session's own claude: each over ssh.
+      // `--version`, `auth status`, the session's own claude, then its stop there: each over ssh.
       const lines = (await readFile(log, "utf8")).trim().split("\n");
-      expect(lines).toHaveLength(3);
+      expect(lines).toHaveLength(4);
       expect(lines[2]).toContain("--permission-mode=default");
+      expect(lines[3]).toMatch(/\.stop/);
       expect(open).not.toHaveBeenCalled();
     });
 

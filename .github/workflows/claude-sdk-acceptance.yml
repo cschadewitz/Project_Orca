@@ -3,7 +3,8 @@
 # nothing. It observes on the installed Claude Code what the stand-in `claude` of the unit
 # tests cannot: Claude Code's own model list and its answers to model and effort changes, the
 # deny-only tool gate and Claude Code's own permission ask meeting a real tool call, cancel,
-# and that close leaves no Claude Code behind. It then runs the #706 enforcement cases through
+# and that close leaves no Claude Code behind. It runs the SSH host route over a real loopback
+# sshd (#1130). It then runs the #706 enforcement cases through
 # the same Claude Code on this route (#1128) and keeps the connected receipt, and writes the
 # route's installed receipt through the bundled session factory (#1128), kept unsigned.
 #
@@ -29,6 +30,8 @@ on:
       - packages/agents/package.json
       - packages/cli/src/bootstrap.ts
       - packages/cli/test/claude-sdk-acceptance-1120.test.ts
+      - packages/agents/src/hosts/ssh-host.ts
+      - packages/agents/test/claude-sdk-ssh-native-1130.test.ts
       - tools/guard-qualification/**
       - tools/test/enforcement-connected-sdk-1128.test.js
       - tools/test/enforcement-installed-claude-sdk-1128.test.js
@@ -94,6 +97,25 @@ jobs:
             if (r.numTotalTests === 0 || r.numPendingTests > 0 || r.numPassedTests !== r.numTotalTests)
               throw new Error(`expected every acceptance test to run and pass: ${JSON.stringify({total: r.numTotalTests, passed: r.numPassedTests, skipped: r.numPendingTests})}`);
           ' "$RUNNER_TEMP/acceptance.json"
+
+      # Claude Code on an SSH host (#1130) over a real loopback sshd: no environment value in any
+      # argument list on either side, and close, a lost connection and a cancelled open leave
+      # nothing running there. Required here, so a missing or broken sshd fails.
+      - name: Install sshd
+        run: command -v /usr/sbin/sshd >/dev/null || { sudo apt-get update -q && sudo apt-get install -yq openssh-server; }
+      - name: Run the SSH host tests over a real sshd (#1130)
+        shell: bash
+        env:
+          ORCA_REQUIRE_SSHD: "1"
+        run: |
+          set -euo pipefail
+          pnpm exec vitest run packages/agents/test/claude-sdk-ssh-native-1130.test.ts \
+            --reporter=default --reporter=json --outputFile="$RUNNER_TEMP/ssh-native.json"
+          node -e '
+            const r = require(process.argv[1]);
+            if (r.numTotalTests === 0 || r.numPendingTests > 0 || r.numPassedTests !== r.numTotalTests)
+              throw new Error(`expected every SSH host test to run and pass: ${JSON.stringify({total: r.numTotalTests, passed: r.numPassedTests, skipped: r.numPendingTests})}`);
+          ' "$RUNNER_TEMP/ssh-native.json"
 
       - name: Run the enforcement suite through the live agent on this route (#706, #1128)
         shell: bash

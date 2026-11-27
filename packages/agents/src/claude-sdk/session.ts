@@ -86,6 +86,7 @@ import type { ClaudeSdkPreflight } from "./launch.js";
 import { claudeSdkPermissionBridge } from "./permission-bridge.js";
 import { inProcessHookTelemetry } from "./tool-telemetry.js";
 import { rateLimitNotice, usageLimitFailure, usageUpdate, type CallSample } from "./usage.js";
+import type { ClaudeSdkRemoteLaunch } from "./remote.js";
 import { attestClaudeSdkRuntime, type ClaudeSdkRuntimeAttestation, type ClaudeSdkVerifiedPair } from "./attestation.js";
 
 export interface ClaudeSdkSessionOptions {
@@ -110,17 +111,13 @@ export interface ClaudeSdkSessionOptions {
       }
     | undefined;
   /**
-   * Claude Code on another machine (#1130): how its process is started there (over SSH,
-   * `claudeSdkSshSpawner`) instead of as ORCA's own child, and the host's id. Its image is
-   * not attested (so `runtimeAttestation.required` is refused with it), and no call it makes
-   * is taken to run inside the workspace (`remoteWorkspace` in the bridge).
+   * Claude Code on another machine (#1130): how its process is started there and stopped there
+   * (over SSH, `claudeSdkSshLaunch`) instead of as ORCA's own child. Its image is not attested
+   * (so `runtimeAttestation.required` is refused with it), no call it makes is taken to run
+   * inside the workspace (`remoteWorkspace` in the bridge), and the session counts as closed
+   * only once the remote stop has run.
    */
-  remote?:
-    | {
-        hostId: string;
-        spawn: (o: { command: string; args: string[]; cwd: string; env: Record<string, string> }) => ChildProcess;
-      }
-    | undefined;
+  remote?: ClaudeSdkRemoteLaunch | undefined;
   /** ORCA's own files, which no rule opens to a tool call (C4-01). */
   protectedPaths?: ProtectedPaths | undefined;
   /** Permission sidecars layered under the agent's configured rules, read again for every call. */
@@ -365,11 +362,40 @@ async function openClaudeSdkProcess(
       if (proc.pid === undefined) markExited();
     });
     // The SDK's forwarded signal fires only after its own stdin-EOF grace: stop everything.
-    o.signal.addEventListener("abort", () => killGroup("SIGKILL"), { once: true });
+    o.signal.addEventListener(
+      "abort",
+      () => {
+        killGroup("SIGKILL");
+        void stopRemote();
+      },
+      { once: true },
+    );
     return proc as SpawnedProcess;
   };
-  // Once the process is gone, anything it started in its group goes too.
-  const terminated: Promise<void> = exited.then(() => killGroup("SIGKILL"));
+  /**
+   * On another machine, what this launch started there is stopped there too, over a connection
+   * of its own, once (#1130); a stop that cannot be confirmed is logged, never thrown.
+   */
+  let remoteStopped: Promise<void> | undefined;
+  const stopRemote = (): Promise<void> =>
+    (remoteStopped ??= remote
+      ? remote.stop().then(
+          (r) => {
+            if (!r.stopped)
+              logger.warn("ORCA could not confirm that Claude Code stopped on the remote host", {
+                agentId: options.agent.id,
+                host: remote.hostId,
+                reason: r.reason,
+              });
+          },
+          () => undefined,
+        )
+      : Promise.resolve());
+  // Once the process is gone, anything it started in its group goes too, here and there.
+  const terminated: Promise<void> = exited.then(async () => {
+    killGroup("SIGKILL");
+    if (spawned) await stopRemote();
+  });
 
   // ---- input, permissions, the query --------------------------------------------------------
   const id = newId("sess", clock.now());
@@ -479,6 +505,8 @@ async function openClaudeSdkProcess(
       } catch {
         // already closed
       }
+      // Closed means nothing of it still runs on the other machine either.
+      if (spawned && remote) await stopRemote();
       await relayClosed;
       // The last lines the hook recorded are handed over before the session counts as closed.
       await telemetry?.finish();

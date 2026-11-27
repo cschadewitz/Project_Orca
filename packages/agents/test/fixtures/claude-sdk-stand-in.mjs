@@ -10,6 +10,8 @@
  * every model change, `STAND_IN_FLAGS_OK=n` every effort change after the first n;
  * `STAND_IN_CONFIG_DELAY_MS` answers changes that late.
  * `STAND_IN_STUBBORN`, when set, keeps it running after its input ends and through SIGTERM.
+ * `STAND_IN_DESCENDANT`, when set, starts a long `sleep` that outlives it unless its process
+ * group is killed, and logs that process's pid as `{ descendant }`.
  * `STAND_IN_LOG`, when set, gets one JSON line per input line and the argv.
  * `STAND_IN_TRANSCRIPTS`, when set, is where sessions are kept: one file per `--session-id`,
  * holding its prompts, which `--resume <id>` continues and the `history` script reports. A resume
@@ -73,6 +75,11 @@ const history = () =>
         .filter(Boolean)
         .map((l) => JSON.parse(l))
     : [];
+if (process.env.STAND_IN_DESCENDANT) {
+  const child = spawn("sleep", ["600"], { stdio: "ignore" });
+  child.unref();
+  log({ descendant: child.pid });
+}
 // Ignores the end of its input and SIGTERM, so only a kill stops it.
 if (process.env.STAND_IN_STUBBORN) {
   setInterval(() => undefined, 1000);

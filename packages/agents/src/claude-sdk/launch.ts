@@ -255,7 +255,7 @@ export async function probeClaude(
   executable: string,
   run: (args: string[]) => Promise<BoundedResult>,
   place: ClaudeProbePlace,
-  expectedVersion?: string  ,
+  expectedVersion?: string,
 ): Promise<Omit<ClaudeSdkPreflight, "executable" | "env">> {
   const agent = { id: agentId };
   /** Where the probe ran, named in a failure only when it is not this machine. */
@@ -296,7 +296,7 @@ export async function probeClaude(
     throw new OrcaError(
       "AGENT_TRANSPORT",
       `agent ${agent.id}: Claude Code is not signed in ${place.where}. Run \`claude auth login\` ${place.there} as the person whose ` +
-        `account this agent uses (ORCA offers no login), or give the agent its own API key in env.`,
+        `account this agent uses (ORCA offers no login)${at ? "." : ", or give the agent its own API key in env."}`,
       { agentId: agent.id, executable, reason: "claude-not-logged-in" },
     );
   // Signed in counts only from a probe that finished and exited 0.
@@ -434,7 +434,14 @@ export const PROBE_KILL_SETTLE_MS = 1_000;
 export function runBounded(
   file: string,
   args: string[],
-  o: { cwd: string; env: Record<string, string>; timeoutMs: number; signal?: AbortSignal | undefined },
+  o: {
+    cwd: string;
+    env: Record<string, string>;
+    timeoutMs: number;
+    signal?: AbortSignal | undefined;
+    /** Written to the program's stdin, which is then closed; without it stdin is not opened. */
+    input?: string | undefined;
+  },
 ): Promise<BoundedResult> {
   if (o.signal?.aborted)
     return Promise.resolve({
@@ -457,17 +464,24 @@ export function runBounded(
     const child = spawn(file, args, {
       cwd: o.cwd,
       env: o.env,
-      stdio: ["ignore", "pipe", "ignore"],
+      stdio: [o.input === undefined ? "ignore" : "pipe", "pipe", "ignore"],
       windowsHide: true,
       detached: group,
     });
+    // stdout is always piped.
+    const out = child.stdout!;
+    if (o.input !== undefined && child.stdin) {
+      // A program that exits without reading it closes the pipe; that is its answer, not an error.
+      child.stdin.on("error", () => undefined);
+      child.stdin.end(o.input);
+    }
     const finish = (r: Omit<BoundedResult, "timedOut" | "aborted" | "overLimit" | "stdout">) => {
       if (settled) return;
       settled = true;
       clearTimeout(deadline);
       clearTimeout(settleTimer);
       o.signal?.removeEventListener("abort", onAbort);
-      child.stdout.destroy();
+      out.destroy();
       const clean = !killed && r.spawnError === undefined;
       resolveResult({ ...r, ...flags, stdout: clean ? Buffer.concat(chunks).toString("utf8") : "" });
     };
@@ -480,7 +494,7 @@ export function runBounded(
       } catch {
         // Already gone.
       }
-      child.stdout.destroy();
+      out.destroy();
       settleTimer = setTimeout(() => finish(exit ?? { code: null, signal: null }), PROBE_KILL_SETTLE_MS);
     };
     const deadline = setTimeout(() => {
@@ -492,7 +506,7 @@ export function runBounded(
       kill();
     };
     o.signal?.addEventListener("abort", onAbort, { once: true });
-    child.stdout.on("data", (chunk: Buffer) => {
+    out.on("data", (chunk: Buffer) => {
       bytes += chunk.length;
       if (bytes > MAX_OUTPUT_BYTES) {
         flags.overLimit = true;
@@ -502,7 +516,7 @@ export function runBounded(
       chunks.push(chunk);
     });
     // A destroyed pipe may report an error; the flags already say why.
-    child.stdout.on("error", () => undefined);
+    out.on("error", () => undefined);
     child.on("error", (e: NodeJS.ErrnoException) => {
       finish({ code: null, signal: null, spawnError: /^[A-Z0-9_]{1,40}$/.test(e.code ?? "") ? e.code! : "UNKNOWN" });
     });

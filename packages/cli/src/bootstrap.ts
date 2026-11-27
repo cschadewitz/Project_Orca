@@ -53,7 +53,7 @@ import {
   claudeSdkPreflight,
   claudeSdkSecrets,
   claudeSdkSshPreflight,
-  claudeSdkSshSpawner,
+  claudeSdkSshLaunch,
   SshHost,
   redactError,
   claudeSdkPlatformUnsupported,
@@ -462,9 +462,7 @@ export function makeSessionFactory(
         // into (`experimental`) an unverified one is refused; otherwise it is logged.
         runtimeAttestation: { required: options.agent.nativeToolHook === "experimental" },
         // On an SSH host, `claude` is started there over the host's SSH configuration (#1130).
-        ...(sshHost
-          ? { remote: { hostId: sshHost.id, spawn: claudeSdkSshSpawner(sshHost, options.agent.id, secrets.withheld) } }
-          : {}),
+        ...(sshHost ? { remote: claudeSdkSshLaunch(sshHost, options.agent.id, secrets.withheld) } : {}),
       });
     }
     // ORCA's gate in Codex's executor path (#1026): its own route, which refuses every session

@@ -118,19 +118,35 @@ hook is guard-qualified.
 With `hostId` naming an `ssh` host (#1130), the SDK and ORCA's permission bridge stay on ORCA's
 machine, and only `claude` runs on the host. ORCA starts it over the host's own SSH
 configuration (identity file, port, `remoteShell`), the way the ACP route starts an agent
-there: `ssh -T … -- bash -lc 'cd <cwd> && exec env … claude …'`, with the SDK's stream-json on
-the connection's stdin and stdout. It runs as your own login on that machine, with the Claude
-Code found on its login-shell `PATH` (or `command`) and the sign-in kept there; ORCA reads no
-credentials there and offers no login. The two checks above (`claude --version`, then
+there, with the SDK's stream-json on the connection's stdin and stdout. It runs as your own
+login on that machine, with the Claude Code found on its login-shell `PATH` (or `command`) and
+the sign-in kept there; ORCA reads no credentials there and offers no login. Sign in on the
+host itself with `claude auth login`. The two checks above (`claude --version`, then
 `claude auth status --json`) are asked on the host, each over its own SSH connection under the
 same deadline, and a `claude` that is not signed in is refused with "run `claude auth login` on
 <host>".
 
 What `claude` is given there is only what the session sets: the agent's own literal `env`, what
 ORCA adds, and the SDK's own variables, on top of the remote login shell's environment. None of
-the daemon's environment crosses. Variable names are checked, values are quoted for the remote
-shell, and Claude credential variables ORCA would otherwise carry are left out, as on ORCA's
-own machine.
+the daemon's environment crosses, and Claude credential variables ORCA would otherwise carry
+are left out, as on ORCA's own machine. **No value is put on a command line.** The remote
+command holds only variable names, the directory, the command and its arguments. ORCA writes
+each value to the connection's stdin first, and the remote shell reads and exports it with
+builtins before `claude` starts and is handed the rest of stdin. So a value appears in no
+process's argument list on either machine, and in no error or log ORCA writes. A real-sshd
+test scans every process's arguments while a session starts and runs.
+
+**The remote side owns the process.** The remote shell starts `claude` in a process group of
+its own (`setsid`, or job control where there is none). It records the group under a token
+unique to the launch in `~/.cache/orca/claude-sdk/` on the host, waits for `claude`, and kills
+the whole group when `claude` exits. Whenever a session ends (closed, cancelled while it opened,
+or its connection lost), ORCA also stops it over a new SSH connection: that connection kills
+the recorded group and checks that it is gone, and the session counts as closed only after it.
+A stop that cannot be confirmed (the host unreachable, say) is logged as a warning. A process
+that leaves the group by starting a session of its own is not followed, as on ORCA's own
+machine. The real-sshd tests check that a `claude` that ignores the end of its input, and a
+process it started, are gone after a close, after the connection is killed, and after a
+cancelled open.
 
 What does not hold on that machine yet, and so is refused or left out:
 
