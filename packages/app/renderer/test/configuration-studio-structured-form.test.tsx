@@ -540,3 +540,19 @@ describe("authority, redaction, validation and keyboard boundaries", () => {
     expect(screen.queryByRole("button", { name: "Remove fixture" })).toBeNull();
   });
 });
+
+describe("agent policy fields say what absence means (#1109)", () => {
+  it("says the native hook is off when absent and how to opt in", () => {
+    renderForm(scalar(), undefined, { path: ["agents", 0, "nativeToolHook"], label: "nativeToolHook" });
+    expect(screen.getByText(/Off when absent: no native pre-tool hook\. experimental opts this agent in/)).toBeTruthy();
+  });
+
+  it("explains tool-call records under an agent, and nothing on other fields", () => {
+    renderForm(scalar(), undefined, { path: ["agents", 2, "diagnostics", "toolCalls"], label: "toolCalls" });
+    expect(screen.getByText(/keep needs nativeToolHook: experimental/)).toBeTruthy();
+    cleanup();
+    h?.dispose();
+    renderForm(scalar(), undefined, { path: ["hosts", 0, "nativeToolHook"], label: "nativeToolHook" });
+    expect(screen.queryByText(/Off when absent/)).toBeNull();
+  });
+});

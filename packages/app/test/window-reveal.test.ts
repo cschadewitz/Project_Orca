@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import {
   REVEAL_AFTER_LOAD_MS,
   REVEAL_DEADLINE_MS,
+  revealWarning,
   revealWhenReady,
   type RevealReason,
 } from "../src/main/window-reveal.js";
@@ -119,4 +120,12 @@ describe("revealWhenReady", () => {
     expect(win.shows).toBe(0);
     expect(reasons).toEqual(["deadline"]);
   });
+});
+
+/* #1109: the after-load reveal is the ordinary Wayland path, so it logs nothing; only the
+   creation deadline, where the page never reported loading, is a warning. */
+test("warns only for the creation deadline", () => {
+  expect(revealWarning("ready-to-show")).toBeUndefined();
+  expect(revealWarning("after-load")).toBeUndefined();
+  expect(revealWarning("deadline")).toMatch(/deadline fallback/);
 });

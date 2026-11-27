@@ -10,7 +10,7 @@
  * (backup-archive.ts, store-format-carryover.ts, #910).
  */
 import { constants } from "node:fs";
-import { open } from "node:fs/promises";
+import { open, rename } from "node:fs/promises";
 
 export async function syncDirectory(path: string): Promise<void> {
   if (process.platform === "win32") return;
@@ -67,5 +67,42 @@ export async function createDurable(path: string, text: string): Promise<void> {
     await handle.sync();
   } finally {
     await handle.close();
+  }
+}
+
+/** Errors Windows gives a rename while another handle has the source or the target open. */
+const SHARING_VIOLATIONS = new Set(["EPERM", "EACCES", "EBUSY"]);
+/** The waits between attempts, about 1.3 seconds in all: an antivirus scan or a reader's open handle. */
+export const REPLACE_RETRY_DELAYS_MS: readonly number[] = [10, 20, 40, 80, 160, 320, 640];
+
+/**
+ * Rename `from` over `to`, the last step of every write-then-rename publication. On Windows a
+ * rename fails with EPERM, EACCES or EBUSY while any other handle has either file open: a
+ * reader of the target in another request, or an antivirus scanner looking at the file just
+ * closed. That is a moment, not a refusal, so the rename is tried again for a bounded time, as
+ * graceful-fs does (#1284). Elsewhere, and for any other error, it fails at once.
+ */
+export async function replaceFile(
+  from: string,
+  to: string,
+  options: {
+    platform?: NodeJS.Platform;
+    rename?: (from: string, to: string) => Promise<void>;
+    delaysMs?: readonly number[];
+  } = {},
+): Promise<void> {
+  const platform = options.platform ?? process.platform;
+  const move = options.rename ?? rename;
+  const delays = options.delaysMs ?? REPLACE_RETRY_DELAYS_MS;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await move(from, to);
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code ?? "";
+      const delay = delays[attempt];
+      if (platform !== "win32" || !SHARING_VIOLATIONS.has(code) || delay === undefined) throw error;
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
   }
 }

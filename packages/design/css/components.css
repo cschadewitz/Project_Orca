@@ -227,6 +227,12 @@
    permanent kind the header describes: no token could sensibly name 1px-of-nothing. */
 .orca-visually-hidden {
   position: absolute;
+  /* Pinned to its containing block's corner rather than left at its place in the flow. Left
+     there, a hidden label inside a pane that scrolls sideways sat past the window's edge, and
+     an absolute box escapes a clip whose element is not its containing block, so the whole
+     window scrolled sideways under Plan, Workflows and the id chips (#1112). */
+  inset-block-start: 0;
+  inset-inline-start: 0;
   /* The note covers this line and the next, which is the whole of the exemption. */
   width: 1px; /* orca-allow-literal: the smallest rendered box, which is not a size — no token could sensibly name it, and a rung that did would name a family with one invisible member. Callers take the class, never these two numbers. */
   height: 1px;
@@ -2411,11 +2417,13 @@
   top: 100%;
   left: 0;
   z-index: var(--z-menu);
-  min-width: var(--panel-width);
   /* Never wider than the widest side pane: one long workflow name made Launch work's menu
      864px wide and ran it out of its pane (#1112). A label that does not fit is cut at its
-     end with the whole in `title` (rule 15). */
-  max-width: var(--pane-max-side);
+     end with the whole in `title` (rule 15). Nor wider than the room the menu has in the pane
+     it opens in, which `Menu` measures inside the pane's scrollbar (`--menu-room`); the floor
+     gives way to it too, since a min-width beats a max-width. */
+  min-width: min(var(--panel-width), var(--menu-room, var(--panel-width)));
+  max-width: min(var(--pane-max-side), var(--menu-room, var(--pane-max-side)));
   margin: var(--space-1) 0 0;
   padding: var(--space-1);
   list-style: none;
@@ -2820,6 +2828,9 @@
   align-items: center;
   justify-content: center;
   gap: var(--space-3);
+  /* Shrinks with a flex row it sits in, as the Agents split, instead of holding the
+     skeleton's measure and pushing the window sideways at 800 px and 150% (#1112). */
+  min-width: 0;
   padding: var(--space-12) var(--space-8);
   text-align: center;
 }

@@ -68,4 +68,7 @@ jobs:
           REPO: ${{ github.repository }}
           # Unattended merging is off until the `feature/*` ruleset is in place (docs/WORKSTREAMS.md).
           AUTO_MERGE: ${{ vars.FEATURE_SYNC_AUTO_MERGE }}
+          # Sync conflict issues use the workflow's own token (issues: write above); the release
+          # App is not granted Issues.
+          ISSUES_TOKEN: ${{ github.token }}
         run: bash tools/feature-sync.sh

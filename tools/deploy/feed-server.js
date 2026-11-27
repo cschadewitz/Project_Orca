@@ -36,8 +36,12 @@ const KEYS = [
   "signatureSize",
 ];
 
-export function bundleNames(version) {
-  const stem = `orca-server-${version}-linux-x64`;
+const PRODUCT = "orca";
+// The Orrery rename bridge (v0.8.1): a channel may name a bundle from either side of the rename.
+const PRODUCTS = [...new Set([PRODUCT, "orca", "orrery"])]; // rename-keep: both names, one release
+
+export function bundleNames(version, product = PRODUCT) {
+  const stem = `${product}-server-${version}-linux-x64`;
   return {
     archive: `${stem}.tar.xz`,
     manifest: `${stem}.manifest.json`,
@@ -104,7 +108,8 @@ export function parseServerChannel(text) {
   });
   if (!isVersion(value.version) || !/^\d+\.\d+\.\d+(?:-rc\.\d+)?$/.test(value.version))
     throw new Error(`unexpected version ${value.version}`);
-  const names = bundleNames(value.version);
+  const product = PRODUCTS.find((p) => value.archive === bundleNames(value.version, p).archive) ?? PRODUCT;
+  const names = bundleNames(value.version, product);
   if (value.platform !== "linux-x64") throw new Error(`unexpected platform ${value.platform}`);
   if (!/^[0-9a-f]{40}$/.test(value.sourceSha)) throw new Error("no source commit");
   for (const kind of ["archive", "manifest", "signature"]) {
