@@ -34,9 +34,12 @@ function concurrently(world, path, action, n, expected) {
     : Promise.all(actions.map((a) => path.decide(world, a, opts)));
 }
 
-/** The answer ran nothing: an ACP ask cancelled, or what the path says nothing ran on it. */
-function ranNothing(path, got) {
-  if (path.ranNothing) assert.ok(path.ranNothing(got), `${path.id}: ${JSON.stringify(got.response)}`);
+/**
+ * The answer ORCA handed back refuses the call: an ACP ask cancelled, or the path's own refusal
+ * shape. Only the answer is observed here, not that the agent obeys it or that nothing ran.
+ */
+function refusesCall(path, got) {
+  if (path.refusesCall) assert.ok(path.refusesCall(got), `${path.id}: ${JSON.stringify(got.response)}`);
   else assert.deepEqual(got.response, { outcome: { outcome: "cancelled" } });
 }
 
@@ -137,7 +140,7 @@ export const SCENARIOS = {
       return;
     }
     const none = await expectOutcome(world, path, issue, "ask", { noAnswerer: true });
-    ranNothing(path, none);
+    refusesCall(path, none);
 
     const turn = new AbortController();
     const pending = path.decide(world, issue, {
@@ -147,11 +150,11 @@ export const SCENARIOS = {
     setTimeout(() => turn.abort(), 10);
     const ended = await pending;
     assert.equal(ended.detail, "ask:expired");
-    ranNothing(path, ended);
+    refusesCall(path, ended);
 
     // An answer that is not one of the offered options runs nothing either.
     const invented = await path.decide(world, issue, { onAsk: async () => "allow-everything" });
-    ranNothing(path, invented);
+    refusesCall(path, invented);
   },
 
   async F01(world, path) {

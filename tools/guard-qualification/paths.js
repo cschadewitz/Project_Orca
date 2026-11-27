@@ -471,28 +471,40 @@ export const claudeSdkHook = {
       return result(decision.startsWith("ask:") ? "ask" : "deny", answer);
     }
     if (answer.behavior !== "allow") return result(`invalid:answer-${String(answer.behavior)}`, answer);
-    if (decision === "ask:allow_once") return result("ask", answer);
+    const answered = decision === "ask:allow_once";
     // An automatic allow of a call the hook asked about would be a grant the hook refused.
-    if (hookAsked) return result(`invalid:allowed-after-ask:${decision}`, answer);
-    if (action.tool === "mcp") {
-      // ORCA runs the server: the relayed call is checked again at dispatch, asking nobody.
-      try {
-        const relayed = await bridge.authorizeMcp(
-          { server: action.server, method: "tools/call", tool: action.name, arguments: toolInput },
-          claudeSignal,
-          { toolUseId },
-        );
-        await relayed.recheck();
-        relayed.dispatch();
-      } catch {
-        return result("invalid:relay-refused", answer);
-      }
+    if (hookAsked && !answered) return result(`invalid:allowed-after-ask:${decision}`, answer);
+    const outcome = answered ? "ask" : "allow";
+    if (action.tool !== "mcp") return result(outcome, answer);
+    // ORCA runs the server: every allowed MCP call, a person's one-time allow included, goes
+    // through the relay's own check, which asks nobody and decides again at the handoff.
+    let relayed;
+    try {
+      relayed = await bridge.authorizeMcp(
+        { server: action.server, method: "tools/call", tool: action.name, arguments: toolInput },
+        claudeSignal,
+        { toolUseId },
+      );
+    } catch {
+      return { ...result("invalid:relay-refused", answer), relay: "refused" };
     }
-    return result("allow", answer);
+    // A case may change the policy between the relay's first check and the handoff.
+    await opts.beforeHandoff?.();
+    try {
+      await relayed.recheck();
+      relayed.dispatch();
+    } catch {
+      // Refused at the handoff: ORCA denied the call there, after the case's change.
+      return { ...result(opts.beforeHandoff ? "deny" : "invalid:relay-refused", answer), relay: "refused" };
+    }
+    return { ...result(outcome, answer), relay: "dispatched" };
   },
 
-  /** Whether an answer ran nothing: on this route, a deny Claude is handed. */
-  ranNothing(got) {
+  /**
+   * Whether the answer ORCA handed Claude refuses the call: a deny. This observes the answer
+   * only; that Claude obeys it, and that nothing ran, are for the installed acceptance.
+   */
+  refusesCall(got) {
     return got.response?.behavior === "deny";
   },
 };
