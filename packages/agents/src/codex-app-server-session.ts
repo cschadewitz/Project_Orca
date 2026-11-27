@@ -924,7 +924,7 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
         };
   const packageCheck = async (entrypoint: string, version: string, signal: AbortSignal, path: string | undefined) =>
     (await checkCodexPackage(entrypoint, version, imageTarget, { signal })) ??
-    (await checkSystemBwrap(path, opts.cwd, { signal }));
+    (await checkSystemBwrap(path, { signal }));
   /** The `$TMPDIR` Codex sees, which a workspace-write sandbox lets it write unless excluded. */
   const fromAgent = agent.env.TMPDIR;
   const tmpdir = opts.env?.TMPDIR ?? (typeof fromAgent === "string" ? fromAgent : process.env.TMPDIR);

@@ -111,10 +111,10 @@ describe("checkCodexPackage", () => {
   it("runs under one deadline with the PATH check, as checkCodexPreflight", async () => {
     await build();
     await expect(
-      checkCodexPreflight(entrypoint(), "1.0.0", "linux-x64", undefined, root, { pins: PINS }),
+      checkCodexPreflight(entrypoint(), "1.0.0", "linux-x64", undefined, { pins: PINS }),
     ).resolves.toBeUndefined();
     await expect(
-      checkCodexPreflight(entrypoint(), "1.0.0", "linux-x64", undefined, root, { pins: PINS, timeoutMs: 0 }),
+      checkCodexPreflight(entrypoint(), "1.0.0", "linux-x64", undefined, { pins: PINS, timeoutMs: 0 }),
     ).resolves.toBe("ORCA's check of the Codex package did not finish within 0 ms");
   });
 });
@@ -144,23 +144,21 @@ describe("boundedCheck", () => {
       checkCodexPackage(join(root, "bin", "codex"), "0.171.0", "linux-x64", { signal: stopped }),
     ).rejects.toThrow("ORCA's check was stopped");
     await writeFile(join(root, "bin", "bwrap"), "");
-    await expect(checkSystemBwrap(join(root, "bin"), root, { signal: stopped })).rejects.toThrow(
-      "ORCA's check was stopped",
-    );
+    await expect(checkSystemBwrap(join(root, "bin"), { signal: stopped })).rejects.toThrow("ORCA's check was stopped");
   });
 });
 
 describe("checkSystemBwrap", () => {
   it("accepts a PATH with no bubblewrap on it, and skips entries that are not directories", async () => {
     await writeFile(join(root, "file"), "");
-    await expect(checkSystemBwrap(`${join(root, "none")}:${join(root, "file")}`, root)).resolves.toBeUndefined();
-    await expect(checkSystemBwrap(undefined, root)).resolves.toBeUndefined();
+    await expect(checkSystemBwrap(`${join(root, "none")}:${join(root, "file")}`)).resolves.toBeUndefined();
+    await expect(checkSystemBwrap(undefined)).resolves.toBeUndefined();
   });
 
   it("refuses a bubblewrap the user's own processes could replace", async () => {
     await mkdir(join(root, "bin"));
     await writeFile(join(root, "bin", "bwrap"), "", { mode: 0o755 });
-    await expect(checkSystemBwrap(`/nowhere:${join(root, "bin")}`, root)).resolves.toMatch(
+    await expect(checkSystemBwrap(`/nowhere:${join(root, "bin")}`)).resolves.toMatch(
       new RegExp(`^Codex would run the bubblewrap at ${join(root, "bin", "bwrap")} on its PATH instead of its own`),
     );
   });
@@ -168,14 +166,42 @@ describe("checkSystemBwrap", () => {
   it("refuses a link to a root-owned file from a directory that is not root's alone", async () => {
     await mkdir(join(root, "bin"));
     await symlink("/bin/sh", join(root, "bin", "bwrap"));
-    await expect(checkSystemBwrap(join(root, "bin"), root)).resolves.toMatch(/is not root's alone/);
+    await expect(checkSystemBwrap(join(root, "bin"))).resolves.toMatch(/is not root's alone/);
   });
 
-  it("reads an empty PATH entry as the working directory", async () => {
-    await writeFile(join(root, "bwrap"), "", { mode: 0o755 });
-    await expect(checkSystemBwrap("/nowhere::", root)).resolves.toMatch(
-      new RegExp(`bubblewrap at ${join(root, "bwrap")} on its PATH`),
+  it("checks the path the child looks up: a .. after a link is refused, not collapsed", async () => {
+    // root/link -> root/real/sub, so the kernel reads root/link/../bin as root/real/bin, where a
+    // replaceable bwrap is, while the string collapses to root/bin, where there is none.
+    await mkdir(join(root, "real", "sub"), { recursive: true });
+    await mkdir(join(root, "real", "bin"));
+    await writeFile(join(root, "real", "bin", "bwrap"), "", { mode: 0o755 });
+    await symlink(join(root, "real", "sub"), join(root, "link"));
+    const entry = `${join(root, "link")}/../bin`;
+    expect(existsSync(`${entry}/bwrap`)).toBe(true);
+    expect(existsSync(join(root, "bin", "bwrap"))).toBe(false);
+    await expect(checkSystemBwrap(`/usr/bin:${entry}`)).resolves.toBe(
+      `Codex's PATH has the entry ${JSON.stringify(entry)}, which ORCA cannot check as Codex would look it up (an empty, relative, "." or ".." entry). Give Codex a PATH of absolute directories`,
     );
+  });
+
+  it.each([
+    ["an empty entry", "/usr/bin::/bin", ""],
+    ["a relative entry", "/usr/bin:bin", "bin"],
+    ["a . component", "/usr/./bin", "/usr/./bin"],
+    ["an empty PATH", "", ""],
+  ])("refuses %s rather than guess how it resolves", async (_, path, entry) => {
+    await expect(checkSystemBwrap(path)).resolves.toMatch(
+      `Codex's PATH has the entry ${JSON.stringify(entry)}, which ORCA cannot check`,
+    );
+  });
+
+  it("checks a link in the looked-up path itself, as well as the file it reaches", async () => {
+    await mkdir(join(root, "sys"));
+    await symlink("/usr/bin", join(root, "sys", "bin"));
+    // A link the user owns, or in a directory that is not root's alone, can be repointed.
+    if (existsSync("/usr/bin/bwrap"))
+      await expect(checkSystemBwrap(join(root, "sys", "bin"))).resolves.toMatch(/is not root's alone/);
+    else await expect(checkSystemBwrap(join(root, "sys", "bin"))).resolves.toBeUndefined();
   });
 
   it("refuses a bubblewrap it cannot check", async () => {
@@ -184,7 +210,7 @@ describe("checkSystemBwrap", () => {
     await chmod(join(root, "locked"), 0o000);
     try {
       // Root reads through a mode-0 directory: then the file is found, and refused as the user's.
-      await expect(checkSystemBwrap(join(root, "locked"), root)).resolves.toMatch(
+      await expect(checkSystemBwrap(join(root, "locked"))).resolves.toMatch(
         process.getuid?.() === 0 ? /is not root's alone/ : /^ORCA could not check the bubblewrap at/,
       );
     } finally {
@@ -201,6 +227,6 @@ describe("checkSystemBwrap", () => {
     }
   });
   it.skipIf(!system)("accepts an installed system bubblewrap, owned by root and writable by no one else", async () => {
-    await expect(checkSystemBwrap(dirname(system!), root)).resolves.toBeUndefined();
+    await expect(checkSystemBwrap(dirname(system!))).resolves.toBeUndefined();
   });
 });

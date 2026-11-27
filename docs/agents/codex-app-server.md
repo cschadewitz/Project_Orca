@@ -29,7 +29,9 @@ guard. To use Codex today, use the ACP adapter (`codex-acp`) with no `driver`.
   writable by no one else, as an installed `bubblewrap` system package is. A `bwrap` in your
   home directory or under `/tmp` is refused. ORCA fixes Codex's `PATH` when the session opens,
   checks that one and starts every Codex process of the session with it, so `PATH` must be a
-  plain value: an agent whose `PATH` comes from a secret is refused. The whole check has one
+  plain value: an agent whose `PATH` comes from a secret is refused. Every `PATH` entry must be
+  an absolute directory with no `.` or `..` part, so that ORCA checks exactly what Codex looks up;
+  an empty or relative entry is refused. The whole check has one
   30-second limit; one that does not finish in time starts nothing.
 - **Your own `codex login`.** ORCA never signs in, never refreshes a token and never reads
   Codex's credential files. Run `codex login` yourself. A Codex that reports no login is

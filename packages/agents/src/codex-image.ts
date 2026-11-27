@@ -10,7 +10,7 @@
 
 import { createReadStream } from "node:fs";
 import { lstat, open, readFile, realpath, stat } from "node:fs/promises";
-import { basename, delimiter, dirname, join, resolve as resolvePath } from "node:path";
+import { basename, delimiter, dirname, isAbsolute, join } from "node:path";
 import { createHash } from "node:crypto";
 
 /** A file's content digest and the inode it was read from. */
@@ -253,17 +253,24 @@ export async function checkCodexPackage(
  * bubblewrap found on its `PATH` in preference to its bundled one, and checks only the bundled
  * one, so a `bwrap` there is accepted only when it, and every directory above it, is owned by
  * root and writable by no one else (an installed system package): one the user's own
- * processes could replace is refused. Empty entries are the working directory, as for a
- * shell. Returns why not, or undefined. Stops once `signal` fires.
+ * processes could replace is refused. Returns why not, or undefined. Stops once `signal`
+ * fires.
+ *
+ * ORCA checks the very path the child looks up, never a normalized one: `..` after a link
+ * resolves in the filesystem, not in the string. An entry whose meaning depends on how it is
+ * resolved (empty, relative, or with a `.` or `..` component) is refused rather than guessed.
+ * No `PATH` at all searches nothing.
  */
 export async function checkSystemBwrap(
   path: string | undefined,
-  cwd: string,
   { signal }: { signal?: AbortSignal } = {},
 ): Promise<string | undefined> {
   live(signal, undefined);
-  for (const entry of new Set((path ?? "").split(delimiter))) {
-    const candidate = resolvePath(cwd, entry, "bwrap");
+  for (const entry of new Set(path === undefined ? [] : path.split(delimiter))) {
+    if (!isAbsolute(entry) || entry.split("/").some((part) => part === "." || part === ".."))
+      return `Codex's PATH has the entry ${JSON.stringify(entry)}, which ORCA cannot check as Codex would look it up (an empty, relative, "." or ".." entry). Give Codex a PATH of absolute directories`;
+    // Exactly the path the child looks up: no component is collapsed.
+    const candidate = `${entry.replace(/\/+$/, "")}/bwrap`;
     try {
       live(signal, await stat(candidate));
     } catch (error) {
@@ -307,7 +314,6 @@ export function checkCodexPreflight(
   version: string,
   target: string,
   path: string | undefined,
-  cwd: string,
   {
     timeoutMs = CODEX_IMAGE_CHECK_TIMEOUT_MS,
     pins,
@@ -317,6 +323,6 @@ export function checkCodexPreflight(
     timeoutMs,
     async (signal) =>
       (await checkCodexPackage(entrypoint, version, target, { signal, ...(pins ? { pins } : {}) })) ??
-      (await checkSystemBwrap(path, cwd, { signal })),
+      (await checkSystemBwrap(path, { signal })),
   );
 }
