@@ -365,26 +365,45 @@ def signer(repository):
 
 
 # rename-keep-start: the admission variable of either product
-def admission_keys(entry):
-    """The admission variables the daemon at ENTRY reads, in the order it honors them. An
-    `orca-daemon.mjs` bundle or the source layout reads only ORCA_ADMISSION_FILE. An
-    `orrery-daemon.mjs` bundle reads ORRERY_ADMISSION_FILE, and adopts ORCA_ADMISSION_FILE only
-    when the new name is unset (core's adoptLegacyEnv). Launchers set both to the same value."""
-    if Path(entry).name == "orrery-daemon.mjs":
-        return ("ORRERY_ADMISSION_FILE", "ORCA_ADMISSION_FILE")
-    return ("ORCA_ADMISSION_FILE",)
+def admission_keys(record):
+    """Which admission variables fence the daemon a release RECORD (metadata()) runs, and how.
+
+    - An `orca-daemon.mjs` bundle reads only ORCA_ADMISSION_FILE: ("any", (ORCA,)).
+    - An `orrery-daemon.mjs` bundle reads ORRERY_ADMISSION_FILE, adopting ORCA_ADMISSION_FILE
+      only when the new name is unset (core's adoptLegacyEnv): ("first", (ORRERY, ORCA)).
+    - A source stage runs packages/cli/dist/main.js on both sides of the rename, so its entry
+      proves nothing. One whose recorded version is below 0.9.0 is positively the old
+      generation and reads only ORCA_ADMISSION_FILE. Any other (0.9.0 on, or no readable
+      version) is unidentified, and BOTH variables must be present and agree: ("all", ...).
+    Launchers write the same value under both names, so a correct launch passes every case."""
+    if record.get("source") == "bundle":
+        if Path(record["entry"]).name == "orrery-daemon.mjs":
+            return "first", ("ORRERY_ADMISSION_FILE", "ORCA_ADMISSION_FILE")
+        return "any", ("ORCA_ADMISSION_FILE",)
+    match = re.fullmatch(r"(\d+)\.(\d+)\.\d+(?:-[0-9A-Za-z.-]+)?", str(record.get("version") or ""))
+    if match and (int(match[1]), int(match[2])) < (0, 9):
+        return "any", ("ORCA_ADMISSION_FILE",)
+    return "all", ("ORRERY_ADMISSION_FILE", "ORCA_ADMISSION_FILE")
 
 
-def admission_guarded(entry, environment, pending):
-    """True only when the admission variable the running daemon actually honors (the first of
-    admission_keys present) names exactly PENDING, once. A variable the daemon ignores never
-    counts, and a disagreeing honored one refuses even when another is right. ENVIRONMENT is
-    /proc/<pid>/environ split on NUL."""
-    for key in admission_keys(entry):
+def admission_guarded(record, environment, pending):
+    """True only when the admission variable(s) that fence the daemon RECORD runs (see
+    admission_keys) name exactly PENDING, each exactly once. A variable the daemon ignores never
+    counts as proof, and a disagreeing honored one refuses even when another is right.
+    ENVIRONMENT is /proc/<pid>/environ split on NUL."""
+    mode, keys = admission_keys(record)
+    expected = [str(pending).encode()]
+
+    def values(key):
         prefix = key.encode() + b"="
-        values = [item[len(prefix):] for item in environment if item.startswith(prefix)]
-        if values:
-            return values == [str(pending).encode()]
+        return [item[len(prefix):] for item in environment if item.startswith(prefix)]
+
+    if mode == "all":
+        return all(values(key) == expected for key in keys)
+    for key in keys:
+        found = values(key)
+        if found:
+            return found == expected
     return False
 # rename-keep-end
 
@@ -1033,11 +1052,12 @@ class Deployment(BundleSource):
                 raise RuntimeError(f"Unmanaged ORCA process blocks activation: pid {directory.name}")
         process_dir = Path("/proc") / str(service_pid)
         args = (process_dir / "cmdline").read_bytes().split(b"\0")
-        expected = metadata((self.root / "current").resolve())["entry"].encode()
+        record = metadata((self.root / "current").resolve())
+        expected = record["entry"].encode()
         if process_dir.stat().st_uid != os.getuid() or expected not in args or b"serve" not in args:
             raise RuntimeError("Service PID is not the expected managed daemon; inspect the actual launch method")
         environment = (process_dir / "environ").read_bytes().split(b"\0")
-        if not admission_guarded(expected.decode(), environment, self.pending):
+        if not admission_guarded(record, environment, self.pending):
             raise RuntimeError("Managed daemon lacks the persistent admission guard; migrate its launcher first")
         return service_pid
 
