@@ -1232,6 +1232,40 @@ export const AgentSpecSchema = z
      */
     codexExecGate: z.enum(["off", "experimental"]).optional(),
     /**
+     * Claude Code settings for an agent that is the Claude ACP adapter (#1134), passed to
+     * Claude Code through `session/new`'s `_meta.claudeCode.options`. Left out, Claude Code
+     * loads every settings source and runs commands unsandboxed, as before. ORCA refuses the
+     * session when the agent turns out not to be the Claude adapter, rather than drop them.
+     *
+     * - `settingSources`: which of Claude Code's own settings files it loads: `user`
+     *   (`~/.claude/settings.json`), `project` (the checkout's `.claude/settings.json`) and
+     *   `local` (`.claude/settings.local.json`). `[]` loads none of them, so a checkout cannot
+     *   add hooks, MCP servers or allow rules ORCA did not choose. Leaving out `project` also
+     *   leaves out CLAUDE.md. Leaving out `project` or `local` turns bypass mode off too, since
+     *   the adapter still reads the checkout's initial mode.
+     * - `sandbox: on`: Bash commands run in Claude Code's OS sandbox, or the session fails to
+     *   start; no command may leave it, ORCA's private paths and the whole store are kept from
+     *   its writes, and every command is still asked about as before. It needs
+     *   `settingSources: []`, since Claude Code merges sandbox exceptions from every settings
+     *   file it loads.
+     */
+    claudeCode: z
+      .object({
+        settingSources: z
+          .array(z.enum(["user", "project", "local"]))
+          .max(3)
+          .refine((s) => new Set(s).size === s.length, { message: "each settings source at most once" })
+          .optional(),
+        sandbox: z.enum(["off", "on"]).optional(),
+      })
+      .strict()
+      .refine((c) => c.sandbox !== "on" || (c.settingSources !== undefined && c.settingSources.length === 0), {
+        message:
+          "sandbox: on needs settingSources: [] (Claude Code merges sandbox exceptions from every settings file it loads)",
+        path: ["settingSources"],
+      })
+      .optional(),
+    /**
      * MCP servers passed in `session/new`. The legacy inline form: each one is on for this
      * agent, as if it were in the catalog and enabled here. `capabilities` below selects from
      * the shared catalog instead (#335).

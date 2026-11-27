@@ -25,6 +25,7 @@
 import type { LiveAnswerAuthority, ExecutionResumeAuthority } from "@orca/engine";
 import {
   OrcaError,
+  elicitationOf,
   isOrcaError,
   type HumanInputRequest,
   type RunState,
@@ -123,11 +124,15 @@ export async function answerAndResume(orc: Orchestrator, opts: AnswerAndResumeOp
     });
 
   const runId = found.request.runId;
-  if (found.request.kind === "permission") {
+  if (found.request.kind === "permission" || elicitationOf(found.request.context)) {
     const held = (await orc.listLeases()).some((lease) => lease.runId === runId && !lease.lapsed);
-    throw new OrcaError("RUN_STATE", "answer a live permission at its owning daemon with its exact identity", {
-      liveInputState: held ? "owner-unavailable" : "expired",
-    });
+    throw new OrcaError(
+      "RUN_STATE",
+      "answer a live permission or agent question at its owning daemon with its exact identity",
+      {
+        liveInputState: held ? "owner-unavailable" : "expired",
+      },
+    );
   }
   if (found.state.run.status !== "paused")
     throw new ProtocolFault(
@@ -299,7 +304,8 @@ export class ControlModel {
         candidate.request.kind !== expected.kind)
     )
       throw new OrcaError("RUN_STATE", "The exact decision is no longer available");
-    if (candidate.request.kind === "permission") {
+    // A permission ask and an agent's question (#1133) are both answered into the live turn.
+    if (candidate.request.kind === "permission" || elicitationOf(candidate.request.context)) {
       return this.answerLive(params, candidate.request, candidate.state, authority);
     }
     if (params.live) throw new OrcaError("RUN_STATE", "a durable gate has no live callback");

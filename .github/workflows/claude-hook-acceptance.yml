@@ -31,6 +31,8 @@ on:
       - packages/agents/src/bin/hook-output-guard.ts
       - packages/agents/test/fixtures/hook-output-guard/**
       - packages/agents/src/acp-session.ts
+      - packages/agents/src/claude-mode.ts
+      - packages/agents/src/claude-code-options.ts
       - packages/agents/src/permissions.ts
       - packages/agents/src/policy-call.ts
       - packages/cli/src/bootstrap.ts
@@ -96,6 +98,17 @@ jobs:
           bin="$d/node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude"
           "$bin" --version
           echo "ORCA_CLAUDE_OTHER_RUNTIME=$bin" >> "$GITHUB_ENV"
+
+      # Claude Code's command sandbox (sandbox: on, #1134) runs on bubblewrap and socat. Ubuntu
+      # 24.04 keeps unprivileged user namespaces behind AppArmor, which bubblewrap needs.
+      - name: Install Claude Code's sandbox prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq bubblewrap socat
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          bwrap --ro-bind / / true
 
       - name: Run the acceptance tests
         shell: bash

@@ -4,8 +4,8 @@
  */
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import { OrcaError, type MutationActor, type OrcaEventInput } from "@orca/core";
-import { HumanInputPending, type HumanInputPort, type HumanInputQuery } from "./human-input.js";
+import { OrcaError, parseElicitationAnswer, type MutationActor, type OrcaEventInput } from "@orca/core";
+import { HumanInputPending, heldByAgentTurn, type HumanInputPort, type HumanInputQuery } from "./human-input.js";
 
 export interface LiveDecisionIdentity {
   instanceId: string;
@@ -176,11 +176,11 @@ export class LiveHumanInput implements HumanInputPort {
   }
 
   recordsAnswer(query: HumanInputQuery): boolean {
-    return query.kind === "permission" && query.live !== undefined;
+    return heldByAgentTurn(query) && query.live !== undefined;
   }
 
   ask(query: HumanInputQuery): Promise<string | undefined> {
-    if (query.kind !== "permission") return Promise.reject(new HumanInputPending(query));
+    if (!heldByAgentTurn(query)) return Promise.reject(new HumanInputPending(query));
     const binding = query.live;
     // Unsupported transports retain PausingHumanInput's conservative cancellation.
     if (!binding) return Promise.resolve(undefined);
@@ -338,8 +338,13 @@ export class LiveHumanInput implements HumanInputPort {
     const entry = this.pending.get(answer.target.requestId);
     const state = this.inspect(answer.target);
     if (state !== "pending" || !entry) throw unavailable(state);
-    if (!entry.query.options.some((option) => option.id === answer.optionId))
+    // An agent's question is answered with its form's content (#1133), checked against the
+    // form the agent sent; anything else with one of the options it offered.
+    if (entry.query.elicitation) parseElicitationAnswer(entry.query.elicitation, answer.optionId);
+    else if (!entry.query.options.some((option) => option.id === answer.optionId))
       throw new OrcaError("RUN_STATE", "the answer is not an offered option");
+    if (answer.standing === true && entry.query.kind !== "permission")
+      throw new OrcaError("NOT_SUPPORTED", "only a permission ask has a standing answer");
     if ((answer.standing === true) !== Boolean(afterAnswer))
       throw new OrcaError("NOT_SUPPORTED", "standing answer requires its authorized writer");
     // Claim synchronously before any await, so concurrent responders cannot both enter.
