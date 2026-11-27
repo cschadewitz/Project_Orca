@@ -391,6 +391,50 @@ def signer(repository):
     return f"https://github.com/{repository}/.github/workflows/release-server-bundle.yml@refs/heads/main"
 
 
+# rename-keep-start: the admission variable of either product
+def admission_keys(record):
+    """Which admission variables fence the daemon a release RECORD (metadata()) runs, and how.
+
+    - An `orca-daemon.mjs` bundle reads only ORCA_ADMISSION_FILE: ("any", (ORCA,)).
+    - An `orrery-daemon.mjs` bundle reads ORRERY_ADMISSION_FILE, adopting ORCA_ADMISSION_FILE
+      only when the new name is unset (core's adoptLegacyEnv): ("first", (ORRERY, ORCA)).
+    - A source stage runs packages/cli/dist/main.js on both sides of the rename, so its entry
+      proves nothing. One whose recorded version is below 0.9.0 is positively the old
+      generation and reads only ORCA_ADMISSION_FILE. Any other (0.9.0 on, or no readable
+      version) is unidentified, and BOTH variables must be present and agree: ("all", ...).
+    Launchers write the same value under both names, so a correct launch passes every case."""
+    if record.get("source") == "bundle":
+        if Path(record["entry"]).name == "orrery-daemon.mjs":
+            return "first", ("ORRERY_ADMISSION_FILE", "ORCA_ADMISSION_FILE")
+        return "any", ("ORCA_ADMISSION_FILE",)
+    match = re.fullmatch(r"(\d+)\.(\d+)\.\d+(?:-[0-9A-Za-z.-]+)?", str(record.get("version") or ""))
+    if match and (int(match[1]), int(match[2])) < (0, 9):
+        return "any", ("ORCA_ADMISSION_FILE",)
+    return "all", ("ORRERY_ADMISSION_FILE", "ORCA_ADMISSION_FILE")
+
+
+def admission_guarded(record, environment, pending):
+    """True only when the admission variable(s) that fence the daemon RECORD runs (see
+    admission_keys) name exactly PENDING, each exactly once. A variable the daemon ignores never
+    counts as proof, and a disagreeing honored one refuses even when another is right.
+    ENVIRONMENT is /proc/<pid>/environ split on NUL."""
+    mode, keys = admission_keys(record)
+    expected = [str(pending).encode()]
+
+    def values(key):
+        prefix = key.encode() + b"="
+        return [item[len(prefix):] for item in environment if item.startswith(prefix)]
+
+    if mode == "all":
+        return all(values(key) == expected for key in keys)
+    for key in keys:
+        found = values(key)
+        if found:
+            return found == expected
+    return False
+# rename-keep-end
+
+
 def both_env_names(env, names):
     """The daemon environment this adapter sets, under the old and the new prefix (the rename
     bridge): either release reads its own, whichever adapter launched it."""
@@ -1035,12 +1079,12 @@ class Deployment(BundleSource):
                 raise RuntimeError(f"Unmanaged ORCA process blocks activation: pid {directory.name}")
         process_dir = Path("/proc") / str(service_pid)
         args = (process_dir / "cmdline").read_bytes().split(b"\0")
-        expected = metadata((self.root / "current").resolve())["entry"].encode()
+        record = metadata((self.root / "current").resolve())
+        expected = record["entry"].encode()
         if process_dir.stat().st_uid != os.getuid() or expected not in args or b"serve" not in args:
             raise RuntimeError("Service PID is not the expected managed daemon; inspect the actual launch method")
         environment = (process_dir / "environ").read_bytes().split(b"\0")
-        gates = [(prefix + "ADMISSION_FILE=" + str(self.pending)).encode() for prefix in ENV_PREFIXES]
-        if not any(gate in environment for gate in gates):
+        if not admission_guarded(record, environment, self.pending):
             raise RuntimeError("Managed daemon lacks the persistent admission guard; migrate its launcher first")
         return service_pid
 

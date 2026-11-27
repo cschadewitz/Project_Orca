@@ -67,7 +67,14 @@ extraResources:
   # agents there, #1236), so they are this build's own, never fetched.
   - from: ../../tools/deploy
     to: server-setup
-    filter: ["orca-server-setup.py", "orca-release.py", "orca-host-agents.py", "host-agents.lock.json"]
+    filter:
+      [
+        "orca-server-setup.py",
+        "orca-server-setup.ps1",
+        "orca-release.py",
+        "orca-host-agents.py",
+        "host-agents.lock.json",
+      ]
 
 # Both architectures on every platform that has two. A desktop artifact that only runs on
 # the architecture the runner happened to have is the bug this spells out to avoid: GitHub's

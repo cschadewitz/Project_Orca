@@ -29,6 +29,7 @@ vi.mock("../src/durable-file.js", async (original) => {
       );
     },
     syncFile: real.syncFile,
+    replaceFile: real.replaceFile,
   };
 });
 const { carryStoreForward, readStoreFormat, STORE_FORMAT_BACKUP_DIR } = await import("../src/index.js");

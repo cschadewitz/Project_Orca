@@ -93,7 +93,7 @@ export interface TailnetPeer {
   sshHostKeys: string[];
   /** Runs the Tailscale SSH server: it advertises host keys (Tailscale's own signal for this). */
   tailscaleSsh: boolean;
-  /** Whether ORCA can set up a daemon host there today: Linux only (#1238 for Windows). */
+  /** Whether ORCA can set up a daemon host there: Linux, or Windows (#1238). */
   hostSupported: boolean;
 }
 
@@ -220,7 +220,7 @@ function peerOf(raw: unknown, users: Record<string, unknown> | undefined): Tailn
     sharedIn: typeof peer.AltSharerUserID === "number" && peer.AltSharerUserID !== 0,
     sshHostKeys: keys,
     tailscaleSsh: keys.length > 0,
-    hostSupported: os.toLowerCase() === "linux",
+    hostSupported: ["linux", "windows"].includes(os.toLowerCase()),
   };
 }
 

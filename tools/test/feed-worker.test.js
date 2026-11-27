@@ -186,6 +186,49 @@ describe("payload files", () => {
     expect((await handle(get("/ORCA-9.9.9-win-x64.exe", { token: TOKENS.stable }), e)).status).toBe(404);
   });
 
+  // The Orrery rename bridge (#1311): a v0.9 snapshot names its installers `Orrery-`.
+  it("serves Orrery- installers and blockmaps of a completed snapshot through the same routes", async () => {
+    const e = env(RINGS, {
+      "0.9.0/complete.json": '{"format":2,"version":"0.9.0","arches":["x64","arm64"]}',
+      "0.9.0/Orrery-0.9.0-win-x64.exe": "orrery-x64",
+      "0.9.0/Orrery-0.9.0-win-x64.exe.blockmap": "orrery-map",
+      "0.9.0/Orrery-0.9.0-win-arm64.exe": "orrery-arm",
+      "0.9.0/Orrery-0.9.0-win-arm64.exe.blockmap": "orrery-arm-map",
+      // A snapshot from before the rename, which only ever has the old name (the fixtures
+      // above follow the rename, so this one is what keeps the two names apart).
+      "0.8.1/complete.json": '{"format":1,"version":"0.8.1"}',
+      "0.8.1/ORCA-0.8.1-win-x64.exe": "pre-rename", // rename-keep: a snapshot from before the rename
+    });
+    for (const [path, body] of [
+      ["/Orrery-0.9.0-win-x64.exe", "orrery-x64"],
+      ["/Orrery-0.9.0-win-x64.exe.blockmap", "orrery-map"],
+      ["/Orrery-0.9.0-win-arm64.exe", "orrery-arm"],
+      ["/Orrery-0.9.0-win-arm64.exe.blockmap", "orrery-arm-map"],
+    ]) {
+      const response = await handle(get(path, { token: TOKENS.stable }), e);
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe(body);
+    }
+    const range = await handle(
+      get("/Orrery-0.9.0-win-x64.exe", { token: TOKENS.stable, headers: { Range: "bytes=0-5" } }),
+      e,
+    );
+    expect(range.status).toBe(206);
+    expect(await range.text()).toBe("orrery");
+    // The old name still works beside it, and neither name reaches a file under the other.
+    expect(await (await handle(get("/ORCA-0.7.0-win-x64.exe", { token: TOKENS.stable }), e)).text()).toBe("0123456789");
+    const before = "/ORCA-0.8.1-win-x64.exe"; // rename-keep: the old name of a pre-rename snapshot
+    expect(await (await handle(get(before, { token: TOKENS.stable }), e)).text()).toBe("pre-rename");
+    for (const path of [
+      "/ORCA-0.9.0-win-x64.exe", // rename-keep: the old name never reaches a renamed snapshot
+      "/Orrery-0.8.1-win-x64.exe",
+      "/orrery-0.9.0-win-x64.exe",
+      "/ORRERY-0.9.0-win-x64.exe",
+    ]) {
+      expect((await handle(get(path, { token: TOKENS.stable }), e)).status).toBe(404);
+    }
+  });
+
   it.each([
     ["bytes=2-4", 206, "234", "bytes 2-4/10"],
     ["bytes=7-", 206, "789", "bytes 7-9/10"],
@@ -420,6 +463,46 @@ describe("server bundle channel (#877)", () => {
     }
     // The desktop channel of the same ring is untouched.
     expect(await (await handle(get("/latest-x64.yml", { token: TOKENS.preview }), e)).text()).toBe("version: 0.7.0\n");
+  });
+
+  it("serves an orrery-server bundle, manifest and signature through the same routes (#1311)", async () => {
+    const stem = "orrery-server-0.9.0-linux-x64";
+    const e = serverEnv(SERVER_RINGS, {
+      [`server/0.9.0/${stem}.tar.xz`]: "orrery archive",
+      [`server/0.9.0/${stem}.manifest.json`]: '{"version":"0.9.0"}',
+      [`server/0.9.0/${stem}.manifest.json.sigstore.json`]: '{"orrery":true}',
+      "server/0.9.0/complete.json": JSON.stringify({ format: 1, version: "0.9.0", platform: "linux-x64" }),
+      // A bundle from before the rename, which only ever has the old name.
+      "server/0.8.1/complete.json": JSON.stringify({ format: 1, version: "0.8.1", platform: "linux-x64" }),
+      "server/0.8.1/orca-server-0.8.1-linux-x64.tar.xz": "pre-rename archive", // rename-keep: a pre-rename bundle
+    });
+    for (const [suffix, body] of [
+      ["tar.xz", "orrery archive"],
+      ["manifest.json", '{"version":"0.9.0"}'],
+      ["manifest.json.sigstore.json", '{"orrery":true}'],
+    ]) {
+      const response = await handle(get(`/server/${stem}.${suffix}`, { token: SERVER_TOKEN }), e);
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe(body);
+    }
+    const range = await handle(
+      get(`/server/${stem}.tar.xz`, { token: SERVER_TOKEN, headers: { Range: "bytes=0-5" } }),
+      e,
+    );
+    expect(range.status).toBe(206);
+    expect(await range.text()).toBe("orrery");
+    // Still the old name beside it; neither name reaches the other's files.
+    expect(
+      (await handle(get("/server/orca-server-0.8.0-rc.1-linux-x64.tar.xz", { token: SERVER_TOKEN }), e)).status,
+    ).toBe(200);
+    const before = "/server/orca-server-0.8.1-linux-x64.tar.xz"; // rename-keep: a pre-rename bundle's old name
+    expect(await (await handle(get(before, { token: SERVER_TOKEN }), e)).text()).toBe("pre-rename archive");
+    for (const path of [
+      "/server/orca-server-0.9.0-linux-x64.tar.xz", // rename-keep: the old name never reaches a renamed bundle
+      "/server/orrery-server-0.8.1-linux-x64.tar.xz",
+    ]) {
+      expect((await handle(get(path, { token: SERVER_TOKEN }), e)).status).toBe(404);
+    }
   });
 
   it("serves the bundle, manifest and signature by the version in their name, with HEAD and Range", async () => {

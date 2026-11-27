@@ -60,6 +60,11 @@ publishing.
   different path. A watcher answers every "Unlock Login Keyring" window with xdotool: Escape
   to cancel, or the password and Return to unlock. Input goes through XTEST to the focused
   window; `xdotool --window` sends synthetic events, which GTK and Chromium ignore.
+  The watcher follows each prompt by its X window id. One ask of the app's is several prompts
+  in a row (two when cancelled on a fresh keyring, three once ORCA's key is stored), each a
+  new window about 25 ms after the last one closed, so "is a prompt showing" cannot tell an
+  answered prompt from the next one (#1177). A window still up a second after its answer is
+  answered again.
 - **`app.ts`** launches the installed binary with Playwright's `_electron.launch({ executablePath })`
   and `chromiumSandbox: true`. Without that option Playwright adds `--no-sandbox` on Linux.
   Every launch then fails unless the browser has no `--no-sandbox` and each renderer is in a
@@ -71,6 +76,18 @@ publishing.
 - **`flows.ts`** is the tester's path by role and accessible name: first-run setup of a
   disposable Git project and empty workspace, then Launch work with the harmless sample.
   The folder chooser is stubbed in the main process: GTK's dialog is GTK's to test.
+
+## While a keyring prompt is up
+
+Electron's `safeStorage` asks the keyring synchronously, so from the first prompt until the
+last one is answered the app's main process is inside that call. Playwright reaches the
+window through the main process: every locator, `expect` and screenshot waits until then,
+and its timeout keeps running. A failure in that time says "element(s) not found" and
+attaches a page from before the prompt, whatever the page shows by then. That is how #1177
+looked: the page was right, and the prompts had gone unanswered for 20 s. So when a spec
+times out near a keyring ask, look at the prompts before the page. `keyring-prompt.spec.ts`
+attaches the watcher's log on failure (`keyring-prompts`: each prompt's window, how often it
+was answered and how long it stayed up).
 
 ## Checked against the bugs
 

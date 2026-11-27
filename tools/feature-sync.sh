@@ -77,24 +77,37 @@ ACTIONS_APP_ID=15368
 # requires a pull request and `check (node 24)` from GitHub Actions under the strict (up to
 # date with the base) policy, with no bypass actors at all, so no credential, the merging one
 # included, can merge past it. A ruleset whose bypass list cannot be read counts as unverified.
+# The message names why each candidate ruleset did not qualify.
 ruleset_problem() {
   local rules id ruleset
   if ! rules=$(gh api "repos/$REPO/rules/branches/$1" 2>/dev/null); then
     echo "its rules could not be read"; return 1
   fi
+  local seen=() why
   for id in $(jq -r --arg c "$REQUIRED_CHECK" --argjson app "$ACTIONS_APP_ID" '
       .[] | select(.type == "required_status_checks"
         and .parameters.strict_required_status_checks_policy == true
         and any(.parameters.required_status_checks[]; .context == $c and .integration_id == $app))
       | .ruleset_id // empty' <<<"$rules" | sort -u); do
-    ruleset=$(gh api "repos/$REPO/rulesets/$id" 2>/dev/null) || continue
-    if jq -e '.enforcement == "active"
-        and (.bypass_actors | type == "array" and length == 0)
-        and any(.rules[]; .type == "pull_request")' <<<"$ruleset" >/dev/null; then
-      return 0
+    if ! ruleset=$(gh api "repos/$REPO/rulesets/$id" 2>/dev/null); then
+      seen+=("ruleset $id could not be read"); continue
     fi
+    # "qualifies", or why this candidate does not. Only a successful parse that prints exactly
+    # "qualifies" counts; a jq failure or any other output leaves the ruleset unverified.
+    if ! why=$(jq -r --arg id "$id" '
+      if .enforcement != "active" then "ruleset \($id) is not active"
+      elif (.bypass_actors | type) != "array" then "ruleset \($id) bypass list is not visible to this token"
+      elif (.bypass_actors | length) != 0 then "ruleset \($id) has bypass actors"
+      elif any(.rules[]; .type == "pull_request") | not then "ruleset \($id) does not require a pull request"
+      else "qualifies" end' <<<"$ruleset" 2>/dev/null); then
+      seen+=("ruleset $id could not be parsed"); continue
+    fi
+    [ "$why" != "qualifies" ] || return 0
+    seen+=("${why:-ruleset $id gave no verdict}")
   done
-  echo "no active ruleset with no bypass actors requires a pull request and an up-to-date \`$REQUIRED_CHECK\` from GitHub Actions (or its bypass list could not be read)"
+  local detail=""
+  [ "${#seen[@]}" -eq 0 ] || detail=" ($(IFS=';'; echo "${seen[*]}" | sed 's/;/; /g'))"
+  echo "no active ruleset with no bypass actors requires a pull request and an up-to-date \`$REQUIRED_CHECK\` from GitHub Actions$detail"
   return 1
 }
 

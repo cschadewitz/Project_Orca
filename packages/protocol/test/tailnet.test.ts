@@ -123,21 +123,24 @@ describe("parseTailnetStatus", () => {
     ]);
   });
 
-  it("marks shared-in nodes, keeps tags, hides sharee nodes and marks Windows as not a host yet", () => {
+  it("marks shared-in nodes, keeps tags, hides sharee nodes and marks Linux and Windows as hosts", () => {
     const snapshot = running(
       status([
         peer({ ID: "nShared1", DNSName: "gpu.other-tailnet.ts.net.", AltSharerUserID: 202, UserID: 202 }),
         peer({ ID: "nTagged1", DNSName: "ci.example-tailnet.ts.net.", Tags: ["tag:orca-server", "not a tag"] }),
         peer({ ID: "nSharee1", DNSName: "visitor.example-tailnet.ts.net.", ShareeNode: true }),
         peer({ ID: "nWin1", DNSName: "desk.example-tailnet.ts.net.", OS: "windows" }),
+        peer({ ID: "nMac1", DNSName: "mac.example-tailnet.ts.net.", OS: "macOS" }),
       ]),
     );
-    expect(snapshot.peers.map((entry) => entry.nodeId)).toEqual(["nTagged1", "nWin1", "nShared1"]);
-    const [tagged, windows, shared] = snapshot.peers;
+    expect(snapshot.peers.map((entry) => entry.nodeId)).toEqual(["nTagged1", "nWin1", "nShared1", "nMac1"]);
+    const [tagged, windows, shared, mac] = snapshot.peers;
     expect(tagged!.tags).toEqual(["tag:orca-server"]);
     expect(shared!.sharedIn).toBe(true);
     expect(shared!.owner).toBeUndefined();
-    expect(windows!.hostSupported).toBe(false);
+    // Windows hosts since #1238; macOS still cannot be one.
+    expect(windows!.hostSupported).toBe(true);
+    expect(mac!.hostSupported).toBe(false);
     expect(windows!.tailscaleSsh).toBe(false);
   });
 

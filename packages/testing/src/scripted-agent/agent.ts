@@ -242,6 +242,22 @@ export class ScriptedAgent {
             locations: [{ path: d.path }],
           },
         });
+        let answer = "";
+        if (entry.elicit) {
+          const { mode = "form", ...rest } = entry.elicit;
+          try {
+            const res = await ctx.client.request(acp.methods.client.elicitation.create, {
+              sessionId,
+              toolCallId,
+              mode,
+              ...rest,
+            } as acp.CreateElicitationRequest);
+            answer = JSON.stringify(res);
+          } catch (error) {
+            const code = (error as { code?: unknown }).code;
+            answer = `error:${typeof code === "number" ? code : "unknown"}`;
+          }
+        }
         if (entry.askPermission) {
           const permissionPath = entry.permissionPath ?? d.path;
           const res = await ctx.client.request(acp.methods.client.session.requestPermission, {
@@ -266,7 +282,7 @@ export class ScriptedAgent {
             continue;
           }
         }
-        const content = renderEntry(entry, { kind: d.kind, path: d.path, n, prompt: text });
+        const content = renderEntry(entry, { kind: d.kind, path: d.path, n, prompt: text, answer });
         await mkdir(dirname(d.path), { recursive: true });
         await writeFile(d.path, content, "utf8");
         await ctx.client.notify(acp.methods.client.session.update, {
@@ -294,13 +310,13 @@ function toWire(options: SessionConfigOption[]): acp.SessionConfigOption[] {
   return JSON.parse(JSON.stringify(options)) as acp.SessionConfigOption[];
 }
 
-type EntryVars = { kind: string; path: string; n: number; prompt: string };
+type EntryVars = { kind: string; path: string; n: number; prompt: string; answer?: string };
 
 function substitute(s: string, vars: EntryVars, entry: PlaybookEntry): string {
   const extract = entry.extract === undefined ? "" : (new RegExp(entry.extract).exec(vars.prompt)?.[1] ?? "");
   return s
-    .replace(/\{(kind|path|n|prompt|extract)\}/g, (_, k: keyof EntryVars | "extract") =>
-      k === "extract" ? extract : String(vars[k]),
+    .replace(/\{(kind|path|n|prompt|extract|answer)\}/g, (_, k: keyof EntryVars | "extract") =>
+      k === "extract" ? extract : String(vars[k] ?? ""),
     )
     .replace(/\{env:([A-Za-z_][A-Za-z0-9_]*)\}/g, (_, name: string) => process.env[name] ?? "");
 }

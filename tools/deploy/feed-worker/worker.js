@@ -17,7 +17,7 @@
  * bundle, its manifest and the manifest's Sigstore signature (as attached to the GitHub
  * release, #876) and `latest-linux-x64.yml`, and is served only once its own `complete.json`
  * exists. `server/latest-linux-x64.yml` resolves per token from rings.json's `server` rings;
- * `server/orca-server-<version>-linux-x64.*` is addressed by the version in its name. The
+ * `server/orca-server-<version>-linux-x64.*` (or `orrery-server-…`) is addressed by the version in its name. The
  * server verifies the signature itself (orca-release.py), so the feed is transport only.
  *
  * Responses are never cached and never redirect. Authorization is never logged.

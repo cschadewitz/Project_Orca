@@ -97,6 +97,8 @@ export interface ServerSetupView {
     step?: string;
     detail?: string;
     version?: string;
+    /** A Windows server whose account may not register a boot task: started at its logon (#1238). */
+    startsAt?: "logon";
   };
   signIn?: { ok: true } | { ok: false; message: string };
 }
@@ -117,6 +119,8 @@ export interface ServerInspectionView {
   root: string;
   current: string | null;
   scope: "install-and-sign-in";
+  /** A Windows server (#1238): its setup is a scheduled task, and it downloads its own bundle. */
+  os?: "windows";
 }
 /** An inspection: something to confirm, or (`setup`) why this server cannot be set up. */
 export interface ServerInspectionResultView {
@@ -137,7 +141,7 @@ export interface TailnetMachineView {
   tailscaleSsh: boolean;
   /** Shared in from another tailnet: its host keys are confirmed by hand. */
   sharedIn: boolean;
-  /** ORCA can set up a server there (Linux today, #1238). */
+  /** ORCA can set up a server there: Linux or Windows (#1238). */
   hostSupported: boolean;
 }
 /**

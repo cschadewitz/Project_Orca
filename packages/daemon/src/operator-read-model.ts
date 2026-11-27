@@ -3,6 +3,7 @@ import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import {
   OrcaError,
+  elicitationOf,
   isOrcaError,
   SUBMISSION_CORRELATION_VAR,
   systemClock,
@@ -716,7 +717,8 @@ export function operatorEventCollections(options: {
                 ? { runId, stepRunId: p.stepRunId, requestId: p.requestId, ...p.liveDecision }
                 : undefined;
               // A legacy permission has no living invocation. Never advertise it as a durable gate.
-              if (p.kind === "permission" && !live) continue;
+              // Nor an agent's question (#1133): only its live turn can take the answer.
+              if ((p.kind === "permission" || elicitationOf(p.context)) && !live) continue;
               // Two records suffice to disprove uniqueness; never hydrate the whole run.
               // Do not infer a node from question text, active workflow defaults or another step.
               const scheduled = await events.readRange(runId, {

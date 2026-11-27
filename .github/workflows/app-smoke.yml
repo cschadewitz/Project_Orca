@@ -245,7 +245,8 @@ jobs:
           if-no-files-found: ignore
 
   # The layout check on Windows (#1112: "at 100%, 125% and 150% scaling, on Windows and
-  # Linux"), for now the Connect to a daemon dialog only (#1284). A fresh GitHub-hosted VM: the runner's own session is the desktop and DPAPI the
+  # Linux"): the whole layout spec, every surface and the Connect to a daemon dialog. A
+  # fresh GitHub-hosted VM: the runner's own session is the desktop and DPAPI the
   # key store, so nothing is installed and no persistent host is touched. Its screen is
   # 1024×768, so the larger size measured here is 1000×680 (`test/layout/desktop.ts`).
   layout-windows:
@@ -286,9 +287,7 @@ jobs:
             echo "::notice title=Layout check::not applicable: this ref predates the check"
             exit 0
           fi
-          # Only the dialog spec, which needs no seeded daemon: seeding a workspace on Windows
-          # fails in requests.submit (#1284). Drop the file argument once that is fixed.
-          pnpm run app:layout connect-dialog.spec.ts
+          pnpm run app:layout
 
       - name: Upload the layout check's output
         if: ${{ !cancelled() }}
