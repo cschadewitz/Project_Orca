@@ -383,7 +383,8 @@ way with `powershell -NoProfile -ExecutionPolicy Bypass -File orca-windows-ssh.p
   2019), or when SSH would stay open on another network: a firewall profile that is off or
   does not block inbound connections by default, another enabled rule that allows SSH (it
   changes no rule it did not make, and none a policy manages), a rule by its own name with
-  another scope, or a firewall it cannot read. It reads the effective policy (Windows'
+  another scope, or a firewall it cannot read. It also refuses an `sshd_config` that listens on any
+  port but 22, or that it cannot read in full (an `Include`, say). It reads the effective policy (Windows'
   `ActiveStore`), Group Policy and other managed rules included, and changes only local rules.
 - A step that fails stops the run before `sshd` is started; run it again to finish.
 

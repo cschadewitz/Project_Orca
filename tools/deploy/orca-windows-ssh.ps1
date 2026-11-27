@@ -311,8 +311,7 @@ function Invoke-OrcaWindowsSsh {
     return 2
   }
   if ($state.Listen.Problem) {
-    $problem = $state.Listen.Problem
-    Write-Host "$($problem.Substring(0, 1).ToUpper() + $problem.Substring(1)). This sets up the OpenSSH Server only as Windows installs it, listening on port 22 alone: set it back, or set up its firewall yourself. Nothing was changed."
+    Write-Host "This cannot set it up: $($state.Listen.Problem). It sets up the OpenSSH Server only as Windows installs it, listening on port 22 alone: set it back, or set up its firewall yourself. Nothing was changed."
     return 2
   }
   $refusal = Get-OrcaFirewallRefusal $state.Firewall

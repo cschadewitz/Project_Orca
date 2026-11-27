@@ -231,7 +231,7 @@ try {
   & $nothing (Invoke-Case (New-State $true $false $false -ours "wrong") "y") "not exactly inbound TCP 22 over the Tailscale adapter"
   & $nothing (Invoke-Case (New-State $false $false $false -open @("Public")) "y") "for the Public profile"
   & $nothing (Invoke-Case (New-State $true $false $false -others @("rule lan (lan)", "rule gpo (gpo, set by GroupPolicy)")) "y") "rule lan (lan); rule gpo (gpo, set by GroupPolicy). This changes no rule it did not make"
-  & $nothing (Invoke-Case (New-State $true $false $false -ours "ok" -listen "sshd is set to listen on port 2222") "y") "Sshd is set to listen on port 2222. This sets up the OpenSSH Server only as Windows installs it, listening on port 22 alone"
+  & $nothing (Invoke-Case (New-State $true $false $false -ours "ok" -listen "sshd is set to listen on port 2222") "y") "This cannot set it up: sshd is set to listen on port 2222. It sets up the OpenSSH Server only as Windows installs it, listening on port 22 alone"
   & $nothing (Invoke-Case (New-State $true $false $false -listen "sshd_config includes other files (more.conf)") "y") "includes other files"
   $state = New-State $true $false $false
   $state.Firewall | Add-Member NoteProperty Error "Access is denied."
