@@ -74,8 +74,10 @@ function ConvertTo-OrcaRule($rule, $ports, $interfaces, $programs, $services) {
     LocalPort = @($ports[$id].LocalPort | ForEach-Object { [string]$_ })
     Interfaces = @($interfaces[$id].InterfaceAlias | ForEach-Object { [string]$_ })
     Program = [string]$programs[$id].Program
-    # An app package's own rule (a Store app's): only that app's process is let in.
+    # An app package's own rule (a Store app's network isolation rule, made for the account that
+    # installed it): only that app's container is let in, never sshd.
     Package = [string]$programs[$id].Package
+    Owner = [string]$rule.Owner
     Service = [string]$services[$id].Service
   }
 }
@@ -137,6 +139,7 @@ function Test-OrcaRuleAllowsSsh($rule) {
   if ($rule.Program -and $rule.Program -ne "Any" -and -not $rule.Program.EndsWith("\sshd.exe", [StringComparison]::OrdinalIgnoreCase)) { return $false }
   if ($rule.Service -and $rule.Service -ne "Any" -and $rule.Service -ne $Service) { return $false }
   if ($rule.PSObject.Properties["Package"] -and $rule.Package) { return $false }
+  if ($rule.PSObject.Properties["Owner"] -and $rule.Owner) { return $false }
   return -not ($rule.Interfaces.Count -eq 1 -and $rule.Interfaces[0] -eq $Adapter)
 }
 

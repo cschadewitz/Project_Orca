@@ -44,6 +44,10 @@ try {
   Assert ($null -eq $found.Firewall.PSObject.Properties["Error"]) "the firewall could not be read: $($found.Firewall.Error)"
   Assert ($found.Firewall.Ours -in @("missing", "ok", "wrong")) "the probe's own rule is $($found.Firewall.Ours)"
   Microsoft.PowerShell.Utility\Write-Host "      $([string]($probe | Select-Object -Last 1))"
+  # What each rule it reads as letting SSH in looks like there, for the record.
+  $detail = powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command `
+    ". '$shipped'; (Read-OrcaFirewall).Allowing | Where-Object { Test-OrcaRuleAllowsSsh `$_ } | Select-Object -First 3 | ConvertTo-Json -Compress"
+  Microsoft.PowerShell.Utility\Write-Host "      $([string]($detail -join ' '))"
 
   Check "the firewall reading: its own rule only when exactly TCP 22 over Tailscale"
   Assert ((Get-Measured @()).Ours -eq "ok") "the exact rule is not ours"
@@ -72,7 +76,8 @@ try {
       (New-Rule "udp" -protocol "UDP"), (New-Rule "other-port" -ports @("3389")), (New-Rule "keyword" -ports @("RPC")),
       (New-Rule "range-above" -ports @("23-80")), (New-Rule "other-program" -ports @("Any") -program "C:\app\app.exe"),
       (New-Rule "other-service" -service "W32Time"), (New-Rule "tailnet-only" -interfaces @("Tailscale")),
-      (New-Rule "store-app" -protocol "Any" -ports @("Any") -package "S-1-15-2-1910091885-1573563583-1104941280-2418270861-3411158377-2822700936-2990310272"))) {
+      (New-Rule "store-app" -protocol "Any" -ports @("Any") -package "S-1-15-2-1910091885-1573563583-1104941280-2418270861-3411158377-2822700936-2990310272"),
+      ((New-Rule "isolation" -protocol "Any" -ports @("Any")) | Add-Member -PassThru NoteProperty Owner "S-1-5-21-1-2-3-1001"))) {
     $measured = Get-Measured @($closed)
     Assert (-not $measured.Others.Count -and -not $measured.Broad) "$($closed.Name) is taken to allow SSH: $(ConvertTo-Json -Compress $measured)"
   }
@@ -121,7 +126,7 @@ try {
   $failed = ""
   try { $null = Read-OrcaFirewall } catch { $failed = $_.Exception.Message }
   Assert ($failed -like "*could not read the scope of the firewall rule*") "a rule with no filter was read as: $failed"
-  Assert ((Get-OrcaFirewallState).PSObject.Properties["Error"]) "an unreadable firewall is not reported as one"
+  Assert ($null -ne (Get-OrcaFirewallState).PSObject.Properties["Error"]) "an unreadable firewall is not reported as one"
   $script:lost = $false
   # The run: installed and stopped, no rule of its own yet; a policy's rule appears in the effective
   # policy as the firewall step runs, and the check before the start, which reads it there, stops it.
