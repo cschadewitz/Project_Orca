@@ -255,10 +255,15 @@ function decideByRules(policy: PermissionPolicy, call: PolicyCall, ctx?: Permiss
   // be reached, and nothing approves a call whose command ORCA cannot vouch for.
   const restricted = (kind === "execute" || commandLike) && !unverifiedExecuteAllowed(policy);
   const decide = (part: CommandPart | undefined): PermissionExplanation => {
+    // In a pass by another route's form of the title, only the title restrictions that form
+    // meets count, all of them and not only the first: no allow or other rule can end the pass
+    // ahead of a deny, and what it found only ever adds to the call's own answer (#1303 review).
+    let strictest: PermissionExplanation | undefined;
     for (const [ruleIndex, rule] of policy.rules.entries()) {
       const m = rule.match;
       if ((restricted || claimed) && rule.decision === "allow") continue;
       if (denyOnly && rule.decision !== "deny") continue;
+      if (form !== undefined && (rule.decision === "allow" || m.titlePattern === undefined)) continue;
       if (!matchesCall(m, rule.decision)) continue;
       if (m.command !== undefined) {
         // A command is only ever an `execute`'s, and a part that is not there matches no rule.
@@ -268,8 +273,12 @@ function decideByRules(policy: PermissionPolicy, call: PolicyCall, ctx?: Permiss
         const pattern = parseCommandPattern(m.command);
         if (pattern === undefined || !commandCatches(pattern, part)) continue;
       }
-      return { decision: rule.decision, basis: "rule", ruleIndex };
+      const found: PermissionExplanation = { decision: rule.decision, basis: "rule", ruleIndex };
+      if (form === undefined) return found;
+      if (strictest === undefined || strictness(found.decision) > strictness(strictest.decision)) strictest = found;
     }
+    // Nothing that form meets: the pass adds nothing (an allow is never stricter than an answer).
+    if (form !== undefined) return strictest ?? { decision: "allow", basis: "default" };
     if (claimed && policy.default === "allow") return { decision: "ask", basis: "unverified-identity" };
     return { decision: policy.default, basis: "default" };
   };

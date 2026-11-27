@@ -311,6 +311,27 @@ describe("one decision for a call on either route (#1119)", () => {
       expect(viaSdk).toEqual(viaAcp);
     });
 
+    it("an earlier allow with no title does not end the hook-form pass ahead of its deny", () => {
+      const rules: PermissionPolicy["rules"] = [
+        { match: { kind: "read", scope: "workspace" }, decision: "allow" },
+        { match: { kind: "read", titlePattern: `^Read ${esc(join(ws, "src"))}` }, decision: "deny" },
+      ];
+      const [viaAcp, viaSdk] = decide(rules, read());
+      // The ACP route is unchanged: its first match, the allow, decides.
+      expect(viaAcp).toEqual({ decision: "allow", basis: "rule", ruleIndex: 0 });
+      expect(viaSdk).toEqual({ decision: "deny", basis: "rule", ruleIndex: 1 });
+      // A hook-form ask behind both an allow and an ACP-title ask still counts, and a later deny beats it.
+      const [, stacked] = decide(
+        [
+          rules[0]!,
+          { match: { kind: "read", titlePattern: `^Read ${esc(join(ws, "src"))}` }, decision: "ask" },
+          rules[1]!,
+        ],
+        read(),
+      );
+      expect(stacked).toEqual({ decision: "deny", basis: "rule", ruleIndex: 2 });
+    });
+
     it("a deny met only by the hook's form holds over an ask the ACP title meets", () => {
       const [viaAcp, viaSdk] = decide(
         [
@@ -380,8 +401,9 @@ describe("one decision for a call on either route (#1119)", () => {
         for (const order of orders(rules)) {
           const [viaAcp, viaSdk] = decide(order, c);
           expect(strictness(viaSdk.decision)).toBeGreaterThanOrEqual(strictness(viaAcp.decision));
-          // Any deny that may hold for the uncertain grep wins, wherever it sits.
-          if (c === grep()) expect(viaSdk.decision).toBe("deny");
+          // Any deny that may hold for the uncertain grep wins, wherever it sits; so does the
+          // read's deny met by the hook's form, whatever allow comes before it.
+          expect(viaSdk.decision).toBe("deny");
         }
     });
   });
