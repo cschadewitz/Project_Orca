@@ -207,7 +207,7 @@ describe("orca remote add --tailnet", () => {
 
   it.each([
     ["an unknown machine", "nope", {}, /No single machine named nope/],
-    ["a Windows machine", "build-1", { OS: "windows" }, /not a Linux machine/],
+    ["a macOS machine", "build-1", { OS: "macOS" }, /not a Linux or Windows machine/],
     ["an offline machine", "build-1", { Online: false }, /offline on your tailnet/],
   ])("refuses %s", async (_, name, peer, message) => {
     const { make } = fakeServer();

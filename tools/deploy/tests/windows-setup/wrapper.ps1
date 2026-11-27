@@ -8,6 +8,9 @@
 #   exit-at-task  trust, and the process ends where the task would be registered, as a cut
 #                 ssh session ends it
 #   drive-KIND    trust, and Windows says the setup directory's volume is KIND (Network, Unknown)
+#   no-boot       trust, and registering a task that starts at boot fails, as it does for an
+#                 account that may not; the task is not started (a logon task runs only in a
+#                 logged-on session, which a CI runner has none of)
 #
 # With -Feed DIR, downloads are served from DIR instead of the network: the release's API record
 # from DIR\release.json, any other URL from the DIR file its last segment names.
@@ -38,6 +41,14 @@ if ($mode -eq "exit-at-task") {
 if ($mode -like "drive-*") {
   $script:driveKind = $mode.Substring(6)
   function Get-OrcaDriveType { param($drive) $script:driveKind }
+}
+if ($mode -eq "no-boot") {
+  function Register-OrcaTask {
+    param($s, [bool]$atStartup)
+    if ($atStartup) { throw "Access is denied (the test refuses a boot task)." }
+    $null = Register-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -InputObject (New-OrcaTaskDefinition $s $false) -Force
+  }
+  function Start-OrcaTask { param($s) Send-Step "start" "ok" "not started by the test" }
 }
 if ($script:feed) {
   function Invoke-OrcaDownload {

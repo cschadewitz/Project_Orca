@@ -4,7 +4,9 @@
  * checkout's `tools/deploy/orca-server-setup.py`, with its managed adapter embedded, runs on
  * the server over ORCA's own config-free ssh. It installs this version's signed server bundle,
  * the wrappers and the systemd user unit, and starts and checks the daemon; a re-run verifies
- * and repairs.
+ * and repairs. A Windows machine (#1238) runs `tools/deploy/orca-server-setup.ps1` in its own
+ * Windows PowerShell instead, which downloads and verifies the bundle there and runs the daemon
+ * as a scheduled task.
  *
  * Nothing is installed on a key nobody confirmed: the first run only inspects, read only and
  * with a first-seen host key held aside rather than pinned, and prints the host keys, the
@@ -39,13 +41,12 @@ import {
   dropDiscovery,
   enrollDiscovered,
   keyFingerprints,
-  managedLauncher,
+  launcherCommand,
   readSetup,
-  setupCommand,
-  setupProgram,
+  setupInvocation,
   SETUP_SCRIPT,
-  SETUP_TIMEOUT_MS,
   type InspectOutcome,
+  type ServerOs,
   type SetupOutcome,
   type SetupTunnel,
 } from "@orca/protocol/server-setup";
@@ -155,14 +156,13 @@ export async function remoteCommand(
   if (confirm !== undefined && typeof confirm !== "string")
     throw new OrcaError("CONFIG_INVALID", "--confirm takes the code the first run printed");
   const make = deps.tunnel ?? ((options: ConstructorParameters<typeof SshTunnel>[0]) => new SshTunnel(options));
-  const program = setupProgram(scripts);
 
   ctx.err(`Checking ${destination} (read only).`);
   const discovery = await discoverServer({
     base,
     tunnel: make,
     version,
-    program,
+    scripts,
     // A machine shared in from another tailnet is vouched for by that tailnet, not yours: confirm by hand.
     ...(peer?.sshHostKeys.length && !peer.sharedIn
       ? { advertised: { alias: `orca-${profile.id}`, keys: peer.sshHostKeys } }
@@ -174,7 +174,17 @@ export async function remoteCommand(
     return finish(ctx, destination, found);
   }
   const { account, root, current } = found.inspected;
-  const code = confirmationCode({ profile, keys: discovery.keys, account, root, current, version, scope: "install" });
+  const { os } = discovery;
+  const code = confirmationCode({
+    profile,
+    keys: discovery.keys,
+    account,
+    root,
+    current,
+    version,
+    scope: "install",
+    ...(os === "windows" ? { os } : {}),
+  });
   if (confirm !== code) {
     dropDiscovery(discovery);
     const fingerprints = keyFingerprints(discovery.keys);
@@ -189,6 +199,7 @@ export async function remoteCommand(
           root,
           current,
           version,
+          ...(os === "windows" ? { os } : {}),
           confirmation: code,
         }),
       );
@@ -198,10 +209,13 @@ export async function remoteCommand(
           `Host key: ${key}${discovery.advertised ? " (advertised by your tailnet's coordination server)" : discovery.firstUse ? " (not pinned yet)" : " (pinned)"}`,
         );
       ctx.out(`Account: ${account}`);
+      const service = os === "windows" ? "its scheduled task \\ORCA\\orca-server" : "its systemd user service";
       ctx.out(
         current
-          ? `Would verify and repair ORCA ${current} in ${root}, and its systemd user service.`
-          : `Would install ORCA ${version} from its signed server bundle in ${root}, and enable and start its systemd user service with lingering.`,
+          ? `Would verify and repair ORCA ${current} in ${root}, and ${service}.`
+          : os === "windows"
+            ? `Would install ORCA ${version} from its signed server bundle in ${root}, and register and start ${service} (at boot where ${account} may register that, otherwise at its logon, and the setup says so).`
+            : `Would install ORCA ${version} from its signed server bundle in ${root}, and enable and start ${service} with lingering.`,
       );
     }
     if (confirm !== undefined) {
@@ -216,6 +230,13 @@ export async function remoteCommand(
     return 3;
   }
 
+  if (ctx.flags["push-bundle"] && os === "windows") {
+    dropDiscovery(discovery);
+    throw new OrcaError(
+      "CONFIG_INVALID",
+      "--push-bundle is not available for a Windows server yet; it downloads its own bundle.",
+    );
+  }
   // Confirmed: pin exactly the keys shown, and set up only through them, as that account.
   enrollDiscovered(discovery, base.knownHostsFile, profile.jump !== undefined);
   const tunnel = make({ ...base, pinnedOnly: true, expectKeys: discovery.keys });
@@ -241,15 +262,11 @@ export async function remoteCommand(
     const scratch = courier ? await pushCourier(transport, courier) : undefined;
     try {
       // Only the setup that was confirmed counts: what the server reports must match it.
+      const run = setupInvocation(os, scripts, version, profile.remotePort, { account, root, current }, scratch?.path);
       outcome = confirmedResult(
-        readSetup(
-          await tunnel.exec(
-            setupCommand(version, profile.remotePort, { account, root, current }, scratch?.path),
-            SETUP_TIMEOUT_MS,
-            program,
-          ),
-        ),
+        readSetup(await tunnel.exec(run.command, run.timeoutMs, run.input)),
         { version, port: profile.remotePort, account, root },
+        os,
       );
     } finally {
       if (scratch) await dropCourier(transport, scratch);
@@ -257,7 +274,7 @@ export async function remoteCommand(
   } finally {
     await tunnel.close();
   }
-  return finish(ctx, destination, outcome);
+  return finish(ctx, destination, outcome, os);
 }
 
 type RemoteDeps = NonNullable<Parameters<typeof remoteCommand>[1]>;
@@ -504,7 +521,10 @@ async function tailnetPeer(
   const peer = findTailnetPeer(read.snapshot, name);
   if (!peer) throw new OrcaError("CONFIG_INVALID", `No single machine named ${name} on your tailnet.`);
   if (!peer.hostSupported)
-    throw new OrcaError("CONFIG_INVALID", `${peer.dnsName} is not a Linux machine; ORCA servers run on Linux.`);
+    throw new OrcaError(
+      "CONFIG_INVALID",
+      `${peer.dnsName} is not a Linux or Windows machine; ORCA servers run on those.`,
+    );
   if (!peer.online) throw new OrcaError("CONFIG_INVALID", `${peer.dnsName} is offline on your tailnet.`);
   if (peer.sharedIn)
     ctx.err(`${peer.dnsName} is shared from another tailnet: check its host key by hand before you confirm.`);
@@ -515,7 +535,12 @@ async function tailnetPeer(
   return peer;
 }
 
-function finish(ctx: CommandContext, destination: string, outcome: SetupOutcome | InspectOutcome): number {
+function finish(
+  ctx: CommandContext,
+  destination: string,
+  outcome: SetupOutcome | InspectOutcome,
+  os: ServerOs = "linux",
+): number {
   if (ctx.flags.json) ctx.out(JSON.stringify(outcome));
   else {
     for (const step of outcome.steps)
@@ -527,7 +552,11 @@ function finish(ctx: CommandContext, destination: string, outcome: SetupOutcome 
     case "ready":
       if (!ctx.flags.json)
         ctx.out(
-          `${destination} is a managed ORCA server (v${outcome.version}). To connect and sign in, add an SSH profile for it in the desktop app with server command ${managedLauncher(outcome.root)}, or use Add a machine there.`,
+          `${destination} is a managed ORCA server (v${outcome.version}). To connect and sign in, add an SSH profile for it in the desktop app with server command ${launcherCommand(outcome.root, os)}, or use Add a machine there.`,
+        );
+      if (!ctx.flags.json && outcome.startsAt === "logon")
+        ctx.out(
+          `Its daemon starts when ${outcome.account} logs on, not at boot: that account may not register a task that starts at boot. To start it at boot, run this again while ${outcome.account} is an administrator there (an administrator's SSH sessions on Windows are elevated).`,
         );
       return 0;
     case "refused":

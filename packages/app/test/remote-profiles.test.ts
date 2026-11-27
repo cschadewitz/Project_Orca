@@ -15,6 +15,7 @@ import {
   type SshTunnelOptions,
   type TunnelState,
 } from "@orca/protocol/remote-access";
+import { INSPECT_TIMEOUT_MS, SETUP_TIMEOUT_MS, WINDOWS_SETUP_TIMEOUT_MS } from "@orca/protocol/server-setup";
 import { connect as netConnect, type Socket } from "node:net";
 import { WebSocketServer } from "ws";
 import { z } from "zod";
@@ -93,9 +94,24 @@ class FakeServer {
     ].join("\n"),
     serverLines: [],
   };
+  /** How often the setup asked which system this is (`serverOs`): a Linux one, unless `windows`. */
+  probes = 0;
+  /** A Windows server (#1238): answers `ver`, and runs its setup in PowerShell. */
+  windows = false;
+  /** How long each command's session was allowed, by its first word. */
+  readonly timeouts: { word: string; timeoutMs: number | undefined }[] = [];
   run(command: readonly string[]): RemoteResult {
+    if (command.join(" ") === "ver") {
+      this.probes += 1;
+      return this.windows
+        ? { code: 0, stdout: "\r\nMicrosoft Windows [Version 10.0.26100.4349]\r\n", serverLines: [] }
+        : { code: 127, stdout: "", serverLines: ["sh: 1: ver: not found"] };
+    }
     this.commands.push([...command]);
     if (command[0] === "python3") return command.includes("--inspect") ? this.inspect : this.setup;
+    // The Windows setup's options are the first line of its standard input.
+    if (command[0] === "powershell")
+      return this.inputs.at(-1)!.split("\n")[0]!.includes("Inspect=$true") ? this.inspect : this.setup;
     if (this.fail) return { code: this.fail.code, stdout: "", serverLines: this.fail.lines };
     const words = [...command];
     const flag = (name: string) => {
@@ -173,9 +189,10 @@ class FakeTunnel {
     private readonly daemonPort?: number,
     private readonly server = new FakeServer(),
   ) {}
-  async exec(command: readonly string[], _timeoutMs?: number, input?: string): Promise<RemoteResult> {
+  async exec(command: readonly string[], timeoutMs?: number, input?: string): Promise<RemoteResult> {
     await Promise.resolve();
     await this.server.gate;
+    this.server.timeouts.push({ word: command[0]!, timeoutMs });
     if (input !== undefined) this.server.inputs.push(input);
     return this.server.run(command);
   }
@@ -1669,6 +1686,48 @@ describe("setting a machine up as a managed server (#881)", () => {
     await expect(setup).rejects.toThrow();
     // Released when the setup ends, however it ends.
     expect(profiles.save({ id: "lab", name: "Lab", destination: "casey@lab" })).toMatchObject({ id: "lab" });
+  });
+
+  it("gives a Windows setup the Windows budget, and reports a daemon started at logon (#1238)", async () => {
+    const { profiles, server } = store();
+    server.windows = true;
+    const root = "C:\\Users\\casey\\AppData\\Local\\orca-server";
+    server.inspect = {
+      code: 0,
+      stdout: `orca-setup: ${JSON.stringify({ inspected: true, account: "DESK\\casey", root, current: null })}`,
+      serverLines: [],
+    };
+    server.setup = {
+      code: 0,
+      stdout: [
+        'orca-setup: {"step": "task", "result": "changed", "detail": "\\\\ORCA\\\\orca-server"}',
+        'orca-setup: {"step": "boot", "result": "warning", "detail": "could not register a task that starts at boot"}',
+        `orca-setup: ${JSON.stringify({ done: true, root, command: `${root}\\orca.cmd`, account: "DESK\\casey", version: "0.9.0", port: 6722, platform: "win-x64", start: "logon" })}`,
+      ].join("\n"),
+      serverLines: [],
+    };
+    profiles.save({ name: "Desk", destination: "casey@desk" });
+    const { inspection } = await profiles.inspectServer("desk", { version: "0.9.0", scripts });
+    expect(inspection).toMatchObject({ os: "windows", account: "DESK\\casey", root });
+    const { setup } = await profiles.setUpServer("desk", {
+      version: "0.9.0",
+      scripts,
+      confirmation: inspection!.confirmation,
+    });
+    expect(setup).toMatchObject({ kind: "ready", startsAt: "logon" });
+    const runs = server.timeouts.filter((run) => run.word === "powershell");
+    expect(runs.map((run) => run.timeoutMs)).toEqual([INSPECT_TIMEOUT_MS, WINDOWS_SETUP_TIMEOUT_MS]);
+  });
+
+  it("gives a Linux setup the Linux budget, and no logon start", async () => {
+    const { profiles, server } = store();
+    profiles.save({ name: "Lab", destination: "casey@lab" });
+    const { setup } = await inspectAndSetUp(profiles);
+    expect(setup.kind).toBe("ready");
+    expect(setup).not.toHaveProperty("startsAt");
+    const runs = server.timeouts.filter((run) => run.word === "python3");
+    expect(runs.map((run) => run.timeoutMs)).toEqual([INSPECT_TIMEOUT_MS, SETUP_TIMEOUT_MS]);
+    expect(SETUP_TIMEOUT_MS).toBe(30 * 60_000);
   });
 
   it("first inspects read only: shows keys and account, and pins and installs nothing", async () => {

@@ -71,11 +71,9 @@ import {
   dropDiscovery,
   enrollDiscovered,
   keyFingerprints,
-  managedLauncher,
+  launcherCommand,
   readSetup,
-  setupCommand,
-  setupProgram,
-  SETUP_TIMEOUT_MS,
+  setupInvocation,
   type Discovery,
   type InspectOutcome,
   type SetupOutcome,
@@ -811,7 +809,7 @@ export class RemoteProfiles {
         base: this.tunnelOptions(profile),
         tunnel: (tunnelOptions) => (this.deps.tunnel ?? ((o) => new SshTunnel(o)))(tunnelOptions),
         version: options.version,
-        program: setupProgram(options.scripts),
+        scripts: options.scripts,
         ...(advertised ? { advertised: { alias: `orca-${profile.id}`, keys: advertised } } : {}),
       });
     } finally {
@@ -834,6 +832,7 @@ export class RemoteProfiles {
       current,
       version: options.version,
       scope: "install-and-sign-in",
+      ...(discovery.os === "windows" ? { os: discovery.os } : {}),
     });
     this.inspections.set(id, {
       code,
@@ -858,6 +857,7 @@ export class RemoteProfiles {
         root,
         current,
         scope: "install-and-sign-in",
+        ...(discovery.os === "windows" ? { os: "windows" as const } : {}),
       },
     };
   }
@@ -916,12 +916,13 @@ export class RemoteProfiles {
     // Held from here, before anything is awaited, so no agent action (or anything else
     // `assertIdle` guards) starts while the bundle is fetched; released on every way out.
     this.serverSetups.add(id);
-    let program: string;
+    const { os } = pending.discovery;
     let courier: CourierPackage | undefined;
     try {
       // Checked before anything is gathered: the command is built again with the scratch directory.
-      setupCommand(options.version, profile.remotePort, pending);
-      program = setupProgram(options.scripts);
+      setupInvocation(os, options.scripts, options.version, profile.remotePort, pending);
+      if (options.pushBundle && os === "windows")
+        throw new ConnectionRefusal("Carrying the server bundle to a Windows server is not available yet.");
       // Everything the server would download, fetched and checked here before it is enrolled.
       if (options.pushBundle)
         courier = await prepareCourier({
@@ -946,14 +947,13 @@ export class RemoteProfiles {
         await tunnel.open();
         const scratch = courier ? await pushCourier(tunnel, courier) : undefined;
         try {
-          const command = setupCommand(options.version, profile.remotePort, pending, scratch?.path);
+          const run = setupInvocation(os, options.scripts, options.version, profile.remotePort, pending, scratch?.path);
           // Only the setup that was confirmed counts: what the server reports must match it.
-          setup = confirmedResult(readSetup(await tunnel.exec(command, SETUP_TIMEOUT_MS, program)), {
-            version: options.version,
-            port: profile.remotePort,
-            account: pending.account,
-            root: pending.root,
-          });
+          setup = confirmedResult(
+            readSetup(await tunnel.exec(run.command, run.timeoutMs, run.input)),
+            { version: options.version, port: profile.remotePort, account: pending.account, root: pending.root },
+            os,
+          );
         } finally {
           if (scratch) await dropCourier(tunnel, scratch);
         }
@@ -975,7 +975,9 @@ export class RemoteProfiles {
     // server and port (so the verified pins stay). The managed launcher passes the server's
     // config itself, so the profile names none.
     const latest = this.get(id)!;
-    const launcher = managedLauncher(pending.root);
+    const launcher = launcherCommand(pending.root, os);
+    // Inspection refuses a directory no server command can name, so this is never reached.
+    if (launcher === undefined) throw new ConnectionRefusal(`ORCA cannot run a server from ${pending.root} yet.`);
     if (latest.serverCommand !== launcher || latest.serverConfig !== undefined) {
       const { serverConfig: _config, ...rest } = latest;
       this.save({ ...rest, serverCommand: launcher });
