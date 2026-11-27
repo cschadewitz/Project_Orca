@@ -284,6 +284,22 @@
       }
     },
     {
+      "id": "claude-sdk",
+      "driver": "claude-agent-sdk",
+      "tuple": "Claude Code 2.1.332 driven through the Claude Agent SDK 0.3.332, linux-x64 (CLAUDE_SDK_VERIFIED_PAIRS); not pinned here until a trusted receipt exists",
+      "pin": null,
+      "tier": "none",
+      "routes": ["claude-sdk-hook"],
+      "receipts": [],
+      "unverified": [
+        "No installed receipt yet: the route's cases run synthetically (claude-sdk-hook) and through the pinned Claude Code (claude-sdk-connected, claude-sdk-acceptance.yml), unsigned",
+        "That events and logs about its calls are redacted"
+      ],
+      "unsupportedRoutes": [],
+      "residualRisks": [],
+      "next": "#1128: installed receipt for claude-sdk-hook through guard-receipts.yml, then a scoped A claim; #1129 tier B. Held on feature/claude-agent-sdk until #1132"
+    },
+    {
       "id": "codex",
       "tuple": "Codex ACP adapter 2.9.0 with Codex 0.171.0, linux-x64 (CODEX_HOOK_VERIFIED_PAIRS); not pinned here until a trusted receipt exists",
       "pin": null,

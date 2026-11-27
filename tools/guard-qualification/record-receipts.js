@@ -21,7 +21,7 @@
  */
 import { readFileSync, writeFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
-import { REPO_ROOT, artifactsOf } from "./check-support-matrix.js";
+import { REPO_ROOT, artifactsOf, driverOf, pinShape } from "./check-support-matrix.js";
 
 /** `read` reads a receipt the row already lists (repository-relative); injectable for tests. */
 export function recordReceipts(matrix, receipts, read = (f) => JSON.parse(readFileSync(join(REPO_ROOT, f), "utf8"))) {
@@ -29,9 +29,15 @@ export function recordReceipts(matrix, receipts, read = (f) => JSON.parse(readFi
   for (const { file, receipt } of receipts) {
     const row = next.agents.find((a) => a.id === receipt.agent);
     if (!row) throw new Error(`${file}: no support-matrix row for agent ${receipt.agent}`);
+    // A row and its receipts run on one driver (#1128): an SDK receipt never pins an ACP row.
+    if (driverOf(receipt) !== driverOf(row))
+      throw new Error(
+        `${file}: a receipt on driver ${driverOf(receipt)} cannot pin row ${row.id}, which is on driver ${driverOf(row)}`,
+      );
+    const shape = pinShape(row);
+    if (!shape) throw new Error(`${file}: driver ${driverOf(row)} has no pin shape`);
     const pin = {
-      agentVersion: receipt.agentVersion,
-      adapterVersion: receipt.adapterVersion,
+      ...Object.fromEntries(shape.versions.map((v) => [v, receipt[v]])),
       host: receipt.host,
       build: receipt.build,
     };
@@ -52,9 +58,9 @@ export function recordReceipts(matrix, receipts, read = (f) => JSON.parse(readFi
     row.pin = pin;
     row.receipts = [...kept.filter((f) => f !== file), file].sort();
     if (row.scoped?.route === receipt.route && receipt.kind === "installed") {
-      const moved = CLAIM_FOLLOWS_BUILD.filter(
-        ([, of]) => JSON.stringify(of(row.scoped.pin ?? {})) !== JSON.stringify(of(pin)),
-      ).map(([key]) => key);
+      const moved = claimFollowsBuild(shape)
+        .filter(([, of]) => JSON.stringify(of(row.scoped.pin ?? {})) !== JSON.stringify(of(pin)))
+        .map(([key]) => key);
       if (moved.length > 0)
         throw new Error(
           `${file}: the scoped claim on ${receipt.route} pins another ${moved.join(", ")}; ` +
@@ -67,15 +73,17 @@ export function recordReceipts(matrix, receipts, read = (f) => JSON.parse(readFi
   return next;
 }
 
-/** What a scoped claim's pin must keep when a receipt moves it: everything but the ORCA build. */
-const CLAIM_FOLLOWS_BUILD = [
-  ["agentVersion", (p) => p.agentVersion],
-  ["adapterVersion", (p) => p.adapterVersion],
+/**
+ * What a scoped claim's pin must keep when a receipt moves it: everything but the ORCA build and
+ * what ORCA built from it (the hook program, or on the SDK route the bridge's code).
+ */
+const claimFollowsBuild = (shape) => [
+  ...shape.versions.map((v) => [v, (p) => p[v]]),
   ["host", (p) => p.host],
-  ["adapterIntegrity", (p) => p.artifacts?.adapterIntegrity],
-  ["runtimeSha256", (p) => p.artifacts?.runtimeSha256],
+  ...shape.artifacts
+    .filter((a) => a !== "hookProgramSha256" && a !== "bridgeSha256")
+    .map((a) => [a, (p) => p.artifacts?.[a]]),
 ];
-
 if (process.argv[1] && resolve(process.argv[1]) === resolve(new URL(import.meta.url).pathname)) {
   const matrixFile = join(REPO_ROOT, "tools/guard-qualification/support-matrix.json");
   const files = process.argv.slice(2).map((f) => relative(REPO_ROOT, resolve(f)));
