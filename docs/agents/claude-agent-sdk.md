@@ -90,14 +90,23 @@ ORCA starts `claude` itself, so it checks the program it starts (#1124), twice w
 has `nativeToolHook: experimental`:
 
 1. **Before it runs at all**, even for `claude --version`: the file at the resolved real path
-   must be an image pinned for this SDK, and it must then report that pair's version. An
-   unverified program is never started, so it never gets the session's environment or
-   credentials.
+   must be a regular file (checked before it is opened, so a FIFO or device never blocks the
+   check) whose image is pinned for this SDK. ORCA then does not run that path: it runs its own
+   copy of exactly the bytes it hashed, kept read-only under `$XDG_CACHE_HOME/orca/claude-code`
+   (`~/.cache/orca/claude-code` by default) in a directory only your user can use, written once
+   per image. The version probe, the auth probe and the session all run that copy, which must
+   report the pair's version. An update or replacement of your install between the check and a
+   launch therefore changes nothing that runs, and a file that is not a pinned image never runs
+   with the session's environment. The check has its own deadline (120 s, a first copy
+   included) and the session open's cancellation, and once either ends it, no probe is started.
+
+   What this cannot stop is a process running as your own user rewriting ORCA's copy. Such a
+   process can already read the session's environment and the daemon's memory, so no check
+   ORCA makes from that user could; the second check measures what runs again.
 2. **Once it runs**, after it has answered the SDK's `initialize` and before the session is
    given work or its MCP servers start: ORCA hashes the image the kernel runs for that process
    (`/proc/<pid>/exe`), checks that it is still the same process and still ORCA's own child, and
-   compares it with the same pin, in case the file was replaced in between. This check has the
-   open's own deadline and cancellation.
+   compares it with the same pin. This check has the open's own deadline and cancellation.
 
 Nothing Claude Code says about itself (a path, its process title) is read or run. The second
 check is a measurement of what runs, not a boundary before execution: the first is that.

@@ -29,7 +29,18 @@
  *   a copy of it one byte longer, which would report the same version, is refused before it runs;
  * - cancel ends a turn as `cancelled`, and close leaves no Claude Code process behind.
  */
-import { appendFile, chmod, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  appendFile,
+  chmod,
+  copyFile,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  readlink,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { realpathSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -37,7 +48,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { AgentSpecSchema, configOptionValues, type HookTelemetryLine } from "@orca/core";
-import { LocalHost, type AgentSession, type SessionUpdateEvent } from "@orca/agents";
+import {
+  CLAUDE_SDK_VERIFIED_PAIRS,
+  LocalHost,
+  claudeSdkImageDir,
+  type AgentSession,
+  type SessionUpdateEvent,
+} from "@orca/agents";
 import { makeSessionFactory } from "../src/bootstrap.js";
 
 const CLAUDE = process.env["ORCA_CLAUDE_SDK_CLAUDE"];
@@ -484,6 +501,16 @@ rl.on("line", (line) => {
       const session = await open({}, undefined, { nativeToolHook: "experimental" });
       try {
         expect((await session.prompt("hello")).stopReason).toBe("end_turn");
+        // What runs is ORCA's own copy of the checked bytes, not the install path.
+        const pin = CLAUDE_SDK_VERIFIED_PAIRS[0]!.images[`${process.platform}-${process.arch}`]!;
+        const copy = join(claudeSdkImageDir(), pin, "claude");
+        const running = await Promise.all(
+          (await readdir("/proc"))
+            .filter((e) => /^\d+$/.test(e))
+            .map((e) => readlink(`/proc/${e}/exe`).catch(() => "")),
+        );
+        expect(running).toContain(copy);
+        expect(running).not.toContain(realpathSync(CLAUDE!));
       } finally {
         await session.close();
       }

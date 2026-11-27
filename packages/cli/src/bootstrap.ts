@@ -398,10 +398,10 @@ export function makeSessionFactory(
         orcaEnv: options.env ?? {},
         secrets,
         signal: options.origin?.signal,
-        // With the hook opted into, the file is checked against the pins before it is run at
-        // all, so an unverified program never gets the session's environment (#1124).
+        // With the hook opted into, the file is checked against the pins before anything is
+        // run, and what runs is ORCA's own copy of the bytes it checked (#1124).
         ...(options.agent.nativeToolHook === "experimental"
-          ? { verifyInstall: requireVerifiedClaudeSdkInstall(options.agent.id, { signal: options.origin?.signal }) }
+          ? { verifyInstall: requireVerifiedClaudeSdkInstall(options.agent.id) }
           : {}),
       }).catch((error: unknown) => {
         throw redactError(error, secrets.values);

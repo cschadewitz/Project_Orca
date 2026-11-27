@@ -8,9 +8,9 @@
  * `claude` here is the SDK stand-in behind a shell shim, so the image that runs is Node's: a
  * pair pinned to Node's digest stands in for the real pin.
  */
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { existsSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -49,6 +49,8 @@ beforeEach(async () => {
 afterEach(async () => {
   for (const c of children.splice(0)) c.kill("SIGKILL");
   await Promise.all(sessions.splice(0).map((s) => s.close()));
+  // ORCA leaves its image copies read-only.
+  execFileSync("chmod", ["-R", "u+w", dir]);
   await rm(dir, { recursive: true, force: true });
 });
 
@@ -321,6 +323,7 @@ describe.runIf(process.platform === "linux")("before anything runs (#1318 review
       command,
       env: { ANTHROPIC_API_KEY: "sk-orca-1124-credential" },
     });
+  const images = () => join(dir, "images");
   const pair = (digest: string, claudeCode = "2.1.332"): ClaudeSdkVerifiedPair => ({
     sdk: CLAUDE_AGENT_SDK_VERSION,
     claudeCode,
@@ -333,7 +336,7 @@ describe.runIf(process.platform === "linux")("before anything runs (#1318 review
       agent: agent(claude),
       cwd: dir,
       baseEnv: { PATH: process.env.PATH },
-      verifyInstall: requireVerifiedClaudeSdkInstall("claude", { pairs: [pair("0".repeat(64))] }),
+      verifyInstall: requireVerifiedClaudeSdkInstall("claude", { pairs: [pair("0".repeat(64))], imageDir: images() }),
     }).catch((e: unknown) => e as OrcaError);
     expect(error).toMatchObject({ code: "NOT_SUPPORTED" });
     expect((error as OrcaError).message).toMatch(/refuses to run it at all/);
@@ -346,25 +349,101 @@ describe.runIf(process.platform === "linux")("before anything runs (#1318 review
       agent: agent(claude),
       cwd: dir,
       baseEnv: { PATH: process.env.PATH },
-      verifyInstall: requireVerifiedClaudeSdkInstall("claude", { pairs: [pair(digest)] }),
+      verifyInstall: requireVerifiedClaudeSdkInstall("claude", { pairs: [pair(digest)], imageDir: images() }),
     });
     expect(ok.version).toBe("2.1.332");
+    // What ran is ORCA's own read-only copy of the bytes it checked, not the install path.
+    expect(ok.executable).toBe(join(images(), digest, "claude"));
+    expect((await stat(ok.executable)).mode & 0o777).toBe(0o500);
+    expect((await stat(join(images(), digest))).mode & 0o777).toBe(0o500);
     expect(await readFile(ran, "utf8")).toContain("ANTHROPIC_API_KEY=sk-orca-1124-credential");
     await rm(ran);
     const mismatch = await claudeSdkPreflight({
       agent: agent(claude),
       cwd: dir,
       baseEnv: { PATH: process.env.PATH },
-      verifyInstall: requireVerifiedClaudeSdkInstall("claude", { pairs: [pair(digest, "2.1.000")] }),
+      verifyInstall: requireVerifiedClaudeSdkInstall("claude", {
+        pairs: [pair(digest, "2.1.000")],
+        imageDir: images(),
+      }),
     }).catch((e: unknown) => e as OrcaError);
     expect(mismatch).toMatchObject({ code: "NOT_SUPPORTED" });
     expect((mismatch as OrcaError).message).toMatch(/verified for Claude Code 2\.1\.000, but it reports 2\.1\.332/);
   });
 
-  it("refuses a candidate that is not a regular file", async () => {
-    const error = await requireVerifiedClaudeSdkInstall("claude", { pairs: [] })(dir).catch(
+  it("refuses a candidate that is not a regular file, a FIFO included, without blocking on it", async () => {
+    const check = requireVerifiedClaudeSdkInstall("claude", { pairs: [], imageDir: images() });
+    const error = await check(dir, new AbortController().signal).catch((e: unknown) => e as OrcaError);
+    expect(error).toMatchObject({ code: "NOT_SUPPORTED" });
+    const fifo = join(dir, "fifo");
+    execFileSync("mkfifo", [fifo]);
+    // An ordinary open of a FIFO with no writer would wait forever.
+    const fifoError = await check(fifo, new AbortController().signal).catch((e: unknown) => e as OrcaError);
+    expect((fifoError as OrcaError).message).toMatch(/not a regular file/);
+  });
+
+  it("runs the bytes it checked even when the install is replaced right after the check", async () => {
+    const { claude, ran, digest } = await shim();
+    const swapped = join(dir, "swapped-ran");
+    const verify = requireVerifiedClaudeSdkInstall("claude", { pairs: [pair(digest)], imageDir: images() });
+    const ok = await claudeSdkPreflight({
+      agent: agent(claude),
+      cwd: dir,
+      baseEnv: { PATH: process.env.PATH },
+      verifyInstall: async (executable, signal) => {
+        const result = await verify(executable, signal);
+        // An update (or anything else) replaces the file between the check and the probes.
+        await rm(claude);
+        await writeFile(claude, `#!/bin/sh\nenv >> "${swapped}"\necho "2.1.332 (Claude Code)"\n`, { mode: 0o755 });
+        return result;
+      },
+    });
+    expect(ok.executable).not.toBe(claude);
+    expect(existsSync(ran)).toBe(true);
+    expect(existsSync(swapped)).toBe(false);
+  });
+
+  it("keeps the check inside a deadline and the cancellation, and never probes after either", async () => {
+    const { claude, ran } = await shim();
+    const late: Array<() => void> = [];
+    const stalled = (signals: AbortSignal[]) => (_: string, signal: AbortSignal) => {
+      signals.push(signal);
+      return new Promise<{ claudeCode: string }>((done) => late.push(() => done({ claudeCode: "2.1.332" })));
+    };
+    const base = { agent: agent(claude), cwd: dir, baseEnv: { PATH: process.env.PATH } };
+
+    const timedSignals: AbortSignal[] = [];
+    const timedOut = await claudeSdkPreflight({
+      ...base,
+      verifyInstall: stalled(timedSignals),
+      verifyTimeoutMs: 50,
+    }).catch((e: unknown) => e as OrcaError);
+    expect(timedOut).toMatchObject({ code: "AGENT_TRANSPORT", details: { reason: "verify-timeout" } });
+    expect(timedSignals[0]!.aborted).toBe(true);
+
+    const cancel = new AbortController();
+    const cancelSignals: AbortSignal[] = [];
+    const pending = claudeSdkPreflight({ ...base, verifyInstall: stalled(cancelSignals), signal: cancel.signal }).catch(
       (e: unknown) => e as OrcaError,
     );
-    expect(error).toMatchObject({ code: "NOT_SUPPORTED" });
+    await new Promise((r) => setTimeout(r, 20));
+    cancel.abort();
+    expect(await pending).toMatchObject({ code: "CANCELLED" });
+    expect(cancelSignals[0]!.aborted).toBe(true);
+
+    // Already cancelled: the check is not even started.
+    let called = false;
+    const before = await claudeSdkPreflight({
+      ...base,
+      signal: AbortSignal.abort(),
+      verifyInstall: async () => ((called = true), { claudeCode: "2.1.332" }),
+    }).catch((e: unknown) => e as OrcaError);
+    expect(before).toMatchObject({ code: "CANCELLED" });
+    expect(called).toBe(false);
+
+    // The stalled checks now answer "verified": nothing is started from that.
+    for (const answer of late) answer();
+    await new Promise((r) => setTimeout(r, 300));
+    expect(existsSync(ran)).toBe(false);
   });
 });
