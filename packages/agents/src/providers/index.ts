@@ -43,7 +43,10 @@ export function withProviderGuards<O extends OpenSessionOptions>(
   return async (options) => {
     const guard = providerGuardFor(options.agent, guards);
     if (!guard) return open(options);
-    const prepared = (await guard.prepare(options)) as O;
+    // A guarded agent's pinned behaviour is what its provider vouches for, and questions were
+    // not part of it (#1133): it is not offered form elicitation, and refuses it as before.
+    const { askElicitation: _notChecked, ...unasked } = options;
+    const prepared = (await guard.prepare(unasked as O)) as O;
     return guard.guard(await open(prepared));
   };
 }

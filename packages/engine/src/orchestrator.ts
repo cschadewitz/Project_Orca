@@ -32,6 +32,8 @@ import {
   type CapabilityManifest,
   type ResolvedMcpServer,
   describeError,
+  elicitationOf,
+  parseElicitationAnswer,
   evaluateCondition,
   effectAbandoned,
   evaluateExpression,
@@ -123,7 +125,7 @@ import {
 import { PlanService } from "./plan/service.js";
 import { recoverReleasedWorkItem } from "./program/work-items.js";
 import { RunContext } from "./run-context.js";
-import type { LiveHumanInput, ExecutionResumeAuthority, ExecutionActivity } from "./live-input.js";
+import type { LiveHumanInput, LiveInputBinding, ExecutionResumeAuthority, ExecutionActivity } from "./live-input.js";
 import { protectExecutionInputs } from "./execution-inputs.js";
 import { checkpointSeed, resumeBlocked } from "./checkpoint-attempt.js";
 import { gitRefMoved, gitRefRefusal, LocalWorkspaceProvider, type WorkspaceProvider } from "./workspace/provider.js";
@@ -1318,6 +1320,11 @@ export class Orchestrator {
     const state = fresh;
     if (request.kind === "permission")
       throw new OrcaError("RUN_STATE", "tool permission callbacks cannot be answered from a parked log", {
+        liveInputState: "expired",
+      });
+    // Nor an agent's question (#1133): the turn that asked it does not outlive its session.
+    if (elicitationOf(request.context))
+      throw new OrcaError("RUN_STATE", "an agent's question cannot be answered from a parked log", {
         liveInputState: "expired",
       });
     if (state.run.status !== "paused")
@@ -3119,6 +3126,32 @@ export class Orchestrator {
     // Opening a session *is* the ACP handshake, so it is also where agent health comes from:
     // one that returns is a live agent, one that throws is a spawn or handshake that failed.
     // Nothing polls - health only ever reflects work a run asked for (#222).
+    /** The live callback an agent-held ask (a permission or a question) is answered through. */
+    const liveBindingFor = (
+      invocation: Parameters<NonNullable<OpenSessionOptions["askPermission"]>>[1],
+    ): LiveInputBinding | undefined =>
+      this.liveInput && invocation
+        ? {
+            identity: {
+              instanceId: this.liveInput.port.instanceId,
+              sessionId: invocation.sessionId,
+              turnId: invocation.turnId,
+              invocationId: invocation.invocationId,
+            },
+            signal: AbortSignal.any([rc.abort.signal, invocation.signal, this.liveInput.executionSignal(rc.id)]),
+            withOwnership: <T>(operation: () => Promise<T>) =>
+              rc.withOwnership(async () => {
+                // Polling expires idle asks; acceptance must also check the initiating
+                // actor now, after acquiring the original interpreter's lease mutex.
+                if (this.liveInput!.executionSignal(rc.id).aborted)
+                  throw new OrcaError("RUN_STATE", "live execution authority expired", {
+                    liveInputState: "expired",
+                  });
+                return operation();
+              }),
+            emitOwned: (event: Parameters<RunContext["emitOwned"]>[0]) => rc.emitOwned(event),
+          }
+        : undefined;
     const handshake = this.agents.health.begin(agent.id);
     let session: AgentSession;
     let continuity: Parameters<NonNullable<OpenSessionOptions["onSessionContinuity"]>>[0] | undefined;
@@ -3167,29 +3200,7 @@ export class Orchestrator {
         // logged independently (one id per session made concurrent asks collide).
         askPermission: async (req, invocation, judged) => {
           const stepRunId = current.step.id;
-          const live =
-            this.liveInput && invocation
-              ? {
-                  identity: {
-                    instanceId: this.liveInput.port.instanceId,
-                    sessionId: invocation.sessionId,
-                    turnId: invocation.turnId,
-                    invocationId: invocation.invocationId,
-                  },
-                  signal: AbortSignal.any([rc.abort.signal, invocation.signal, this.liveInput.executionSignal(rc.id)]),
-                  withOwnership: <T>(operation: () => Promise<T>) =>
-                    rc.withOwnership(async () => {
-                      // Polling expires idle asks; acceptance must also check the initiating
-                      // actor now, after acquiring the original interpreter's lease mutex.
-                      if (this.liveInput!.executionSignal(rc.id).aborted)
-                        throw new OrcaError("RUN_STATE", "live execution authority expired", {
-                          liveInputState: "expired",
-                        });
-                      return operation();
-                    }),
-                  emitOwned: (event: Parameters<RunContext["emitOwned"]>[0]) => rc.emitOwned(event),
-                }
-              : undefined;
+          const live = liveBindingFor(invocation);
           // One-time choices only, live or parked (#702). An agent's remembered option
           // ("Allow always") would have the agent stop asking for the rest of the session, so
           // a rule removed or expired later would never be consulted; ORCA's own standing
@@ -3240,6 +3251,40 @@ export class Orchestrator {
                   .catch(() => undefined);
             },
           });
+        },
+        // An agent's question (#1133, #1169): its own human-input request, held open with the
+        // agent's turn like a permission ask, and answered only by a person. With no live
+        // callback (an unattended or parked run) nobody is asked and the agent hears `cancel`.
+        askElicitation: async (form, invocation, about) => {
+          const stepRunId = current.step.id;
+          const live = liveBindingFor(invocation);
+          const answer = await askHumanInput({
+            port: live ? this.liveInput!.port : humanInput,
+            ...(live ? { live } : {}),
+            emit: (e) => rc.emit(e),
+            clock: this.clock,
+            runId: rc.id,
+            stepRunId,
+            kind: "question",
+            question: form.message || `${agent.id} has a question`,
+            // Free text: the answer is the form's content, checked against `elicitation`.
+            options: [],
+            elicitation: form,
+            agent: { id: agent.id, hostId: host.spec.id },
+            context: { elicitation: form, ...(about.toolCallId ? { toolCallId: about.toolCallId } : {}) },
+            onRequested: () => {
+              pendingAsks++;
+            },
+            onSettled: async () => {
+              pendingAsks--;
+              if (pendingAsks === 0)
+                await rc
+                  .emit({ type: "step.waiting", payload: { stepRunId, on: "agent-turn" } })
+                  .catch(() => undefined);
+            },
+          });
+          // Checked again here: whatever port answered, the agent only ever gets its own form back.
+          return answer === undefined ? undefined : parseElicitationAnswer(form, answer);
         },
         onPermission: (info) => {
           if (rc.abort.signal.aborted) return;
