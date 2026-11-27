@@ -28,6 +28,7 @@ export * from "./codex-exec-gate-session.js";
 export * from "./host-ipc-inventory.js";
 export * from "./providers/index.js";
 export * from "./claude-sdk/launch.js";
+export * from "./claude-sdk/remote.js";
 export * from "./agent-profiles/index.js";
 export * from "./judged-lane.js";
 export * from "./owned-fs-io.js";

@@ -207,8 +207,10 @@ and the repository present on the remote (clone it there, or use a shared filesy
 does not sync code). Verify with `orca ping claude-remote`.
 
 An agent with `driver: claude-agent-sdk` (Claude through the Claude Agent SDK, experimental)
-runs only on ORCA's own machine for now and is refused on an SSH host (#1130); use the ACP
-route there.
+runs on an SSH host too (#1130): only `claude` runs there, with that machine's own Claude Code
+and sign-in, while the SDK and ORCA's permission checks stay on ORCA's machine. Every call it
+makes there is a person's to allow, and secret references and `nativeToolHook: experimental`
+are refused; see [the driver's page](agents/claude-agent-sdk.md#on-an-ssh-host).
 
 For a machine that runs a daemon of its own, delegating steps to it is the alternative; see
 [running across machines](MULTI-MACHINE.md#ssh-host-or-delegation) for when to use which.

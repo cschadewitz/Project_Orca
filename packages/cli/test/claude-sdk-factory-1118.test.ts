@@ -2,14 +2,14 @@
  * The session factory's route for `driver: claude-agent-sdk` (#1118, #1120): the launch checks
  * run, then a Claude Agent SDK session opens, and the ACP opener is never called.
  */
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { existsSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { AgentSpecSchema } from "@orca/core";
-import { LocalHost, type AgentHost, type AgentSession, type OpenSessionOptions } from "@orca/agents";
+import { AgentSpecSchema, HostSpecSchema } from "@orca/core";
+import { LocalHost, SshHost, type AgentHost, type AgentSession, type OpenSessionOptions } from "@orca/agents";
 import { makeSessionFactory } from "../src/bootstrap.js";
 
 const STAND_IN = fileURLToPath(new URL("../../agents/test/fixtures/claude-sdk-stand-in.mjs", import.meta.url));
@@ -127,12 +127,90 @@ echo '{"loggedIn":false}'; exit 1
     expect(open).not.toHaveBeenCalled();
   });
 
-  it("refuses an agent on another host before running anything there", async () => {
+  it("refuses a host that is neither ORCA's own machine nor an SSH host before running anything there", async () => {
     const { open, factory } = factoryWithSpy();
     const agent = AgentSpecSchema.parse({ id: "claude", driver: "claude-agent-sdk", hostId: "box" });
-    const host = { id: "box", spec: { id: "box", type: "ssh" } } as unknown as AgentHost;
-    await expect(factory({ host, agent, cwd: dir })).rejects.toThrow(/only on ORCA's own machine for now \(#1130\)/);
+    const host = { id: "box", spec: { id: "box", type: "other" } } as unknown as AgentHost;
+    await expect(factory({ host, agent, cwd: dir })).rejects.toThrow(/runs on ORCA's own machine or an SSH host/);
     expect(open).not.toHaveBeenCalled();
+  });
+
+  describe("on an SSH host (#1130)", () => {
+    /** An `ssh` that logs its arguments and runs the remote command line with the local shell. */
+    async function sshHost(): Promise<{ host: SshHost; log: string; remoteClaude: string }> {
+      const log = join(dir, "ssh.log");
+      const ssh = join(dir, "ssh");
+      await writeFile(
+        ssh,
+        `#!/bin/sh
+printf '%s' "$*" | tr '\\n' ' ' >> "${log}"; echo >> "${log}"
+while [ "$#" -gt 0 ] && [ "$1" != "--" ]; do shift; done
+shift
+exec env -i PATH="/usr/bin:/bin" HOME="${dir}" bash -c "$*"
+`,
+      );
+      await chmod(ssh, 0o755);
+      const remoteClaude = join(dir, "remote-claude");
+      await writeFile(
+        remoteClaude,
+        `#!/bin/sh
+if [ "$1" = "--version" ]; then echo "2.1.332 (Claude Code)"; exit 0; fi
+if [ "$1" = "auth" ]; then echo '{"loggedIn":true,"authMethod":"oauth_token","apiProvider":"firstParty"}'; exit 0; fi
+exec "${process.execPath}" "${STAND_IN}" "$@"
+`,
+      );
+      await chmod(remoteClaude, 0o755);
+      const host = new SshHost(
+        HostSpecSchema.parse({
+          id: "box",
+          type: "ssh",
+          host: "box.invalid",
+          sshBinary: ssh,
+          remoteShell: "bash -c",
+        }) as never,
+      );
+      return { host, log, remoteClaude };
+    }
+
+    it("checks claude there and runs the session's claude there, without opening ACP", async () => {
+      const { host, log, remoteClaude } = await sshHost();
+      const { open, factory } = factoryWithSpy();
+      const agent = AgentSpecSchema.parse({
+        id: "claude",
+        driver: "claude-agent-sdk",
+        hostId: "box",
+        command: remoteClaude,
+      });
+      const session = await factory({ host, agent, cwd: dir });
+      try {
+        expect((await session.prompt("hello")).stopReason).toBe("end_turn");
+      } finally {
+        await session.close();
+      }
+      // `--version`, `auth status`, the session's own claude, then its stop there: each over ssh.
+      const lines = (await readFile(log, "utf8")).trim().split("\n");
+      expect(lines).toHaveLength(4);
+      expect(lines[2]).toContain("--permission-mode=default");
+      expect(lines[3]).toMatch(/orca_set stopped/);
+      expect(open).not.toHaveBeenCalled();
+    });
+
+    it("refuses nativeToolHook: experimental there before running anything", async () => {
+      const { host, log, remoteClaude } = await sshHost();
+      const { open, factory } = factoryWithSpy();
+      const agent = AgentSpecSchema.parse({
+        id: "claude",
+        driver: "claude-agent-sdk",
+        hostId: "box",
+        command: remoteClaude,
+        nativeToolHook: "experimental",
+      });
+      await expect(factory({ host, agent, cwd: dir })).rejects.toThrow(
+        /nativeToolHook: experimental, which ORCA applies only to agents on its own machine; it runs on ssh host box/,
+      );
+      expect(existsSync(log)).toBe(false);
+      expect(open).not.toHaveBeenCalled();
+    });
   });
 
   it("opens an agent without the driver exactly as before", async () => {

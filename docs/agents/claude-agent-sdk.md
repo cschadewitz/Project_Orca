@@ -8,7 +8,8 @@ claude-agent-sdk` is a second, opt-in way: ORCA drives the Claude Agent SDK itse
 see and decide more of what Claude does (#1153 lists what each slice adds). ORCA checks the launch,
 then runs the session through the SDK (#1120), and decides every tool call Claude makes with the
 agent's permission rules (#1122): see [What a session may do](#what-a-session-may-do). It runs
-only on the daemon's own computer and not on Windows: Windows and SSH hosts are refused before
+on the daemon's own computer or, with only `claude` on the other machine, an SSH host (see
+[On an SSH host](#on-an-ssh-host)). It does not run on Windows, which is refused before
 anything starts, so use the ACP route there.
 
 ## 1. Install Claude Code and sign in yourself
@@ -105,12 +106,99 @@ names: no error or log carries text the CLI printed.
    with code 0; a timeout, cancellation, signal, output over the cap, nonzero exit or an answer
    ORCA cannot read fails it.
 
-The agent must run on ORCA's own machine for now (SSH hosts: #1130). It takes no `args` (the SDK
-builds Claude's arguments) and no `codexExecGate`. ORCA's tool hook always runs on this route,
+The agent runs on ORCA's own machine or on an SSH host (see "On an SSH host" below). It takes
+no `args` (the SDK builds Claude's arguments) and no `codexExecGate`. ORCA's tool hook always runs on this route,
 in process (see "ORCA's tool hook" below). `nativeToolHook: experimental` additionally
 requires the Claude Code that runs to be one ORCA verified (see "Which Claude Code runs");
 `off` changes nothing, and `on` is refused when the session opens, as on the ACP route, until a
 hook is guard-qualified.
+
+### On an SSH host
+
+With `hostId` naming an `ssh` host (#1130), the SDK and ORCA's permission bridge stay on ORCA's
+machine, and only `claude` runs on the host. ORCA starts it over the host's own SSH
+configuration (identity file, port, `remoteShell`), the way the ACP route starts an agent
+there, with the SDK's stream-json on the connection's stdin and stdout. It runs as your own
+login on that machine, with the Claude Code found on its login-shell `PATH` (or `command`) and
+the sign-in kept there; ORCA reads no credentials there and offers no login. Sign in on the
+host itself with `claude auth login`. The two checks above (`claude --version`, then
+`claude auth status --json`) are asked on the host, each over its own SSH connection under the
+same deadline, and a `claude` that is not signed in is refused with "run `claude auth login` on
+<host>".
+
+What `claude` is given there is only what the session sets: the agent's own literal `env`, what
+ORCA adds, and the SDK's own variables, on top of the remote login shell's environment. None of
+the daemon's environment crosses, and Claude credential variables ORCA would otherwise carry
+are left out, as on ORCA's own machine. **No value is put on a command line.** The remote
+command holds only variable names, the directory, the command and its arguments. ORCA writes
+each value to the connection's stdin first, and the remote shell reads and exports it with
+builtins before `claude` starts and is handed the rest of stdin. So a value appears in no
+process's argument list on either machine, and in no error or log ORCA writes. A real-sshd
+test scans every process's arguments while a session starts and runs.
+
+**The host owns the launch.** The host must be Linux with bash as the remote shell (the
+default `bash -lc`) and `flock` (util-linux); anything else is refused before `claude` starts.
+
+- **A marker, not a number.** Every process of a launch carries
+  `ORCA_CLAUDE_SDK_LAUNCH=<token>` in its environment, with a token unique to the launch. A stop
+  signals a process only after reading that marker in `/proc/<pid>/environ` right before the
+  signal, so a reused pid or group id, or another launch's process, is never signalled. A
+  process that clears its own environment is not followed.
+- **One supervisor, explicit states.** Each launch has a state on the host, written only while
+  holding the launch's lock (`flock`): `starting`, `admitted` (the one process allowed to become
+  `claude`, named by pid and start time), `running`, `stopping` (a stop asked for, not
+  confirmed), `stopped` and `done` (both confirmed). The process that becomes `claude` waits
+  until the state names it, and the remote shell holds the lock from before it starts until it
+  carries the marker. So a stop never runs while a launch is started but not yet visible, and a
+  launch a stop overtook never starts. A stop reaches `stopped` only on evidence: before
+  admission nothing may start `claude`; after it, the admitted process must be gone or carry
+  the marker, and no process may carry the marker any more. Otherwise the launch stays
+  `stopping`, the stop reports it unconfirmed, and the host's watchdog keeps trying every
+  second. The record is replaced whole (written, then renamed) and checked when read: one that
+  cannot be read or written, or that is not a state, keeps any launch from starting and leaves
+  the stop unconfirmed, though what carries the marker is still killed. "Confirmed" covers the
+  supervised processes, those that carry the marker; a descendant that drops the marker from
+  its environment is not one of them, and an empty scan says nothing about it. Tests hold a
+  launch inside admission and stop it there, kill the remote shell after admission and stop
+  what it admitted, check that a stop it cannot confirm is reported so and signals nothing, and
+check records that are cut short, invalid, unreadable or cannot be written.
+- **The host stops it by itself.** `claude`'s input comes through a relay in the remote shell,
+  which drops a heartbeat line ORCA sends every 5 seconds and records a beat for every line it
+  reads. A separate watchdog, which forwards nothing, stops every process of the launch when no
+  beat comes for 30 seconds: ORCA frozen or unreachable, the link silently gone, or a `claude`
+  that stopped reading so the relay is stuck writing to it. It also stops them 10 seconds after
+  the input ended (ORCA closed it, or the connection did), taking the lock as any stop does.
+  These deadlines are elapsed time (`/proc/uptime`), not the wall clock. When `claude` exits,
+  the remote shell stops what it left. None of this needs a connection back, and only marked
+  processes are ever signalled: the relay and the watchdog end by themselves.
+- **ORCA confirms it.** Whenever a session ends (closed, cancelled while it opened, or its
+  connection lost), ORCA also runs the stop over a new SSH connection and checks that no marked
+  process of the launch runs. A stop that cannot be confirmed (the host unreachable, the lock not
+  free in time, or its state record unreadable) is not
+  reported as closure: `close()` throws and the session's termination is rejected with reason
+  `remote-cleanup-unconfirmed`, so ORCA keeps the agent slot until it knows. The host's own
+  stop is what remains.
+
+Not covered: a host that crashes or a process that clears its own environment is not
+followed. A stop that cannot show the launch is gone says so rather than claiming closure.
+
+The real-sshd tests check each of these. After a close, a killed connection, a frozen ORCA
+(its ssh stopped, no stop sent), a cleanup connection that cannot be made, a `claude` that
+stopped reading with no cleanup connection to be had, and a cancelled open, a `claude` that ignores the end of its input, and a process it started, are gone, and
+the unconfirmed case is reported as such.
+
+What does not hold on that machine yet, and so is refused or left out:
+
+- **No rule allows a call there.** The bridge cannot check a directory on another machine, so
+  no call is taken to run inside the workspace: each call the policy allows is still a
+  person's to allow. Deny rules, asks and protected paths apply as everywhere.
+- **No attestation.** The Claude Code that runs there is not ORCA's child, so it is not attested
+  (the result is logged as unverified), and `nativeToolHook: experimental` is refused on an SSH
+  host, as on the ACP route.
+- **No secret references.** Secrets are read only on ORCA's own machine, so an agent whose `env`
+  (or one of its MCP servers') refers to one is refused on an SSH host.
+
+The workspace must already be on the host (ORCA does not sync code), as for any SSH agent.
 
 ### Which Claude Code runs
 

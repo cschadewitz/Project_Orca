@@ -232,6 +232,34 @@ export async function claudeSdkPreflight(options: ClaudeSdkPreflightOptions): Pr
   const executable = expected?.executable ?? resolved;
   const timeoutMs = options.timeoutMs ?? CLAUDE_SDK_PREFLIGHT_TIMEOUT_MS;
   const run = (args: string[]) => runBounded(executable, args, { cwd, env, timeoutMs, signal: options.signal });
+  return { executable, env, ...(await probeClaude(agent.id, executable, run, THIS_MACHINE, expected?.claudeCode)) };
+}
+
+/** Where a probed `claude` runs, as its errors name it. */
+export interface ClaudeProbePlace {
+  /** "on this machine", "on host build-box". */
+  where: string;
+  /** Where the person runs a command to fix it: "here", "on build-box". */
+  there: string;
+}
+
+const THIS_MACHINE: ClaudeProbePlace = { where: "on this machine", there: "here" };
+
+/**
+ * Ask `claude` (through `run`) for its version and whether it is signed in, and refuse it for
+ * every way that can fail. `expectedVersion`: the version a verified image must report.
+ * Only the version number and two short identifiers are kept from what it printed.
+ */
+export async function probeClaude(
+  agentId: string,
+  executable: string,
+  run: (args: string[]) => Promise<BoundedResult>,
+  place: ClaudeProbePlace,
+  expectedVersion?: string,
+): Promise<Omit<ClaudeSdkPreflight, "executable" | "env">> {
+  const agent = { id: agentId };
+  /** Where the probe ran, named in a failure only when it is not this machine. */
+  const at = place === THIS_MACHINE ? "" : ` ${place.where}`;
 
   const version = await run(["--version"]);
   // Only the version number is kept from what the CLI printed: `command` is configurable, so
@@ -241,15 +269,15 @@ export async function claudeSdkPreflight(options: ClaudeSdkPreflightOptions): Pr
   if (versionNumber === undefined)
     throw new OrcaError(
       "AGENT_TRANSPORT",
-      `agent ${agent.id}: ${executable} --version ${versionOk ? "printed no Claude Code version" : describeFailure(version)}; ` +
+      `agent ${agent.id}: ${executable} --version${at} ${versionOk ? "printed no Claude Code version" : describeFailure(version)}; ` +
         `it is not a Claude Code ORCA can run.`,
       { agentId: agent.id, executable, ...failureDetails(version) },
     );
-  if (expected && versionNumber !== expected.claudeCode)
+  if (expectedVersion !== undefined && versionNumber !== expectedVersion)
     throw new OrcaError(
       "NOT_SUPPORTED",
-      `agent ${agent.id}: ${executable} is the image ORCA verified for Claude Code ${expected.claudeCode}, but it reports ${versionNumber}; ORCA refuses it.`,
-      { agentId: agent.id, executable, expected: expected.claudeCode, reported: versionNumber },
+      `agent ${agent.id}: ${executable} is the image ORCA verified for Claude Code ${expectedVersion}, but it reports ${versionNumber}; ORCA refuses it.`,
+      { agentId: agent.id, executable, expected: expectedVersion, reported: versionNumber },
     );
 
   const status = await run(["auth", "status", "--json"]);
@@ -260,15 +288,15 @@ export async function claudeSdkPreflight(options: ClaudeSdkPreflightOptions): Pr
     throw new OrcaError(
       "AGENT_TRANSPORT",
       `agent ${agent.id}: ${executable} auth status ${completed(status) ? "gave no answer ORCA can read" : describeFailure(status)}, ` +
-        `so ORCA cannot tell whether it is signed in. Check \`claude auth status\` on this machine.`,
+        `so ORCA cannot tell whether it is signed in. Check \`claude auth status\` ${place.where}.`,
       { agentId: agent.id, executable, ...failureDetails(status) },
     );
   // The known signed-out answer, which the CLI may give with a nonzero exit.
   if (answer.loggedIn === false)
     throw new OrcaError(
       "AGENT_TRANSPORT",
-      `agent ${agent.id}: Claude Code is not signed in on this machine. Run \`claude auth login\` here as the person whose ` +
-        `account this agent uses (ORCA offers no login), or give the agent its own API key in env.`,
+      `agent ${agent.id}: Claude Code is not signed in ${place.where}. Run \`claude auth login\` ${place.there} as the person whose ` +
+        `account this agent uses (ORCA offers no login)${at ? "." : ", or give the agent its own API key in env."}`,
       { agentId: agent.id, executable, reason: "claude-not-logged-in" },
     );
   // Signed in counts only from a probe that finished and exited 0.
@@ -276,15 +304,13 @@ export async function claudeSdkPreflight(options: ClaudeSdkPreflightOptions): Pr
     throw new OrcaError(
       "AGENT_TRANSPORT",
       `agent ${agent.id}: ${executable} auth status said signed in but ${describeFailure(status)}, ` +
-        `so ORCA does not take it as signed in. Check \`claude auth status\` on this machine.`,
+        `so ORCA does not take it as signed in. Check \`claude auth status\` ${place.where}.`,
       { agentId: agent.id, executable, ...failureDetails(status) },
     );
   return {
-    executable,
     version: versionNumber,
     authMethod: token(answer.authMethod),
     apiProvider: token(answer.apiProvider),
-    env,
   };
 }
 
@@ -376,7 +402,7 @@ export function parseAuthStatus(stdout: string): AuthStatus | undefined {
   }
 }
 
-interface BoundedResult {
+export interface BoundedResult {
   /** The exit code, when the process exited on its own; null otherwise. */
   code: number | null;
   signal: NodeJS.Signals | null;
@@ -405,10 +431,17 @@ export const PROBE_KILL_SETTLE_MS = 1_000;
  * promise settles when the pipe closes or `PROBE_KILL_SETTLE_MS` later, whichever is first, with
  * the pipe destroyed. It owns only the processes it started; nothing here is a session.
  */
-function runBounded(
+export function runBounded(
   file: string,
   args: string[],
-  o: { cwd: string; env: Record<string, string>; timeoutMs: number; signal?: AbortSignal | undefined },
+  o: {
+    cwd: string;
+    env: Record<string, string>;
+    timeoutMs: number;
+    signal?: AbortSignal | undefined;
+    /** Written to the program's stdin, which is then closed; without it stdin is not opened. */
+    input?: string | undefined;
+  },
 ): Promise<BoundedResult> {
   if (o.signal?.aborted)
     return Promise.resolve({
@@ -431,17 +464,24 @@ function runBounded(
     const child = spawn(file, args, {
       cwd: o.cwd,
       env: o.env,
-      stdio: ["ignore", "pipe", "ignore"],
+      stdio: [o.input === undefined ? "ignore" : "pipe", "pipe", "ignore"],
       windowsHide: true,
       detached: group,
     });
+    // stdout is always piped.
+    const out = child.stdout!;
+    if (o.input !== undefined && child.stdin) {
+      // A program that exits without reading it closes the pipe; that is its answer, not an error.
+      child.stdin.on("error", () => undefined);
+      child.stdin.end(o.input);
+    }
     const finish = (r: Omit<BoundedResult, "timedOut" | "aborted" | "overLimit" | "stdout">) => {
       if (settled) return;
       settled = true;
       clearTimeout(deadline);
       clearTimeout(settleTimer);
       o.signal?.removeEventListener("abort", onAbort);
-      child.stdout.destroy();
+      out.destroy();
       const clean = !killed && r.spawnError === undefined;
       resolveResult({ ...r, ...flags, stdout: clean ? Buffer.concat(chunks).toString("utf8") : "" });
     };
@@ -454,7 +494,7 @@ function runBounded(
       } catch {
         // Already gone.
       }
-      child.stdout.destroy();
+      out.destroy();
       settleTimer = setTimeout(() => finish(exit ?? { code: null, signal: null }), PROBE_KILL_SETTLE_MS);
     };
     const deadline = setTimeout(() => {
@@ -466,7 +506,7 @@ function runBounded(
       kill();
     };
     o.signal?.addEventListener("abort", onAbort, { once: true });
-    child.stdout.on("data", (chunk: Buffer) => {
+    out.on("data", (chunk: Buffer) => {
       bytes += chunk.length;
       if (bytes > MAX_OUTPUT_BYTES) {
         flags.overLimit = true;
@@ -476,7 +516,7 @@ function runBounded(
       chunks.push(chunk);
     });
     // A destroyed pipe may report an error; the flags already say why.
-    child.stdout.on("error", () => undefined);
+    out.on("error", () => undefined);
     child.on("error", (e: NodeJS.ErrnoException) => {
       finish({ code: null, signal: null, spawnError: /^[A-Z0-9_]{1,40}$/.test(e.code ?? "") ? e.code! : "UNKNOWN" });
     });

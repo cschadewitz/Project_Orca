@@ -52,6 +52,9 @@ import {
   claudeSdkRequested,
   claudeSdkPreflight,
   claudeSdkSecrets,
+  claudeSdkSshPreflight,
+  claudeSdkSshLaunch,
+  SshHost,
   redactError,
   claudeSdkPlatformUnsupported,
   openClaudeSdkSession,
@@ -366,12 +369,23 @@ export function makeSessionFactory(
     // person's own `claude` and login, checked before anything starts, then a session over
     // one streaming `query()` (#1120).
     if (claudeSdkRequested(options.agent)) {
-      if (options.host.spec.type !== "local")
+      // ORCA's own machine, or an SSH host where only `claude` runs (#1130): the SDK and the
+      // permission bridge stay here.
+      const sshHost = options.host instanceof SshHost ? options.host : undefined;
+      if (options.host.spec.type !== "local" && !sshHost)
         throw new OrcaError(
           "NOT_SUPPORTED",
           `agent ${options.agent.id} has driver: claude-agent-sdk, but it runs on ${options.host.spec.type} host ${options.host.spec.id}; ` +
-            `the Claude Agent SDK driver runs only on ORCA's own machine for now (#1130).`,
+            `the Claude Agent SDK driver runs on ORCA's own machine or an SSH host.`,
           { agentId: options.agent.id, host: options.host.spec.id },
+        );
+      // The pinned image is attested only on ORCA's own machine, as on the ACP route.
+      if (sshHost && options.agent.nativeToolHook === "experimental")
+        throw new OrcaError(
+          "NOT_SUPPORTED",
+          `agent ${options.agent.id} has nativeToolHook: experimental, which ORCA applies only to agents on its own machine; ` +
+            `it runs on ssh host ${sshHost.id}. Remove nativeToolHook to run it there.`,
+          { agentId: options.agent.id, host: sshHost.id },
         );
       // Refused before anything runs: no tested process-tree ownership on Windows yet.
       if (process.platform === "win32") throw claudeSdkPlatformUnsupported(options.agent.id);
@@ -392,18 +406,30 @@ export function makeSessionFactory(
       // Skills reach a session as embedded prompt context, which this route does not take yet:
       // a step that delivers skills is refused rather than run without them.
       if (options.requireEmbeddedContext) throw options.requireEmbeddedContext();
-      const preflight = await claudeSdkPreflight({
-        agent: options.agent,
-        cwd: options.cwd,
-        orcaEnv: options.env ?? {},
-        secrets,
-        signal: options.origin?.signal,
-        // With the hook opted into, the file is checked against the pins before anything is
-        // run, and what runs is ORCA's own copy of the bytes it checked (#1124).
-        ...(options.agent.nativeToolHook === "experimental"
-          ? { verifyInstall: requireVerifiedClaudeSdkInstall(options.agent.id) }
-          : {}),
-      }).catch((error: unknown) => {
+      const preflight = await (
+        sshHost
+          ? // Asked on that machine, with its own Claude Code and sign-in.
+            claudeSdkSshPreflight({
+              host: sshHost,
+              agent: options.agent,
+              cwd: options.cwd,
+              orcaEnv: options.env ?? {},
+              withheldEnv: secrets.withheld,
+              signal: options.origin?.signal,
+            })
+          : claudeSdkPreflight({
+              agent: options.agent,
+              cwd: options.cwd,
+              orcaEnv: options.env ?? {},
+              secrets,
+              signal: options.origin?.signal,
+              // With the hook opted into, the file is checked against the pins before anything is
+              // run, and what runs is ORCA's own copy of the bytes it checked (#1124).
+              ...(options.agent.nativeToolHook === "experimental"
+                ? { verifyInstall: requireVerifiedClaudeSdkInstall(options.agent.id) }
+                : {}),
+            })
+      ).catch((error: unknown) => {
         throw redactError(error, secrets.values);
       });
       // Asked last, immediately before Claude starts and is handed its servers (#337, #1125).
@@ -435,6 +461,8 @@ export function makeSessionFactory(
         // The Claude Code ORCA started, attested from its own side (#1124): with the hook opted
         // into (`experimental`) an unverified one is refused; otherwise it is logged.
         runtimeAttestation: { required: options.agent.nativeToolHook === "experimental" },
+        // On an SSH host, `claude` is started there over the host's SSH configuration (#1130).
+        ...(sshHost ? { remote: claudeSdkSshLaunch(sshHost, options.agent.id, secrets.withheld) } : {}),
       });
     }
     // ORCA's gate in Codex's executor path (#1026): its own route, which refuses every session
