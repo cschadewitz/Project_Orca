@@ -65,7 +65,7 @@ import {
 } from "../guard-qualification/check-support-matrix.js";
 import { claudeSdkHook } from "../guard-qualification/paths.js";
 import { SCENARIOS } from "../guard-qualification/scenarios.js";
-import { createWorld } from "../guard-qualification/world.js";
+import { claudeShape, createWorld } from "../guard-qualification/world.js";
 import { modelStandIn } from "../guard-qualification/connected/model-stand-in.js";
 import { claudeSdkConnected } from "../guard-qualification/connected/claude-sdk.js";
 import { effectFrom } from "../guard-qualification/connected/evidence.js";
@@ -154,7 +154,8 @@ describe("reads what the SDK handed Claude from its command line", () => {
 });
 
 describe("the route's diagnostics keep evidence the checker re-derives (#1129)", () => {
-  it("each diagnostic on the bridge passes, and a call whose outcome does not follow from its answers is refused", async () => {
+  /** The route's diagnostics run on the source bridge, as the installed receipt runs them. */
+  async function diagnosticCases() {
     const cases = [];
     for (const id of diagnostics) {
       const world = await realWorld();
@@ -165,21 +166,58 @@ describe("the route's diagnostics keep evidence the checker re-derives (#1129)",
         await world.dispose();
       }
     }
-    expect(bridgeDiagnosticProblems({ cases }, diagnostics)).toEqual([]);
-    const [first] = cases;
-    const tampered = {
-      ...first,
-      calls: first.calls.map((c, i) => (i === 0 ? { ...c, outcome: c.outcome === "allow" ? "deny" : "allow" } : c)),
-    };
-    expect(bridgeDiagnosticProblems({ cases: [tampered, ...cases.slice(1)] }, diagnostics)).toEqual([
-      expect.stringMatching(new RegExp(`^case ${first.id} \\(bridge\\): call 1: its answer shows `)),
+    return cases;
+  }
+  const problems = (cases) => bridgeDiagnosticProblems({ route: ROUTE, cases }, diagnostics);
+  /** The cases with case `id`'s calls changed by `change`. */
+  const changed = (cases, id, change) => cases.map((c) => (c.id === id ? { ...c, calls: change(c.calls) } : c));
+  const firstCall = (cases, id, edit) => changed(cases, id, (calls) => calls.map((x, i) => (i === 0 ? edit(x) : x)));
+
+  it("each diagnostic on the bridge makes exactly its inventory's calls, with outcomes its answers show", async () => {
+    const cases = await diagnosticCases();
+    expect(problems(cases)).toEqual([]);
+    expect(problems(cases.slice(1))).toEqual([`case ${cases[0].id} (bridge): not run`]);
+    expect(problems([{ ...cases[0], via: "live" }, ...cases.slice(1)])).toEqual([
+      `case ${cases[0].id} (bridge): ran via live, not the bridge`,
     ]);
-    expect(bridgeDiagnosticProblems({ cases: cases.slice(1) }, diagnostics)).toEqual([
-      `case ${first.id} (bridge): not run`,
+  });
+
+  it("refuses a dropped call or a substituted call, even when each remaining call is consistent", async () => {
+    const cases = await diagnosticCases();
+    // A02 makes five calls: drop the last.
+    expect(problems(changed(cases, "A02", (calls) => calls.slice(0, -1)))).toEqual([
+      "case A02 (bridge): 4 calls, the inventory requires 5",
     ]);
-    expect(bridgeDiagnosticProblems({ cases: [{ ...first, via: "live" }, ...cases.slice(1)] }, diagnostics)).toEqual([
-      `case ${first.id} (bridge): ran via live, not the bridge`,
+    // Another case's consistent call in place of B01's first.
+    const stranger = cases.find((c) => c.id === "A04").calls[0];
+    expect(problems(firstCall(cases, "B01", () => stranger))).toEqual([
+      "case B01 (bridge): call 1: tool mcp__github__create_issue, the inventory's is Write",
+      "case B01 (bridge): call 1: outcome allow is not one the inventory accepts (deny)",
     ]);
+  });
+
+  it("refuses an answer not bound to its call, or one that remembers, before deriving anything", async () => {
+    const cases = await diagnosticCases();
+    // A04's first call is allowed by canUseTool, so it carries an answer.
+    const unbound = firstCall(cases, "A04", (x) => ({ ...x, answer: { ...x.answer, toolUseID: "toolu_other" } }));
+    expect(problems(unbound)).toEqual(["case A04 (bridge): call 1: ORCA's answers are invalid (invalid:answer-shape)"]);
+    const remembers = firstCall(cases, "A04", (x) => ({ ...x, answer: { ...x.answer, updatedPermissions: [] } }));
+    expect(problems(remembers)).toEqual([
+      "case A04 (bridge): call 1: ORCA's answers are invalid (invalid:answer-shape)",
+    ]);
+  });
+
+  it("never passes an invalid outcome, even one the record repeats", async () => {
+    const cases = await diagnosticCases();
+    const invalid = firstCall(cases, "A04", (x) => ({
+      ...x,
+      hook: { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow" } },
+      outcome: "invalid:hook-allow",
+    }));
+    expect(problems(invalid)).toEqual(["case A04 (bridge): call 1: ORCA's answers are invalid (invalid:hook-allow)"]);
+    // And a call whose saved outcome is not what its answers show.
+    const relabelled = firstCall(cases, "A04", (x) => ({ ...x, outcome: "deny" }));
+    expect(problems(relabelled)).toEqual(["case A04 (bridge): call 1: its answers show allow, not deny"]);
   });
 });
 
@@ -428,7 +466,7 @@ describe.skipIf(CLAUDE === undefined || process.platform !== "linux")("installed
     expect(rowReceiptProblems(shaped, row)).toEqual([]);
     expect(installedCaseProblems(shaped, liveCases, loadAssertions(), route)).toEqual([]);
     // The diagnostics hold too, though they count toward no tier.
-    expect(bridgeDiagnosticProblems(shaped, diagnostics)).toEqual([]);
+    expect(bridgeDiagnosticProblems(shaped, diagnostics, loadAssertions())).toEqual([]);
     // The row is not pinned yet, so only the inputs' own shape and settings are checked here.
     const pinnedToThis = {
       ...row,
@@ -491,7 +529,7 @@ function bridgeRecorded(world) {
     async decide(w, action, opts = {}) {
       const got = await claudeSdkHook.decide(w, action, opts);
       w.bridgeCalls.push({
-        tool: action.tool,
+        tool: claudeShape(action).toolName,
         toolUseId: got.toolUseId,
         outcome: got.outcome,
         decision: got.decision,
