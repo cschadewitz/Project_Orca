@@ -44,6 +44,7 @@ import {
   CLAUDE_ADAPTER_NAMES,
   claudeModePin,
   nativeToolHookNotQualified,
+  requireVerifiedClaudeSdkInstall,
   nativeToolHookRequested,
   nativeToolHookSession,
   sweepHookTelemetrySpools,
@@ -397,6 +398,11 @@ export function makeSessionFactory(
         orcaEnv: options.env ?? {},
         secrets,
         signal: options.origin?.signal,
+        // With the hook opted into, the file is checked against the pins before it is run at
+        // all, so an unverified program never gets the session's environment (#1124).
+        ...(options.agent.nativeToolHook === "experimental"
+          ? { verifyInstall: requireVerifiedClaudeSdkInstall(options.agent.id, { signal: options.origin?.signal }) }
+          : {}),
       }).catch((error: unknown) => {
         throw redactError(error, secrets.values);
       });

@@ -26,7 +26,7 @@
  * - an ORCA-run MCP server is served to Claude in process (#1125): the person is asked about the
  *   tool call once, ORCA's relay runs the real server, and a checkout's `.mcp.json` does not load;
  * - with `nativeToolHook: experimental` the pinned Claude Code is attested and opens (#1124), and
- *   a copy of it one byte longer, reporting the same version, is refused;
+ *   a copy of it one byte longer, which would report the same version, is refused before it runs;
  * - cancel ends a turn as `cancelled`, and close leaves no Claude Code process behind.
  */
 import { appendFile, chmod, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -494,7 +494,7 @@ rl.on("line", (line) => {
       await chmod(altered, 0o755);
       try {
         await expect(open({}, undefined, { nativeToolHook: "experimental", command: altered })).rejects.toThrow(
-          /not one ORCA verified: the image it runs is not the one ORCA verified for Claude Code/,
+          /is not a Claude Code ORCA verified .* ORCA refuses to run it at all/,
         );
       } finally {
         await rm(altered, { force: true });

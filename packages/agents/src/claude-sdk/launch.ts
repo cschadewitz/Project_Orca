@@ -196,6 +196,11 @@ export interface ClaudeSdkPreflightOptions {
   timeoutMs?: number;
   signal?: AbortSignal | undefined;
   platform?: NodeJS.Platform | undefined;
+  /**
+   * Checked on the resolved `claude` before ORCA runs it at all, even for `--version` (#1124):
+   * throws to refuse it. A returned `claudeCode` is the version it must then report.
+   */
+  verifyInstall?: ((executable: string) => Promise<{ claudeCode: string } | undefined>) | undefined;
 }
 
 export const CLAUDE_SDK_PREFLIGHT_TIMEOUT_MS = 20_000;
@@ -211,6 +216,8 @@ export async function claudeSdkPreflight(options: ClaudeSdkPreflightOptions): Pr
   const { agent, cwd } = options;
   const env = claudeSdkEnvironment(agent, options.baseEnv ?? process.env, options.orcaEnv, options.secrets);
   const executable = await resolveClaudeExecutable(agent, env, cwd, options.platform);
+  // Before it is run with the session's environment, credentials included.
+  const expected = await options.verifyInstall?.(executable);
   const timeoutMs = options.timeoutMs ?? CLAUDE_SDK_PREFLIGHT_TIMEOUT_MS;
   const run = (args: string[]) => runBounded(executable, args, { cwd, env, timeoutMs, signal: options.signal });
 
@@ -225,6 +232,12 @@ export async function claudeSdkPreflight(options: ClaudeSdkPreflightOptions): Pr
       `agent ${agent.id}: ${executable} --version ${versionOk ? "printed no Claude Code version" : describeFailure(version)}; ` +
         `it is not a Claude Code ORCA can run.`,
       { agentId: agent.id, executable, ...failureDetails(version) },
+    );
+  if (expected && versionNumber !== expected.claudeCode)
+    throw new OrcaError(
+      "NOT_SUPPORTED",
+      `agent ${agent.id}: ${executable} is the image ORCA verified for Claude Code ${expected.claudeCode}, but it reports ${versionNumber}; ORCA refuses it.`,
+      { agentId: agent.id, executable, expected: expected.claudeCode, reported: versionNumber },
     );
 
   const status = await run(["auth", "status", "--json"]);

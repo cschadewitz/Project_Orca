@@ -16,12 +16,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { OrcaError, type Logger } from "@orca/core";
+import { AgentSpecSchema, OrcaError, type Logger } from "@orca/core";
 import {
   CLAUDE_AGENT_SDK_VERSION,
   CLAUDE_SDK_VERIFIED_PAIRS,
+  LocalHost,
   attestClaudeSdkRuntime,
+  claudeSdkPreflight,
   openClaudeSdkSession,
+  requireVerifiedClaudeSdkInstall,
   type AgentSession,
   type ClaudeSdkRuntimeAttestation,
   type ClaudeSdkVerifiedPair,
@@ -203,5 +206,165 @@ describe.runIf(process.platform === "linux")("a session's Claude Code (#1124)", 
     // What was hashed is what the kernel runs for ORCA's child, not what the child said.
     expect(results).toEqual([{ verified: true, claudeCode: "2.1.332", sha256: NODE_DIGEST }]);
     expect(existsSync(marker)).toBe(false);
+  });
+});
+
+describe.runIf(process.platform === "linux")("the open stays bounded through the attestation (#1318 review)", () => {
+  const serverLog = () => join(dir, "server.log");
+  const open = async (
+    attest: NonNullable<NonNullable<Parameters<typeof openClaudeSdkSession>[0]["runtimeAttestation"]>["attest"]>,
+    extra: Partial<Parameters<typeof openClaudeSdkSession>[0]> = {},
+    env: Record<string, string> = {},
+  ) => {
+    const claude = join(dir, "claude");
+    await writeFile(claude, `#!/bin/sh\nexec "${process.execPath}" "${STAND_IN}" "$@"\n`);
+    await chmod(claude, 0o755);
+    await writeFile(
+      join(dir, "server.cjs"),
+      `require("node:fs").appendFileSync(process.env.SERVER_LOG, "started\\n"); process.stdin.resume();`,
+    );
+    return openClaudeSdkSession({
+      agent: { id: "claude-sdk", cancelGraceMs: 2_000 },
+      hostId: "local",
+      cwd: dir,
+      host: new LocalHost({ id: "local", type: "local" }),
+      // Claude lists the server's tools as it starts: nothing may serve that before admission.
+      mcpServers: [
+        { name: "tools", command: process.execPath, args: [join(dir, "server.cjs")], env: { SERVER_LOG: serverLog() } },
+      ],
+      preflight: {
+        executable: claude,
+        version: "2.1.332",
+        env: {
+          PATH: process.env.PATH ?? "",
+          STAND_IN_LOG: join(dir, "claude.log"),
+          STAND_IN_MCP_EARLY: "tools",
+          ...env,
+        },
+      },
+      startupTimeoutMs: 1_000,
+      exitGraceMs: 1_000,
+      runtimeAttestation: { required: true, attest },
+      ...extra,
+    });
+  };
+  const neverStarted = async () => {
+    expect(existsSync(serverLog())).toBe(false);
+    expect(await readFile(join(dir, "claude.log"), "utf8")).not.toContain('"type":"user"');
+  };
+
+  it("times a stalled image read out with the open's own deadline, and starts nothing", async () => {
+    let stopped: AbortSignal | undefined;
+    const started = Date.now();
+    const error = await open(({ signal }) => {
+      stopped = signal;
+      return new Promise(() => undefined);
+    }).catch((e: unknown) => e as OrcaError);
+    expect(error).toMatchObject({ code: "AGENT_TRANSPORT", details: { startup: "timeout" } });
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(stopped?.aborted).toBe(true);
+    await neverStarted();
+  });
+
+  it("is cancelled during the image read", async () => {
+    const ac = new AbortController();
+    const error = await open(
+      () => {
+        setTimeout(() => ac.abort(), 50);
+        return new Promise(() => undefined);
+      },
+      { signal: ac.signal },
+    ).catch((e: unknown) => e as OrcaError);
+    expect(error).toMatchObject({ code: "CANCELLED" });
+    await neverStarted();
+  });
+
+  it("refuses a child that exited while it was checked, even if the check verified", async () => {
+    const error = await open(async ({ pid }) => {
+      process.kill(pid!, "SIGKILL");
+      await new Promise((r) => setTimeout(r, 200));
+      return { verified: true, claudeCode: "2.1.332", sha256: NODE_DIGEST };
+    }).catch((e: unknown) => e as OrcaError);
+    expect(error).toBeInstanceOf(OrcaError);
+    expect((error as OrcaError).message).toMatch(/exited/);
+    await neverStarted();
+  });
+
+  it("refuses an unverified child and retires the MCP listing it sent while starting", async () => {
+    const error = await open(() => Promise.resolve({ verified: false, reason: "synthetic" })).catch(
+      (e: unknown) => e as OrcaError,
+    );
+    expect(error).toMatchObject({ code: "NOT_SUPPORTED" });
+    await neverStarted();
+  });
+});
+
+describe.runIf(process.platform === "linux")("before anything runs (#1318 review)", () => {
+  const shim = async () => {
+    const claude = join(dir, "claude");
+    const ran = join(dir, "ran-env");
+    await writeFile(
+      claude,
+      `#!/bin/sh\nenv >> "${ran}"\nif [ "$1" = "--version" ]; then echo "2.1.332 (Claude Code)"; exit 0; fi\n` +
+        `echo '{"loggedIn":true,"authMethod":"api_key","apiProvider":"firstParty"}'\n`,
+    );
+    await chmod(claude, 0o755);
+    const digest = createHash("sha256")
+      .update(await readFile(claude))
+      .digest("hex");
+    return { claude, ran, digest };
+  };
+  const agent = (command: string) =>
+    AgentSpecSchema.parse({
+      id: "claude",
+      driver: "claude-agent-sdk",
+      command,
+      env: { ANTHROPIC_API_KEY: "sk-orca-1124-credential" },
+    });
+  const pair = (digest: string, claudeCode = "2.1.332"): ClaudeSdkVerifiedPair => ({
+    sdk: CLAUDE_AGENT_SDK_VERSION,
+    claudeCode,
+    images: { [`${process.platform}-${process.arch}`]: digest },
+  });
+
+  it("never runs an unverified candidate, so it never receives the session's credentials", async () => {
+    const { claude, ran } = await shim();
+    const error = await claudeSdkPreflight({
+      agent: agent(claude),
+      cwd: dir,
+      baseEnv: { PATH: process.env.PATH },
+      verifyInstall: requireVerifiedClaudeSdkInstall("claude", { pairs: [pair("0".repeat(64))] }),
+    }).catch((e: unknown) => e as OrcaError);
+    expect(error).toMatchObject({ code: "NOT_SUPPORTED" });
+    expect((error as OrcaError).message).toMatch(/refuses to run it at all/);
+    expect(existsSync(ran)).toBe(false);
+  });
+
+  it("runs a pinned one, which must then report the pinned version", async () => {
+    const { claude, ran, digest } = await shim();
+    const ok = await claudeSdkPreflight({
+      agent: agent(claude),
+      cwd: dir,
+      baseEnv: { PATH: process.env.PATH },
+      verifyInstall: requireVerifiedClaudeSdkInstall("claude", { pairs: [pair(digest)] }),
+    });
+    expect(ok.version).toBe("2.1.332");
+    expect(await readFile(ran, "utf8")).toContain("ANTHROPIC_API_KEY=sk-orca-1124-credential");
+    await rm(ran);
+    const mismatch = await claudeSdkPreflight({
+      agent: agent(claude),
+      cwd: dir,
+      baseEnv: { PATH: process.env.PATH },
+      verifyInstall: requireVerifiedClaudeSdkInstall("claude", { pairs: [pair(digest, "2.1.000")] }),
+    }).catch((e: unknown) => e as OrcaError);
+    expect(mismatch).toMatchObject({ code: "NOT_SUPPORTED" });
+    expect((mismatch as OrcaError).message).toMatch(/verified for Claude Code 2\.1\.000, but it reports 2\.1\.332/);
+  });
+
+  it("refuses a candidate that is not a regular file", async () => {
+    const error = await requireVerifiedClaudeSdkInstall("claude", { pairs: [] })(dir).catch(
+      (e: unknown) => e as OrcaError,
+    );
+    expect(error).toMatchObject({ code: "NOT_SUPPORTED" });
   });
 });

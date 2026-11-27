@@ -86,12 +86,22 @@ hook is guard-qualified.
 
 ### Which Claude Code runs
 
-ORCA starts `claude` itself, so it checks the program it started (#1124). Once that process has
-answered the SDK's `initialize`, ORCA hashes the image the kernel runs for it
-(`/proc/<pid>/exe`), checks that it is still the same process and still ORCA's own child, and
-compares the digest with the one pinned for this SDK version and the version
-`claude --version` printed. Nothing Claude Code says about itself (a path, its process title)
-is read or run. Verified pairs, Linux x64 only for now:
+ORCA starts `claude` itself, so it checks the program it starts (#1124), twice when the agent
+has `nativeToolHook: experimental`:
+
+1. **Before it runs at all**, even for `claude --version`: the file at the resolved real path
+   must be an image pinned for this SDK, and it must then report that pair's version. An
+   unverified program is never started, so it never gets the session's environment or
+   credentials.
+2. **Once it runs**, after it has answered the SDK's `initialize` and before the session is
+   given work or its MCP servers start: ORCA hashes the image the kernel runs for that process
+   (`/proc/<pid>/exe`), checks that it is still the same process and still ORCA's own child, and
+   compares it with the same pin, in case the file was replaced in between. This check has the
+   open's own deadline and cancellation.
+
+Nothing Claude Code says about itself (a path, its process title) is read or run. The second
+check is a measurement of what runs, not a boundary before execution: the first is that.
+Verified pairs, Linux x64 only for now:
 
 | Claude Agent SDK | Claude Code | Image (`@anthropic-ai/claude-code-linux-x64`, `claude`) |
 | --- | --- | --- |
@@ -100,8 +110,9 @@ is read or run. Verified pairs, Linux x64 only for now:
 - **With `nativeToolHook: experimental`** an unverified Claude Code (another version, another
   build of the same version, a wrapper, another platform) is refused before the session is
   given any work.
-- **Otherwise** the session runs your own Claude Code whatever its version, and ORCA logs that
-  it is not one it verified.
+- **Otherwise** the session runs your own Claude Code whatever its version, and ORCA only logs
+  that it is not one it verified (the second check, not waited for). Such a session carries no
+  attestation claim.
 
 A pin moves only by a reviewed change with an acceptance run on the new pair.
 

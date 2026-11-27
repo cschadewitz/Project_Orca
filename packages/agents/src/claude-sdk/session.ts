@@ -103,6 +103,8 @@ export interface ClaudeSdkSessionOptions {
         required?: boolean | undefined;
         pairs?: readonly ClaudeSdkVerifiedPair[] | undefined;
         onResult?: ((result: ClaudeSdkRuntimeAttestation) => void) | undefined;
+        /** Replaces how the child is attested (tests). */
+        attest?: typeof attestClaudeSdkRuntime | undefined;
       }
     | undefined;
   /** ORCA's own files, which no rule opens to a tool call (C4-01). */
@@ -448,26 +450,61 @@ async function openClaudeSdkProcess(
   let startupTimer: ReturnType<typeof setTimeout> | undefined;
   let onOpenAbort: (() => void) | undefined;
   let initResult: SDKControlInitializeResponse;
+  /** Ends a startup step that is still running when the open is refused. */
+  const startupAbort = new AbortController();
+  /** Which Claude Code runs (#1124), from ORCA's own side; see `runtimeAttestation`. */
+  const attest = options.runtimeAttestation?.attest ?? attestClaudeSdkRuntime;
+  const required = options.runtimeAttestation?.required === true;
+  let attestation: Promise<ClaudeSdkRuntimeAttestation> | undefined;
+  const reportAttestation = (result: ClaudeSdkRuntimeAttestation) => {
+    try {
+      options.runtimeAttestation?.onResult?.(result);
+    } catch {
+      // An observer's failure is not the session's.
+    }
+    return result;
+  };
   try {
-    // Each loser of the race below must not become an unhandled rejection later.
+    // Each loser of the races below must not become an unhandled rejection later.
     const initialized = q.initializationResult();
     initialized.catch(() => undefined);
     const exitedFirst = exited.then(() => Promise.reject(startupFailure("exited before it answered")));
     exitedFirst.catch(() => undefined);
-    initResult = await Promise.race([
-      initialized,
-      new Promise<never>((_, reject) => {
-        startupTimer = setTimeout(
-          () => reject(startupFailure("did not answer in time", { startup: "timeout" })),
-          startupTimeoutMs,
+    // One deadline and one cancellation for the whole open, the attestation included.
+    const bounded = new Promise<never>((_, reject) => {
+      startupTimer = setTimeout(
+        () => reject(startupFailure("did not answer in time", { startup: "timeout" })),
+        startupTimeoutMs,
+      );
+      onOpenAbort = () => reject(new OrcaError("CANCELLED", `opening agent ${options.agent.id} was cancelled`));
+      options.signal?.addEventListener("abort", onOpenAbort, { once: true });
+      if (options.signal?.aborted) onOpenAbort();
+    });
+    bounded.catch(() => undefined);
+    initResult = await Promise.race([initialized, bounded, exitedFirst]);
+    attestation = attest({
+      pid: child?.pid,
+      claudeCodeVersion: options.preflight.version,
+      pairs: options.runtimeAttestation?.pairs,
+      signal: startupAbort.signal,
+    }).then(reportAttestation);
+    if (required) {
+      const result = await Promise.race([attestation, bounded, exitedFirst]);
+      if (!result.verified)
+        throw new OrcaError(
+          "NOT_SUPPORTED",
+          `agent ${options.agent.id} has nativeToolHook: experimental, but the Claude Code it runs is not one ORCA verified: ${result.reason}. ` +
+            `ORCA refuses the session rather than run it unattested; use the pinned Claude Code (docs/agents/claude-agent-sdk.md), or remove nativeToolHook.`,
+          { agentId: options.agent.id, executable, reason: result.reason },
         );
-        onOpenAbort = () => reject(new OrcaError("CANCELLED", `opening agent ${options.agent.id} was cancelled`));
-        options.signal?.addEventListener("abort", onOpenAbort, { once: true });
-      }),
-      exitedFirst,
-    ]);
+      // The process that was attested must still be the one the session runs.
+      if (exitObserved) throw startupFailure("exited while ORCA checked it");
+      if (options.signal?.aborted) throw new OrcaError("CANCELLED", `opening agent ${options.agent.id} was cancelled`);
+    }
   } catch (e) {
+    startupAbort.abort();
     const error = e instanceof OrcaError ? e : startupFailure("refused to start a session", { sdkError: errorName(e) });
+    // The child, its group and the relay (nothing admitted, nothing queued served) go first.
     await terminate();
     throw withStartupTermination(error, spawned && !exitObserved ? terminated : Promise.resolve());
   } finally {
@@ -482,35 +519,8 @@ async function openClaudeSdkProcess(
       { agentId: options.agent.id, executable, ...details },
     );
   }
-
-  // ---- which Claude Code runs (#1124) ---------------------------------------------------------
-  const attestation = attestClaudeSdkRuntime({
-    pid: child?.pid,
-    claudeCodeVersion: options.preflight.version,
-    pairs: options.runtimeAttestation?.pairs,
-  }).then((result) => {
-    try {
-      options.runtimeAttestation?.onResult?.(result);
-    } catch {
-      // An observer's failure is not the session's.
-    }
-    return result;
-  });
-  if (options.runtimeAttestation?.required) {
-    const result = await attestation;
-    if (!result.verified) {
-      await terminate();
-      throw withStartupTermination(
-        new OrcaError(
-          "NOT_SUPPORTED",
-          `agent ${options.agent.id} has nativeToolHook: experimental, but the Claude Code it runs is not one ORCA verified: ${result.reason}. ` +
-            `ORCA refuses the session rather than run it unattested; use the pinned Claude Code (docs/agents/claude-agent-sdk.md), or remove nativeToolHook.`,
-          { agentId: options.agent.id, executable, reason: result.reason },
-        ),
-        spawned && !exitObserved ? terminated : Promise.resolve(),
-      );
-    }
-  } else
+  // Not required: the session runs whatever the result, which is only logged.
+  if (!required)
     void attestation.then((result) => {
       if (!result.verified)
         logger.warn("the Claude Code this session runs is not one ORCA verified", {
