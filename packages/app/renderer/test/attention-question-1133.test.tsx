@@ -124,6 +124,32 @@ describe("an agent's question", () => {
     expect(answerCall()).toMatchObject({ optionId: JSON.stringify({ action: "decline" }) });
   });
 
+  it("answers a required yes/no with No directly, neither picked to start", async () => {
+    const yesNo: OpenInputView = {
+      ...QUESTION,
+      question: "Keep backups?",
+      context: {
+        elicitation: {
+          message: "Keep backups?",
+          fields: [{ key: "backups", kind: "boolean", title: "Backups", required: true }],
+        },
+      },
+    };
+    mount([yesNo]);
+    const card = await screen.findByRole("region", { name: cardName("permission", "Keep backups?") });
+    const yes = within(card).getByRole("radio", { name: "Yes" });
+    const no = within(card).getByRole("radio", { name: "No" });
+    expect(yes).toHaveProperty("checked", false);
+    expect(no).toHaveProperty("checked", false);
+    expect(within(card).getByRole("button", { name: "Answer" }).getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(no);
+    fireEvent.click(within(card).getByRole("button", { name: "Answer" }));
+    await waitFor(() => expect(answerCall()).toBeDefined());
+    expect(answerCall()).toMatchObject({
+      optionId: JSON.stringify({ action: "accept", content: { backups: false } }),
+    });
+  });
+
   it("cannot be answered once its turn's callback is gone", async () => {
     mount([{ ...QUESTION, live: { ...QUESTION.live!, state: "expired" } }]);
     const card = await screen.findByRole("region", { name: cardName("permission", QUESTION.question) });

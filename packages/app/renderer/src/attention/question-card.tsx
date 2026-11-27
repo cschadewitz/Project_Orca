@@ -244,16 +244,30 @@ function Field({
       );
     }
     case "boolean":
+      // Two explicit choices, neither picked without a default: an unset box would read as No.
       return (
-        <label className="orca-attn__option orca-attn__field">
-          <input
-            type="checkbox"
-            disabled={disabled}
-            checked={value === true}
-            onChange={(event) => onChange(event.target.checked)}
-          />
-          <span className="orca-attn__option-text">{heading}</span>
-        </label>
+        <fieldset className="orca-attn__field" disabled={disabled}>
+          <legend className="orca-attn__legend">{heading}</legend>
+          {(
+            [
+              [true, "Yes"],
+              [false, "No"],
+            ] as const
+          ).map(([choice, label]) => (
+            <label key={label} className="orca-attn__option">
+              <input
+                type="radio"
+                name={field.key}
+                value={label}
+                checked={value === choice}
+                onChange={() => onChange(choice)}
+              />
+              <span className="orca-attn__option-text">
+                <Text style="body">{label}</Text>
+              </span>
+            </label>
+          ))}
+        </fieldset>
       );
     case "number":
       return (

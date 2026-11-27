@@ -20,7 +20,13 @@ export function cliHumanInput(
       // like `orca status`. Answers still resolve against the authoritative option ids.
       const shown = q.presentation ?? q;
       try {
-        output.write(`\n[orca] ${q.kind} for run ${q.runId} / step ${q.stepRunId}\n${shown.question}\n`);
+        // ORCA's own label first, then what the run or the agent said, quoted and inert: an
+        // agent's text could otherwise move the cursor, recolour or overwrite the label (#1133).
+        output.write(
+          q.elicitation
+            ? `\n[orca] question from the agent for run ${inline(q.runId)} / step ${inline(q.stepRunId)}. Its words:\n${quoted(shown.question)}\n`
+            : `\n[orca] ${q.kind} for run ${inline(q.runId)} / step ${inline(q.stepRunId)}\n${quoted(shown.question)}\n`,
+        );
         const ask = async (prompt: string): Promise<string> => {
           if (q.signal?.aborted) throw humanInputCancelled(q.signal);
           return (
@@ -35,7 +41,7 @@ export function cliHumanInput(
         if (shown.options.length)
           output.write(
             shown.options
-              .map((o, i) => `  ${i + 1}. ${o.label}${o.consequence ? ` - ${o.consequence}` : ""}`)
+              .map((o, i) => `  ${i + 1}. ${inline(o.label)}${o.consequence ? ` - ${inline(o.consequence)}` : ""}`)
               .join("\n") + "\n",
           );
         for (;;) {
@@ -73,16 +79,18 @@ async function askForm(
   output: NodeJS.WritableStream,
 ): Promise<string> {
   output.write(
-    `Answer each field. Leave one empty to skip it if it is optional, or type ${DECLINE_WORD} to decline.\n`,
+    "[orca] Your answers go to the agent and are recorded in the run's log. Do not type a password, key or other secret, whatever the question says.\n" +
+      `[orca] Answer each field. Leave one empty to skip it if it is optional, or type ${DECLINE_WORD} to decline.\n`,
   );
   const content: Record<string, ElicitationValue> = {};
   for (const field of form.fields) {
-    output.write(`\n${field.title ?? field.key}${field.required ? " (required)" : ""}\n`);
-    if (field.description) output.write(`${field.description}\n`);
+    output.write(`\n${quoted(field.title ?? field.key)}${field.required ? " (required)" : ""}\n`);
+    if (field.description) output.write(`${quoted(field.description)}\n`);
     if (field.kind === "choice" || field.kind === "multi")
       output.write(
-        field.options.map((o, i) => `  ${i + 1}. ${o.label}${o.description ? ` - ${o.description}` : ""}`).join("\n") +
-          "\n",
+        field.options
+          .map((o, i) => `  ${i + 1}. ${inline(o.label)}${o.description ? ` - ${inline(o.description)}` : ""}`)
+          .join("\n") + "\n",
       );
     for (;;) {
       const line = await ask(promptFor(field));
@@ -162,4 +170,29 @@ function readField(field: ElicitationField, line: string): ElicitationValue | un
     case "boolean":
       return /^(y|yes)$/i.test(line) ? true : /^(n|no)$/i.test(line) ? false : undefined;
   }
+}
+
+/**
+ * Text from a run or an agent, made safe to print: every control character (escape sequences
+ * included), carriage return and bidirectional override becomes a visible `?`, so it can only
+ * ever be read, never act on the terminal. Newlines are kept for `quoted` to indent.
+ */
+export function inert(text: string): string {
+  // eslint-disable-next-line no-control-regex -- matching control characters is the point here
+  return text.replace(/[\u0000-\u0009\u000b-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, (c) =>
+    c === "\t" ? " " : "?",
+  );
+}
+
+/** `inert` text, each line indented under ORCA's own label so none of it can pass for one. */
+function quoted(text: string): string {
+  return inert(text)
+    .split("\n")
+    .map((line) => `  ${line}`)
+    .join("\n");
+}
+
+/** `inert` text on one line: an option or an id. */
+function inline(text: string): string {
+  return inert(text).replace(/\n/g, " ");
 }

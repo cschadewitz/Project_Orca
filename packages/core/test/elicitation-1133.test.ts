@@ -68,6 +68,32 @@ describe("elicitationForm", () => {
     expect("refused" in out && out.refused).toContain(reason);
   });
 
+  it.each([
+    ["a pattern on text", { k: { type: "string", pattern: "^a+$" } }, "'pattern'"],
+    ["an exclusive bound on a number", { k: { type: "number", exclusiveMinimum: 0 } }, "'exclusiveMinimum'"],
+    ["a multipleOf", { k: { type: "integer", multipleOf: 2 } }, "'multipleOf'"],
+    ["a text format ORCA does not check", { k: { type: "string", format: "ipv4" } }, "format"],
+    ["a bound ORCA cannot read", { k: { type: "string", maxLength: -1 } }, "'maxLength'"],
+    ["a constraint on a choice", { k: { type: "string", enum: ["a"], pattern: "a" } }, "'pattern'"],
+    ["a constraint on list items", { k: { type: "array", items: { enum: ["a"], maxLength: 1 } } }, "items"],
+    ["a list of non-text values", { k: { type: "array", items: { type: "number", enum: ["a"] } } }, "not text"],
+    ["a keyword on an option", { k: { type: "string", oneOf: [{ const: "a", pattern: "a" }] } }, "cannot read"],
+    ["a constraint on a yes/no", { k: { type: "boolean", const: true } }, "'const'"],
+  ])("declines %s rather than dropping it", (_, properties, reason) => {
+    const out = elicitationForm("Q", { type: "object", properties });
+    expect("refused" in out && out.refused).toContain(reason);
+  });
+
+  it("declines a form that allows fields it does not name, or sets a keyword of its own", () => {
+    expect(elicitationForm("Q", { properties: { k: { type: "string" } }, additionalProperties: true })).toHaveProperty(
+      "refused",
+    );
+    expect(elicitationForm("Q", { properties: { k: { type: "string" } }, minProperties: 1 })).toHaveProperty("refused");
+    expect(
+      elicitationForm("Q", { $schema: "x", properties: { k: { type: "string" } }, additionalProperties: false }),
+    ).toHaveProperty("form");
+  });
+
   it("declines a form beyond its limits", () => {
     const properties = Object.fromEntries(Array.from({ length: 21 }, (_, i) => [`f${i}`, { type: "string" }]));
     expect(elicitationForm("Q", { properties })).toHaveProperty("refused");
@@ -94,6 +120,17 @@ describe("parseElicitationAnswer", () => {
     expect(parseElicitationAnswer(every, ELICITATION_DECLINE)).toEqual({ action: "decline" });
     const answer = { action: "accept" as const, content: { pick: "b", many: ["q"] } };
     expect(parseElicitationAnswer(every, encodeElicitationAnswer(answer))).toEqual(answer);
+  });
+
+  it.each([
+    ["email", "a@b.example", "not an email"],
+    ["uri", "https://example.invalid/x", "example.invalid"],
+    ["date", "2026-02-28", "2026-02-30"],
+    ["date-time", "2026-11-27T18:00:00Z", "2026-11-27 18:00"],
+  ] as const)("checks a %s field's format", (format, good, bad) => {
+    const f = form({ properties: { v: { type: "string", format } } });
+    expect(parseElicitationAnswer(f, accept({ v: good }))).toEqual({ action: "accept", content: { v: good } });
+    expect(() => parseElicitationAnswer(f, accept({ v: bad }))).toThrow(/not a valid/);
   });
 
   it.each([

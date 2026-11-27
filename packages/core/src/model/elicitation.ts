@@ -130,6 +130,10 @@ export function elicitationForm(
   if (!isRecord(requestedSchema)) return { refused: "the form has no schema" };
   if (requestedSchema.type !== undefined && requestedSchema.type !== "object")
     return { refused: "the form is not an object schema" };
+  const top = unenforced(requestedSchema, FORM_KEYS);
+  if (top !== undefined) return { refused: `the form sets '${top}', which ORCA does not enforce` };
+  if (requestedSchema.additionalProperties !== undefined && requestedSchema.additionalProperties !== false)
+    return { refused: "the form allows fields it does not name" };
   const properties = requestedSchema.properties;
   if (!isRecord(properties) || Object.keys(properties).length === 0)
     return { refused: "the form has no fields: a confirmation is not a question ORCA answers" };
@@ -164,6 +168,41 @@ function elicitationField(
     ...(text(raw.title) !== undefined ? { title: text(raw.title)! } : {}),
     ...(text(raw.description) !== undefined ? { description: text(raw.description)! } : {}),
   };
+  // Every keyword left is one ORCA enforces or only shows. A constraint it would not check is
+  // refused rather than dropped: both checks of the answer read this form, not the agent's.
+  const kind =
+    raw.type === "string"
+      ? hasChoices(raw)
+        ? "choice"
+        : "text"
+      : raw.type === "number" || raw.type === "integer"
+        ? "number"
+        : raw.type === "boolean"
+          ? "boolean"
+          : raw.type === "array"
+            ? "multi"
+            : undefined;
+  if (kind) {
+    const extra = unenforced(raw, [...FIELD_KEYS, ...KIND_KEYS[kind]]);
+    if (extra !== undefined) return { refused: `field '${key}' sets '${extra}', which ORCA does not enforce` };
+    if (kind === "text" && raw.format !== undefined && !TEXT_FORMATS.includes(raw.format as never))
+      return { refused: `field '${key}' has a format ORCA does not check` };
+    // A bound ORCA cannot read is a bound it would not enforce.
+    for (const bound of ["minLength", "maxLength", "minItems", "maxItems"])
+      if (raw[bound] !== undefined && count(raw[bound]) === undefined)
+        return { refused: `field '${key}' has a '${bound}' ORCA cannot read` };
+    for (const bound of ["minimum", "maximum"])
+      if (raw[bound] !== undefined && finite(raw[bound]) === undefined)
+        return { refused: `field '${key}' has a '${bound}' ORCA cannot read` };
+    if (kind === "multi") {
+      if (!isRecord(raw.items)) return { refused: `field '${key}' is a list without options, which ORCA cannot show` };
+      const item = unenforced(raw.items, ITEM_KEYS);
+      if (item !== undefined)
+        return { refused: `field '${key}' sets '${item}' on its items, which ORCA does not enforce` };
+      if (raw.items.type !== undefined && raw.items.type !== "string")
+        return { refused: `field '${key}' lists values that are not text` };
+    }
+  }
   switch (raw.type) {
     case "string": {
       const options = choices(raw);
@@ -229,12 +268,37 @@ function elicitationField(
  * The options of a choice schema: titled `oneOf`/`anyOf` consts, or `enum` with optional
  * `enumNames`. Undefined when the schema offers none, null when it offers some ORCA cannot read.
  */
+const TEXT_FORMATS = ["email", "uri", "date", "date-time"] as const;
+/** Keywords of the form itself ORCA reads or checks. */
+const FORM_KEYS = ["type", "properties", "required", "additionalProperties", "$schema", "title", "description"];
+/** Annotations every field may carry; ORCA shows them or reads them for secrets. */
+const FIELD_KEYS = ["type", "title", "description", "default", "_meta", "writeOnly"];
+/** The constraints ORCA enforces, by field kind. */
+const KIND_KEYS = {
+  choice: ["oneOf", "anyOf", "enum", "enumNames"],
+  text: ["minLength", "maxLength", "format"],
+  number: ["minimum", "maximum"],
+  boolean: [],
+  multi: ["items", "minItems", "maxItems", "uniqueItems"],
+} as const;
+const ITEM_KEYS = ["type", "oneOf", "anyOf", "enum", "enumNames"];
+const OPTION_KEYS = ["const", "title", "description", "_meta"];
+
+/** The first keyword of `raw` outside `allowed`, if any. */
+function unenforced(raw: Json, allowed: readonly string[]): string | undefined {
+  return Object.keys(raw).find((k) => !allowed.includes(k));
+}
+
+function hasChoices(raw: Json): boolean {
+  return Array.isArray(raw.oneOf) || Array.isArray(raw.anyOf) || Array.isArray(raw.enum);
+}
+
 function choices(raw: Json): ElicitationOption[] | null | undefined {
   const titled = Array.isArray(raw.oneOf) ? raw.oneOf : Array.isArray(raw.anyOf) ? raw.anyOf : undefined;
   if (titled) {
     const out: ElicitationOption[] = [];
     for (const o of titled) {
-      if (!isRecord(o) || typeof o.const !== "string") return null;
+      if (!isRecord(o) || typeof o.const !== "string" || unenforced(o, OPTION_KEYS) !== undefined) return null;
       out.push({
         value: o.const,
         label: text(o.title) ?? o.const,
@@ -320,6 +384,7 @@ function fieldValue(field: ElicitationField, value: unknown): ElicitationValue {
         refuse(`${name} is longer than ${field.maxLength}`);
       if (field.minLength !== undefined && s.length < field.minLength)
         refuse(`${name} is shorter than ${field.minLength}`);
+      if (field.format !== undefined && !fitsFormat(field.format, s)) refuse(`${name} is not a valid ${field.format}`);
       return s;
     }
     case "number": {
@@ -340,4 +405,26 @@ function fieldValue(field: ElicitationField, value: unknown): ElicitationValue {
 export function elicitationOf(context: Record<string, unknown> | undefined): ElicitationForm | undefined {
   const parsed = ElicitationFormSchema.safeParse(context?.elicitation);
   return parsed.success ? parsed.data : undefined;
+}
+
+/** The text formats ORCA offers, checked as their JSON Schema names say. */
+function fitsFormat(format: (typeof TEXT_FORMATS)[number], s: string): boolean {
+  switch (format) {
+    case "email":
+      return /^[^\s@]+@[^\s@]+$/.test(s);
+    case "uri":
+      return /^[A-Za-z][A-Za-z0-9+.-]*:\S*$/.test(s) && URL.canParse(s);
+    case "date": {
+      const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+      if (!m) return false;
+      const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+      return d.toISOString().startsWith(s);
+    }
+    case "date-time":
+      return (
+        /^\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(\.\d+)?([Zz]|[+-]\d{2}:\d{2})$/.test(s) &&
+        !Number.isNaN(Date.parse(s)) &&
+        fitsFormat("date", s.slice(0, 10))
+      );
+  }
 }

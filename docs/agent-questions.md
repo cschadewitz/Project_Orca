@@ -11,8 +11,13 @@ question where permission asks appear, and sends the person's answer back to the
 - **In the app**, a question card in Attention and in the run's step, beside permission asks:
   the agent's message, who is asking, and the form. **Answer** sends the form; **Decline** tells
   the agent the person would not answer. There is no "always": a question is answered once.
-- **At the terminal** (`humanInput.mode: cli`), one prompt per field. An empty line skips an
-  optional field and `!decline` declines the whole question.
+- **At the terminal** (`humanInput.mode: cli`), one prompt per field, after ORCA's own label
+  and a warning that answers go to the agent, are recorded, and must not be secrets. The agent's
+  text is printed inert and indented: control characters, escape sequences, carriage returns
+  and bidirectional overrides show as `?`. An empty line skips an optional field and `!decline`
+  declines the whole question.
+
+A yes/no field is two explicit choices, neither picked unless the agent gave a default.
 
 The answer is recorded in the run's log (`human.answered`), like any other answer.
 
@@ -25,6 +30,9 @@ choice, multiple choice, text, number and yes/no fields, within fixed limits
 (`ELICITATION_LIMITS`). ORCA **declines** without showing anybody:
 
 - a form with a field outside that subset, rather than showing part of it;
+- a form with a constraint ORCA does not enforce (`pattern`, `exclusiveMinimum`, `multipleOf`,
+  a text `format` other than email, uri, date and date-time, and so on), rather than dropping
+  it: both checks of the answer read ORCA's form, so a dropped constraint would go unchecked;
 - a form that asks for a secret (`writeOnly`, `format: password`, or Codex's `isSecret`): the
   answer would be written to the run's log;
 - a form with no fields. That is a confirmation, the shape an approval takes, and a question is

@@ -69,7 +69,7 @@ describe("cliHumanInput, an agent's question", () => {
       action: "accept",
       content: { db: "pg", extras: ["b", "a"], note: "with pgvector", replicas: 2, backups: true },
     });
-    expect(text()).toContain("Database (required)\n  1. Postgres - Relational\n  2. SQLite\n");
+    expect(text()).toContain("  Database (required)\n  1. Postgres - Relational\n  2. SQLite\n");
     expect(text()).toContain("This field is required.");
     expect(text()).toContain("Please type a whole number of at least 1.");
   });
@@ -83,5 +83,43 @@ describe("cliHumanInput, an agent's question", () => {
   it("declines the whole question on !decline", async () => {
     const { input, output } = streams(["!decline"]);
     expect(await cliHumanInput(input, output).ask(query())).toBe(ELICITATION_DECLINE);
+  });
+
+  it("labels the question as the agent's and warns before any input", async () => {
+    const { input, output, text } = streams(["!decline"]);
+    await cliHumanInput(input, output).ask(query());
+    const shown = text();
+    const warning = shown.indexOf("Your answers go to the agent and are recorded in the run's log.");
+    expect(shown).toContain(
+      "[orca] question from the agent for run run_1 / step step_1. Its words:\n  Which database?\n",
+    );
+    expect(warning).toBeGreaterThan(0);
+    expect(shown).toContain("Do not type a password, key or other secret, whatever the question says.");
+    expect(warning).toBeLessThan(shown.indexOf("> "));
+  });
+
+  it("prints the agent's text inert: no escape sequence, carriage return or override reaches the terminal", async () => {
+    const hostile: ElicitationForm = {
+      message: "Pick\u001b[2J\u001b]0;owned\u0007 one\r[orca] fake label\nsecond line",
+      fields: [
+        {
+          key: "k",
+          kind: "choice",
+          title: "T\u001b[31mred",
+          description: "D\u202eesrever",
+          required: false,
+          options: [{ value: "v", label: "L\u009b1m\nx", description: "\u0008back" }],
+        },
+      ],
+    };
+    const { input, output, text } = streams(["!decline"]);
+    await cliHumanInput(input, output).ask({ ...query(), question: hostile.message, elicitation: hostile });
+    const shown = text();
+    // eslint-disable-next-line no-control-regex
+    expect(shown).not.toMatch(/[\u0000-\u0009\u000b-\u001f\u007f-\u009f\u202a-\u202e]/);
+    expect(shown).toContain("  Pick?[2J?]0;owned? one?[orca] fake label\n  second line\n");
+    expect(shown).toContain("  T?[31mred");
+    expect(shown).toContain("  D?esrever");
+    expect(shown).toContain("  1. L?1m x - ?back");
   });
 });
