@@ -208,7 +208,7 @@ describe("orca remote add --tailnet", () => {
     const sha = createHash("sha256").update("Write-Host 'bootstrap'\n").digest("hex").toUpperCase();
     expect(lines).toHaveLength(1);
     expect(lines[0]).toContain("/v0.9.0/tools/deploy/orca-windows-ssh.ps1");
-    expect(lines[0]).toContain(`.Hash -eq '${sha}'`);
+    expect(lines[0]).toContain(`$h -eq '${sha}'`);
     expect(errs.join("\n")).toContain(sha);
     expect(errs.join("\n")).toContain("asks before making any");
     const json = ctx(["windows-ssh"], { json: true });

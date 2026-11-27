@@ -26,7 +26,7 @@ function New-Rule([string]$name, [string]$protocol = "TCP", [string[]]$ports = @
   }
 }
 $ours = New-Rule $RuleName -interfaces @("Tailscale")
-$on = @([pscustomobject]@{ Name = "Domain"; Enabled = $true; DefaultInbound = "Block" }, [pscustomobject]@{ Name = "Public"; Enabled = $true; DefaultInbound = "NotConfigured" })
+$on = @([pscustomobject]@{ Name = "Domain"; Enabled = $true; DefaultInbound = "Block" }, [pscustomobject]@{ Name = "Public"; Enabled = $true; DefaultInbound = "Block" })
 function Get-Measured([object[]]$allowing, [object[]]$mine = @($ours), [object[]]$profiles = $on) {
   return Measure-OrcaFirewall ([pscustomobject]@{ Allowing = $allowing; Ours = $mine; Profiles = $profiles })
 }
@@ -78,6 +78,77 @@ try {
   }
   $measured = Get-Measured @() -profiles @([pscustomobject]@{ Name = "Private"; Enabled = $false; DefaultInbound = "Block" }, [pscustomobject]@{ Name = "Public"; Enabled = $true; DefaultInbound = "Allow" })
   Assert (($measured.Open -join ",") -eq "Private,Public") "open profiles: $($measured.Open -join ',')"
+  $measured = Get-Measured @() -profiles @([pscustomobject]@{ Name = "Domain"; Enabled = $true; DefaultInbound = "NotConfigured" })
+  Assert (($measured.Open -join ",") -eq "Domain") "a profile that does not say it blocks is taken as closed"
+
+  Check "the firewall is read from the effective policy: a policy's rule seen only there stops sshd from starting"
+  # Windows' firewall cmdlets stand in for by functions: the local store holds only this machine's
+  # own rules, the effective one also a policy's that lets SSH in on every network.
+  $script:reads = New-Object Collections.ArrayList
+  $script:policy = $false
+  $script:mine = $true
+  function New-CimRule([string]$name, [string]$store) {
+    return [pscustomobject]@{ InstanceID = $name; Name = $name; DisplayName = "rule $name"; Enabled = "True"; Direction = "Inbound"; Action = "Allow"; PolicyStoreSourceType = $store }
+  }
+  function Get-NetFirewallRule {
+    [CmdletBinding()] param([string]$Name, [string]$Direction, [string]$Action, [string]$Enabled, [string]$PolicyStore)
+    $null = $script:reads.Add("rule:$PolicyStore")
+    $rules = @()
+    if ($script:mine) { $rules += New-CimRule $RuleName "Local" }
+    if ($PolicyStore -eq "ActiveStore" -and $script:policy) { $rules += New-CimRule "corp-ssh" "GroupPolicy" }
+    if ($Name) { $rules = @($rules | Where-Object { $_.Name -eq $Name }) }
+    return $rules
+  }
+  function Get-NetFirewallProfile {
+    [CmdletBinding()] param([string]$PolicyStore)
+    $null = $script:reads.Add("profile:$PolicyStore")
+    if ($PolicyStore -ne "ActiveStore") { return [pscustomobject]@{ Name = "Domain"; Enabled = "NotConfigured"; DefaultInboundAction = "NotConfigured" } }
+    return [pscustomobject]@{ Name = "Domain"; Enabled = "True"; DefaultInboundAction = "Block" }
+  }
+  function Get-NetFirewallPortFilter { param([Parameter(ValueFromPipeline = $true)]$rule) process { [pscustomobject]@{ InstanceID = $rule.InstanceID; Protocol = "TCP"; LocalPort = "22" } } }
+  function Get-NetFirewallInterfaceFilter { param([Parameter(ValueFromPipeline = $true)]$rule) process { [pscustomobject]@{ InstanceID = $rule.InstanceID; InterfaceAlias = $(if ($rule.Name -eq $RuleName) { "Tailscale" } else { "Any" }) } } }
+  function Get-NetFirewallApplicationFilter { param([Parameter(ValueFromPipeline = $true)]$rule) process { if (-not $script:lost) { [pscustomobject]@{ InstanceID = $rule.InstanceID; Program = "Any"; Package = "" } } } }
+  function Get-NetFirewallServiceFilter { param([Parameter(ValueFromPipeline = $true)]$rule) process { [pscustomobject]@{ InstanceID = $rule.InstanceID; Service = "Any" } } }
+  $script:lost = $false
+  $measured = Measure-OrcaFirewall (Read-OrcaFirewall)
+  Assert ($measured.Ours -eq "ok" -and -not $measured.Others.Count -and -not $measured.Open.Count) "the local rules alone: $(ConvertTo-Json -Compress $measured)"
+  Assert (@($script:reads | Where-Object { $_ -notlike "*:ActiveStore" }).Count -eq 0) "read from another store: $($script:reads -join ', ')"
+  $script:policy = $true
+  $measured = Measure-OrcaFirewall (Read-OrcaFirewall)
+  Assert (($measured.Others -join ";") -eq "rule corp-ssh (corp-ssh, set by GroupPolicy)") "the policy's rule is not found: $(ConvertTo-Json -Compress $measured)"
+  # A filter that cannot be read is no answer: the reading fails, and the run refuses.
+  $script:lost = $true
+  $failed = ""
+  try { $null = Read-OrcaFirewall } catch { $failed = $_.Exception.Message }
+  Assert ($failed -like "*could not read the scope of the firewall rule*") "a rule with no filter was read as: $failed"
+  Assert ((Get-OrcaFirewallState).PSObject.Properties["Error"]) "an unreadable firewall is not reported as one"
+  $script:lost = $false
+  # The run: installed and stopped, no rule of its own yet; a policy's rule appears in the effective
+  # policy as the firewall step runs, and the check before the start, which reads it there, stops it.
+  $script:policy = $false
+  $script:mine = $false
+  $script:started = $false
+  function Get-Service { [CmdletBinding()] param([string]$Name) [pscustomobject]@{ StartType = "Manual"; Status = "Stopped" } }
+  function Get-WindowsCapability { [CmdletBinding()] param([switch]$Online, [string]$Name) [pscustomobject]@{ State = "Installed" } }
+  function Get-NetAdapter { [CmdletBinding()] param([string]$Name) [pscustomobject]@{ Name = "Tailscale" } }
+  function Test-OrcaElevated { return $true }
+  function Read-OrcaConsent([string]$question) { return "y" }
+  function Set-OrcaSshFirewall { $script:mine = $true; $script:policy = $true }
+  function Start-OrcaSshService { $script:started = $true }
+  $script:reads.Clear()
+  $state = Get-OrcaSshState
+  Assert ($state.Firewall.Ours -eq "missing" -and -not $state.Firewall.Others.Count) "before the run: $(ConvertTo-Json -Compress $state.Firewall)"
+  $code = @(Invoke-OrcaWindowsSsh)[-1]
+  Assert ($code -eq 1) "exit $code"
+  Assert (-not $script:started) "sshd was started with a policy's rule letting SSH in everywhere"
+  Assert (@($script:reads | Where-Object { $_ -notlike "*:ActiveStore" }).Count -eq 0) "read from another store: $($script:reads -join ', ')"
+  foreach ($name in @("Get-NetFirewallRule", "Get-NetFirewallProfile", "Get-NetFirewallPortFilter", "Get-NetFirewallInterfaceFilter",
+      "Get-NetFirewallApplicationFilter", "Get-NetFirewallServiceFilter", "Get-Service", "Get-WindowsCapability", "Get-NetAdapter",
+      "Test-OrcaElevated", "Read-OrcaConsent", "Set-OrcaSshFirewall", "Start-OrcaSshService")) {
+    Remove-Item -LiteralPath "function:$name"
+  }
+  # The shipped ones back, for the run below to replace again.
+  . $shipped
 
   # From here on, the run: the seams are what the machine looks like, the answer typed, and what was changed.
   $script:said = New-Object Collections.ArrayList

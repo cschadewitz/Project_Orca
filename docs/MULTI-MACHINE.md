@@ -359,10 +359,11 @@ Server on with the line your own ORCA gives you, run once in an administrator Po
 - From a source checkout, `orca-cli remote windows-ssh` prints it (`--json` for the command and
   digest alone).
 
-The line downloads `tools/deploy/orca-windows-ssh.ps1` from your ORCA version's tag, checks its
-SHA-256 against the copy your ORCA install ships, and runs it only if they match; otherwise it
-deletes the download and runs nothing. It never pipes a download into the session. To read the
-script first, it is in your ORCA install's `resources/server-setup/` folder, and it runs the same
+The line fetches `tools/deploy/orca-windows-ssh.ps1` from your ORCA version's tag into memory,
+checks its SHA-256 against the copy your ORCA install ships, and runs exactly those bytes only if
+they match. Nothing is written to disk on the way, so nothing can replace the file between the
+check and the run. A failed download, or bytes that differ, run nothing, and the line says
+which. To read the script first, it is in your ORCA install's `resources/server-setup/` folder, and it runs the same
 way with `powershell -NoProfile -ExecutionPolicy Bypass -File orca-windows-ssh.ps1`.
 
 - If the OpenSSH Server is already installed, starts automatically and is running, it changes
@@ -380,9 +381,10 @@ way with `powershell -NoProfile -ExecutionPolicy Bypass -File orca-windows-ssh.p
 - It refuses, changing nothing, outside an administrator session, without the Tailscale
   adapter, on a Windows too old to have the feature (before Windows 10 1809 or Windows Server
   2019), or when SSH would stay open on another network: a firewall profile that is off or
-  allows inbound connections by default, another enabled rule that allows SSH (it changes no
-  rule it did not make, and none a policy manages), or a rule by its own name with another
-  scope.
+  does not block inbound connections by default, another enabled rule that allows SSH (it
+  changes no rule it did not make, and none a policy manages), a rule by its own name with
+  another scope, or a firewall it cannot read. It reads the effective policy (Windows'
+  `ActiveStore`), Group Policy and other managed rules included, and changes only local rules.
 - A step that fails stops the run before `sshd` is started; run it again to finish.
 
 **From your own machine**, add it as above (`orca-cli remote add you@desk-1 --tailnet`, or **Add

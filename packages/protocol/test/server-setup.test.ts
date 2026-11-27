@@ -257,13 +257,22 @@ describe("a Windows server (#1238)", () => {
     expect(url).toBe(
       "https://raw.githubusercontent.com/cschadewitz/Project_Orca/v0.9.0/tools/deploy/orca-windows-ssh.ps1",
     );
-    expect(command).toContain(`Invoke-WebRequest -UseBasicParsing -Uri '${url}' -OutFile $f`);
-    // Downloaded, then checked, then run: never piped into the session.
-    expect(command).not.toMatch(/\biex\b|Invoke-Expression/);
-    const check = command.indexOf(`(Get-FileHash -Algorithm SHA256 -LiteralPath $f).Hash -eq '${own}'`);
-    expect(check).toBeGreaterThan(command.indexOf("Invoke-WebRequest"));
-    expect(command.indexOf("powershell -NoProfile -ExecutionPolicy Bypass -File $f")).toBeGreaterThan(check);
-    expect(command).toContain("else { Remove-Item -LiteralPath $f;");
+    // Fetched into memory, checked, and exactly those bytes run: no file to swap, never `iex`.
+    expect(command).not.toMatch(/\biex\b|Invoke-Expression|-OutFile|\$env:TEMP|-File /);
+    const fetch = command.indexOf(`$b = (New-Object Net.WebClient).DownloadData('${url}');`);
+    const check = command.indexOf(
+      `if ($null -ne $b -and $h -eq '${own}') { & ([scriptblock]::Create([Text.Encoding]::UTF8.GetString($b))) }`,
+    );
+    expect(fetch).toBeGreaterThan(0);
+    expect(check).toBeGreaterThan(fetch);
+    // A failed download runs nothing, and says so; so do other bytes.
+    expect(command).toContain(
+      "} catch { $b = $null; Write-Host ('Could not download orca-windows-ssh.ps1, so nothing was run: '",
+    );
+    expect(command).toContain(
+      "elseif ($null -ne $b) { Write-Host 'Not the orca-windows-ssh.ps1 this ORCA ships, so nothing was run.' }",
+    );
+    expect(() => windowsSshBootstrap(DEPLOY, "0.9.0", "https://x/'; calc; '")).toThrow(/Not an address/);
     // Another copy, another digest: the line is bound to the bytes shipped beside it.
     const other = mkdtempSync(join(tmpdir(), "orca-windows-ssh-"));
     try {
