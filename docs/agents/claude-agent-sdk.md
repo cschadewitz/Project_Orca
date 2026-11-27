@@ -8,7 +8,8 @@ claude-agent-sdk` is a second, opt-in way: ORCA drives the Claude Agent SDK itse
 see and decide more of what Claude does (#1153 lists what each slice adds). ORCA checks the launch,
 then runs the session through the SDK (#1120), and decides every tool call Claude makes with the
 agent's permission rules (#1122): see [What a session may do](#what-a-session-may-do). It runs
-only on the daemon's own computer and not on Windows: Windows and SSH hosts are refused before
+on the daemon's own computer or, with only `claude` on the other machine, an SSH host (see
+[On an SSH host](#on-an-ssh-host)). It does not run on Windows, which is refused before
 anything starts, so use the ACP route there.
 
 ## 1. Install Claude Code and sign in yourself
