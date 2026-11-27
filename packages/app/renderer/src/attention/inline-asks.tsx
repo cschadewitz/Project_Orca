@@ -20,6 +20,8 @@ import { revisionSlotKey } from "./use-revisions.js";
 import { Button, Text } from "../ui/index.js";
 import { GateCard } from "./gate-card.js";
 import { PermissionCard } from "./permission-card.js";
+import { QuestionCard } from "./question-card.js";
+import { elicitationOf } from "@orca/protocol";
 import type { AttentionFeed } from "./use-attention.js";
 import { useControls, type Controls } from "./use-controls.js";
 
@@ -87,7 +89,10 @@ export function StepAsks({ runId, stepRunId }: StepAsksProps): JSX.Element | nul
           outcome: controls.report?.subject === input.id ? controls.report.message : undefined,
           onAnswer: (request: Parameters<Controls["answer"]>[1]) => controls.answer(input, request),
         };
-        return input.kind === "permission" ? (
+        const form = elicitationOf(input.context);
+        return form ? (
+          <QuestionCard key={input.id} form={form} {...shared} />
+        ) : input.kind === "permission" ? (
           <PermissionCard key={input.id} {...shared} />
         ) : (
           <GateCard key={input.id} revisions={revisions} {...shared} />

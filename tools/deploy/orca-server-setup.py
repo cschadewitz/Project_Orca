@@ -108,8 +108,10 @@ OWNED_FILES = (("orca-release.py", 0o755), ("deployment.json", 0o600), ("orca", 
 GUIDANCE = ("Migrate it by hand first (docs/UPDATING.md, \"Debian: inventory before migration\"); "
             "this setup never takes over an installation it did not make.")
 # What an ORCA process or launcher looks like, as orca-release.py's own inventory reads it.
-ORCA_PROCESS = re.compile(r"(?:orca-daemon|packages/cli/(?:dist|src)/main\.|orca\s+(?:acp|run|program|serve))")
-ORCA_LAUNCHER = re.compile(rb"orca-release\.py|orca-daemon\.mjs|packages/cli/dist/main\.js|@orca/cli")
+# Either side of the Orrery rename (the v0.8.1 bridge): a release after it runs orrery-daemon.mjs.
+EITHER_NAME = "(?:orca|orrery)"  # rename-keep: both names are recognised for one release
+ORCA_PROCESS = re.compile(rf"(?:{EITHER_NAME}-daemon|packages/cli/(?:dist|src)/main\.|{EITHER_NAME}\s+(?:acp|run|program|serve))")
+ORCA_LAUNCHER = re.compile(rf"{EITHER_NAME}-release\.py|{EITHER_NAME}-daemon\.mjs|packages/cli/dist/main\.js|@{EITHER_NAME}/cli".encode())
 
 
 class Refused(Exception):
@@ -170,7 +172,7 @@ def snapshot(path):
 
 class Setup:
     def __init__(self, root, version, port, adapter_source, bundle=None, home=None, systemctl=None,
-                 expect_account=None, expect_root=None, expect_current=None):
+                 expect_account=None, expect_root=None, expect_current=None, offline=False):
         # The effective account's own home, not $HOME: what the confirmation names is canonical.
         self.home = Path(home or pwd.getpwuid(os.geteuid()).pw_dir)
         self.root = Path(os.path.realpath(root if root else self.home / ".local" / "share" / "orca-server"))
@@ -178,6 +180,7 @@ class Setup:
         self.port = port
         self.adapter_source = adapter_source
         self.bundle = bundle
+        self.offline = offline
         self.unit_dir = self.home / ".config" / "systemd" / "user"
         self.unit = self.unit_dir / SERVICE
         self.systemctl_bin = systemctl or "systemctl"
@@ -684,7 +687,8 @@ class Setup:
         manifest = scratch / "deployment.json"
         write_file(manifest, json.dumps({**json.loads(self.manifest.read_text()), "root": str(scratch)}) + "\n", 0o600)
         return subprocess.run([sys.executable, str(self.adapter), "--deployment", str(manifest),
-                               "stage", "--bundle", source], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                               "stage", "--bundle", *(["--offline"] if self.bundle and self.offline else []), source],
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
     def owned_scratch(self, staging):
         """A journal's staging scratch, only if it is one this setup makes: a direct child of
@@ -834,6 +838,8 @@ def main(argv, embedded=None):
     parser.add_argument("--root")
     parser.add_argument("--port", type=int, default=6722)
     parser.add_argument("--bundle", help="a directory holding the three server bundle files")
+    parser.add_argument("--offline-bundle", action="store_true",
+                        help="the --bundle directory also carries the pinned cosign and Sigstore trusted root (#1234)")
     parser.add_argument("--adapter", help="orca-release.py to install (default: the embedded one)")
     parser.add_argument("--inspect", action="store_true", help="check only, change nothing")
     parser.add_argument("--expect-account", help="refuse to run as any other account")
@@ -852,7 +858,10 @@ def main(argv, embedded=None):
         source = base64.b64decode(embedded).decode()
     else:
         parser.error("no adapter: pass --adapter orca-release.py")
+    if options.offline_bundle and not options.bundle:
+        parser.error("--offline-bundle needs --bundle")
     setup = Setup(options.root, options.version, options.port, source, options.bundle,
+                  offline=options.offline_bundle,
                   expect_account=options.expect_account, expect_root=options.expect_root,
                   expect_current=options.expect_current)
     return setup.inspect() if options.inspect else setup.run()

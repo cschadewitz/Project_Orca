@@ -60,6 +60,7 @@ import { usePlanDecisions } from "./use-decisions.js";
 import { usePlanRisks, useRiskJournal } from "./use-risks.js";
 import { usePlanWrites } from "./use-plan-writes.js";
 import "./plan.css";
+import { NoDaemonView } from "../first-run/no-daemon-view.js";
 
 /**
  * The modes, in the order the header draws them. Each position arrived with the mode behind
@@ -524,12 +525,7 @@ function PlanBody({
         action={{ label: "Try again", onClick: feed.reload }}
       />
     ) : (
-      <StateView
-        kind="disconnected"
-        title="No daemon to read the plan from"
-        body="Start one with orca serve, then try again."
-        action={{ label: "Try again", onClick: feed.reload }}
-      />
+      <NoDaemonView title="No daemon to read the plan from" onRetry={feed.reload} />
     );
   }
 
@@ -699,12 +695,7 @@ function ScheduleBody(props: ScheduleBodyProps): JSX.Element {
         action={{ label: "Try again", onClick: props.onRetry }}
       />
     ) : (
-      <StateView
-        kind="disconnected"
-        title="No daemon to read the schedule from"
-        body="Start one with orca serve, then try again."
-        action={{ label: "Try again", onClick: props.onRetry }}
-      />
+      <NoDaemonView title="No daemon to read the schedule from" onRetry={props.onRetry} />
     );
   }
   if (visible.length === 0) {

@@ -26,6 +26,22 @@ import { PendingRevisionViewSchema, RevisionBoundaryViewSchema } from "./revisio
 import { LiveInputViewSchema } from "./live-input.js";
 // The node-free subpath, not the package root: the renderer bundles this package. See runs.ts.
 import { GateOptionSchema, PermissionRuleSchema } from "@orca/core/schemas";
+
+/**
+ * An agent's question (#1133, #1169) is a `question` input whose `context.elicitation` is the
+ * form it asks, held open with the agent's turn like a permission ask: it carries `live`, and
+ * `inputs.answer` takes the JSON of the form's answer (`encodeElicitationAnswer`) as its
+ * `optionId`, checked by the daemon against the form the agent sent.
+ */
+export {
+  ELICITATION_DECLINE,
+  ElicitationFormSchema,
+  elicitationOf,
+  encodeElicitationAnswer,
+  type ElicitationField,
+  type ElicitationForm,
+  type ElicitationValue,
+} from "@orca/core/schemas";
 import { AgentHostTypeSchema } from "./agents.js";
 import { ArtifactViewSchema, WorkItemViewSchema } from "./views.js";
 

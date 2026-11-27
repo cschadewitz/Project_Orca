@@ -53,6 +53,15 @@ import { parseServerChannel } from "./feed-server.js";
 import { RINGS, compareVersions, hasServer, validateRings } from "./feed-worker/rings.js";
 import * as worker from "./feed-worker/worker.js";
 
+const INSTALLER_PREFIX = "ORCA";
+const STOP_HEADER = "x-orca-feed-stop";
+// The Orrery rename bridge (v0.8.1): a ring may offer a release from either side of the rename,
+// so its installer carries either name, and the stop header either spelling, for one release.
+// rename-keep-start: both names on purpose
+const INSTALLER_PREFIXES = [...new Set([INSTALLER_PREFIX, "ORCA", "Orrery"])];
+const STOP_HEADERS = [...new Set([STOP_HEADER, "x-orca-feed-stop", "x-orrery-feed-stop"])];
+// rename-keep-end
+
 const ARCHES = ["x64", "arm64"];
 const VERSION = /^\d+\.\d+\.\d+(?:-rc\.\d+)?$/;
 
@@ -115,14 +124,14 @@ export function channelProblems(ring, arch, channel) {
     problems.push(`${where}: unexpected version ${channel.version}`);
   else if (ring === "stable" && channel.version.includes("-"))
     problems.push(`${where}: stable offers the prerelease ${channel.version}`);
-  const name = `ORCA-${channel.version}-win-${arch}.exe`;
+  const names = INSTALLER_PREFIXES.map((prefix) => `${prefix}-${channel.version}-win-${arch}.exe`);
   const files = channel.files ?? [];
   if (files.length !== 1) {
     problems.push(`${where}: names ${files.length} installers in files[], not exactly one`);
     return problems;
   }
   const [entry] = files;
-  if (entry.url !== name)
+  if (!names.includes(entry.url))
     problems.push(`${where}: files[0] ${entry.url} is not ${arch}'s installer for ${channel.version}`);
   if (!/^[A-Za-z0-9+/]{86}==$/.test(entry.sha512 ?? "")) problems.push(`${where}: files[0] has no valid sha512`);
   if (!/^\d+$/.test(entry.size ?? "")) problems.push(`${where}: files[0] has no valid size`);
@@ -340,7 +349,8 @@ async function watchServers({ tokens, rings, feed, github, releases, problems, r
     const needed = desktop && hasServer(desktop) ? desktop : undefined;
     // The servers' stop switch (#878): every server channel answers 503 with the stop header
     // while rings.json sets it, and never otherwise.
-    const stopped = response.status === 503 && response.headers.get("x-orca-feed-stop") === "servers";
+    const stopped =
+      response.status === 503 && STOP_HEADERS.some((header) => response.headers.get(header) === "servers");
     if (record?.serverStop === true || stopped) {
       if (record?.serverStop !== true)
         problems.push(`${where}: answers the servers' stop, but rings.json does not set it`);

@@ -30,6 +30,7 @@
  * Electron-free so the per-target fencing is a plain test (`test/fleet.test.ts`).
  */
 import type { ConnectionState } from "@orca/design";
+import { elicitationOf } from "@orca/protocol";
 import type {
   DaemonNotification,
   HelloResult,
@@ -218,7 +219,8 @@ function summarize(runs: RunsListResult, inputs: InputsListResult): FleetWork {
     activeTotal: runs.total,
     inputs: inputs.inputs.map((input) => ({
       id: input.id,
-      tier: input.kind === "permission" ? "permission" : "gate",
+      // An agent's question (#1133) holds the agent's turn like a permission ask.
+      tier: input.kind === "permission" || elicitationOf(input.context) ? "permission" : "gate",
       runId: input.runId,
       runName: input.runName,
       question: input.question,

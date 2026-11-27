@@ -124,7 +124,7 @@ export function WorkflowCanvas({
     () => ({ width: layout.width + PAD * 2, height: layout.height + PAD * 2 }),
     [layout.width, layout.height],
   );
-  const canvas = useCanvasView({ scope: "workflow", content, panStep: PAN_STEP, measure });
+  const canvas = useCanvasView({ scope: "workflow", content, panStep: PAN_STEP, measure, fitOnOpen: true });
 
   /* Turning the graph puts the view back at rest. The pan was a place in the old drawing,
      and the same numbers over the turned one point at wherever that happens to be now —

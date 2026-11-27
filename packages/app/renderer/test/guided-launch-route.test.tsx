@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 /** Real shell routing, persistent drafts, permission review and exact protected recovery wiring. */
 import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { OrcaBridge } from "../../src/bridge.js";
 import type { GuidedLaunchSnapshot } from "../../src/guided-launch-bridge.js";
 import type { LaunchReview, RetainedLaunch } from "../../src/configuration-launch-contract.js";
@@ -545,5 +545,102 @@ describe("mounted guided launch route", () => {
     expect(f.diagnostics.setEnabled).not.toHaveBeenCalled();
     expect(resolveRoute(launchUrl())).toEqual({ kind: "launch", surface: "config" });
     expect(resolveRoute("orca://launch/arbitrary")).toBeUndefined();
+  });
+});
+
+/**
+ * #1177 asked whether the Launch work page depends on which of two overlapping reads wins when
+ * the keyring refuses the journal. It does not, and this pins it: the refusal only ever comes
+ * from `retained()`, which a read asks for after its own snapshot has built the controller, and
+ * a read that has been overtaken changes nothing. So the page is the one the surviving read
+ * renders when nothing overlaps it. (The flake itself was the native suite's prompt answerer;
+ * see `test/native-linux/session.ts`.)
+ */
+describe("a refused keyring across overlapping reads (#1177)", () => {
+  const GUIDANCE =
+    "Secure run-intent storage is unavailable, so ORCA cannot read its retained launches. An earlier launch may still exist; do not start new work.";
+  type Bridge = NonNullable<OrcaBridge["guidedLaunch"]>;
+  /** `read` starts another read; the others answer the nth snapshot or retained call, in the order asked. */
+  type Step = "read" | `snapshot ${1 | 2}` | `retained ${1 | 2}`;
+  /** One read, alone. */
+  const ONCE: Step[] = ["snapshot 1", "retained 1"];
+  /** A second read after the first has finished: the controller says its context was read again. */
+  const TWICE: Step[] = [...ONCE, "read", "snapshot 2", "retained 2"];
+  async function play(steps: readonly Step[]) {
+    const f = setup({ sample: true });
+    const answer = f.guided.snapshot.getMockImplementation()!;
+    const waiting = { snapshot: [] as (() => void)[], retained: [] as (() => void)[] };
+    f.guided.snapshot.mockImplementation(
+      () => new Promise((resolve) => waiting.snapshot.push(() => void answer().then(resolve))),
+    );
+    (f.guided.retained as Mock<Bridge["retained"]>).mockImplementation(
+      () =>
+        new Promise((resolve) =>
+          waiting.retained.push(() =>
+            resolve({
+              ok: false,
+              error: {
+                code: "PROTECTED_STORAGE",
+                message: GUIDANCE,
+                details: { reason: "keyring-locked", stage: "unconfirmed" },
+              },
+            }),
+          ),
+        ),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Launch work" }));
+    for (const step of steps) {
+      if (step === "read") {
+        fireEvent.click(screen.getAllByRole("button", { name: "Read current launch context" })[0]!);
+        continue;
+      }
+      const [call, nth] = step.split(" ") as ["snapshot" | "retained", string];
+      await waitFor(() => expect(waiting[call].length).toBeGreaterThanOrEqual(Number(nth)));
+      await act(async () => waiting[call][Number(nth) - 1]!());
+    }
+    await screen.findByText(GUIDANCE);
+    const page = screen.getByLabelText("Launch work workspace");
+    const rendered = {
+      region: screen.queryByRole("region", { name: "Guided launch" }) !== null,
+      text: page.textContent,
+      buttons: [...page.querySelectorAll("button")].map(
+        (button) =>
+          `${button.textContent}${button.disabled || button.getAttribute("aria-disabled") === "true" ? " (disabled)" : ""}`,
+      ),
+    };
+    cleanup();
+    while (teardown.length) teardown.pop()?.();
+    return rendered;
+  }
+  it("shows the Guided launch region with the recovery guidance, and offers no launch", async () => {
+    const page = await play(ONCE);
+    expect(page.region).toBe(true);
+    expect(page.text).toContain(GUIDANCE);
+    expect(page.text).not.toContain("No run was submitted");
+    expect(page.text).not.toContain("could not verify this target");
+    expect(page.buttons).toContain("Launch (disabled)");
+  });
+  it.each<[string, Step[], Step[]]>([
+    [
+      "the first read's refusal lands before the second read's snapshot",
+      ["snapshot 1", "read", "retained 1", "snapshot 2", "retained 2"],
+      TWICE,
+    ],
+    [
+      "the second read's snapshot lands before the first read's refusal",
+      ["snapshot 1", "read", "snapshot 2", "retained 1", "retained 2"],
+      TWICE,
+    ],
+    [
+      "the second read's refusal lands before the first read's",
+      ["snapshot 1", "read", "snapshot 2", "retained 2", "retained 1"],
+      TWICE,
+    ],
+    ["both snapshots are out and the first answers first", ["read", "snapshot 1", "snapshot 2", "retained 1"], ONCE],
+    ["both snapshots are out and the second answers first", ["read", "snapshot 2", "retained 1", "snapshot 1"], ONCE],
+  ])("renders the page of the surviving read when %s", async (_order, steps, alone) => {
+    const expected = await play(alone);
+    expect(expected.region).toBe(true);
+    expect(await play(steps)).toEqual(expected);
   });
 });

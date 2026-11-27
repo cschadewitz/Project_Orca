@@ -2,7 +2,12 @@
 import { type JSX } from "react";
 import type { DiagnosticsBridge } from "../../../src/diagnostics-contract.js";
 import { Button, ConfigField, Menu, Text, counted } from "../ui/index.js";
-import { DIAGNOSTICS_MESSAGES, EARLIER_EXPORT_WARNING, SAVE_WARNING } from "./diagnostics-model.js";
+import {
+  DIAGNOSTICS_MESSAGES,
+  EARLIER_EXPORT_WARNING,
+  NO_PLATFORM_STORAGE,
+  SAVE_WARNING,
+} from "./diagnostics-model.js";
 import { useDiagnostics } from "./use-diagnostics.js";
 import "./diagnostics.css";
 
@@ -24,6 +29,7 @@ export function DiagnosticsSection({ bridge: supplied }: { bridge?: DiagnosticsB
       status.code === "acknowledged_unknown");
   const unknown = status?.code === "unknown_blocked" || status?.code === "unknown_ready";
   const disabledReason = state.busy ? "A diagnostics action is pending." : "Local diagnostics are unavailable.";
+  const noStorage = status?.platformStorage === false;
 
   return (
     <section className="orca-diagnostics orca-config__section" aria-label="Local diagnostics">
@@ -73,9 +79,13 @@ export function DiagnosticsSection({ bridge: supplied }: { bridge?: DiagnosticsB
                   Keep off
                 </Button>
                 <Button
-                  disabled={state.busy || status.cleanupPending}
+                  disabled={state.busy || status.cleanupPending || noStorage}
                   disabledReason={
-                    status.cleanupPending ? "Owned cleanup must finish before enabling again." : disabledReason
+                    noStorage
+                      ? "Local diagnostics are not available on this system."
+                      : status.cleanupPending
+                        ? "Owned cleanup must finish before enabling again."
+                        : disabledReason
                   }
                   onClick={() => void state.enable()}
                 >
@@ -112,7 +122,7 @@ export function DiagnosticsSection({ bridge: supplied }: { bridge?: DiagnosticsB
             )}
           </ConfigField>
           <Text style="caption" as="p">
-            {DIAGNOSTICS_MESSAGES[status.code]}
+            {noStorage ? NO_PLATFORM_STORAGE : DIAGNOSTICS_MESSAGES[status.code]}
           </Text>
           {status.lastSaveOutcome === "saved" && status.saveAdmittedBeforeRevocation && (
             <Text style="caption" as="p">
