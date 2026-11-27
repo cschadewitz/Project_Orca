@@ -137,9 +137,15 @@ export function elicitationForm(
   const properties = requestedSchema.properties;
   if (!isRecord(properties) || Object.keys(properties).length === 0)
     return { refused: "the form has no fields: a confirmation is not a question ORCA answers" };
-  const required = new Set(
-    Array.isArray(requestedSchema.required) ? requestedSchema.required.filter((k) => typeof k === "string") : [],
-  );
+  // `required` is validated, not filtered: a name ORCA dropped would be a field it let go empty.
+  const listed = requestedSchema.required ?? [];
+  if (
+    !Array.isArray(listed) ||
+    !listed.every((k) => typeof k === "string" && Object.hasOwn(properties, k)) ||
+    new Set(listed).size !== listed.length
+  )
+    return { refused: "the form's required list names fields it does not have" };
+  const required = new Set(listed as string[]);
   const fields: ElicitationField[] = [];
   for (const [key, raw] of Object.entries(properties)) {
     const field = elicitationField(key, raw, required.has(key));
@@ -294,6 +300,11 @@ function hasChoices(raw: Json): boolean {
 }
 
 function choices(raw: Json): ElicitationOption[] | null | undefined {
+  // Each of these constrains the value on its own; with two, ORCA would show one and check one.
+  const encodings = [raw.oneOf, raw.anyOf, raw.enum].filter((v) => v !== undefined).length;
+  if (encodings > 1 || (raw.enumNames !== undefined && raw.enum === undefined)) return null;
+  for (const v of [raw.oneOf, raw.anyOf, raw.enum, raw.enumNames])
+    if (v !== undefined && !Array.isArray(v)) return null;
   const titled = Array.isArray(raw.oneOf) ? raw.oneOf : Array.isArray(raw.anyOf) ? raw.anyOf : undefined;
   if (titled) {
     const out: ElicitationOption[] = [];

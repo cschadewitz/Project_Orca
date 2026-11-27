@@ -84,6 +84,26 @@ describe("elicitationForm", () => {
     expect("refused" in out && out.refused).toContain(reason);
   });
 
+  it.each([
+    ["oneOf and enum", { type: "string", oneOf: [{ const: "a" }], enum: ["b"] }],
+    ["oneOf and anyOf", { type: "string", oneOf: [{ const: "a" }], anyOf: [{ const: "b" }] }],
+    ["anyOf and enum on list items", { type: "array", items: { anyOf: [{ const: "a" }], enum: ["b"] } }],
+    ["enumNames without enum", { type: "string", oneOf: [{ const: "a" }], enumNames: ["A"] }],
+    ["a oneOf that is not a list", { type: "string", oneOf: { const: "a" } }],
+  ])("declines an ambiguous choice: %s", (_, field) => {
+    expect(elicitationForm("Q", { properties: { k: field } })).toHaveProperty("refused");
+  });
+
+  it.each([
+    ["a name the form lacks", ["k", "missing"]],
+    ["a name that is not text", ["k", 1]],
+    ["a repeated name", ["k", "k"]],
+    ["a list that is not a list", "k"],
+  ])("declines a required list with %s", (_, required) => {
+    const out = elicitationForm("Q", { properties: { k: { type: "string" } }, required });
+    expect("refused" in out && out.refused).toContain("required");
+  });
+
   it("declines a form that allows fields it does not name, or sets a keyword of its own", () => {
     expect(elicitationForm("Q", { properties: { k: { type: "string" } }, additionalProperties: true })).toHaveProperty(
       "refused",
