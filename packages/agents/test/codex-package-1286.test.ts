@@ -15,6 +15,7 @@ import {
   checkCodexPackage,
   checkCodexPreflight,
   checkSystemBwrap,
+  type LookupFs,
 } from "../src/index.js";
 
 const sha = (text: string) => createHash("sha256").update(text).digest("hex");
@@ -216,6 +217,81 @@ describe("checkSystemBwrap", () => {
     } finally {
       await chmod(join(root, "locked"), 0o755);
     }
+  });
+
+  describe("every hop of the lookup, on a fixture filesystem", () => {
+    type Node = { uid: number; mode?: number; link?: string };
+    /** A filesystem of `path -> node`; directories and files are mode 0o755 unless given. */
+    const fixture = (nodes: Record<string, Node>): LookupFs => ({
+      lstat: async (path) => {
+        const node = nodes[path];
+        if (!node) throw Object.assign(new Error(`ENOENT: ${path}`), { code: "ENOENT" });
+        return { uid: node.uid, mode: node.mode ?? 0o755, isSymbolicLink: () => node.link !== undefined };
+      },
+      readlink: async (path) => nodes[path]!.link!,
+    });
+    const ROOT_TREE: Record<string, Node> = {
+      "/": { uid: 0 },
+      "/opt": { uid: 0 },
+      "/usr": { uid: 0 },
+      "/usr/lib": { uid: 0 },
+      "/usr/lib/bin": { uid: 0 },
+      "/usr/lib/bin/bwrap": { uid: 0 },
+      "/home": { uid: 0 },
+      "/home/you": { uid: 1000 },
+    };
+
+    it("refuses a root-owned path that reaches the file through a link of the user's", async () => {
+      // /opt/sys (root's link) -> /home/you/hop (the user's link) -> /usr/lib/bin. The path
+      // looked up and the file reached are both root's alone; the hop between them is not.
+      const fs = fixture({
+        ...ROOT_TREE,
+        "/opt/sys": { uid: 0, link: "/home/you/hop" },
+        "/home/you/hop": { uid: 1000, link: "/usr/lib/bin" },
+      });
+      await expect(checkSystemBwrap("/opt/sys", { fs })).resolves.toBe(
+        "Codex would run the bubblewrap at /opt/sys/bwrap on its PATH instead of its own, and /home/you is not root's alone (owned by root and writable by no one else)",
+      );
+    });
+
+    it("refuses a link the user owns, even in a root-only directory", async () => {
+      const fs = fixture({
+        ...ROOT_TREE,
+        "/opt/sys": { uid: 0, link: "hop" },
+        "/opt/hop": { uid: 1000, link: "../usr/lib/bin" },
+      });
+      await expect(checkSystemBwrap("/opt/sys", { fs })).resolves.toMatch(/and \/opt\/hop is not root's alone/);
+    });
+
+    it("refuses a group- or world-writable directory on the way, and follows relative links from where they are", async () => {
+      const fs = fixture({
+        ...ROOT_TREE,
+        "/usr/lib": { uid: 0, mode: 0o775 },
+        "/opt/sys": { uid: 0, link: "../usr/lib/bin" },
+      });
+      await expect(checkSystemBwrap("/opt/sys", { fs })).resolves.toMatch(/and \/usr\/lib is not root's alone/);
+    });
+
+    it("accepts a chain of root's own links to a root-only file", async () => {
+      const fs = fixture({
+        ...ROOT_TREE,
+        "/opt/sys": { uid: 0, link: "/opt/sys2" },
+        "/opt/sys2": { uid: 0, link: "../usr/lib/bin" },
+      });
+      await expect(checkSystemBwrap("/opt/sys", { fs })).resolves.toBeUndefined();
+    });
+
+    it("skips an entry where nothing is found, even under a directory of the user's", async () => {
+      const fs = fixture(ROOT_TREE);
+      await expect(checkSystemBwrap("/home/you/bin:/nowhere", { fs })).resolves.toBeUndefined();
+    });
+
+    it("refuses a lookup that follows more links than Linux would", async () => {
+      const fs = fixture({ ...ROOT_TREE, "/opt/loop": { uid: 0, link: "/opt/loop" } });
+      await expect(checkSystemBwrap("/opt/loop", { fs })).resolves.toBe(
+        "ORCA could not check the bubblewrap at /opt/loop/bwrap on Codex's PATH (more than 40 links on the way)",
+      );
+    });
   });
 
   const system = ["/usr/bin/bwrap", "/bin/bwrap"].find((p) => {

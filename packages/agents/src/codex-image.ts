@@ -9,7 +9,7 @@
  */
 
 import { createReadStream } from "node:fs";
-import { lstat, open, readFile, realpath, stat } from "node:fs/promises";
+import { lstat, open, readFile, readlink } from "node:fs/promises";
 import { basename, delimiter, dirname, isAbsolute, join } from "node:path";
 import { createHash } from "node:crypto";
 
@@ -253,7 +253,8 @@ export async function checkCodexPackage(
  * bubblewrap found on its `PATH` in preference to its bundled one, and checks only the bundled
  * one, so a `bwrap` there is accepted only when it, and every directory above it, is owned by
  * root and writable by no one else (an installed system package): one the user's own
- * processes could replace is refused. Returns why not, or undefined. Stops once `signal`
+ * processes could replace is refused, as is one reached through any link, or link to a link,
+ * that is not root's alone: every hop of the lookup is checked. Returns why not, or undefined. Stops once `signal`
  * fires.
  *
  * ORCA checks the very path the child looks up, never a normalized one: `..` after a link
@@ -263,7 +264,7 @@ export async function checkCodexPackage(
  */
 export async function checkSystemBwrap(
   path: string | undefined,
-  { signal }: { signal?: AbortSignal } = {},
+  { signal, fs = { lstat, readlink } }: { signal?: AbortSignal; fs?: LookupFs } = {},
 ): Promise<string | undefined> {
   live(signal, undefined);
   for (const entry of new Set(path === undefined ? [] : path.split(delimiter))) {
@@ -271,38 +272,79 @@ export async function checkSystemBwrap(
       return `Codex's PATH has the entry ${JSON.stringify(entry)}, which ORCA cannot check as Codex would look it up (an empty, relative, "." or ".." entry). Give Codex a PATH of absolute directories`;
     // Exactly the path the child looks up: no component is collapsed.
     const candidate = `${entry.replace(/\/+$/, "")}/bwrap`;
-    try {
-      live(signal, await stat(candidate));
-    } catch (error) {
-      if (error instanceof CheckAborted) throw error;
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code === "ENOENT" || code === "ENOTDIR") continue;
-      return `ORCA could not check the bubblewrap at ${candidate} on Codex's PATH (${reason(error)})`;
-    }
-    let real: string;
-    try {
-      real = live(signal, await realpath(candidate));
-    } catch (error) {
-      if (error instanceof CheckAborted) throw error;
-      return `ORCA could not resolve the bubblewrap at ${candidate} on Codex's PATH (${reason(error)})`;
-    }
-    // Both the path Codex looks up and the file it reaches: a link on the way is as
-    // replaceable as its owner allows.
-    for (const start of new Set([candidate, real]))
-      for (let at = start; ; at = dirname(at)) {
-        let owner;
-        try {
-          owner = live(signal, await lstat(at));
-        } catch (error) {
-          if (error instanceof CheckAborted) throw error;
-          return `ORCA could not check ${at}, on the way to the bubblewrap on Codex's PATH (${reason(error)})`;
-        }
-        if (owner.uid !== 0 || (!owner.isSymbolicLink() && (owner.mode & 0o022) !== 0))
-          return `Codex would run the bubblewrap at ${candidate} on its PATH instead of its own, and ${at} is not root's alone (owned by root and writable by no one else)`;
-        if (dirname(at) === at) break;
-      }
+    const unsafe = await everyHopRootOnly(candidate, signal, fs);
+    if (unsafe === "missing") continue;
+    if (unsafe !== undefined)
+      return unsafe.at === undefined
+        ? `ORCA could not check the bubblewrap at ${candidate} on Codex's PATH (${unsafe.why})`
+        : `Codex would run the bubblewrap at ${candidate} on its PATH instead of its own, and ${unsafe.at} ${unsafe.why}`;
   }
   return undefined;
+}
+
+/** What a lookup reads of the filesystem; tests give a fixture. */
+export interface LookupFs {
+  lstat(path: string): Promise<{ uid: number; mode: number; isSymbolicLink(): boolean }>;
+  readlink(path: string): Promise<string>;
+}
+
+/** How many links one lookup may follow, as Linux allows (`MAXSYMLINKS`). */
+const MAX_LINKS = 40;
+
+/**
+ * Walks `path` the way the kernel does, one component at a time from `/`, following each
+ * link where it is met (its target spliced in, from `/` when absolute), and checks every
+ * entry it passes through (`/`, each directory, each link and the file reached): each must be
+ * owned by root, and each that is not a link writable by no one else (#1286). So no hop,
+ * however many links lead to the file, is one the user's own processes could replace.
+ * Returns the first that is not (`at`), why the walk could not finish (no `at`), or
+ * `missing` when nothing is there (a component that does not exist, or is not a directory).
+ */
+async function everyHopRootOnly(
+  path: string,
+  signal: AbortSignal | undefined,
+  fs: LookupFs,
+): Promise<{ at?: string; why: string } | "missing" | undefined> {
+  const notRootOnly = "is not root's alone (owned by root and writable by no one else)";
+  // The walk goes on past a hop that is not root's alone, so a lookup that finds nothing is
+  // told apart from one that does; the first such hop is what is reported.
+  let unsafe: string | undefined;
+  const check = async (at: string) => {
+    const entry = live(signal, await fs.lstat(at));
+    if (unsafe === undefined && (entry.uid !== 0 || (!entry.isSymbolicLink() && (entry.mode & 0o022) !== 0)))
+      unsafe = at;
+    return entry;
+  };
+  try {
+    await check("/");
+    // `current` never holds a link, so `..` from it is its real parent.
+    let current = "/";
+    const rest = path.split("/").filter((part) => part !== "");
+    for (let links = 0; rest.length > 0;) {
+      const part = rest.shift()!;
+      if (part === ".") continue;
+      if (part === "..") {
+        current = dirname(current);
+        continue;
+      }
+      const next = join(current, part);
+      const entry = await check(next);
+      if (!entry.isSymbolicLink()) {
+        current = next;
+        continue;
+      }
+      if (++links > MAX_LINKS) return { why: `more than ${MAX_LINKS} links on the way` };
+      const target = live(signal, await fs.readlink(next));
+      if (target.startsWith("/")) current = "/";
+      rest.unshift(...target.split("/").filter((p) => p !== ""));
+    }
+    return unsafe === undefined ? undefined : { at: unsafe, why: notRootOnly };
+  } catch (error) {
+    if (error instanceof CheckAborted) throw error;
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") return "missing";
+    return { why: reason(error) };
+  }
 }
 
 /**
