@@ -4,8 +4,9 @@
   it only if it matches the copy your ORCA install ships. When the OpenSSH Server is already on,
   it changes nothing. Otherwise it lists each change and asks before making any:
   - install the Windows feature;
-  - allow SSH only over the Tailscale adapter;
-  - start `sshd`, only once SSH is allowed nowhere else.
+  - allow SSH over the Tailscale adapter, and block it from every address outside Tailscale's;
+  - start `sshd`, only once that block is in place.
 
-  It refuses when another firewall rule or profile would leave SSH open. Windows Update keeps the
+  It refuses when the block would not hold, such as a firewall profile that is off or a policy
+  that turns local firewall rules off. Windows Update keeps the
   OpenSSH Server updated; ORCA does not bundle it (#1238).

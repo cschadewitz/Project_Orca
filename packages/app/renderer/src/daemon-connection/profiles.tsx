@@ -862,8 +862,9 @@ function WindowsSshStep({
       </Text>
       <Text style="caption" as="p">
         If the OpenSSH Server is already on, it changes nothing. Otherwise it lists each change and asks before making
-        any: install the OpenSSH Server Windows feature, allow SSH only over the Tailscale adapter, then start sshd
-        automatically. It refuses, changing nothing, if another firewall rule would leave SSH open on other networks.
+        any: install the OpenSSH Server Windows feature, allow SSH over the Tailscale adapter and block it from every
+        address outside Tailscale&apos;s, then start sshd automatically. It refuses, changing nothing, if that block
+        would not hold, for example when a policy turns local firewall rules off.
       </Text>
       <pre
         className={`orca-input ${textClass("mono-id")}`}

@@ -20,21 +20,25 @@ it would change and asks first; anything but `y` changes nothing. Only the steps
 in this order:
 
 1. feature   Install the OpenSSH Server Windows feature (OpenSSH.Server), from Windows Update.
-2. firewall  Allow inbound SSH (TCP 22) only over the Tailscale network adapter, with the rule
-             "ORCA: OpenSSH Server over Tailscale", and disable the rule the feature adds for
-             every network ("OpenSSH-Server-In-TCP").
-3. service   Check that SSH is then allowed only over Tailscale, and only then set the sshd
-             service to start automatically and start it.
+2. firewall  Allow inbound SSH (TCP 22) over the Tailscale network adapter, with the rule
+             "ORCA: OpenSSH Server over Tailscale"; block inbound SSH from every address outside
+             Tailscale's (100.64.0.0/10 and fd7a:115c:a1e0::/48), with the rule
+             "ORCA: Block OpenSSH Server outside Tailscale"; and disable the rule the feature
+             adds for every network ("OpenSSH-Server-In-TCP").
+3. service   Check that SSH is then blocked from everywhere but Tailscale, and only then set the
+             sshd service to start automatically and start it.
 
-Before asking, it refuses, changing nothing, when sshd would not be reachable over Tailscale
-alone: a Windows Firewall profile that is off or does not block inbound connections by
-default, any other enabled rule that allows SSH on another network (it changes no rule it did
-not make, and none a policy manages), a rule by its own name with another scope, or a firewall
-it cannot read in full. It reads the effective policy (ActiveStore: local rules and every
-policy's) and changes local rules only (PersistentStore). It also refuses an sshd_config that
-listens anywhere but port 22, or that it cannot read in full (an Include, say): the firewall it
-sets up is for port 22 alone. A step that fails stops the run
-before sshd is started; run it again to finish.
+A Windows Firewall block rule wins over every allow rule, local or a policy's, so other rules
+that allow inbound connections (Windows' own app rules, say) cannot open SSH elsewhere; they
+are listed, and left as they are. Before asking, it refuses, changing nothing, when that block
+would not hold: a Windows Firewall profile that is off or does not block inbound connections by
+default, a policy that turns local rules off (the ORCA rules would not apply), an enabled rule
+that lets SSH past block rules (OverrideBlockRules), a rule by one of its own names with another
+scope, or a firewall it cannot read in full. It reads the effective policy (ActiveStore: local
+rules and every policy's) and changes local rules only (PersistentStore). It also refuses an
+sshd_config that listens anywhere but port 22, or that it cannot read in full (an Include, say):
+the firewall it sets up is for port 22 alone. A step that fails stops the run before sshd is
+started; run it again to finish.
 
 It needs Tailscale installed and signed in (its "Tailscale" network adapter).
 
@@ -49,6 +53,11 @@ $Service = "sshd"
 $Adapter = "Tailscale"
 $RuleName = "ORCA-OpenSSH-Server-Tailscale"
 $RuleDisplay = "ORCA: OpenSSH Server over Tailscale"
+$BlockName = "ORCA-OpenSSH-Server-Block-Off-Tailscale"
+$BlockDisplay = "ORCA: Block OpenSSH Server outside Tailscale"
+# Every address but Tailscale's: 100.64.0.0/10 and fd7a:115c:a1e0::/48.
+$OffTailnet = @("0.0.0.0-100.63.255.255", "100.128.0.0-255.255.255.255",
+  "::-fd7a:115c:a1df:ffff:ffff:ffff:ffff:ffff", "fd7a:115c:a1e1::-ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff")
 $BroadRule = "OpenSSH-Server-In-TCP"
 
 # -- what is there (read only) ------------------------------------------------------------------
@@ -58,13 +67,15 @@ function Test-OrcaElevated {
   return ([Security.Principal.WindowsPrincipal]$identity).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
-function ConvertTo-OrcaRule($rule, $ports, $interfaces, $programs, $services) {
+function ConvertTo-OrcaRule($rule, $ports, $interfaces, $programs, $services, $addresses, $types, $security) {
   $id = [string]$rule.InstanceID
   # A rule whose scope could not be read is not taken as closed.
-  foreach ($filter in @($ports, $interfaces, $programs, $services)) {
+  foreach ($filter in @($ports, $interfaces, $programs, $services, $addresses, $types, $security)) {
     if ($null -eq $filter[$id]) { throw "could not read the scope of the firewall rule $($rule.Name)" }
   }
   if ([string]$rule.Enabled -notin @("True", "False")) { throw "could not tell whether the firewall rule $($rule.Name) is enabled" }
+  $override = [string]$security[$id].OverrideBlockRules
+  if ($override -notin @("True", "False")) { throw "could not tell whether the firewall rule $($rule.Name) overrides block rules" }
   return [pscustomobject]@{
     Name = [string]$rule.Name
     DisplayName = [string]$rule.DisplayName
@@ -80,6 +91,12 @@ function ConvertTo-OrcaRule($rule, $ports, $interfaces, $programs, $services) {
     Package = [string]$programs[$id].Package
     Owner = [string]$rule.Owner
     Service = [string]$services[$id].Service
+    Profile = [string]$rule.Profile
+    LocalAddress = @($addresses[$id].LocalAddress | ForEach-Object { [string]$_ })
+    RemoteAddress = @($addresses[$id].RemoteAddress | ForEach-Object { [string]$_ })
+    InterfaceType = [string]$types[$id].InterfaceType
+    # Lets authenticated connections past every block rule, ours included.
+    Override = $override -eq "True"
   }
 }
 
@@ -97,7 +114,10 @@ function Read-OrcaFirewallRules($rules) {
   $interfaces = & $by ($rules | Get-NetFirewallInterfaceFilter)
   $programs = & $by ($rules | Get-NetFirewallApplicationFilter)
   $services = & $by ($rules | Get-NetFirewallServiceFilter)
-  return @($rules | ForEach-Object { ConvertTo-OrcaRule $_ $ports $interfaces $programs $services })
+  $addresses = & $by ($rules | Get-NetFirewallAddressFilter)
+  $types = & $by ($rules | Get-NetFirewallInterfaceTypeFilter)
+  $security = & $by ($rules | Get-NetFirewallSecurityFilter)
+  return @($rules | ForEach-Object { ConvertTo-OrcaRule $_ $ports $interfaces $programs $services $addresses $types $security })
 }
 
 function Get-OrcaActiveRules([hashtable]$query) {
@@ -115,14 +135,57 @@ function Read-OrcaFirewall {
   $profiles = @(Get-NetFirewallProfile -PolicyStore ActiveStore -ErrorAction Stop | ForEach-Object {
       $enabled = [string]$_.Enabled
       if ($enabled -notin @("True", "False")) { throw "could not tell whether the $($_.Name) firewall profile is on ($enabled)" }
-      [pscustomobject]@{ Name = [string]$_.Name; Enabled = $enabled -eq "True"; DefaultInbound = [string]$_.DefaultInboundAction }
+      [pscustomobject]@{
+        Name = [string]$_.Name; Enabled = $enabled -eq "True"; DefaultInbound = [string]$_.DefaultInboundAction
+        # Whether local rules (the ORCA ones) apply at all: a policy may turn them off.
+        LocalRules = [string]$_.AllowLocalFirewallRules
+      }
     })
   if (-not $profiles.Count) { throw "could not read the firewall profiles" }
   return [pscustomobject]@{
     Allowing = Read-OrcaFirewallRules (Get-OrcaActiveRules @{ Direction = "Inbound"; Action = "Allow"; Enabled = "True" })
     Ours = @(Read-OrcaFirewallRules (Get-OrcaActiveRules @{ Name = $RuleName }))
+    Block = @(Read-OrcaFirewallRules (Get-OrcaActiveRules @{ Name = $BlockName }))
     Profiles = $profiles
   }
+}
+
+function ConvertTo-OrcaAddressRanges([string[]]$addresses) {
+  # Addresses ("a", "a-b", "a/bits" or "a/mask") as merged numeric ranges, one "family:first-last"
+  # each, so two spellings of the same set compare equal. Anything else (a keyword) throws.
+  $ranges = foreach ($text in $addresses) {
+    $parts = @($text.Trim() -split '-', 2)
+    if ($parts.Count -eq 2) {
+      $first = [Net.IPAddress]::Parse($parts[0]).GetAddressBytes()
+      $last = [Net.IPAddress]::Parse($parts[1]).GetAddressBytes()
+    } else {
+      $pieces = @($parts[0] -split '/', 2)
+      $first = [Net.IPAddress]::Parse($pieces[0]).GetAddressBytes()
+      $bits = $first.Length * 8
+      if ($pieces.Count -eq 2) {
+        if ($pieces[1] -match '^\d+$') { $bits = [int]$pieces[1] }
+        else { $bits = 0; foreach ($byte in [Net.IPAddress]::Parse($pieces[1]).GetAddressBytes()) { for ($b = 7; $b -ge 0; $b--) { if ($byte -band (1 -shl $b)) { $bits++ } } } }
+      }
+      $last = [byte[]]$first.Clone()
+      for ($i = 0; $i -lt $first.Length; $i++) {
+        $keep = [Math]::Max(0, [Math]::Min(8, $bits - 8 * $i))
+        $mask = (0xFF -shl (8 - $keep)) -band 0xFF
+        $first[$i] = $first[$i] -band $mask
+        $last[$i] = $first[$i] -bor ((-bnot $mask) -band 0xFF)
+      }
+    }
+    if ($first.Length -ne $last.Length) { throw "the address range $text mixes IPv4 and IPv6" }
+    $number = { param($bytes) [Numerics.BigInteger]::Parse("0" + (-join ($bytes | ForEach-Object { $_.ToString("x2") })), "AllowHexSpecifier") }
+    [pscustomobject]@{ Family = $first.Length; First = & $number $first; Last = & $number $last }
+  }
+  $merged = New-Object Collections.ArrayList
+  foreach ($range in @($ranges | Sort-Object Family, First)) {
+    $previous = if ($merged.Count) { $merged[$merged.Count - 1] } else { $null }
+    if ($previous -and $previous.Family -eq $range.Family -and $range.First -le $previous.Last + 1) {
+      if ($range.Last -gt $previous.Last) { $previous.Last = $range.Last }
+    } else { $null = $merged.Add([pscustomobject]@{ Family = $range.Family; First = $range.First; Last = $range.Last }) }
+  }
+  return @($merged | ForEach-Object { "$($_.Family):$($_.First)-$($_.Last)" })
 }
 
 function Test-OrcaPortCovers22([string[]]$ports) {
@@ -152,20 +215,44 @@ function Test-OrcaRuleIsOurs($rule) {
   (-not $rule.Program -or $rule.Program -eq "Any") -and (-not $rule.Service -or $rule.Service -eq "Any")
 }
 
+function Test-OrcaBlockIsOurs($rule) {
+  # Inbound TCP 22 blocked from exactly every address outside Tailscale's, on every network.
+  if (-not ($rule.Enabled -and $rule.Direction -eq "Inbound" -and $rule.Action -eq "Block" -and $rule.Store -eq "Local" -and
+      $rule.Profile -eq "Any" -and $rule.Protocol -eq "TCP" -and $rule.LocalPort.Count -eq 1 -and $rule.LocalPort[0] -eq "22" -and
+      $rule.Interfaces.Count -eq 1 -and $rule.Interfaces[0] -eq "Any" -and $rule.InterfaceType -eq "Any" -and
+      (-not $rule.Program -or $rule.Program -eq "Any") -and -not $rule.Package -and (-not $rule.Service -or $rule.Service -eq "Any") -and
+      $rule.LocalAddress.Count -eq 1 -and $rule.LocalAddress[0] -eq "Any")) { return $false }
+  try {
+    return ((ConvertTo-OrcaAddressRanges $rule.RemoteAddress) -join ",") -eq ((ConvertTo-OrcaAddressRanges $OffTailnet) -join ",")
+  } catch { return $false }
+}
+
 function Measure-OrcaFirewall($firewall) {
   # What stands between sshd and every network but Tailscale's: nothing here changes anything.
-  $ours = if (-not $firewall.Ours.Count) { "missing" } elseif ($firewall.Ours.Count -eq 1 -and (Test-OrcaRuleIsOurs $firewall.Ours[0])) { "ok" } else { "wrong" }
+  $one = {
+    param($rules, $test)
+    if (-not $rules.Count) { "missing" } elseif ($rules.Count -eq 1 -and (& $test $rules[0])) { "ok" } else { "wrong" }
+  }
   # Only a profile that is on and blocks inbound by default counts as closed.
   $open = @($firewall.Profiles | Where-Object { -not $_.Enabled -or $_.DefaultInbound -ne "Block" } | ForEach-Object { $_.Name })
+  # Local rules apply unless a policy says otherwise; anything else is not taken as applying.
+  $local = @($firewall.Profiles | Where-Object { $_.LocalRules -notin @("True", "NotConfigured") } | ForEach-Object { $_.Name })
   $allowing = @($firewall.Allowing | Where-Object { $_.Name -ne $RuleName -and (Test-OrcaRuleAllowsSsh $_) })
+  $named = {
+    param($rule)
+    if ($rule.Store -and $rule.Store -ne "Local") { "$($rule.DisplayName) ($($rule.Name), set by $($rule.Store))" } else { "$($rule.DisplayName) ($($rule.Name))" }
+  }
   return [pscustomobject]@{
-    Ours = $ours
+    Ours = & $one $firewall.Ours ${function:Test-OrcaRuleIsOurs}
+    Block = & $one $firewall.Block ${function:Test-OrcaBlockIsOurs}
     Open = $open
-    # The feature's own every-network rule, which this may disable, and every other one, which it never changes.
+    Local = $local
+    # The feature's own every-network rule, which this may disable.
     Broad = @($allowing | Where-Object { $_.Name -eq $BroadRule -and $_.Store -eq "Local" }).Count -gt 0
-    Others = @($allowing | Where-Object { -not ($_.Name -eq $BroadRule -and $_.Store -eq "Local") } | ForEach-Object {
-        if ($_.Store -and $_.Store -ne "Local") { "$($_.DisplayName) ($($_.Name), set by $($_.Store))" } else { "$($_.DisplayName) ($($_.Name))" }
-      })
+    # Rules that would let SSH past the block rule: never changed here, so refused.
+    Bypass = @($allowing | Where-Object { $_.Override } | ForEach-Object { & $named $_ })
+    # Every other rule that may allow SSH elsewhere, which the block rule overrides: listed only.
+    Others = @($allowing | Where-Object { -not $_.Override -and -not ($_.Name -eq $BroadRule -and $_.Store -eq "Local") } | ForEach-Object { & $named $_ })
   }
 }
 
@@ -173,7 +260,7 @@ function Get-OrcaFirewallState {
   try {
     return Measure-OrcaFirewall (Read-OrcaFirewall)
   } catch {
-    return [pscustomobject]@{ Ours = "unknown"; Open = @(); Broad = $false; Others = @(); Error = $_.Exception.Message }
+    return [pscustomobject]@{ Ours = "unknown"; Block = "unknown"; Open = @(); Local = @(); Broad = $false; Bypass = @(); Others = @(); Error = $_.Exception.Message }
   }
 }
 
@@ -242,11 +329,17 @@ function Get-OrcaFirewallRefusal($firewall) {
   if ($firewall.Ours -eq "wrong") {
     return "The firewall rule `"$RuleDisplay`" ($RuleName) is there but not exactly inbound TCP 22 over the Tailscale adapter. Remove it, then run this again."
   }
+  if ($firewall.Block -eq "wrong") {
+    return "The firewall rule `"$BlockDisplay`" ($BlockName) is there but does not block exactly inbound TCP 22 from every address outside Tailscale's. Remove it, then run this again."
+  }
   if ($firewall.Open.Count) {
     return "Windows Firewall is off, or does not block inbound connections by default, for the $($firewall.Open -join ', ') profile(s), so SSH would be open on every network. Turn it on and block inbound by default, then run this again."
   }
-  if ($firewall.Others.Count) {
-    return "These enabled firewall rules allow SSH on networks other than Tailscale: $($firewall.Others -join '; '). This changes no rule it did not make; disable or narrow them, then run this again."
+  if ($firewall.Local.Count) {
+    return "A policy turns off local firewall rules for the $($firewall.Local -join ', ') profile(s), so the rules this adds would not apply. Ask whoever manages this machine's firewall to allow local rules or to limit SSH to Tailscale, then run this again."
+  }
+  if ($firewall.Bypass.Count) {
+    return "These enabled firewall rules let connections past block rules (OverrideBlockRules) and allow SSH: $($firewall.Bypass -join '; '). This changes no rule it did not make; disable or narrow them, then run this again."
   }
   return ""
 }
@@ -258,6 +351,13 @@ function Install-OrcaSshFeature {
   $null = Add-WindowsCapability -Online -Name $Capability
 }
 
+function New-OrcaBlockRule([string]$name) {
+  # A block rule wins over every allow rule but one that overrides block rules (refused above).
+  $null = New-NetFirewallRule -PolicyStore PersistentStore -Name $name -DisplayName $BlockDisplay -Direction Inbound -Action Block `
+    -Protocol TCP -LocalPort 22 -RemoteAddress $OffTailnet -Profile Any `
+    -Description "Added by orca-windows-ssh.ps1 (ORCA #1238): no SSH from addresses outside Tailscale's, whatever other rules allow."
+}
+
 function Set-OrcaSshFirewall {
   # Changes are made to the local rules (PersistentStore) only, and checked in the effective policy.
   if (-not (Get-NetFirewallRule -Name $RuleName -PolicyStore PersistentStore -ErrorAction SilentlyContinue)) {
@@ -265,6 +365,7 @@ function Set-OrcaSshFirewall {
       -Protocol TCP -LocalPort 22 -InterfaceAlias $Adapter -Profile Any `
       -Description "Added by orca-windows-ssh.ps1 (ORCA #1238): SSH only over the Tailscale adapter."
   }
+  if (-not (Get-NetFirewallRule -Name $BlockName -PolicyStore PersistentStore -ErrorAction SilentlyContinue)) { New-OrcaBlockRule $BlockName }
   # Added again by the feature when it is installed: disabled after that, every time.
   $broad = Get-NetFirewallRule -Name $BroadRule -PolicyStore PersistentStore -ErrorAction SilentlyContinue
   if ($broad -and [string]$broad.Enabled -eq "True") { $null = $broad | Disable-NetFirewallRule }
@@ -277,6 +378,7 @@ function Assert-OrcaSshTailnetOnly {
   $refusal = Get-OrcaFirewallRefusal $firewall
   if ($refusal) { throw $refusal }
   if ($firewall.Ours -ne "ok") { throw "the firewall rule `"$RuleDisplay`" is not in place" }
+  if ($firewall.Block -ne "ok") { throw "the firewall rule `"$BlockDisplay`" is not in place" }
   if ($firewall.Broad) { throw "the rule $BroadRule still allows SSH on every network" }
 }
 
@@ -326,10 +428,14 @@ function Invoke-OrcaWindowsSsh {
   # The firewall is set and checked on every run that starts sshd, before it starts.
   $firewall = @()
   if ($state.Firewall.Ours -ne "ok") { $firewall += "add the firewall rule `"$RuleDisplay`", which allows inbound SSH (TCP 22) only over the Tailscale adapter" }
+  if ($state.Firewall.Block -ne "ok") { $firewall += "add the firewall rule `"$BlockDisplay`", which blocks inbound SSH from every address outside Tailscale's (100.64.0.0/10 and fd7a:115c:a1e0::/48), whatever other rules allow" }
   if (-not $state.Installed) { $firewall += "disable the rule the feature adds for every network ($BroadRule)" }
   elseif ($state.Firewall.Broad) { $firewall += "disable the feature's rule that allows SSH on every network ($BroadRule)" }
   if ($firewall.Count) { $steps += , @(($firewall -join ", and "), "Set-OrcaSshFirewall") }
-  $steps += , @("check that SSH is allowed only over Tailscale, then set the sshd service to start automatically and start it", "Start-OrcaSshService")
+  $steps += , @("check that SSH is blocked from everywhere but Tailscale, then set the sshd service to start automatically and start it", "Start-OrcaSshService")
+  if ($state.Firewall.Others.Count) {
+    Write-Host "These enabled firewall rules may allow inbound connections on other networks. They stay as they are; the ORCA block rule keeps SSH out of them: $($state.Firewall.Others -join '; ')."
+  }
   Write-Host "To let ORCA reach this machine over your tailnet, this would, in order:"
   foreach ($step in $steps) { Write-Host "  - $($step[0].Substring(0, 1).ToUpper() + $step[0].Substring(1))." }
   Write-Host "ORCA does not bundle or update the OpenSSH Server; Windows Update maintains it."

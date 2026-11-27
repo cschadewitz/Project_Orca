@@ -373,19 +373,26 @@ way with `powershell -NoProfile -ExecutionPolicy Bypass -File orca-windows-ssh.p
   nothing ("Nothing was changed"). The changes, only those still needed, in this order:
   1. Install the OpenSSH Server Windows feature from Windows Update. Its `sshd` service stays
      stopped.
-  2. Allow inbound SSH (TCP 22) only over the Tailscale adapter, with the firewall rule
-     "ORCA: OpenSSH Server over Tailscale", and disable the rule the feature adds for every
-     network (`OpenSSH-Server-In-TCP`).
-  3. Check that SSH is then allowed over Tailscale alone, and only then set `sshd` to start
-     automatically and start it.
+  2. Allow inbound SSH (TCP 22) over the Tailscale adapter, with the firewall rule
+     "ORCA: OpenSSH Server over Tailscale"; block inbound SSH from every address outside
+     Tailscale's (`100.64.0.0/10` and `fd7a:115c:a1e0::/48`), with the rule
+     "ORCA: Block OpenSSH Server outside Tailscale"; and disable the rule the feature adds for
+     every network (`OpenSSH-Server-In-TCP`).
+  3. Check that SSH is then blocked from everywhere but Tailscale, and only then set `sshd` to
+     start automatically and start it.
+- A Windows Firewall block rule wins over every allow rule, so other rules that allow inbound
+  connections, such as the ones Windows adds for its own apps, cannot open SSH on another network.
+  It lists them and leaves them as they are.
 - It refuses, changing nothing, outside an administrator session, without the Tailscale
   adapter, on a Windows too old to have the feature (before Windows 10 1809 or Windows Server
-  2019), or when SSH would stay open on another network: a firewall profile that is off or
-  does not block inbound connections by default, another enabled rule that allows SSH (it
-  changes no rule it did not make, and none a policy manages), a rule by its own name with
-  another scope, or a firewall it cannot read. It also refuses an `sshd_config` that listens on any
-  port but 22, or that it cannot read in full (an `Include`, say). It reads the effective policy (Windows'
-  `ActiveStore`), Group Policy and other managed rules included, and changes only local rules.
+  2019), or when the block would not hold: a firewall profile that is off or does not block
+  inbound connections by default, a policy that turns local firewall rules off (the ORCA rules
+  would not apply), an enabled rule that allows SSH and lets connections past block rules
+  (`OverrideBlockRules`; it changes no rule it did not make), a rule by one of its own names
+  with another scope, or a firewall it cannot read. It also refuses an `sshd_config` that
+  listens on any port but 22, or that it cannot read in full (an `Include`, say). It reads the
+  effective policy (Windows' `ActiveStore`), Group Policy and other managed rules included, and
+  changes only local rules.
 - A step that fails stops the run before `sshd` is started; run it again to finish.
 
 **From your own machine**, add it as above (`orca-cli remote add you@desk-1 --tailnet`, or **Add

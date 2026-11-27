@@ -561,7 +561,7 @@ function windowsSshCommand(ctx: CommandContext, deps: { scripts?: string; versio
   );
   ctx.err(`  ${bootstrap.sha256}`);
   ctx.err(
-    "If the OpenSSH Server is already on, it changes nothing. Otherwise it lists each change (install the Windows feature, allow SSH only over the Tailscale adapter, start sshd automatically) and asks before making any. Windows Update keeps the OpenSSH Server updated; ORCA does not bundle it.",
+    "If the OpenSSH Server is already on, it changes nothing. Otherwise it lists each change (install the Windows feature, allow SSH over the Tailscale adapter and block it from every address outside Tailscale's, start sshd automatically) and asks before making any. Windows Update keeps the OpenSSH Server updated; ORCA does not bundle it.",
   );
   ctx.out(bootstrap.command);
   return 0;
