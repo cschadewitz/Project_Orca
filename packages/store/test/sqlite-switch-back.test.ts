@@ -5,7 +5,7 @@
  * Every refusal, and an interruption before the marker, leaves the store on SQLite as it was.
  */
 import { spawn } from "node:child_process";
-import { lstat, mkdtemp, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { link, lstat, mkdtemp, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -34,6 +34,7 @@ import {
   switchStoreToSqlite,
 } from "@orca/store";
 import { readPrivateJson, writePrivateJson } from "../src/protected-file.js";
+import { databaseIdentity } from "../src/store-format.js";
 import {
   contents,
   expectFenced,
@@ -386,7 +387,10 @@ describe("switch back to files (#339)", () => {
       const backups = await mkdtemp(join(tmpdir(), "orca-switch-back-backup-"));
       const backup = join(backups, "metadata.sqlite");
       await backupSqliteMetadata(dir, backup);
-      // An earlier cleanup removed the database; the journal is still pending.
+      // An earlier cleanup removed the database; the journal is still pending. A link outside the
+      // store keeps the removed file's inode in use, so the file put in by hand below cannot be
+      // given the same inode number and pass for the database the switch journaled (#1342).
+      await link(file, `${dir}.removed-database`);
       await rm(file);
       await expect(restoreSqliteMetadata(backup, dir)).rejects.toMatchObject(refusal("SWITCH_PENDING"));
       await expect(importFileMetadata(dir)).rejects.toMatchObject(refusal("SWITCH_PENDING"));
@@ -398,6 +402,125 @@ describe("switch back to files (#339)", () => {
       await keptForReview(dir);
       expect(await readFile(file)).toEqual(replacement);
       expect(await readFile(backup)).toEqual(replacement);
+    });
+
+    /** The switch's journal, as written to disk, changed by `change`. */
+    const rewriteJournal = async (dir: string, change: (journal: { database: string }) => void) => {
+      const path = join(dir, SQLITE_SWITCH_DIR, "journal.json");
+      const journal = JSON.parse(await readFile(path, "utf8")) as { database: string };
+      change(journal);
+      await writeFile(path, JSON.stringify(journal) + "\n");
+    };
+    const identity = async (file: string) => {
+      const info = await lstat(file, { bigint: true });
+      return { dev: info.dev, ino: info.ino, birth: info.birthtimeNs };
+    };
+
+    it("journals the database with its birth time, so a file that later takes its inode is another file", async () => {
+      const dir = await published();
+      const info = await lstat(join(dir, SQLITE_METADATA_FILE), { bigint: true });
+      const journal = JSON.parse(await readFile(join(dir, SQLITE_SWITCH_DIR, "journal.json"), "utf8")) as {
+        database: string;
+      };
+      expect(journal.database).toBe(databaseIdentity(info));
+      if (info.birthtimeNs > 0n && info.birthtimeNs < info.ctimeNs)
+        expect(journal.database).toBe(`${info.dev}:${info.ino}:${info.birthtimeNs}`);
+    });
+
+    it("counts a birth time only when the platform can vouch for it (#1344)", () => {
+      const file = { dev: 7n, ino: 42n };
+      // A real birth time: earlier than the change time, since the database was written after it was created.
+      expect(databaseIdentity({ ...file, birthtimeNs: 100n, ctimeNs: 200n })).toBe("7:42:100");
+      // None reported (0), or the change time reported in its place: the device and inode alone.
+      expect(databaseIdentity({ ...file, birthtimeNs: 0n, ctimeNs: 200n })).toBe("7:42");
+      expect(databaseIdentity({ ...file, birthtimeNs: 200n, ctimeNs: 200n })).toBe("7:42");
+      expect(databaseIdentity({ ...file, birthtimeNs: 300n, ctimeNs: 200n })).toBe("7:42");
+    });
+
+    it("refuses, dropping nothing, when a replacement has the journaled database's inode but not its birth time (#1344)", async () => {
+      const dir = await published();
+      const file = join(dir, SQLITE_METADATA_FILE);
+      const original = await readFile(file);
+      // A file system that hands the freed inode to the next file: the replacement then shows the
+      // journaled device and inode, and only its birth time differs.
+      await rm(file);
+      await writeFile(file, original);
+      const { dev, ino, birth } = await identity(file);
+      await rewriteJournal(dir, (journal) => {
+        journal.database = `${dev}:${ino}:${birth > 1n ? birth - 1n : birth + 1n}`;
+      });
+      await keptForReview(dir);
+      expect(await readFile(file)).toEqual(original);
+    });
+
+    it("keeps the database and the journal when the journal records no birth time (an earlier build's) (#1344)", async () => {
+      const dir = await published();
+      const file = join(dir, SQLITE_METADATA_FILE);
+      const before = await readFile(file);
+      const { dev, ino } = await identity(file);
+      await rewriteJournal(dir, (journal) => {
+        journal.database = `${dev}:${ino}`;
+      });
+      await expect(enterStoreFormat(dir, { appVersion: "0.8.0", mode: "write" })).rejects.toThrow(
+        /cannot confirm that metadata\.sqlite is the database the switch started from/,
+      );
+      await keptForReview(dir);
+      expect(await readFile(file)).toEqual(before);
+      // With the database already gone there is nothing to keep, and the switch back finishes.
+      await rm(file);
+      expect(await enterStoreFormat(dir, { appVersion: "0.8.0", mode: "write" })).toMatchObject({ backend: "file" });
+      await expectPlainFiles(dir);
+      await expectReadsOnFiles(dir);
+    });
+  });
+
+  describe("a refusal before the marker, with a journal that cannot prove the database (#1344)", () => {
+    /** Make the journal record the database without a birth time, as an earlier build or a platform without one would. */
+    const unproven = async (dir: string) => {
+      const info = await lstat(join(dir, SQLITE_METADATA_FILE), { bigint: true });
+      const path = join(dir, SQLITE_SWITCH_DIR, "journal.json");
+      const journal = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
+      await writeFile(path, JSON.stringify({ ...journal, database: `${info.dev}:${info.ino}` }) + "\n");
+    };
+
+    it("is still rolled back when the store did not change", async () => {
+      const dir = await onSqlite();
+      const before = await contents(dir);
+      await expect(
+        switchStoreToFiles(dir, {
+          appVersion: "0.8.0",
+          beforeMarker: async () => {
+            await unproven(dir);
+            throw new Error("refused");
+          },
+        }),
+      ).rejects.toThrow("refused");
+      expect(await readdir(dir)).not.toContain(SQLITE_SWITCH_DIR);
+      await expectStillOnSqlite(dir, before);
+    });
+
+    it("keeps the database and the journal when the store changed during the switch", async () => {
+      const dir = await onSqlite();
+      const database = await readFile(join(dir, SQLITE_METADATA_FILE));
+      let once = false;
+      await expect(
+        switchStoreToFiles(dir, {
+          appVersion: "0.8.0",
+          afterRestoreStep: async () => {
+            if (once) return;
+            once = true;
+            await unproven(dir);
+            await writeFile(join(dir, "written-meanwhile.txt"), "x");
+          },
+        }),
+      ).rejects.toMatchObject(refusal("BUSY"));
+      expect(await readStoreFormat(dir)).toMatchObject({ epoch: SQLITE_STORE_FORMAT_EPOCH });
+      expect(await readdir(join(dir, SQLITE_SWITCH_DIR))).toContain("journal.json");
+      expect(await readFile(join(dir, SQLITE_METADATA_FILE))).toEqual(database);
+      await expect(enterStoreFormat(dir, { appVersion: "0.8.0", mode: "write" })).rejects.toMatchObject(
+        refusal("INTERRUPTED"),
+      );
+      expect(await readFile(join(dir, SQLITE_METADATA_FILE))).toEqual(database);
     });
   });
 
@@ -431,6 +554,23 @@ describe("switch back to files (#339)", () => {
         await expectPlainFiles(dir);
         await expectReadsOnFiles(dir);
       });
+
+    it("before the marker, with a journal that records no birth time (an earlier build's): keeps the database and the journal (#1344)", async () => {
+      const dir = await onSqlite();
+      expect(await killedAt(dir, "beforeMarker")).toBeNull();
+      const file = join(dir, SQLITE_METADATA_FILE);
+      const database = await readFile(file);
+      const info = await lstat(file, { bigint: true });
+      const path = join(dir, SQLITE_SWITCH_DIR, "journal.json");
+      const journal = JSON.parse(await readFile(path, "utf8")) as { database: string };
+      await writeFile(path, JSON.stringify({ ...journal, database: `${info.dev}:${info.ino}` }) + "\n");
+      await expect(enterStoreFormat(dir, { appVersion: "0.8.0", mode: "write" })).rejects.toMatchObject(
+        refusal("INTERRUPTED"),
+      );
+      expect(await readStoreFormat(dir)).toMatchObject({ epoch: SQLITE_STORE_FORMAT_EPOCH });
+      expect(await readFile(file)).toEqual(database);
+      expect(await readdir(join(dir, SQLITE_SWITCH_DIR))).toContain("journal.json");
+    });
 
     for (const point of ["afterMarkerRename", "afterMarker"])
       it(`after the marker (${point}): the store is on files, and the next start finishes`, async () => {
