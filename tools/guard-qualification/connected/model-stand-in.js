@@ -50,7 +50,12 @@ export function modelStandIn() {
       const users = request.messages.filter((m) => m.role === "user");
       const results = blocks(users[users.length - 1]).filter((b) => b.type === "tool_result");
       for (const r of results)
-        log.results.push({ toolUseId: r.tool_use_id, isError: r.is_error === true, text: textOf(r.content) });
+        log.results.push({
+          toolUseId: r.tool_use_id,
+          isError: r.is_error === true,
+          text: textOf(r.content),
+          at: Date.now(),
+        });
       // The call comes from the newest user turn only. A turn after a cancelled one carries
       // the cancelled call's result in the same message as the new prompt.
       const text = blocks(users[users.length - 1])
@@ -89,7 +94,7 @@ export function modelStandIn() {
           const toolUseId = `toolu_${n}_${index}`;
           // What the agent offered on the request the call was made in: a tool not offered
           // cannot run, which is independent evidence of no effect.
-          log.calls.push({ toolUseId, name: call.name, offered });
+          log.calls.push({ toolUseId, name: call.name, offered, at: Date.now() });
           events.push(
             [
               "content_block_start",

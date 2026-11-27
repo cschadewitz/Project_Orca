@@ -16,6 +16,14 @@
  *   and observe, run live, with each call's independent evidence and ORCA's decision. The
  *   route's other cases (`notRun`) are not in this receipt: a live agent cannot make them, or
  *   Claude refuses them before ORCA answers. They run on the route itself in the #706 suite.
+ * - Lifecycle evidence for tier B (#1129), under `lifecycle`, each call's effect observed apart
+ *   from ORCA: `checks.cancelledNoEffect` (a pending ask whose turn is cancelled has no effect,
+ *   shown again after a wait, for an MCP call and a file write), `checks.freshSessionFreshDecision`
+ *   (a new session asks again, runs nothing unanswered, and runs each call on a one-time answer
+ *   bound to it; on this route that holds for the MCP call too), and
+ *   `checks.decisionTimeoutBlocks` (a call whose policy cannot be read within ORCA's decision
+ *   timeout is blocked and nothing runs). A Claude Code that could not block on a failed hook is
+ *   not the pinned image, and the unsupported-route probe shows that refused.
  *
  * `claude-sdk-acceptance.yml` runs this with ORCA_CLAUDE_SDK_CLAUDE and
  * ORCA_ENFORCEMENT_RECEIPT_DIR set and keeps the receipt it writes, unsigned. Without them only
@@ -24,17 +32,25 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
-import { appendFile, chmod, copyFile, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { appendFile, chmod, copyFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { closeSync, constants as fsConstants, existsSync, openSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { CLAUDE_AGENT_SDK_VERSION, CLAUDE_SDK_VERIFIED_PAIRS } from "@orca/agents";
+import {
+  CLAUDE_AGENT_SDK_VERSION,
+  CLAUDE_SDK_DECISION_TIMEOUT_MS,
+  CLAUDE_SDK_VERIFIED_PAIRS,
+  permissionPolicyPath,
+} from "@orca/agents";
 import { childBundle } from "@orca/testing/child-bundle";
 import {
   REPO_ROOT,
   casesFor,
   installedCaseProblems,
   installedInputProblems,
+  lifecycleEvidenceProblems,
   loadAssertions,
   loadCatalogue,
   loadMatrix,
@@ -46,6 +62,8 @@ import { SCENARIOS } from "../guard-qualification/scenarios.js";
 import { createWorld } from "../guard-qualification/world.js";
 import { modelStandIn } from "../guard-qualification/connected/model-stand-in.js";
 import { claudeSdkConnected } from "../guard-qualification/connected/claude-sdk.js";
+import { effectFrom } from "../guard-qualification/connected/evidence.js";
+import { allowOnlyFixture, effectAgain, record } from "../guard-qualification/installed/lifecycle.js";
 
 const CLAUDE = process.env["ORCA_CLAUDE_SDK_CLAUDE"];
 const ROUTE = "claude-sdk-hook";
@@ -133,11 +151,36 @@ describe("reads what the SDK handed Claude from its command line", () => {
   });
 });
 
+describe("the timeout fixture releases its FIFO without blocking", () => {
+  it.skipIf(process.platform === "win32")(
+    "with no reader it removes the FIFO; with a waiting read it ends that read",
+    async () => {
+      const dir = await mkdtemp(join(tmpdir(), "orca-1129-fifo-"));
+      try {
+        const fifo = join(dir, "sidecar");
+        execFileSync("mkfifo", [fifo]);
+        expect(releaseFifo(fifo)).toBe(false);
+        expect(existsSync(fifo)).toBe(false);
+        expect(releaseFifo(fifo)).toBe(false);
+        execFileSync("mkfifo", [fifo]);
+        const read = readFile(fifo, "utf8");
+        // Give the read time to reach open(), where it waits for a writer.
+        await new Promise((done) => setTimeout(done, 300));
+        expect(releaseFifo(fifo)).toBe(true);
+        expect(existsSync(fifo)).toBe(false);
+        expect(await read).toBe("");
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    },
+  );
+});
+
 describe.skipIf(CLAUDE === undefined || process.platform !== "linux")("installed: claude sdk (#1128)", () => {
   let model;
   let live;
   let bundle;
-  const receipt = { route: ROUTE, cases: [], uncoveredRoutes: [], checks: {}, observed: undefined };
+  const receipt = { route: ROUTE, cases: [], uncoveredRoutes: [], checks: {}, lifecycle: {}, observed: undefined };
 
   beforeAll(async () => {
     const built = childBundle("claude-sdk-factory-1128-installed", {
@@ -200,6 +243,122 @@ describe.skipIf(CLAUDE === undefined || process.platform !== "linux")("installed
       300_000,
     );
 
+  // #1129: a pending ask whose turn is cancelled has no effect, and a fresh session decides
+  // afresh. On this route an MCP call asks once (Claude's ask, in canUseTool) and the relay
+  // runs it on that one-time answer, so its positive case is shown too.
+  it("cancellation: a pending ask whose turn is cancelled has no effect, and a fresh session decides afresh", async () => {
+    const world = await realWorld();
+    try {
+      // The MCP recorder's log exists before the calls, so later a missing log is a failed
+      // observation, not an absence of calls.
+      await writeFile(join(world.root, "mcp-calls.jsonl"), "", { flag: "a" });
+      // Edits ask (MCP calls ask by default), so both calls wait on a person.
+      world.configured = { rules: [{ match: { kind: "edit" }, decision: "ask" }] };
+      const calls = [
+        { tool: "mcp", server: "github", name: "create_issue" },
+        { tool: "write", path: join(world.workspace, "cancelled.md") },
+      ];
+      const cancelled = [];
+      for (const action of calls) {
+        const turn = new AbortController();
+        const got = await live.decide(world, action, {
+          expect: ["ask"],
+          signal: turn.signal,
+          // The ask reached ORCA's human channel; the turn is cancelled and nobody answers.
+          onAsk: () => {
+            turn.abort();
+            return new Promise(() => {});
+          },
+        });
+        expect(got.outcome, JSON.stringify(got.detail)).toBe("ask");
+        expect(got.detail.approvals.map((a) => a.answer)).toEqual(["pending"]);
+        cancelled.push(got);
+      }
+      // Anything the cancelled calls set off would have landed by now: look again.
+      await new Promise((done) => setTimeout(done, 5_000));
+      const later = await Promise.all(cancelled.map((got, i) => effectAgain(world, got, calls[i])));
+      expect(later.map((ref) => effectFrom(ref))).toEqual(["none", "none"]);
+      receipt.lifecycle.cancelled = cancelled.map((got, i) => ({ ...record(got), afterWait: later[i] }));
+      receipt.checks.cancelledNoEffect = "pass";
+
+      // A fresh session: the same calls ask again, run nothing unanswered, and run only on their own answer.
+      await world.connected.session.close();
+      world.connected = undefined;
+      const fresh = [];
+      for (const action of calls) {
+        const unanswered = await live.decide(world, action, { expect: ["ask"], noAnswerer: true });
+        expect(unanswered.outcome, JSON.stringify(unanswered.detail)).toBe("ask");
+        fresh.push(record(unanswered));
+        const session = unanswered.detail.approvals[0]?.sessionId;
+        const once = await live.decide(world, action, {
+          expect: ["allow"],
+          onAsk: allowOnlyFixture(session, sdkToolName),
+        });
+        expect(once.outcome, JSON.stringify(once.detail)).toBe("allow");
+        expect(once.detail.approvals.map((a) => a.sessionId)).toEqual([session]);
+        expect(once.detail.approvals.map((a) => a.answer)).toEqual(["allow_once"]);
+        fresh.push(record(once));
+      }
+      const before = new Set(cancelled.map((got) => got.detail.toolUseId));
+      expect(fresh.filter((r) => before.has(r.toolUseId))).toEqual([]);
+      receipt.lifecycle.fresh = fresh;
+      receipt.checks.freshSessionFreshDecision = "pass";
+      // Re-derived from the evidence, as the matrix checker reads it.
+      expect(lifecycleEvidenceProblems(receipt, ["cancelledNoEffect", "freshSessionFreshDecision"])).toEqual([]);
+    } finally {
+      await world.dispose();
+    }
+  }, 300_000);
+
+  // #1129: a decision that cannot be made in time blocks. In a session already shown live and
+  // deciding (a first command runs), the policy sidecar becomes a FIFO nobody writes, so ORCA's
+  // policy read hangs. With every command allowed by rule, only that hang can stop the next
+  // one. Its decision time is measured between the model stand-in handing Claude the call and
+  // receiving its result, so session startup is outside it; a refusal for any other reason
+  // would come sooner than the deadline. The read is then released without blocking, and a
+  // third command in the same session runs at once, so nothing is left waiting.
+  it("decision timeout: a call whose policy cannot be read in time is blocked, and nothing runs", async () => {
+    const world = await realWorld();
+    const sidecar = permissionPolicyPath(world.configDir);
+    let release = () => false;
+    try {
+      world.configured = { rules: [{ match: { kind: "execute" }, decision: "allow" }] };
+      const touch = (name) => ({ tool: "shell", command: `touch ${join(world.workspace, name)}` });
+      const ready = await live.decide(world, touch("ready.txt"));
+      expect(ready.outcome, JSON.stringify(ready.detail)).toBe("allow");
+      expect(ready.detail.effect).toBe("observed");
+
+      execFileSync("mkfifo", [sidecar]);
+      release = () => releaseFifo(sidecar);
+      const got = await live.decide(world, touch("timed-out.txt"));
+      const decidedMs = decisionTime(model.log, got.detail.toolUseId);
+      // A reader was still waiting on the FIFO when the call was decided: the hang was the read.
+      const pendingRead = release();
+      expect(got.outcome, JSON.stringify(got.detail)).toBe("block");
+      expect(got.detail.effect).toBe("none");
+      expect(got.detail.approvals).toEqual([]);
+      expect(pendingRead, "ORCA's policy read was waiting on the sidecar").toBe(true);
+      expect(decidedMs, "decided at ORCA's decision deadline, not before").toBeGreaterThanOrEqual(
+        CLAUDE_SDK_DECISION_TIMEOUT_MS,
+      );
+      expect(decidedMs, "and soon after it").toBeLessThan(CLAUDE_SDK_DECISION_TIMEOUT_MS + 5_000);
+
+      const after = await live.decide(world, touch("after.txt"));
+      expect(after.outcome, JSON.stringify(after.detail)).toBe("allow");
+      expect(after.detail.effect).toBe("observed");
+      expect(decisionTime(model.log, after.detail.toolUseId)).toBeLessThan(CLAUDE_SDK_DECISION_TIMEOUT_MS);
+      receipt.lifecycle.decisionTimeout = {
+        ready: record(ready),
+        timedOut: { ...record(got), decidedMs, timeoutMs: CLAUDE_SDK_DECISION_TIMEOUT_MS, pendingRead },
+        after: record(after),
+      };
+      receipt.checks.decisionTimeoutBlocks = "pass";
+    } finally {
+      release();
+      await world.dispose();
+    }
+  }, 120_000);
+
   it("binds the receipt to what ran: the SDK, the Claude Code image, the bundled bridge and its settings", async () => {
     expect(receipt.observed, "the connects check read the running Claude Code").toBeDefined();
     const { exeSha256, settingSources, permissionMode } = receipt.observed;
@@ -252,6 +411,36 @@ describe.skipIf(CLAUDE === undefined || process.platform !== "linux")("installed
     expect(model.log.errors, "the model stand-in answered every request").toEqual([]);
   });
 });
+
+/**
+ * Release whatever waits to read `fifo`, without ever blocking: a writer opened non-blocking
+ * succeeds only if a reader is waiting (else ENXIO), and closing it hands every waiting reader
+ * an empty file. The FIFO is removed first, so no later read can wait on it. Returns whether a
+ * reader was waiting; a second call finds nothing and returns false.
+ */
+function releaseFifo(fifo) {
+  let fd;
+  try {
+    fd = openSync(fifo, fsConstants.O_WRONLY | fsConstants.O_NONBLOCK);
+  } catch {
+    // ENXIO: no reader waiting. ENOENT: already released.
+  }
+  rmSync(fifo, { force: true });
+  if (fd === undefined) return false;
+  closeSync(fd);
+  return true;
+}
+
+/** How long Claude took to answer a call, as the model stand-in saw it: tool use to its result. */
+function decisionTime(log, toolUseId) {
+  const call = log.calls.find((c) => c.toolUseId === toolUseId);
+  const result = log.results.find((r) => r.toolUseId === toolUseId);
+  if (!call || !result) throw new Error(`the model stand-in did not see ${toolUseId} and its result`);
+  return result.at - call.at;
+}
+
+/** The tool's name on an ask from the SDK bridge (`askRequest` in permission-bridge.ts). */
+const sdkToolName = (req) => req.toolCall?._meta?.claudeAgentSdk?.toolName;
 
 /** `--setting-sources` and `--permission-mode` as a Claude Code command line carries them. */
 export function settingsFrom(argv) {
@@ -328,6 +517,7 @@ async function writeReceipt(receipt, bundle) {
         inputs: receipt.inputs,
         agentSettings: receipt.agentSettings,
         checks: receipt.checks,
+        lifecycle: receipt.lifecycle,
         uncoveredRoutes: receipt.uncoveredRoutes,
         cases: receipt.cases,
         notRun,

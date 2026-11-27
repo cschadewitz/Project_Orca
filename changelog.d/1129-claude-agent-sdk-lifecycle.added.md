@@ -1,0 +1,1 @@
+- **tools:** the Claude Agent SDK route's installed receipt carries tier B lifecycle evidence (#1129): a cancelled ask has no effect, a fresh session decides afresh (an MCP call included), and a call ORCA cannot decide in time is blocked. No tier changes.
