@@ -84,9 +84,30 @@ ORCA starts Claude with a fixed setup:
 
 - **No settings files** (`settingSources: []`): your user, project and local Claude settings,
   hooks and permission rules are not loaded. Your login is still used.
-- **No MCP servers** (`--strict-mcp-config` with none) and **no session files**
-  (`persistSession: false`).
+- **No MCP servers** (`--strict-mcp-config` with none).
 - Claude Code's own system prompt, and permission mode `default`.
+- **Session transcripts are kept** where Claude Code always keeps them, in its own config
+  directory, under a session id ORCA picks (the session's `acpSessionId`), so the session can be
+  resumed. This is what Claude Code does over ACP too.
+
+### Resume and context recovery
+
+A session opened with `resumeSessionId` continues that earlier session's transcript (Claude
+Code's `resume`), with the same guarantees as `session/load` on the ACP route:
+
+- **Recovery required** (`requireContextRecovery`). With no id the open is refused with
+  `CONFIG_INVALID` before anything starts. A resume Claude Code refuses (for example an unknown
+  id) is refused with `AGENT_PROTOCOL`, and one that does not answer in time with
+  `AGENT_TRANSPORT`. In both cases `details.contextRecoveryReason` gives the reason, the
+  process is stopped, and no fresh session is opened.
+- **Recovery optional.** A refused resume is followed by a fresh session, once the refused
+  process is gone, and continuity is reported as `fresh` / `load-failed`.
+- **What gets passed on.** Only a session id in UUID form is given to Claude Code. Claude Code
+  would also resume a session by its title, which ORCA never asks for. Any other value counts
+  as a failed load, and nothing is started for it.
+- **What a resume restores.** The conversation only. A permission ask that was pending when
+  the earlier session ended is not restored, and resuming authorizes nothing: every tool call
+  is decided again.
 
 Each ORCA turn is one message to Claude; the turn ends with Claude's result. Cancelling a step,
 or a turn timeout, interrupts Claude; a turn that has not ended within the agent's

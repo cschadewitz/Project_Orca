@@ -11,9 +11,14 @@
  * `STAND_IN_CONFIG_DELAY_MS` answers changes that late.
  * `STAND_IN_STUBBORN`, when set, keeps it running after its input ends and through SIGTERM.
  * `STAND_IN_LOG`, when set, gets one JSON line per input line and the argv.
+ * `STAND_IN_TRANSCRIPTS`, when set, is where sessions are kept: one file per `--session-id`,
+ * holding its prompts, which `--resume <id>` continues and the `history` script reports. A resume
+ * of an id with no file fails the way Claude Code does (an error result, then exit), and
+ * `STAND_IN_RESUME_SILENT` makes a resume never answer initialize.
  */
 import { spawn } from "node:child_process";
-import { appendFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { createInterface } from "node:readline";
 
 const log = (o) => process.env.STAND_IN_LOG && appendFileSync(process.env.STAND_IN_LOG, JSON.stringify(o) + "\n");
@@ -22,6 +27,45 @@ const SESSION = "stand-in-session";
 const startup = process.env.STAND_IN_STARTUP ?? "ok";
 log({ argv: process.argv.slice(2), cwd: process.cwd(), env: process.env });
 if (startup === "exit") process.exit(3);
+
+const argv = process.argv.slice(2);
+const flag = (name) => {
+  const joined = argv.find((a) => a.startsWith(`${name}=`));
+  if (joined) return joined.slice(name.length + 1);
+  return argv.includes(name) ? argv[argv.indexOf(name) + 1] : undefined;
+};
+const resumed = flag("--resume");
+const sessionFile = (() => {
+  const dir = process.env.STAND_IN_TRANSCRIPTS;
+  const sessionId = resumed ?? flag("--session-id");
+  return dir && sessionId ? join(dir, sessionId) : undefined;
+})();
+if (resumed !== undefined && (!sessionFile || !existsSync(sessionFile))) {
+  out({
+    type: "result",
+    subtype: "error_during_execution",
+    is_error: true,
+    session_id: resumed,
+    uuid: "resume-failed",
+    duration_ms: 0,
+    duration_api_ms: 0,
+    num_turns: 0,
+    total_cost_usd: 0,
+    usage: {},
+    modelUsage: {},
+    permission_denials: [],
+    errors: [`No conversation found with session ID: ${resumed} SENTINEL-resume-cli-text`],
+  });
+  process.exit(1);
+}
+/** The prompts this session (and the one it resumed) was sent. */
+const history = () =>
+  sessionFile && existsSync(sessionFile)
+    ? readFileSync(sessionFile, "utf8")
+        .split("\n")
+        .filter(Boolean)
+        .map((l) => JSON.parse(l))
+    : [];
 // Ignores the end of its input and SIGTERM, so only a kill stops it.
 if (process.env.STAND_IN_STUBBORN) {
   setInterval(() => undefined, 1000);
@@ -168,6 +212,9 @@ async function turn(text) {
       assistant([{ type: "text", text: JSON.stringify({ ran, answer: lastAnswer ?? null }) }]);
       return result();
     }
+    case "history":
+      assistant([{ type: "text", text: JSON.stringify(history()) }]);
+      return result();
     case "config":
       assistant([{ type: "text", text: JSON.stringify(state) }]);
       return result();
@@ -249,7 +296,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
   if (m.type === "control_request") {
     const req = m.request;
     if (req.subtype === "initialize") {
-      if (startup === "silent") return;
+      if (startup === "silent" || (resumed && process.env.STAND_IN_RESUME_SILENT)) return;
       hookId = req.hooks?.PreToolUse?.[0]?.hookCallbackIds?.[0];
       return out({
         type: "control_response",
@@ -305,6 +352,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       typeof content === "string"
         ? content
         : content.map((b) => (b.type === "text" ? b.text : `[${b.type}]`)).join(" ");
+    if (sessionFile) appendFileSync(sessionFile, JSON.stringify(text) + "\n");
     queue = queue.then(() => turn(text));
   }
 });
