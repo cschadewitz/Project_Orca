@@ -21,7 +21,7 @@
  */
 import { readFileSync, writeFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
-import { REPO_ROOT, artifactsOf, driverOf, pinShape } from "./check-support-matrix.js";
+import { REPO_ROOT, artifactsOf, driverOf, pinShape, rowReceiptProblems } from "./check-support-matrix.js";
 
 /** `read` reads a receipt the row already lists (repository-relative); injectable for tests. */
 export function recordReceipts(matrix, receipts, read = (f) => JSON.parse(readFileSync(join(REPO_ROOT, f), "utf8"))) {
@@ -34,6 +34,10 @@ export function recordReceipts(matrix, receipts, read = (f) => JSON.parse(readFi
       throw new Error(
         `${file}: a receipt on driver ${driverOf(receipt)} cannot pin row ${row.id}, which is on driver ${driverOf(row)}`,
       );
+    if (driverOf(row) === "claude-agent-sdk") {
+      const wrong = rowReceiptProblems(receipt, row);
+      if (wrong.length) throw new Error(`${file}: cannot pin row ${row.id}: ${wrong.join("; ")}`);
+    }
     const shape = pinShape(row);
     if (!shape) throw new Error(`${file}: driver ${driverOf(row)} has no pin shape`);
     const pin = {

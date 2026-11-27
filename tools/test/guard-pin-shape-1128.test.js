@@ -137,4 +137,47 @@ describe("the pin shape follows the row's driver (#1128)", () => {
       /a receipt on driver claude-agent-sdk cannot pin row claude, which is on driver acp/,
     );
   });
+
+  describe("an SDK row holds only its own installed receipts, signed or not (#1323 review)", () => {
+    const files = {
+      "r/own.json": sdkReceipt(),
+      "r/wrong-route.json": sdkReceipt({ route: "claude-native-hook" }),
+      "r/acp.json": { ...acpReceipt, agent: "claude-sdk" },
+      "r/connected.json": sdkReceipt({ kind: "connected", route: "claude-sdk-connected" }),
+    };
+    // Every listed receipt verifies: provenance is not what is checked here.
+    const trusted = () => [];
+    const listing = (receipts) =>
+      checkSupportMatrix(
+        { ...loadMatrix(), agents: [sdkRow({ pin: null, receipts })] },
+        loadCatalogue(),
+        (f) => f in files,
+        (f) => files[f],
+        undefined,
+        trusted,
+      );
+
+    it("holds its own installed receipt at tier none", () => {
+      expect(listing(["r/own.json"])).toEqual([]);
+    });
+
+    it("refuses a receipt for another route, from the ACP route, or a connected one", () => {
+      expect(listing(["r/wrong-route.json", "r/acp.json", "r/connected.json"])).toEqual([
+        "agent claude-sdk: receipt r/wrong-route.json: route claude-native-hook is not one of the row's (claude-sdk-hook)",
+        "agent claude-sdk: receipt r/acp.json: driver acp, needs claude-agent-sdk",
+        "agent claude-sdk: receipt r/connected.json: route claude-sdk-connected is not one of the row's (claude-sdk-hook)",
+        "agent claude-sdk: receipt r/connected.json: a connected receipt; the row holds installed ones only",
+      ]);
+    });
+
+    it("is never pinned to a receipt for another route or a connected one", () => {
+      const matrix = { agents: [sdkRow({ pin: null })] };
+      const file = "r/x.json";
+      for (const [receipt, why] of [
+        [files["r/wrong-route.json"], /cannot pin row claude-sdk: route claude-native-hook is not one of the row's/],
+        [files["r/connected.json"], /a connected receipt; the row holds installed ones only/],
+      ])
+        expect(() => recordReceipts(matrix, [{ file, receipt }])).toThrow(why);
+    });
+  });
 });

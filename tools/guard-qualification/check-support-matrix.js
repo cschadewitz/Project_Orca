@@ -36,6 +36,8 @@ const TIERS = ["none", "A", "B", "C"];
  * Claude Code and the Agent SDK, with the SDK's lockfile integrity, the Claude Code image ORCA
  * ran and the digest of the code that decides a call in ORCA's process (`bridgeSha256`). A row
  * and its receipts share one driver, so a receipt from one route never backs the other's row.
+ * `bridgeSha256` carries no claim yet: nothing may rest on it until it binds the daemon artifact
+ * a run actually exercised, not a selection of source files (#1323 review).
  */
 export const PIN_SHAPES = Object.freeze({
   acp: Object.freeze({
@@ -487,6 +489,22 @@ export function installedInputProblems(receipt, agent, profile) {
   return problems;
 }
 
+/**
+ * Why `receipt` is not one `row` may hold or be pinned to: another agent or driver, a route
+ * that is not one of the row's, or a kind other than an installed receipt. Applied to rows on
+ * the Claude Agent SDK driver (#1128), in the checker at every tier and before recording; a
+ * connected receipt is a diagnostic there and never pins the row. ACP rows are as they were.
+ */
+export function rowReceiptProblems(receipt, row) {
+  const problems = [];
+  if (receipt?.agent !== row.id) problems.push(`agent ${receipt?.agent}, not ${row.id}`);
+  if (driverOf(receipt) !== driverOf(row)) problems.push(`driver ${driverOf(receipt)}, needs ${driverOf(row)}`);
+  if (!(row.routes ?? []).includes(receipt?.route))
+    problems.push(`route ${receipt?.route} is not one of the row's (${(row.routes ?? []).join(",") || "none"})`);
+  if (receipt?.kind !== "installed") problems.push(`a ${receipt?.kind} receipt; the row holds installed ones only`);
+  return problems;
+}
+
 /** The artifact digests a row pins from an installed receipt. */
 export function artifactsOf(receipt) {
   if (driverOf(receipt) === "claude-agent-sdk")
@@ -696,6 +714,10 @@ export function checkSupportMatrix(
       r.trust = verifyReceipt(r.file, r.receipt);
       if (tier === 0 && r.trust.some((p) => p !== UNVERIFIED))
         problems.push(`${at}: receipt ${r.file}: ${r.trust.join("; ")}`);
+      // A signature shows where a receipt came from, not that it belongs to this row. An SDK
+      // row holds only its own installed receipts for its own routes, at every tier (#1128).
+      if (driverOf(agent) === "claude-agent-sdk")
+        for (const p of rowReceiptProblems(r.receipt, agent)) problems.push(`${at}: receipt ${r.file}: ${p}`);
     }
     // The cases a tier B claim leaves out are named on the row, so the claim reads as its scope.
     const diagnostics = [
