@@ -83,8 +83,8 @@ export interface SqliteSwitchJournal {
   to?: "files";
   /**
    * The database file this switch started from or built (`<dev>:<ino>:<birth time in ns>` of
-   * `metadata.sqlite` when the journal was written, `<dev>:<ino>` on a file system without birth
-   * times): recovery keeps, fences or drops only that file, never a replacement that happens to be
+   * `metadata.sqlite` when the journal was written, `<dev>:<ino>` where the platform cannot vouch for a
+   * birth time; see `databaseIdentity` in store-format.ts): recovery keeps, fences or drops only that file, never a replacement that happens to be
    * bound to the same store or reused its inode. Always written; a switch to SQLite journaled by an
    * earlier build has none and is judged by its binding alone, and a switch back without a birth
    * time is kept for review rather than settled (#1344).

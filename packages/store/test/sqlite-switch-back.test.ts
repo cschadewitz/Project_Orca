@@ -34,6 +34,7 @@ import {
   switchStoreToSqlite,
 } from "@orca/store";
 import { readPrivateJson, writePrivateJson } from "../src/protected-file.js";
+import { databaseIdentity } from "../src/store-format.js";
 import {
   contents,
   expectFenced,
@@ -417,11 +418,23 @@ describe("switch back to files (#339)", () => {
 
     it("journals the database with its birth time, so a file that later takes its inode is another file", async () => {
       const dir = await published();
-      const { dev, ino, birth } = await identity(join(dir, SQLITE_METADATA_FILE));
+      const info = await lstat(join(dir, SQLITE_METADATA_FILE), { bigint: true });
       const journal = JSON.parse(await readFile(join(dir, SQLITE_SWITCH_DIR, "journal.json"), "utf8")) as {
         database: string;
       };
-      expect(journal.database).toBe(birth > 0n ? `${dev}:${ino}:${birth}` : `${dev}:${ino}`);
+      expect(journal.database).toBe(databaseIdentity(info));
+      if (info.birthtimeNs > 0n && info.birthtimeNs < info.ctimeNs)
+        expect(journal.database).toBe(`${info.dev}:${info.ino}:${info.birthtimeNs}`);
+    });
+
+    it("counts a birth time only when the platform can vouch for it (#1344)", () => {
+      const file = { dev: 7n, ino: 42n };
+      // A real birth time: earlier than the change time, since the database was written after it was created.
+      expect(databaseIdentity({ ...file, birthtimeNs: 100n, ctimeNs: 200n })).toBe("7:42:100");
+      // None reported (0), or the change time reported in its place: the device and inode alone.
+      expect(databaseIdentity({ ...file, birthtimeNs: 0n, ctimeNs: 200n })).toBe("7:42");
+      expect(databaseIdentity({ ...file, birthtimeNs: 200n, ctimeNs: 200n })).toBe("7:42");
+      expect(databaseIdentity({ ...file, birthtimeNs: 300n, ctimeNs: 200n })).toBe("7:42");
     });
 
     it("refuses, dropping nothing, when a replacement has the journaled database's inode but not its birth time (#1344)", async () => {
@@ -458,6 +471,56 @@ describe("switch back to files (#339)", () => {
       expect(await enterStoreFormat(dir, { appVersion: "0.8.0", mode: "write" })).toMatchObject({ backend: "file" });
       await expectPlainFiles(dir);
       await expectReadsOnFiles(dir);
+    });
+  });
+
+  describe("a refusal before the marker, with a journal that cannot prove the database (#1344)", () => {
+    /** Make the journal record the database without a birth time, as an earlier build or a platform without one would. */
+    const unproven = async (dir: string) => {
+      const info = await lstat(join(dir, SQLITE_METADATA_FILE), { bigint: true });
+      const path = join(dir, SQLITE_SWITCH_DIR, "journal.json");
+      const journal = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
+      await writeFile(path, JSON.stringify({ ...journal, database: `${info.dev}:${info.ino}` }) + "\n");
+    };
+
+    it("is still rolled back when the store did not change", async () => {
+      const dir = await onSqlite();
+      const before = await contents(dir);
+      await expect(
+        switchStoreToFiles(dir, {
+          appVersion: "0.8.0",
+          beforeMarker: async () => {
+            await unproven(dir);
+            throw new Error("refused");
+          },
+        }),
+      ).rejects.toThrow("refused");
+      expect(await readdir(dir)).not.toContain(SQLITE_SWITCH_DIR);
+      await expectStillOnSqlite(dir, before);
+    });
+
+    it("keeps the database and the journal when the store changed during the switch", async () => {
+      const dir = await onSqlite();
+      const database = await readFile(join(dir, SQLITE_METADATA_FILE));
+      let once = false;
+      await expect(
+        switchStoreToFiles(dir, {
+          appVersion: "0.8.0",
+          afterRestoreStep: async () => {
+            if (once) return;
+            once = true;
+            await unproven(dir);
+            await writeFile(join(dir, "written-meanwhile.txt"), "x");
+          },
+        }),
+      ).rejects.toMatchObject(refusal("BUSY"));
+      expect(await readStoreFormat(dir)).toMatchObject({ epoch: SQLITE_STORE_FORMAT_EPOCH });
+      expect(await readdir(join(dir, SQLITE_SWITCH_DIR))).toContain("journal.json");
+      expect(await readFile(join(dir, SQLITE_METADATA_FILE))).toEqual(database);
+      await expect(enterStoreFormat(dir, { appVersion: "0.8.0", mode: "write" })).rejects.toMatchObject(
+        refusal("INTERRUPTED"),
+      );
+      expect(await readFile(join(dir, SQLITE_METADATA_FILE))).toEqual(database);
     });
   });
 

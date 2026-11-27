@@ -3,5 +3,5 @@
   journal now records the database's birth time with its device and inode, and recovery drops
   the database, puts the files back in front of it or ends the journal only when it can prove the
   file is the one the switch started from. Otherwise, including a journal written by 0.8.0 or a
-  file system without birth times, it keeps the database and the journal and refuses
+  platform that cannot vouch for a birth time, it keeps the database and the journal and refuses
   (`INTERRUPTED`), naming the switch's backup (#1344).

@@ -970,12 +970,9 @@ const SQLITE_DATABASE_FILES = ["", "-wal", "-shm", "-journal"].map((suffix) => `
 
 /** Remove a store's database once its marker records files again; the switch's backup keeps it. */
 /**
- * Which file `<storeDir>/metadata.sqlite` is (`<dev>:<ino>:<birth time in ns>`), or undefined when
- * there is none. A switch journals it, so recovery acts on that file only: a backup restored or
- * copied in its place is another file, even when it is bound to the same store. The birth time is
- * what tells them apart when the replacement was created after the database was removed, since a
- * file system may give it the freed inode number (#1344). On a file system that keeps no birth
- * time it is `<dev>:<ino>` alone, which, like a journal from an earlier build, proves nothing.
+ * Which file `<storeDir>/metadata.sqlite` is, or undefined when there is none
+ * ({@link databaseIdentity}). A switch journals it, so recovery acts on that file only: a backup
+ * restored or copied in its place is another file, even when it is bound to the same store.
  */
 async function sqliteDatabaseIdentity(storeDir: string): Promise<string | undefined> {
   const info = await lstat(join(storeDir, SQLITE_METADATA_FILE), { bigint: true }).catch(
@@ -984,8 +981,22 @@ async function sqliteDatabaseIdentity(storeDir: string): Promise<string | undefi
       throw error;
     },
   );
-  if (!info) return undefined;
-  return info.birthtimeNs > 0n ? `${info.dev}:${info.ino}:${info.birthtimeNs}` : `${info.dev}:${info.ino}`;
+  return info && databaseIdentity(info);
+}
+
+/**
+ * A database file's identity as a switch journals it: `<dev>:<ino>:<birth time in ns>` when the
+ * platform vouches for the birth time, `<dev>:<ino>` alone otherwise. The birth time is what tells
+ * a replacement created after the database was removed apart from it, since a file system may give
+ * it the freed inode number (#1344). Node reports no birth time as 0, and on some platforms as the
+ * change time (fs.Stats, "Stat time values"), so a birth time counts only when it is earlier than
+ * the change time: a database has always been written after it was created. Without one the
+ * identity proves nothing, like a journal from an earlier build, and recovery keeps the file.
+ */
+export function databaseIdentity(info: { dev: bigint; ino: bigint; birthtimeNs: bigint; ctimeNs: bigint }): string {
+  return info.birthtimeNs > 0n && info.birthtimeNs < info.ctimeNs
+    ? `${info.dev}:${info.ino}:${info.birthtimeNs}`
+    : `${info.dev}:${info.ino}`;
 }
 
 /**
@@ -1006,7 +1017,8 @@ function compareDatabase(current: string, journaled: string): "same" | "other" |
  * to it. Recovery at the next start needs proof (`proven`) before it settles the database (drops
  * it, or fences the files back in front of it) and ends the journal; anything short of that keeps
  * both for review. The switch's own rollback, moments after it journaled the file, refuses only a
- * provably different one (`unless-other`), since a file system without birth times proves nothing.
+ * provably different one (`unless-other`), since a file system without birth times proves nothing,
+ * unless it found the store changed, when it too needs proof.
  */
 async function journaledDatabase(
   storeDir: string,
@@ -1133,12 +1145,16 @@ async function switchToFilesLocked(
     error instanceof OrcaError && !(error instanceof StoreFormatError) && error.code === "STORE_FORMAT"
       ? new StoreFormatError("UNREADABLE", `${error.message} Nothing was changed.`, storeDir)
       : error;
-  const changed = () =>
-    new StoreFormatError(
+  // Once the store is seen to have changed, the rollback below no longer takes anything on trust.
+  let storeChanged = false;
+  const changed = () => {
+    storeChanged = true;
+    return new StoreFormatError(
       "BUSY",
       "The store changed while it was being switched back to files, so the files may not hold everything and the store stays on SQLite. Stop every ORCA app, daemon and command using it, then switch it again.",
       storeDir,
     );
+  };
   let journaled = false;
   let backup: string;
   try {
@@ -1215,7 +1231,7 @@ async function switchToFilesLocked(
       now?.epoch === SQLITE_STORE_FORMAT_EPOCH &&
       now.sqliteId === sqliteId &&
       journal !== undefined &&
-      (await journaledDatabase(storeDir, journal, "unless-other"))
+      (await journaledDatabase(storeDir, journal, storeChanged ? "proven" : "unless-other"))
     ) {
       await fenceLegacyMetadata(storeDir);
       await endSqliteSwitchJournal(storeDir);
