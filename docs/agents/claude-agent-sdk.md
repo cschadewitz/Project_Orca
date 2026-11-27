@@ -62,12 +62,14 @@ answer. With an API key the work is billed to that key's account instead (#1127)
 What ORCA shows, all from what Claude Code itself sends (ORCA calls no usage service and reads
 no credentials):
 
-- **Each turn's usage** in the run: the context the last call used against the model's window,
-  the session's token totals, and Claude Code's estimated cost so far, priced at API rates. The
+- **Each turn's usage** in the run: the context the turn's last call used against that call's
+  model's window, the session's token totals, and Claude Code's estimated cost so far, priced at
+  API rates. A turn with no call of its own, or whose model reports no window, shows none. The
   cost is an estimate, not a bill; on a subscription you pay by plan, not by it.
 - **A limit that is close** (a claude.ai sign-in only) as a warning in the run, with how much of
   it is used and when it resets.
-- **A limit that stopped a turn** ends the step with what happened and when the limit resets,
+- **A limit that stopped a turn** (a call in that turn failed on a rate limit, or Claude Code
+  reported the limit reached during it) ends the step with what happened and when the limit resets,
   for example "Claude reached the weekly limit of its subscription, so the step ended. It
   resets at 2026-11-28T09:00:00.000Z; run the step again after that." An API key's rate limit
   (HTTP 429), once Claude Code stops retrying, ends the step with its own message. ORCA does not

@@ -92,6 +92,44 @@ describe("usage on the Claude Agent SDK route (#1127)", () => {
     expect(events.filter((e) => e.raw.sessionUpdate === "usage_update").length).toBe(count);
   });
 
+  it("measures only a sample from this turn, against that call's own model's window (#1319 review)", async () => {
+    const window = (contextWindow: number) => ({
+      inputTokens: 10,
+      outputTokens: 5,
+      cacheReadInputTokens: 1,
+      cacheCreationInputTokens: 2,
+      webSearchRequests: 0,
+      costUSD: 0.005,
+      contextWindow,
+      maxOutputTokens: 32000,
+    });
+    const session = await open();
+    const events = collect(session);
+    const usages = () => events.filter((e) => e.raw.sessionUpdate === "usage_update");
+    await session.prompt("usage");
+    expect(usages()).toHaveLength(1);
+    // A later turn with no main-loop call of its own reports no context, not the previous turn's.
+    await session.prompt(
+      `usagejson ${JSON.stringify({ model: null, modelUsage: { "claude-stand-in": window(200000) } })}`,
+    );
+    expect(usages()).toHaveLength(1);
+    // Several models: the window is the calling model's, not the largest; totals cover all of them.
+    await session.prompt(
+      `usagejson ${JSON.stringify({ model: "claude-a", modelUsage: { "claude-a": window(200000), "claude-b": window(1000000) } })}`,
+    );
+    expect(usages()).toHaveLength(2);
+    expect(usages()[1]!.raw).toMatchObject({
+      used: 15,
+      size: 200000,
+      _meta: { orca: { tokens: { input: 20, output: 10, cacheRead: 2, cacheCreation: 4 } } },
+    });
+    // A call whose model the result has no window for is not measured against another's.
+    await session.prompt(
+      `usagejson ${JSON.stringify({ model: "claude-c", modelUsage: { "claude-b": window(1000000) } })}`,
+    );
+    expect(usages()).toHaveLength(2);
+  });
+
   it("turns a near limit into a notice with the reset time", async () => {
     const session = await open();
     const events = collect(session);
@@ -137,6 +175,19 @@ describe("usage on the Claude Agent SDK route (#1127)", () => {
     expect(noReset.details).toMatchObject({ reason: "usage-limit", limit: "seven_day" });
     expect(noReset.details).not.toHaveProperty("resetsAt");
     expect(noReset.message).toMatch(/did not say when it resets/);
+    // Right after it, a failure with no rate-limit evidence of its own is not taken for the limit.
+    const unrelated = (await session.prompt("fail now").catch((e: unknown) => e)) as OrcaError;
+    expect(unrelated.code).toBe("AGENT_PROTOCOL");
+
+    // A limit type ORCA does not know is not kept: it is just "the usage limit".
+    const events = collect(session);
+    const unknown = (await session.prompt("limit 1795000000 SENTINEL_1127_type").catch((e: unknown) => e)) as OrcaError;
+    expect(unknown.details).toMatchObject({ reason: "usage-limit", resetsAt: RESETS });
+    expect(unknown.details).not.toHaveProperty("limit");
+    expect(unknown.message).toMatch(/reached the usage limit of its subscription/);
+    const notice = events.find((e) => e.raw.sessionUpdate === "notice");
+    expect(notice?.raw).toMatchObject({ _meta: { orca: { rateLimit: { status: "rejected", resetsAt: RESETS } } } });
+    expect(JSON.stringify([unknown, notice])).not.toContain("SENTINEL_1127_type");
 
     const api = await open(before);
     const throttled = (await api.prompt("throttle").catch((e: unknown) => e)) as OrcaError;

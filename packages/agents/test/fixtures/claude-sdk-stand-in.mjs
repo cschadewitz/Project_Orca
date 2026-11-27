@@ -315,7 +315,7 @@ async function turn(text) {
           id: "msg",
           type: "message",
           role: "assistant",
-          model: "stand-in",
+          model: "claude-stand-in",
           content: [{ type: "text", text: "counted" }],
           stop_reason: null,
           usage: {
@@ -342,6 +342,28 @@ async function turn(text) {
         },
       });
     }
+    case "usagejson": {
+      // `usagejson {"model":…|null,"modelUsage":{…}}`: a call by that model (none for null), then
+      // a result with those per-model totals.
+      const u = JSON.parse(text.slice("usagejson ".length));
+      if (u.model)
+        out({
+          type: "assistant",
+          session_id: SESSION,
+          uuid: `a${nextRequest++}`,
+          parent_tool_use_id: null,
+          message: {
+            id: "msg",
+            type: "message",
+            role: "assistant",
+            model: u.model,
+            content: [{ type: "text", text: "counted" }],
+            stop_reason: null,
+            usage: { input_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 5 },
+          },
+        });
+      return result({ total_cost_usd: 0.01, modelUsage: u.modelUsage });
+    }
     case "limit":
     case "throttle": {
       // `limit [resetsAt]`: the subscription limit is reached; `throttle`: an API key's HTTP 429.
@@ -353,7 +375,7 @@ async function turn(text) {
           uuid: `rl${nextRequest++}`,
           rate_limit_info: {
             status: "rejected",
-            rateLimitType: "seven_day",
+            rateLimitType: text.split(/\s+/)[2] ?? "seven_day",
             ...(at === "none" ? {} : { resetsAt: Number(at ?? 1795000000) }),
           },
         });

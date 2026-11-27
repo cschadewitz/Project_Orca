@@ -30,10 +30,16 @@ const LIMIT_NAMES: Record<string, string> = {
 
 const count = (n: unknown): number => (typeof n === "number" && Number.isFinite(n) && n >= 0 ? Math.floor(n) : 0);
 
-/** A limit's name for people: `the 5-hour limit`, or `the usage limit` when Claude Code named none. */
+/** The limit's type when it is one ORCA knows; Claude Code's other text is never kept. */
+export function limitType(info: SDKRateLimitInfo | undefined): string | undefined {
+  const type = info?.rateLimitType;
+  return typeof type === "string" && Object.hasOwn(LIMIT_NAMES, type) ? type : undefined;
+}
+
+/** A limit's name for people: `the 5-hour limit`, or `the usage limit` for one ORCA does not know. */
 export function limitName(info: SDKRateLimitInfo | undefined): string {
-  const name = info?.rateLimitType ? LIMIT_NAMES[info.rateLimitType] : undefined;
-  return name ? `the ${name} limit` : "the usage limit";
+  const type = limitType(info);
+  return type ? `the ${LIMIT_NAMES[type]} limit` : "the usage limit";
 }
 
 /** When a limit resets, as an ISO time, from Claude Code's seconds (or milliseconds) since the epoch. */
@@ -44,27 +50,29 @@ export function resetTime(at: number | undefined): string | undefined {
   return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
 }
 
+/** The last main-loop call of a turn: its usage and the model that served it. */
+export interface CallSample {
+  usage: CallUsage;
+  model: string;
+}
+
 /**
- * The turn's usage as an ACP `usage_update`: the context the last main-loop call used against
- * the model's window, the session's estimated cost so far, and its token totals per kind.
- * Undefined when Claude Code reported no window to measure against.
+ * The turn's usage as an ACP `usage_update`: the context the turn's last main-loop call used
+ * against that call's own model's window, the session's estimated cost so far, and its token
+ * totals per kind. Undefined without a sample from this turn, or when the result reports no
+ * window for the sample's model: nothing is measured against another model's window.
  */
-export function usageUpdate(
-  m: ResultMessage,
-  last: CallUsage | undefined,
-  model: string | undefined,
-): acp.SessionUpdate | undefined {
-  const models = Object.entries(m.modelUsage ?? {});
-  const window =
-    (model !== undefined ? count(m.modelUsage?.[model]?.contextWindow) : 0) ||
-    Math.max(0, ...models.map(([, u]) => count(u.contextWindow)));
+export function usageUpdate(m: ResultMessage, sample: CallSample | undefined): acp.SessionUpdate | undefined {
+  if (!sample) return undefined;
+  const window = count(m.modelUsage?.[sample.model]?.contextWindow);
   if (window === 0) return undefined;
-  const used = last
-    ? count(last.input_tokens) +
-      count(last.cache_read_input_tokens) +
-      count(last.cache_creation_input_tokens) +
-      count(last.output_tokens)
-    : 0;
+  const last = sample.usage;
+  const used =
+    count(last.input_tokens) +
+    count(last.cache_read_input_tokens) +
+    count(last.cache_creation_input_tokens) +
+    count(last.output_tokens);
+  const models = Object.entries(m.modelUsage ?? {});
   const totals = { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 };
   for (const [, u] of models) {
     totals.input += count(u.inputTokens);
@@ -106,7 +114,7 @@ export function rateLimitNotice(info: SDKRateLimitInfo): acp.SessionUpdate | und
       orca: {
         rateLimit: {
           status: info.status,
-          ...(info.rateLimitType ? { type: info.rateLimitType } : {}),
+          ...(limitType(info) ? { type: limitType(info) } : {}),
           ...(resets ? { resetsAt: resets } : {}),
         },
       },
@@ -115,36 +123,33 @@ export function rateLimitNotice(info: SDKRateLimitInfo): acp.SessionUpdate | und
 }
 
 /**
- * The step failure for a turn a limit ended: a subscription limit Claude Code reported as
- * reached (with when it resets), or an API rate limit (HTTP 429, an API key's). Undefined when
- * the turn did not end on a limit.
+ * The step failure for a turn a limit ended. Only evidence from this turn counts: a call that
+ * failed on a rate limit, an HTTP 429 result, or Claude Code reporting the subscription limit
+ * reached during the turn. With that evidence, a subscription limit Claude Code reports as
+ * reached (and not yet reset) names itself and when it resets; otherwise it is an API rate
+ * limit (an API key's). Undefined when the turn did not end on a limit.
  */
 export function usageLimitFailure(
   agentId: string,
   m: ResultMessage,
-  o: { rateLimit: SDKRateLimitInfo | undefined; rateLimitedCall: boolean; now: number },
+  o: { rateLimit: SDKRateLimitInfo | undefined; rateLimitedCall: boolean; rejectedInTurn: boolean; now: number },
 ): OrcaError | undefined {
   const failed = m.is_error || m.subtype !== "success";
   if (!failed) return undefined;
   const status = "api_error_status" in m ? m.api_error_status : undefined;
+  if (!o.rateLimitedCall && status !== 429 && !o.rejectedInTurn) return undefined;
   // The last limit status Claude Code reported stands until it reports another, or its reset passes.
-  const resets = resetTime(o.rateLimit?.resetsAt);
-  const reached = o.rateLimit?.status === "rejected" && (resets === undefined || Date.parse(resets) > o.now);
-  if (!o.rateLimitedCall && status !== 429 && !reached) return undefined;
-  if (reached && o.rateLimit) {
-    const resetsAt = resetTime(o.rateLimit.resetsAt);
+  const resetsAt = resetTime(o.rateLimit?.resetsAt);
+  const reached = o.rateLimit?.status === "rejected" && (resetsAt === undefined || Date.parse(resetsAt) > o.now);
+  if (reached) {
+    const limit = limitType(o.rateLimit);
     return new OrcaError(
       "AGENT_TRANSPORT",
       `agent ${agentId}: Claude reached ${limitName(o.rateLimit)} of its subscription, so the step ended. ` +
         (resetsAt
           ? `It resets at ${resetsAt}; run the step again after that.`
           : "Claude Code did not say when it resets; check `/usage` in Claude Code."),
-      {
-        agentId,
-        reason: "usage-limit",
-        ...(o.rateLimit.rateLimitType ? { limit: o.rateLimit.rateLimitType } : {}),
-        ...(resetsAt ? { resetsAt } : {}),
-      },
+      { agentId, reason: "usage-limit", ...(limit ? { limit } : {}), ...(resetsAt ? { resetsAt } : {}) },
     );
   }
   return new OrcaError(
