@@ -382,6 +382,35 @@ describe.runIf(process.platform === "linux")("before anything runs (#1318 review
     expect((fifoError as OrcaError).message).toMatch(/not a regular file/);
   });
 
+  it("hashes a kept copy again before reusing it, and replaces one that no longer matches", async () => {
+    const { claude, ran, digest } = await shim();
+    const options = { agent: agent(claude), cwd: dir, baseEnv: { PATH: process.env.PATH } };
+    const verifyInstall = requireVerifiedClaudeSdkInstall("claude", { pairs: [pair(digest)], imageDir: images() });
+    const first = await claudeSdkPreflight({ ...options, verifyInstall });
+    await rm(ran);
+    // The kept copy changes to other bytes of the same length, still read-only and ORCA's own.
+    const tampered = join(dir, "tampered-ran");
+    const original = await readFile(first.executable, "utf8");
+    const other = `#!/bin/sh\nenv >> "${tampered}"\necho "2.1.332 (Claude Code)"\n#`;
+    const same = other + "x".repeat(original.length - other.length - 1) + "\n";
+    expect(same.length).toBe(original.length);
+    await chmod(join(images(), digest), 0o700);
+    await chmod(first.executable, 0o700);
+    await writeFile(first.executable, same);
+    await chmod(first.executable, 0o500);
+    await chmod(join(images(), digest), 0o500);
+
+    const second = await claudeSdkPreflight({ ...options, verifyInstall });
+    expect(second.executable).toBe(first.executable);
+    expect(existsSync(tampered)).toBe(false);
+    expect(await readFile(ran, "utf8")).toContain("ANTHROPIC_API_KEY=sk-orca-1124-credential");
+    expect(
+      createHash("sha256")
+        .update(await readFile(second.executable))
+        .digest("hex"),
+    ).toBe(digest);
+  });
+
   it("runs the bytes it checked even when the install is replaced right after the check", async () => {
     const { claude, ran, digest } = await shim();
     const swapped = join(dir, "swapped-ran");

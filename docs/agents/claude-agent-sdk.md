@@ -94,13 +94,15 @@ has `nativeToolHook: experimental`:
    check) whose image is pinned for this SDK. ORCA then does not run that path: it runs its own
    copy of exactly the bytes it hashed, kept read-only under `$XDG_CACHE_HOME/orca/claude-code`
    (`~/.cache/orca/claude-code` by default) in a directory only your user can use, written once
-   per image. The version probe, the auth probe and the session all run that copy, which must
+   per image and hashed again against the pin before every reuse (a copy that no longer matches
+   is replaced). The version probe, the auth probe and the session all run that copy, which must
    report the pair's version. An update or replacement of your install between the check and a
    launch therefore changes nothing that runs, and a file that is not a pinned image never runs
    with the session's environment. The check has its own deadline (120 s, a first copy
    included) and the session open's cancellation, and once either ends it, no probe is started.
 
-   What this cannot stop is a process running as your own user rewriting ORCA's copy. Such a
+   This is a trusted cache, not isolation by the operating system: what it cannot stop is a
+   process running as your own user rewriting ORCA's copy between that hash and the launch. Such a
    process can already read the session's environment and the daemon's memory, so no check
    ORCA makes from that user could; the second check measures what runs again.
 2. **Once it runs**, after it has answered the SDK's `initialize` and before the session is

@@ -121,7 +121,8 @@ export type ClaudeSdkInstallCheck =
  * Before anything runs (#1318 review): the file ORCA resolved must be an image pinned for this
  * SDK on this platform, and what ORCA then runs (the version probe, the auth probe, the
  * session) is not that path but ORCA's own copy of exactly the bytes it hashed, written once
- * per image into a directory only ORCA's user can use and left read-only. An update or
+ * per image into a directory only ORCA's user can use and left read-only, and hashed again
+ * before each reuse. An update or
  * replacement of the install between the check and a launch therefore changes nothing that
  * runs. The one thing this cannot stop is a process running as the same user rewriting ORCA's
  * copy; such a process can already read the session's environment, and the runtime
@@ -187,7 +188,7 @@ export function requireVerifiedClaudeSdkInstall(
 
 /**
  * ORCA's copy of the image `read` measured, at `<dir>/<sha256>/claude`: reused when it is there
- * as ORCA left it, otherwise written from `source` again, the bytes hashed as they are written
+ * as ORCA left it and its bytes hash to the pin again, otherwise written from `source` again, the bytes hashed as they are written
  * and required to be the ones measured, then made read-only and moved into place in one rename.
  */
 async function stageImage(
@@ -201,8 +202,14 @@ async function stageImage(
     const final = join(dir, read.sha256);
     const image = join(final, "claude");
     const existing = await keptCopy(final, read.size);
-    if (existing === "kept") return { image };
-    if (existing === "other") await removeTree(final);
+    // A kept copy is used only once its bytes hash to the pin again; one that does not (or is
+    // not as ORCA left it) is replaced by a fresh copy.
+    if (existing === "kept") {
+      const again = await digestOf(image, signal, { regular: true });
+      if (!("error" in again) && again.sha256 === read.sha256) return { image };
+      if (signal?.aborted) return { error: "the check was stopped" };
+    }
+    if (existing !== "missing") await removeTree(final);
     const stage = await mkdtemp(join(dir, ".stage-"));
     try {
       const out = await open(join(stage, "claude"), constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o700);
@@ -220,8 +227,11 @@ async function stageImage(
       try {
         await rename(stage, final);
       } catch (error) {
-        // Another session put the same image in place first.
-        if ((await keptCopy(final, read.size)) === "kept") return { image };
+        // Another session put the same image in place first: used only once it hashes to the pin.
+        if ((await keptCopy(final, read.size)) === "kept") {
+          const theirs = await digestOf(image, signal, { regular: true });
+          if (!("error" in theirs) && theirs.sha256 === read.sha256) return { image };
+        }
         throw error;
       }
       return { image };
