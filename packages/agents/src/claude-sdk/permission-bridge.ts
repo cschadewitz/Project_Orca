@@ -14,7 +14,8 @@
  *   as it is now (`resolvePermission`): a typed rule, or the run's answerer (a person, or the
  *   upstream client). An allow is `{ behavior: "allow" }` for this call only, never with
  *   `updatedPermissions`, so the next identical call asks again. ORCA's own "always" answers go
- *   to ORCA's sidecar as on every route. A deny carries why to the model.
+ *   to ORCA's sidecar as on every route. A deny carries why to the model, and a person's
+ *   decline carries their note with it (`declinedWith`, #1122).
  *
  * Recursive searches (`Glob`, `Grep`) stay denied: their starting path says nothing about what
  * the search visits below it (#1274 review). An ask that arrives outside a live turn, or after
@@ -59,6 +60,20 @@ const WORKSPACE_SCOPE_LIMIT = 1024;
 
 /** Searches that stay denied: what they visit is not what their path names. */
 export const CLAUDE_SDK_SEARCH_TOOLS: ReadonlySet<string> = new Set(["Glob", "Grep"]);
+/** The most of a person's decline note the model is told (#1122). */
+export const CLAUDE_SDK_DECLINE_NOTE_LIMIT = 2000;
+
+/**
+ * What the model is told when the person declines: the fixed text, then their own note, if they
+ * wrote one, marked as theirs and cut to `CLAUDE_SDK_DECLINE_NOTE_LIMIT` characters.
+ */
+export function declinedWith(note: string | undefined): string {
+  const text = note?.trim();
+  if (!text) return CLAUDE_SDK_DENIALS.declined;
+  const cut = text.length > CLAUDE_SDK_DECLINE_NOTE_LIMIT ? `${text.slice(0, CLAUDE_SDK_DECLINE_NOTE_LIMIT)}…` : text;
+  return `${CLAUDE_SDK_DENIALS.declined} Their note: ${cut}`;
+}
+
 /** Tools that touch nothing outside Claude's own session state. */
 const STATE_ONLY_TOOLS: ReadonlySet<string> = new Set(["TodoWrite"]);
 
@@ -334,11 +349,16 @@ export function claudeSdkPermissionBridge(o: ClaudeSdkPermissionBridgeOptions): 
     if (CLAUDE_SDK_SEARCH_TOOLS.has(toolName)) return refuse("ask:deny:search", CLAUDE_SDK_DENIALS.search);
     const turn = o.liveTurn();
     if (!turn || ctx.signal.aborted) return refuse("ask:no-turn", CLAUDE_SDK_DENIALS.noTurn);
+    // A person's note with their answer (#1122): told to the model only with their decline.
+    let answerNote: string | undefined;
     const invocation: PermissionInvocation = {
       sessionId: o.sessionId,
       turnId: turn.id,
       invocationId: randomUUID(),
       signal: AbortSignal.any([turn.signal, ctx.signal]),
+      onAnswerNote: (note) => {
+        answerNote = note;
+      },
     };
     const live = () => o.liveTurn()?.id === turn.id && !invocation.signal.aborted;
     // Unless the hook saw this very call inside the workspace in this turn, no rule's allow
@@ -416,7 +436,7 @@ export function claudeSdkPermissionBridge(o: ClaudeSdkPermissionBridgeOptions): 
           : decision === "ask:no-answerer"
             ? CLAUDE_SDK_DENIALS.noAnswerer
             : decision.startsWith("ask:reject")
-              ? CLAUDE_SDK_DENIALS.declined
+              ? declinedWith(answerNote)
               : // No answer, or one that was not an offered option (#1128): an ask, not a failure.
                 decision === "ask:cancelled"
                 ? CLAUDE_SDK_DENIALS.unanswered
