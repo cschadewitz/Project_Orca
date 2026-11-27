@@ -6,8 +6,10 @@
 ORCA runs Claude over ACP today, through the `claude-agent-acp` adapter. `driver:
 claude-agent-sdk` is a second, opt-in way: ORCA drives the Claude Agent SDK itself, which lets it
 see and decide more of what Claude does (#1153 lists what each slice adds). ORCA checks the launch,
-then runs the session through the SDK (#1120). Until ORCA answers Claude's permission asks
-(#1122), a session can read single files but not search or change anything: see [What a session may do](#what-a-session-may-do-for-now).
+then runs the session through the SDK (#1120), and decides every tool call Claude makes with the
+agent's permission rules (#1122): see [What a session may do](#what-a-session-may-do). It runs
+only on the daemon's own computer and not on Windows: Windows and SSH hosts are refused before
+anything starts, so use the ACP route there.
 
 ## 1. Install Claude Code and sign in yourself
 

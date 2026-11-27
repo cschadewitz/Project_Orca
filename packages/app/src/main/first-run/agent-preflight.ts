@@ -7,7 +7,11 @@ import type { FirstRunAgentCheck } from "../../first-run-contract.js";
 function configuredRoute(
   command: string,
   args: readonly string[] = [],
+  driver?: string,
 ): FirstRunAgentCheck["evidence"]["configuredRoute"] {
+  // The configured driver, not a command name: the person's own `claude`, run through the
+  // Claude Agent SDK (#1131, experimental, held on its feature branch).
+  if (driver === "claude-agent-sdk") return "claude-agent-sdk-candidate";
   const name = win32.basename(command).replace(/\.exe$/i, "");
   if (name === "claude-code-acp") return "claude-code-acp-candidate";
   if (name === "codex-acp") return "codex-acp-candidate";
@@ -30,12 +34,17 @@ export async function inspectLocalTool(agent: {
   command: string;
   args?: readonly string[];
   env: Record<string, string>;
+  driver?: string | undefined;
+  /** The computer the agent would run on (this one): `process.platform` unless given. */
+  platform?: NodeJS.Platform | undefined;
 }): Promise<FirstRunAgentCheck> {
+  // A `driver: claude-agent-sdk` agent with no command runs `claude` from PATH, as the daemon does.
+  const command = agent.command.length === 0 && agent.driver === "claude-agent-sdk" ? "claude" : agent.command;
   const result = (state: FirstRunAgentCheck["state"]): FirstRunAgentCheck => ({
     agentId: agent.id,
     state,
     evidence: {
-      configuredRoute: configuredRoute(agent.command, agent.args),
+      configuredRoute: configuredRoute(command, agent.args, agent.driver),
       support: "unknown",
       version: "unknown",
       architecture: state === "architecture" ? "mismatch" : "unknown",
@@ -44,15 +53,19 @@ export async function inspectLocalTool(agent: {
       exactCommand: "unsupported",
     },
   });
-  const candidates = isAbsolute(agent.command)
-    ? [agent.command]
-    : agent.command.includes("/") || agent.command.includes("\\")
+  // The SDK driver does not run on Windows at all (the daemon refuses it before any session),
+  // so nothing is looked for: finding `claude` there would suggest a route that cannot work.
+  if (agent.driver === "claude-agent-sdk" && (agent.platform ?? process.platform) === "win32")
+    return result("unsupported");
+  const candidates = isAbsolute(command)
+    ? [command]
+    : command.includes("/") || command.includes("\\")
       ? []
       : (agent.env.PATH ?? process.env.PATH ?? "")
           .split(delimiter)
           .filter(isAbsolute)
           .slice(0, 64)
-          .map((path) => join(path, agent.command));
+          .map((path) => join(path, command));
   let state: FirstRunAgentCheck["state"] = "missing";
   for (const candidate of candidates) {
     try {
