@@ -34,6 +34,15 @@ function concurrently(world, path, action, n, expected) {
     : Promise.all(actions.map((a) => path.decide(world, a, opts)));
 }
 
+/**
+ * The answer ORCA handed back refuses the call: an ACP ask cancelled, or the path's own refusal
+ * shape. Only the answer is observed here, not that the agent obeys it or that nothing ran.
+ */
+function refusesCall(path, got) {
+  if (path.refusesCall) assert.ok(path.refusesCall(got), `${path.id}: ${JSON.stringify(got.response)}`);
+  else assert.deepEqual(got.response, { outcome: { outcome: "cancelled" } });
+}
+
 const secretOf = () => `orca706secret${randomBytes(8).toString("hex")}`;
 
 const validFrame = (world) =>
@@ -131,7 +140,7 @@ export const SCENARIOS = {
       return;
     }
     const none = await expectOutcome(world, path, issue, "ask", { noAnswerer: true });
-    assert.deepEqual(none.response, { outcome: { outcome: "cancelled" } });
+    refusesCall(path, none);
 
     const turn = new AbortController();
     const pending = path.decide(world, issue, {
@@ -141,11 +150,11 @@ export const SCENARIOS = {
     setTimeout(() => turn.abort(), 10);
     const ended = await pending;
     assert.equal(ended.detail, "ask:expired");
-    assert.deepEqual(ended.response, { outcome: { outcome: "cancelled" } });
+    refusesCall(path, ended);
 
     // An answer that is not one of the offered options runs nothing either.
     const invented = await path.decide(world, issue, { onAsk: async () => "allow-everything" });
-    assert.deepEqual(invented.response, { outcome: { outcome: "cancelled" } });
+    refusesCall(path, invented);
   },
 
   async F01(world, path) {

@@ -24,7 +24,9 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join, relative, resolve } from "node:path";
 import {
+  CLAUDE_SDK_DENIALS,
   claudePreToolHookSettings,
+  claudeSdkPermissionBridge,
   loadEffectivePermissionPolicy,
   resolvePermission,
   runClaudePreToolHook,
@@ -351,4 +353,160 @@ function codexHookOutcome(result) {
   return "invalid:unrecognised-stderr";
 }
 
-export const PATHS = [acpAsk, claudeNativeHook, geminiAcpAsk, codexNativeHook];
+/* ------------------------- Claude through the Claude Agent SDK (#1128) ------------------------- */
+
+const quiet = { log() {}, debug() {}, info() {}, warn() {}, error() {}, child: () => quiet };
+
+/**
+ * The session's permission bridge (`claudeSdkPermissionBridge`), made once per world the way a
+ * session makes it when it opens: with the agent's configured rules as they are then, the
+ * world's sidecar and protected paths. A session either has the run's answerer or has none, so
+ * a world keeps one bridge of each. All calls share one live turn, as calls in one agent
+ * message do; a call's `signal` is ORCA cancelling that turn, and later calls get a new one.
+ */
+function sdkSession(world, answered) {
+  world.sdk ??= { decisions: new Map(), answerers: new Map(), bridges: new Map(), turn: undefined, turns: 0 };
+  const sdk = world.sdk;
+  sdk.turn ??= { id: `turn-${++sdk.turns}`, abort: new AbortController() };
+  if (!sdk.bridges.has(answered))
+    sdk.bridges.set(
+      answered,
+      claudeSdkPermissionBridge({
+        agent: { id: world.agentId, permissions: world.configured },
+        sessionId: "acceptance-session",
+        cwd: world.workspace,
+        protectedPaths: world.protectedPaths,
+        permissionFiles: [world.sidecar],
+        ...(answered
+          ? { askPermission: async (request) => sdk.answerers.get(request.toolCall.toolCallId)(request) }
+          : {}),
+        onPermission: ({ toolCallId, decision }) => {
+          if (toolCallId) sdk.decisions.set(toolCallId, decision);
+        },
+        liveTurn: () =>
+          sdk.turn && !sdk.turn.abort.signal.aborted ? { id: sdk.turn.id, signal: sdk.turn.abort.signal } : undefined,
+        parentOf: () => undefined,
+        logger: quiet,
+      }),
+    );
+  return { sdk, bridge: sdk.bridges.get(answered) };
+}
+
+/**
+ * ORCA's answer on the Claude Agent SDK route (#1122, #1123, #1125), in process as the session
+ * runs it: the `PreToolUse` hook callback first; unless it denied, `canUseTool` as Claude calls
+ * it when its own check asks; and for an allowed MCP call, the relay's dispatch check. Claude's
+ * own check is taken to ask about every call ORCA did not deny, the strictest case: a call ORCA
+ * allows must then be allowed again by `canUseTool` with nobody asked, and a call the hook
+ * asked about must be decided by the run's answerer. Verifies ORCA's answers to the hook, the
+ * ask and the relay; not that Claude runs the hook and asks for every call, nor that it obeys
+ * (the installed acceptance on the real CLI shows those).
+ */
+export const claudeSdkHook = {
+  id: "claude-sdk-hook",
+  capabilities: ["answerer", "cwd", "mcp-grant-allows"],
+
+  async decide(world, action, opts = {}) {
+    const { sdk, bridge } = sdkSession(world, !opts.noAnswerer);
+    const turn = sdk.turn;
+    const { toolName, toolInput } = claudeShape(action);
+    const toolUseId = `toolu_${++world.seq}`;
+    const claudeSignal = new AbortController().signal;
+    if (opts.signal)
+      opts.signal.addEventListener(
+        "abort",
+        () => {
+          turn.abort.abort();
+          if (sdk.turn === turn) sdk.turn = undefined;
+        },
+        { once: true },
+      );
+    sdk.answerers.set(toolUseId, async (req) => {
+      world.asked.push(req.toolCall.title);
+      if (opts.onAsk) return opts.onAsk(req);
+      return world.answers.shift();
+    });
+    const surfaces = [];
+    const result = (outcome, response) => {
+      sdk.answerers.delete(toolUseId);
+      return { outcome, detail: sdk.decisions.get(toolUseId) ?? outcome, response, surfaces };
+    };
+
+    const hook = await bridge.preToolUse(
+      {
+        session_id: "acceptance-session",
+        transcript_path: "/dev/null",
+        cwd: action.cwd ?? world.workspace,
+        permission_mode: "default",
+        hook_event_name: "PreToolUse",
+        tool_name: toolName,
+        tool_input: toolInput,
+        tool_use_id: toolUseId,
+      },
+      toolUseId,
+      { signal: claudeSignal },
+    );
+    const said = hook?.hookSpecificOutput;
+    if (said?.permissionDecisionReason !== undefined) surfaces.push(said.permissionDecisionReason);
+    if (said?.permissionDecision === "deny")
+      return result(said.permissionDecisionReason === CLAUDE_SDK_DENIALS.failed ? "block" : "deny", hook);
+    // The hook never answers allow, which would skip Claude's own check.
+    if (said !== undefined && said.permissionDecision !== "ask")
+      return result(`invalid:hook-${String(said.permissionDecision)}`, hook);
+    const hookAsked = said !== undefined;
+
+    const answer = await bridge.canUseTool(toolName, toolInput, {
+      signal: claudeSignal,
+      toolUseID: toolUseId,
+      suggestions: [],
+    });
+    if (answer.message !== undefined) surfaces.push(answer.message);
+    // Claude is told which tool use the answer is for, and never told to remember it.
+    if (answer.toolUseID !== toolUseId || "updatedPermissions" in answer) return result("invalid:answer-shape", answer);
+    const decision = sdk.decisions.get(toolUseId) ?? "";
+    if (answer.behavior === "deny") {
+      // Not decided: the ask failed, or the bridge could not answer at all (nothing recorded).
+      if (decision === "ask:failed" || (decision === "" && answer.message === CLAUDE_SDK_DENIALS.failed))
+        return result("block", answer);
+      return result(decision.startsWith("ask:") ? "ask" : "deny", answer);
+    }
+    if (answer.behavior !== "allow") return result(`invalid:answer-${String(answer.behavior)}`, answer);
+    const answered = decision === "ask:allow_once";
+    // An automatic allow of a call the hook asked about would be a grant the hook refused.
+    if (hookAsked && !answered) return result(`invalid:allowed-after-ask:${decision}`, answer);
+    const outcome = answered ? "ask" : "allow";
+    if (action.tool !== "mcp") return result(outcome, answer);
+    // ORCA runs the server: every allowed MCP call, a person's one-time allow included, goes
+    // through the relay's own check, which asks nobody and decides again at the handoff.
+    let relayed;
+    try {
+      relayed = await bridge.authorizeMcp(
+        { server: action.server, method: "tools/call", tool: action.name, arguments: toolInput },
+        claudeSignal,
+        { toolUseId },
+      );
+    } catch {
+      return { ...result("invalid:relay-refused", answer), relay: "refused" };
+    }
+    // A case may change the policy between the relay's first check and the handoff.
+    await opts.beforeHandoff?.();
+    try {
+      await relayed.recheck();
+      relayed.dispatch();
+    } catch {
+      // Refused at the handoff: ORCA denied the call there, after the case's change.
+      return { ...result(opts.beforeHandoff ? "deny" : "invalid:relay-refused", answer), relay: "refused" };
+    }
+    return { ...result(outcome, answer), relay: "dispatched" };
+  },
+
+  /**
+   * Whether the answer ORCA handed Claude refuses the call: a deny. This observes the answer
+   * only; that Claude obeys it, and that nothing ran, are for the installed acceptance.
+   */
+  refusesCall(got) {
+    return got.response?.behavior === "deny";
+  },
+};
+
+export const PATHS = [acpAsk, claudeNativeHook, geminiAcpAsk, codexNativeHook, claudeSdkHook];
