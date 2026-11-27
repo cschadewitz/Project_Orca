@@ -840,6 +840,16 @@ async function switchLocked(
   return { status: "switched", epoch: SQLITE_STORE_FORMAT_EPOCH, backup };
 }
 
+/**
+ * For a switch to SQLite, whose recovery drops nothing but the journal: false when the database
+ * now in the store is provably not the journaled one (or missing). A journal from an earlier build
+ * records no birth time, and its device and inode are taken as they were before.
+ */
+async function sameOrUnprovenDatabase(storeDir: string, journaled: string): Promise<boolean> {
+  const database = await sqliteDatabaseIdentity(storeDir);
+  return database !== undefined && compareDatabase(database, journaled) !== "other";
+}
+
 /** The id the store's database is bound to; undefined when it has none or cannot be read. */
 function sqliteDatabaseBinding(storeDir: string): string | undefined {
   try {
@@ -853,6 +863,18 @@ const switchInterrupted = (storeDir: string) =>
   new StoreFormatError(
     "INTERRUPTED",
     "A switch of this store between files and SQLite was interrupted. Start ORCA once to finish or undo it; nothing reads the store until then.",
+    storeDir,
+  );
+
+/**
+ * A switch back to files was interrupted, and the database left in the store cannot be shown to be
+ * the one it started from (#1344): recovery keeps the database, the journal and the restored files
+ * as they are, and points at the switch's backup.
+ */
+const switchUnproven = (storeDir: string, journal: SqliteSwitchJournal) =>
+  new StoreFormatError(
+    "INTERRUPTED",
+    `A switch of this store from SQLite back to files was interrupted, and ORCA cannot confirm that ${SQLITE_METADATA_FILE} is the database the switch started from, so it keeps the database and the switch's journal as they are; nothing reads the store until this is resolved. The store as it was before the switch is in the backup at ${journal.backup}.`,
     storeDir,
   );
 
@@ -877,7 +899,7 @@ async function settleSqliteSwitch(storeDir: string, marker: StoreFormatMarker | 
     if (
       marker.sqliteId !== journal.sqliteId ||
       sqliteDatabaseBinding(storeDir) !== journal.sqliteId ||
-      (journal.database !== undefined && (await sqliteDatabaseIdentity(storeDir)) !== journal.database)
+      (journal.database !== undefined && (await sameOrUnprovenDatabase(storeDir, journal.database)) === false)
     )
       throw switchInterrupted(storeDir);
     if (!(await legacyFenceComplete(storeDir))) await fenceLegacyMetadata(storeDir);
@@ -948,9 +970,9 @@ const SQLITE_DATABASE_FILES = ["", "-wal", "-shm", "-journal"].map((suffix) => `
 
 /** Remove a store's database once its marker records files again; the switch's backup keeps it. */
 /**
- * Which file `<storeDir>/metadata.sqlite` is (`<dev>:<ino>`), or undefined when there is none. A
- * switch journals it, so recovery acts on that file only: a backup restored or copied in its place
- * is another file, even when it is bound to the same store.
+ * Which file `<storeDir>/metadata.sqlite` is, or undefined when there is none
+ * ({@link databaseIdentity}). A switch journals it, so recovery acts on that file only: a backup
+ * restored or copied in its place is another file, even when it is bound to the same store.
  */
 async function sqliteDatabaseIdentity(storeDir: string): Promise<string | undefined> {
   const info = await lstat(join(storeDir, SQLITE_METADATA_FILE), { bigint: true }).catch(
@@ -959,7 +981,56 @@ async function sqliteDatabaseIdentity(storeDir: string): Promise<string | undefi
       throw error;
     },
   );
-  return info && `${info.dev}:${info.ino}`;
+  return info && databaseIdentity(info);
+}
+
+/**
+ * A database file's identity as a switch journals it: `<dev>:<ino>:<birth time in ns>` when the
+ * platform vouches for the birth time, `<dev>:<ino>` alone otherwise. The birth time is what tells
+ * a replacement created after the database was removed apart from it, since a file system may give
+ * it the freed inode number (#1344). Node reports no birth time as 0, and on some platforms as the
+ * change time (fs.Stats, "Stat time values"), so a birth time counts only when it is earlier than
+ * the change time: a database has always been written after it was created. Without one the
+ * identity proves nothing, like a journal from an earlier build, and recovery keeps the file.
+ */
+export function databaseIdentity(info: { dev: bigint; ino: bigint; birthtimeNs: bigint; ctimeNs: bigint }): string {
+  return info.birthtimeNs > 0n && info.birthtimeNs < info.ctimeNs
+    ? `${info.dev}:${info.ino}:${info.birthtimeNs}`
+    : `${info.dev}:${info.ino}`;
+}
+
+/**
+ * How the database now in the store compares with the one a switch journaled: `same` only when
+ * both identities carry a birth time and match; `other` when they provably differ; `unproven`
+ * when the device and inode match but a birth time is missing on either side (a journal from an
+ * earlier build, or a file system without one), so the file may be a replacement that reused the
+ * inode. Undefined (no database now, or none journaled) is the caller's to decide.
+ */
+function compareDatabase(current: string, journaled: string): "same" | "other" | "unproven" {
+  const [now, then] = [current.split(":"), journaled.split(":")];
+  if (now.length === 3 && then.length === 3) return current === journaled ? "same" : "other";
+  return now[0] === then[0] && now[1] === then[1] ? "unproven" : "other";
+}
+
+/**
+ * Whether the database left in the store is the one a switch back to files journaled, and bound
+ * to it. Recovery at the next start needs proof (`proven`) before it settles the database (drops
+ * it, or fences the files back in front of it) and ends the journal; anything short of that keeps
+ * both for review. The switch's own rollback, moments after it journaled the file, refuses only a
+ * provably different one (`unless-other`), since a file system without birth times proves nothing,
+ * unless it found the store changed, when it too needs proof.
+ */
+async function journaledDatabase(
+  storeDir: string,
+  journal: SqliteSwitchJournal,
+  need: "proven" | "unless-other",
+): Promise<boolean> {
+  const database = await sqliteDatabaseIdentity(storeDir);
+  if (database === undefined || journal.database === undefined) return false;
+  const match = compareDatabase(database, journal.database);
+  return (
+    (need === "proven" ? match === "same" : match !== "other") && sqliteDatabaseBinding(storeDir) === journal.sqliteId
+  );
 }
 
 async function dropSqliteDatabase(storeDir: string): Promise<void> {
@@ -1074,12 +1145,16 @@ async function switchToFilesLocked(
     error instanceof OrcaError && !(error instanceof StoreFormatError) && error.code === "STORE_FORMAT"
       ? new StoreFormatError("UNREADABLE", `${error.message} Nothing was changed.`, storeDir)
       : error;
-  const changed = () =>
-    new StoreFormatError(
+  // Once the store is seen to have changed, the rollback below no longer takes anything on trust.
+  let storeChanged = false;
+  const changed = () => {
+    storeChanged = true;
+    return new StoreFormatError(
       "BUSY",
       "The store changed while it was being switched back to files, so the files may not hold everything and the store stays on SQLite. Stop every ORCA app, daemon and command using it, then switch it again.",
       storeDir,
     );
+  };
   let journaled = false;
   let backup: string;
   try {
@@ -1155,8 +1230,8 @@ async function switchToFilesLocked(
     if (
       now?.epoch === SQLITE_STORE_FORMAT_EPOCH &&
       now.sqliteId === sqliteId &&
-      journal?.database !== undefined &&
-      (await sqliteDatabaseIdentity(storeDir)) === journal.database
+      journal !== undefined &&
+      (await journaledDatabase(storeDir, journal, storeChanged ? "proven" : "unless-other"))
     ) {
       await fenceLegacyMetadata(storeDir);
       await endSqliteSwitchJournal(storeDir);
@@ -1190,20 +1265,23 @@ async function settleFilesSwitch(
   journal: SqliteSwitchJournal,
 ): Promise<void> {
   if (marker?.epoch === STORE_FORMAT_EPOCH && !marker.sqliteId && marker.backup === journal.backup) {
-    // The database left behind must be the very file this switch started from (or already gone):
-    // a replacement bound to the same store, restored or copied in meanwhile, is not dropped.
-    const database = await sqliteDatabaseIdentity(storeDir);
-    if (database && (database !== journal.database || sqliteDatabaseBinding(storeDir) !== journal.sqliteId))
-      throw switchInterrupted(storeDir);
+    // The database left behind must provably be the very file this switch started from (or
+    // already gone): a replacement bound to the same store, restored or copied in meanwhile, is
+    // not dropped, and neither is a file whose identity cannot be established (#1344).
+    if (
+      (await sqliteDatabaseIdentity(storeDir)) !== undefined &&
+      !(await journaledDatabase(storeDir, journal, "proven"))
+    )
+      throw switchUnproven(storeDir, journal);
     await syncMarker(storeDir);
     await dropSqliteDatabase(storeDir);
   } else if (
     marker?.epoch === SQLITE_STORE_FORMAT_EPOCH &&
     marker.sqliteId === journal.sqliteId &&
-    sqliteDatabaseBinding(storeDir) === journal.sqliteId &&
-    (await sqliteDatabaseIdentity(storeDir)) === journal.database
-  )
+    sqliteDatabaseBinding(storeDir) === journal.sqliteId
+  ) {
+    if (!(await journaledDatabase(storeDir, journal, "proven"))) throw switchUnproven(storeDir, journal);
     await fenceLegacyMetadata(storeDir);
-  else throw switchInterrupted(storeDir);
+  } else throw switchInterrupted(storeDir);
   await endSqliteSwitchJournal(storeDir);
 }
