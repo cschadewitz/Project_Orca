@@ -449,8 +449,9 @@ export type PermissionRuleOrigin = {
  * - `default`: no rule matched and the policy's fallthrough decided it;
  * - `command-restricted`: commands are restricted by their words and nothing denied it, so
  *   it is asked whatever an allow would have said;
- * - `unverified-identity`: the call claims an MCP tool ORCA cannot verify (#1021) and nothing
- *   denied or asked it, so it is asked whatever an allow would have said;
+ * - `unverified-identity`: the call claims an MCP tool ORCA cannot verify (#1021), or ORCA could
+ *   not reproduce how an ACP ask would describe it (#1119), and nothing denied or asked it, so it
+ *   is asked whatever an allow would have said;
  * - `judged`: a judged rule's criterion covered the call, which is allowed once (#702).
  */
 export type PermissionBasis =

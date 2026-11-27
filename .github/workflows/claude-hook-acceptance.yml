@@ -32,6 +32,7 @@ on:
       - packages/agents/test/fixtures/hook-output-guard/**
       - packages/agents/src/acp-session.ts
       - packages/agents/src/permissions.ts
+      - packages/agents/src/policy-call.ts
       - packages/cli/src/bootstrap.ts
       - packages/cli/test/claude-hook-acceptance-704.test.ts
       - tools/guard-qualification/**

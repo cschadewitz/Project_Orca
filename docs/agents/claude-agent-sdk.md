@@ -115,3 +115,16 @@ ORCA does not answer Claude's permission asks yet (#1122), so:
   any other tool, also where Claude's own rules would have allowed it.
 - **Every permission ask is answered no**, for example a read outside the working directory.
 
+
+### How your permission rules will read these calls
+
+When ORCA answers Claude's asks (#1122), it will decide each call with the same permission rules
+it uses for Claude over ACP (#1119). A rule that matches by title (`titlePattern`) is matched
+against the title Claude's ACP adapter would show for that call, so a title rule you wrote for
+ACP sessions holds here too. ORCA reproduces that title for Bash and PowerShell, Read, Write,
+Edit, WebFetch, WebSearch and MCP tools. For other tools (Glob, Grep, NotebookEdit, subagents and
+the like) it cannot, so those calls are kept strict:
+
+- no rule allows them, so they are asked, even under `default: allow`;
+- every deny or ask title rule for their kind applies, even one written for a different call;
+- an "always" answer is used for that call only, not saved as a standing allow.

@@ -30,9 +30,9 @@
  *
  * The lane is off unless a session is given a judge. Turning it on is a setting (#701).
  */
-import type * as acp from "@agentclientprotocol/sdk";
 import type { JudgedDecision, JudgedPolicyRule, PermissionExplanation, PermissionPolicy } from "@orca/core";
 import { callFacts, explainPermission, type PermissionEvalContext } from "./permissions.js";
+import { asPolicyCall, type PolicyCall, type PolicyCallInput } from "./policy-call.js";
 import {
   PLAIN_RULE_JUDGED_KINDS,
   PLAIN_RULE_REASONS,
@@ -113,14 +113,15 @@ function orcaLabel(kind: string, locations: readonly string[]): string {
  */
 export type JudgedLane = (
   policy: PermissionPolicy,
-  request: acp.RequestPermissionRequest,
+  request: PolicyCallInput,
   ctx: PermissionEvalContext | undefined,
   signal: AbortSignal,
   bound?: readonly string[],
 ) => Promise<PermissionExplanation>;
 
 export function judgedLane(options: JudgedLaneOptions): JudgedLane {
-  return async (policy, request, ctx, signal, bound) => {
+  return async (policy, asked, ctx, signal, bound) => {
+    const request = asPolicyCall(asked);
     const typed = explainPermission(policy, request, ctx);
     // Protected paths and a typed allow need no judge: the one can't be opened, the other is
     // already the most a judged rule could give.
@@ -213,12 +214,13 @@ export function judgedLane(options: JudgedLaneOptions): JudgedLane {
  */
 export function judgedAllowStillHolds(
   policy: PermissionPolicy,
-  request: acp.RequestPermissionRequest,
+  input: PolicyCallInput,
   ctx: PermissionEvalContext | undefined,
   rule: { readonly ruleId: string; readonly ruleRevision: string },
   identities: readonly string[],
   io?: PlainRuleTargetIo,
 ): boolean {
+  const request = asPolicyCall(input);
   const typed = explainPermission(policy, request, ctx);
   if (typed.basis === "protected" || typed.decision === "deny") return false;
   if (typed.decision === "allow") return true;
@@ -253,12 +255,12 @@ function sameList(a: readonly string[], b: readonly string[]): boolean {
  */
 function gate(
   policy: PermissionPolicy,
-  request: acp.RequestPermissionRequest,
+  request: PolicyCall,
   ctx: PermissionEvalContext | undefined,
   io: PlainRuleTargetIo | undefined,
   verify = true,
 ): Gate {
-  const { kind, commandLike, claimed, matches } = callFacts(request, ctx);
+  const { kind, commandLike, claimed, matches, titleForms } = callFacts(request, ctx);
   // A rule about one relayed MCP tool is the MCP lane's alone (#701): its match is deliberately empty.
   const candidates = (policy.judged ?? []).filter((rule) => rule.mcp === undefined && matches(rule.match, "allow"));
   if (candidates.length === 0) return { state: "closed" };
@@ -269,7 +271,9 @@ function gate(
       rule.decision !== "allow" &&
       (rule.match.command !== undefined
         ? commandLike
-        : matches(rule.match, rule.decision) || matches(rule.match, rule.decision, true)),
+        : matches(rule.match, rule.decision) ||
+          matches(rule.match, rule.decision, true) ||
+          titleForms.some((form) => matches(rule.match, rule.decision, false, form))),
   );
   if (restricted) return { state: "closed", verdict: "hard-boundary" };
   if (policy.commandsRestricted === true) return { state: "closed", verdict: "hard-boundary" };
@@ -279,7 +283,7 @@ function gate(
   if (!verify) return { state: "closed", verdict: "outside-envelope" };
   const check = verifyPlainRuleTargets({
     kind,
-    locations: (request.toolCall.locations ?? []).map((l) => l.path),
+    locations: [...request.locations],
     workspaceCwd: ctx?.workspaceCwd,
     protectedPaths: ctx?.protectedPaths,
     ...(io ? { io } : {}),
@@ -304,17 +308,19 @@ function restricted(policy: PermissionPolicy, facts: ReturnType<typeof callFacts
       rule.decision !== "allow" &&
       (rule.match.command !== undefined
         ? facts.commandLike
-        : facts.matches(rule.match, rule.decision) || facts.matches(rule.match, rule.decision, true)),
+        : facts.matches(rule.match, rule.decision) ||
+          facts.matches(rule.match, rule.decision, true) ||
+          facts.titleForms.some((form) => facts.matches(rule.match, rule.decision, false, form))),
   );
 }
 
 /** The command text an `execute` ask carries, as the agent wrote it; the title when it sent none. */
-function commandText(request: acp.RequestPermissionRequest): string {
-  const raw = request.toolCall.rawInput;
+function commandText(request: PolicyCall): string {
+  const raw = request.input;
   const command = raw !== null && typeof raw === "object" ? (raw as { command?: unknown }).command : undefined;
   if (typeof command === "string" && command !== "") return command;
   if (Array.isArray(command) && command.every((part) => typeof part === "string")) return command.join(" ");
-  return request.toolCall.title ?? "";
+  return request.title;
 }
 
 /**
@@ -324,7 +330,7 @@ function commandText(request: acp.RequestPermissionRequest): string {
 async function adviseCommand(
   judge: JudgePermission,
   policy: PermissionPolicy,
-  request: acp.RequestPermissionRequest,
+  request: PolicyCall,
   ctx: PermissionEvalContext | undefined,
   signal: AbortSignal,
   redact: (text: string) => string,
@@ -399,7 +405,7 @@ export function judgedEditAdvice(options: {
   redact: (text: string) => string;
 }): (
   policy: PermissionPolicy,
-  write: { request: acp.RequestPermissionRequest; ctx: PermissionEvalContext | undefined },
+  write: { request: PolicyCallInput; ctx: PermissionEvalContext | undefined },
   signal: AbortSignal,
 ) => Promise<JudgedDecision | undefined> {
   const base = { kind: "edit" as const, advisory: true };
@@ -415,7 +421,7 @@ export function judgedEditAdvice(options: {
       return { ...base, verdict: "hard-boundary" };
     const check = verifyPlainRuleTargets({
       kind: "edit",
-      locations: (write.request.toolCall.locations ?? []).map((l) => l.path),
+      locations: [...asPolicyCall(write.request).locations],
       workspaceCwd: write.ctx?.workspaceCwd,
       protectedPaths: write.ctx?.protectedPaths,
       ...(options.io ? { io: options.io } : {}),
@@ -471,7 +477,7 @@ export function judgedMcpLane(options: {
     server: string;
     tool: string;
     arguments: unknown;
-    request: acp.RequestPermissionRequest;
+    request: PolicyCallInput;
     ctx: PermissionEvalContext | undefined;
   },
   signal: AbortSignal,
@@ -482,7 +488,7 @@ export function judgedMcpLane(options: {
     call: {
       server: string;
       tool: string;
-      request: acp.RequestPermissionRequest;
+      request: PolicyCallInput;
       ctx?: PermissionEvalContext | undefined;
     },
   ) => {

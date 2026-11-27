@@ -53,6 +53,8 @@ import {
   type PermissionDecision,
   type PermissionPolicy,
 } from "@orca/core";
+import type { PolicyCall } from "./policy-call.js";
+import { claudeAcpTitle } from "./claude-acp-title.js";
 import { fitHookTelemetryLine, type HookTelemetryTarget } from "./hook-telemetry.js";
 import {
   decidePermission,
@@ -382,6 +384,36 @@ export function claudeToolCall(frame: ClaudePreToolFrame): ClaudePreToolVerdict[
   }
 }
 
+/**
+ * A Claude tool call as the policy reads it (#1119), from the tool's name and input the way
+ * the Claude Agent SDK hands them to `canUseTool` or a hook: `claudeToolCall`'s kind and
+ * locations, with the input and the tool's own name kept as an ACP ask's `rawInput` would keep
+ * them, so one rule decides the call alike on the ACP route and the SDK route.
+ *
+ * The title is the one Claude's ACP adapter would give the call (`claudeAcpTitle`), since title
+ * rules are written against that text; the hook's own form, where it differs, is kept as a
+ * further form a deny or an ask is matched by. Where the adapter's ask cannot be reproduced
+ * with certainty, the call is `approximate`: no allow decides it, and every deny or ask title
+ * rule whose other conditions hold does, so a route switch never loosens a rule.
+ */
+export function claudeToolPolicyCall(frame: ClaudePreToolFrame): PolicyCall {
+  const toolCall = claudeToolCall(frame);
+  const acpTitle = claudeAcpTitle(frame.toolName, frame.toolInput, frame.cwd);
+  const title = acpTitle ?? toolCall.title;
+  // Glob and Grep name their search root here (the cwd when no path is given), where the
+  // adapter names none or the path as written, so their ACP locations are not reproduced either.
+  const approximate = acpTitle === undefined;
+  return {
+    title,
+    kind: toolCall.kind,
+    input: frame.toolInput,
+    locations: toolCall.locations.map((l) => l.path),
+    toolName: frame.toolName,
+    ...(toolCall.title !== title ? { titleForms: [toolCall.title] } : {}),
+    ...(approximate ? { approximate: true as const } : {}),
+  };
+}
+
 /** Whether `dir` is `root` or below it, compared as the file system resolves both. */
 function inside(dir: string, root: string): boolean {
   // Not `protectedPathFor`: there a path it cannot resolve counts as protected, which here would
@@ -424,10 +456,11 @@ export async function checkPreToolCall(
   site: PreToolCallSite,
   narrow?: (policy: PermissionPolicy) => PermissionPolicy,
 ): Promise<ClaudePreToolVerdict> {
-  const request: acp.RequestPermissionRequest = {
-    sessionId: site.sessionId ?? "",
-    toolCall: { toolCallId: site.toolUseId ?? "", ...toolCall },
-    options: [],
+  // The neutral call the policy decides (#1119): what an ACP ask for this call would carry.
+  const call: PolicyCall = {
+    title: toolCall.title,
+    kind: toolCall.kind,
+    locations: toolCall.locations.map((l) => l.path),
   };
   const scope = {
     workspaceCwd: context.workspaceCwd,
@@ -453,7 +486,7 @@ export async function checkPreToolCall(
     },
   );
   const policy = narrow ? narrow(loaded) : loaded;
-  const decision = decidePermission(policy, request, scope);
+  const decision = decidePermission(policy, call, scope);
   if (decision !== "allow") return { decision, reason: unreadable ? "sidecar-unreadable" : "policy", toolCall };
 
   // A rule is relative to the workspace; a call running somewhere else is not the call it granted.
