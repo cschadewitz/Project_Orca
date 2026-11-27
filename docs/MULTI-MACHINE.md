@@ -369,7 +369,7 @@ way with `powershell -NoProfile -ExecutionPolicy Bypass -File orca-windows-ssh.p
 - If the OpenSSH Server is already installed, starts automatically and is running, it changes
   nothing, its firewall rules included, and says so. It does not then claim SSH is limited to
   Tailscale: that policy is yours. The one exception is a machine it set up itself whose
-  adapter rule no longer names every adapter; then it offers to update that rule, as below.
+  adapter rule or guard task is out of date; then it offers to put them back, as below.
 - Otherwise it lists exactly what it would change and asks first. Anything but `y` changes
   nothing ("Nothing was changed"). The changes, only those still needed, in this order:
   1. Install the OpenSSH Server Windows feature from Windows Update. Its `sshd` service stays
@@ -385,9 +385,10 @@ way with `powershell -NoProfile -ExecutionPolicy Bypass -File orca-windows-ssh.p
 - A Windows Firewall block rule wins over every allow rule, so other rules that allow inbound
   connections, such as the ones Windows adds for its own apps, cannot open SSH on another
   adapter. It lists them and leaves them as they are.
-- A network adapter added or enabled later (a new VPN, say) is not named by the adapter rule until you run
-  the line again; until then only the address rule covers it. Run it again after adding one: on a
-  machine it set up, it updates its own rule, after asking.
+- Adapters come and go (a new VPN, say), so it also adds the scheduled task `\ORCA\orca-ssh-guard`,
+  which runs as SYSTEM at startup, whenever a network connects and every minute. It brings the
+  adapter rule up to the adapters there are, and stops `sshd` when it cannot. The task carries its
+  script itself, so there is no file anyone else could change. Nothing in it needs maintaining.
 - It refuses, changing nothing, outside an administrator session, without the Tailscale
   adapter, on a Windows too old to have the feature (before Windows 10 1809 or Windows Server
   2019), or when the block would not hold: a firewall profile that is off or does not block

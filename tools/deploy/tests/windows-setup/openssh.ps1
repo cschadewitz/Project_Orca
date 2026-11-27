@@ -96,7 +96,61 @@ try {
     $failed = ""
     try { New-OrcaEdgeRule $name @() } catch { $failed = $_.Exception.Message }
     Assert ($failed -like "*no network adapters*" -and -not (Get-OrcaActiveRules @{ Name = $name }).Count) "an adapter rule naming no adapter was made: $failed"
+
+    Check "the guard task, registered on this machine as the bootstrap registers it, brings the adapter rule up to date as SYSTEM, and fails closed"
+    # Its own rule and a service that does not exist, so nothing of this machine's is stopped.
+    $rule = "ORCA-test-edge-$([guid]::NewGuid().ToString('N'))"
+    $task = "orca-test-guard-$([guid]::NewGuid().ToString('N'))"
+    $fake = "orca-test-no-such-service"
+    $run = {
+      $before = (Get-ScheduledTaskInfo -TaskPath "\ORCA-test\" -TaskName $task).LastRunTime
+      Start-ScheduledTask -TaskPath "\ORCA-test\" -TaskName $task
+      $deadline = (Get-Date).AddSeconds(90)
+      do {
+        Start-Sleep -Milliseconds 500
+        $info = Get-ScheduledTaskInfo -TaskPath "\ORCA-test\" -TaskName $task
+        $state = [string](Get-ScheduledTask -TaskPath "\ORCA-test\" -TaskName $task).State
+      } while (((Get-Date) -lt $deadline) -and ($state -eq "Running" -or $info.LastRunTime -eq $before))
+      Assert ($state -ne "Running" -and $info.LastRunTime -ne $before) "the guard task did not finish"
+      return [int]$info.LastTaskResult
+    }
+    try {
+      Install-OrcaGuard "\ORCA-test\" $task $rule $fake
+      Assert ((Get-OrcaGuardState "\ORCA-test\" $task $rule $fake) -eq "ok") "the guard task as registered is not read as the guard"
+      Assert ((Get-OrcaGuardState "\ORCA-test\" $task $rule $Service) -eq "wrong") "a guard for another service is read as this one"
+      # Naming only one adapter, as if the others came later; the guard names them all.
+      New-OrcaEdgeRule $rule @($adapters[0])
+      $result = & $run
+      $made = @(Read-OrcaFirewallRules (Get-OrcaActiveRules @{ Name = $rule }))
+      Assert ($result -eq 0 -and (Measure-OrcaEdge $made $adapters) -eq "ok") "after the guard ran (result $result): $(ConvertTo-Json -Compress $made)"
+      # Its rule gone: it cannot keep SSH off the other adapters, so it fails.
+      Remove-NetFirewallRule -Name $rule -PolicyStore PersistentStore
+      $result = & $run
+      Assert ($result -eq 1) "the guard without its rule ended with $result"
+    } finally {
+      Unregister-ScheduledTask -TaskPath "\ORCA-test\" -TaskName $task -Confirm:$false -ErrorAction SilentlyContinue
+      Remove-NetFirewallRule -Name $rule -PolicyStore PersistentStore -ErrorAction SilentlyContinue
+    }
   }
+
+  Check "the guard task's reading: exactly the guard, as SYSTEM, enabled, on all three triggers"
+  $good = [xml](Get-OrcaGuardXml)
+  Assert ((Measure-OrcaGuard $good) -eq "ok") "the guard as made is not read as the guard"
+  Assert ((Measure-OrcaGuard $null) -eq "missing") "no task is not missing"
+  foreach ($change in @(
+      @("//*[local-name()='UserId']", "S-1-5-21-1-2-3-1001"), @("//*[local-name()='RunLevel']", "LeastPrivilege"),
+      @("//*[local-name()='Arguments']", "-NoProfile -Command Start-Service sshd"), @("//*[local-name()='Command']", "C:\Users\x\powershell.exe"),
+      @("//*[local-name()='Settings']/*[local-name()='Enabled']", "false"), @("//*[local-name()='EventTrigger']/*[local-name()='Enabled']", "false"),
+      @("//*[local-name()='Interval']", "PT1H"), @("//*[local-name()='Subscription']", "<QueryList/>"))) {
+    $xml = [xml](Get-OrcaGuardXml)
+    $xml.SelectSingleNode($change[0]).InnerText = $change[1]
+    Assert ((Measure-OrcaGuard $xml) -eq "wrong") "a guard with $($change[0]) = $($change[1]) is read as the guard"
+  }
+  $xml = [xml](Get-OrcaGuardXml)
+  $null = $xml.SelectSingleNode("//*[local-name()='BootTrigger']").ParentNode.RemoveChild($xml.SelectSingleNode("//*[local-name()='BootTrigger']"))
+  Assert ((Measure-OrcaGuard $xml) -eq "wrong") "a guard with no boot trigger is read as the guard"
+  $text = Get-OrcaGuardScript
+  Assert ($text -like "*`"$EdgeName`"*" -and $text -like "*-ne `"Tailscale`"*" -and $text -like "*Stop-Service -Name `"sshd`"*") "the guard names another rule, adapter or service: $text"
 
   Check "the adapter rule: every adapter but Tailscale's, named, and nothing else"
   Assert ((Get-Measured @()).Edge -eq "ok") "the exact adapter rule is not ours"
@@ -269,6 +323,7 @@ try {
   function Test-OrcaElevated { return $true }
   function Read-OrcaConsent([string]$question) { return "y" }
   function Read-OrcaSshConfig { return $null }
+  function Get-OrcaGuardState { return $(if ($script:mine) { "ok" } else { "missing" }) }
   function Set-OrcaSshFirewall { $script:mine = $true; $script:policy = $true; if ($script:later) { $script:nolocal = $true } }
   function Start-OrcaSshService { $script:started = $true }
   foreach ($case in @(@{ Override = $true; NoLocal = $false; Code = 1 }, @{ Override = $false; NoLocal = $true; Code = 1 }, @{ Override = $false; NoLocal = $false; Code = 0 })) {
@@ -287,7 +342,7 @@ try {
   foreach ($name in @("Get-NetFirewallRule", "Get-NetFirewallProfile", "Get-NetFirewallPortFilter", "Get-NetFirewallInterfaceFilter",
       "Get-NetFirewallApplicationFilter", "Get-NetFirewallServiceFilter", "Get-NetFirewallAddressFilter", "Get-NetFirewallInterfaceTypeFilter",
       "Get-NetFirewallSecurityFilter", "Get-Service", "Get-WindowsCapability", "Get-NetAdapter", "Get-NetIPInterface",
-      "Test-OrcaElevated", "Read-OrcaConsent", "Read-OrcaSshConfig", "Set-OrcaSshFirewall", "Start-OrcaSshService")) {
+      "Test-OrcaElevated", "Read-OrcaConsent", "Read-OrcaSshConfig", "Set-OrcaSshFirewall", "Start-OrcaSshService", "Get-OrcaGuardState")) {
     Remove-Item -LiteralPath "function:$name"
   }
   # The shipped ones back, for the run below to replace again.
@@ -309,7 +364,7 @@ try {
   function Set-OrcaSshFirewall {
     $null = $script:changed.Add("firewall")
     if ($script:fail -eq "firewall") { throw "the firewall refused the rule" }
-    $script:state.Firewall.Ours = "ok"; $script:state.Firewall.Block = "ok"; $script:state.Firewall.Edge = "ok"; $script:state.Firewall.Broad = $false
+    $script:state.Firewall.Ours = "ok"; $script:state.Firewall.Block = "ok"; $script:state.Firewall.Edge = "ok"; $script:state.Guard = "ok"; $script:state.Firewall.Broad = $false
     if ($script:fail -eq "appeared") { $script:state.Firewall.Bypass = @("rule ipsec (ipsec)") }
     if ($script:fail -eq "port") { $script:state.Listen.Problem = "sshd is set to listen on port 2222" }
   }
@@ -317,14 +372,16 @@ try {
 
   function New-State([bool]$installed, [bool]$automatic, [bool]$running, [string]$ours = "missing", [bool]$broad = $false,
     [string[]]$others = @(), [string[]]$open = @(), [bool]$tailscale = $true, [bool]$available = $true, [string]$listen = "",
-    [string]$block = "", [string[]]$local = @(), [string[]]$bypass = @(), [string]$edge = "") {
+    [string]$block = "", [string[]]$local = @(), [string[]]$bypass = @(), [string]$edge = "", [string]$guard = "") {
     # The ORCA rules alike, unless told otherwise.
     if (-not $block) { $block = $ours }
     if (-not $edge) { $edge = $ours }
+    if (-not $guard) { $guard = $(if ($ours -eq "ok") { "ok" } else { "missing" }) }
     return [pscustomobject]@{
       Available = $available; Installed = $installed; Automatic = $automatic; Running = $running; Tailscale = $tailscale
       Firewall = [pscustomobject]@{ Ours = $ours; Block = $block; Edge = $edge; Adapters = @("Ethernet", "Wi-Fi"); Open = $open; Local = $local; Broad = $broad; Bypass = $bypass; Others = $others }
       Listen = [pscustomobject]@{ Ports = $(if ($listen) { @() } else { @(22) }); Problem = $listen }
+      Guard = $guard
     }
   }
   function Invoke-Case($state, [string]$answer = "", [bool]$elevated = $true, [string]$fail = "") {
@@ -354,6 +411,12 @@ try {
   Assert ((& $all) -like "*Update the firewall rule `"ORCA: Block OpenSSH Server on other network adapters`"*(Ethernet, Wi-Fi)*") "it said: $(& $all)"
   & $nothing (Invoke-Case (New-State $true $true $true -ours "ok" -edge "stale") "y" -elevated $false) "administrator PowerShell"
 
+  Check "already on with its own rules, and its guard task gone: the task is put back, asked first"
+  $code = Invoke-Case (New-State $true $true $true -ours "ok" -guard "wrong") "y"
+  Assert ($code -eq 0 -and $script:asked -eq 1 -and ($script:changed -join ",") -eq "firewall,service") "exit $code, asked $script:asked, changed $($script:changed -join ',')"
+  Assert ((& $all) -like "*Add the scheduled task \ORCA\orca-ssh-guard*") "it said: $(& $all)"
+  Assert (-not ((& $all) -like "*firewall rule*")) "it lists a firewall rule it already has: $(& $all)"
+
   Check "not on: refused before asking, nothing changed, when it is not elevated, has no Tailscale or no feature"
   & $nothing (Invoke-Case (New-State $false $false $false) "y" -elevated $false) "administrator PowerShell"
   & $nothing (Invoke-Case (New-State $false $false $false -tailscale $false) "y") "Tailscale"
@@ -377,7 +440,7 @@ try {
     $code = Invoke-Case (New-State $false $false $false) $answer
     Assert ($code -eq 2 -and $script:asked -eq 1 -and $script:changed.Count -eq 0) "answer '$answer': exit $code, asked $script:asked, changed $($script:changed -join ', ')"
     $text = & $all
-    Assert ($text -like "*Install the OpenSSH Server Windows feature*Add the firewall rule*only over the Tailscale adapter*, and add the firewall rule*ORCA: Block OpenSSH Server on other network adapters*on every network adapter but Tailscale's (Ethernet, Wi-Fi)*, and add the firewall rule*ORCA: Block OpenSSH Server outside Tailscale*from every address outside Tailscale's (100.64.0.0/10 and fd7a:115c:a1e0::/48)*disable the rule the feature adds for every network (OpenSSH-Server-In-TCP)*Check that SSH is blocked on every other network adapter and from every address outside Tailscale's, then set the sshd service to start automatically and start it*") "the steps are not all listed in order: $text"
+    Assert ($text -like "*Install the OpenSSH Server Windows feature*Add the firewall rule*only over the Tailscale adapter*; add the firewall rule*ORCA: Block OpenSSH Server on other network adapters*on every network adapter but Tailscale's (Ethernet, Wi-Fi)*; add the scheduled task \ORCA\orca-ssh-guard, which runs as SYSTEM*stops sshd when it cannot; add the firewall rule*ORCA: Block OpenSSH Server outside Tailscale*from every address outside Tailscale's (100.64.0.0/10 and fd7a:115c:a1e0::/48)*disable the rule the feature adds for every network (OpenSSH-Server-In-TCP)*Check that SSH is blocked on every other network adapter and from every address outside Tailscale's, then set the sshd service to start automatically and start it*") "the steps are not all listed in order: $text"
     Assert ($text -like "*Windows Update maintains it*") "it does not say who maintains it: $text"
     Assert ($script:said[-1] -eq "Nothing was changed.") "the last line is '$($script:said[-1])'"
   }
@@ -387,7 +450,7 @@ try {
     $code = Invoke-Case (New-State $false $false $false) $answer
     Assert ($code -eq 0) "answer '$answer': exit $code"
     Assert (($script:changed -join ",") -eq "feature,firewall,service") "answer '$answer': changed $($script:changed -join ',')"
-    Assert ($script:said[-1] -like "The OpenSSH Server is on. SSH is blocked on every network adapter but Tailscale's*run this again*") "the last line is '$($script:said[-1])'"
+    Assert ($script:said[-1] -like "The OpenSSH Server is on. SSH is blocked on every network adapter but Tailscale's, kept so by the scheduled task \ORCA\orca-ssh-guard (which stops sshd when it cannot)*") "the last line is '$($script:said[-1])'"
   }
 
   Check "installed but stopped, behind the feature's every-network rule: the firewall is set before sshd starts"

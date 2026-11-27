@@ -5,7 +5,8 @@
   it changes nothing. Otherwise it lists each change and asks before making any:
   - install the Windows feature;
   - allow SSH over the Tailscale adapter, and block it on every other network adapter and from
-    every address outside Tailscale's;
+    every address outside Tailscale's, with a scheduled task that keeps the adapter block up to
+    date and stops `sshd` when it cannot;
   - start `sshd`, only once that block is in place.
 
   It refuses when the block would not hold, such as a firewall profile that is off or a policy

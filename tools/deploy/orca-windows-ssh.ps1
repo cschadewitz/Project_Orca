@@ -24,7 +24,8 @@ in this order:
 2. firewall  Allow inbound SSH (TCP 22) over the Tailscale network adapter, with the rule
              "ORCA: OpenSSH Server over Tailscale"; block inbound SSH on every other network
              adapter there is, with the rule "ORCA: Block OpenSSH Server on other network
-             adapters"; block it from every address outside Tailscale's (100.64.0.0/10 and
+             adapters", kept up to date by the scheduled task \ORCA\orca-ssh-guard (below);
+             block it from every address outside Tailscale's (100.64.0.0/10 and
              fd7a:115c:a1e0::/48) on any adapter, with the rule "ORCA: Block OpenSSH Server
              outside Tailscale"; and disable the rule the feature adds for every network
              ("OpenSSH-Server-In-TCP").
@@ -33,9 +34,11 @@ in this order:
 
 A Windows Firewall block rule wins over every allow rule, local or a policy's, so other rules
 that allow inbound connections (Windows' own app rules, say) cannot open SSH on another
-adapter; they are listed, and left as they are. An adapter added or enabled later is not named by the
-adapter rule until this runs again (the address rule still applies to it); run this again after
-adding one, and it updates its own rule. Before asking, it refuses, changing nothing, when that block
+adapter; they are listed, and left as they are. Adapters come and go, so a scheduled task
+(\ORCA\orca-ssh-guard, run as SYSTEM at startup, whenever a network connects and every minute)
+keeps the adapter rule naming every adapter but Tailscale's, and stops sshd when it cannot. The
+task carries its script itself, so there is no file to change. If either is out of date on a
+machine this set up, running it again offers to put them back. Before asking, it refuses, changing nothing, when that block
 would not hold: a Windows Firewall profile that is off or does not block inbound connections by
 default, a policy that turns local rules off (the ORCA rules would not apply), an enabled rule
 that lets SSH past block rules (OverrideBlockRules), a rule by one of its own names with another
@@ -66,6 +69,11 @@ $OffTailnet = @("0.0.0.0-100.63.255.255", "100.128.0.0-255.255.255.255",
 $EdgeName = "ORCA-OpenSSH-Server-Block-Other-Adapters"
 $EdgeDisplay = "ORCA: Block OpenSSH Server on other network adapters"
 $BroadRule = "OpenSSH-Server-In-TCP"
+# Keeps the adapter rule naming every adapter as adapters come and go, or stops sshd.
+$GuardPath = "\ORCA\"
+$GuardName = "orca-ssh-guard"
+$GuardShell = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+$GuardEvents = '<QueryList><Query Id="0" Path="Microsoft-Windows-NetworkProfile/Operational"><Select Path="Microsoft-Windows-NetworkProfile/Operational">*[System[EventID=10000]]</Select></Query></QueryList>'
 
 # -- what is there (read only) ------------------------------------------------------------------
 
@@ -354,6 +362,7 @@ function Get-OrcaSshState {
     Tailscale = $null -ne (Get-NetAdapter -Name $Adapter -ErrorAction SilentlyContinue)
     Firewall = Get-OrcaFirewallState
     Listen = Get-OrcaSshListen
+    Guard = $(try { Get-OrcaGuardState } catch { "wrong" })
   }
 }
 
@@ -397,12 +406,97 @@ function New-OrcaBlockRule([string]$name) {
     -Description "Added by orca-windows-ssh.ps1 (ORCA #1238): no SSH from addresses outside Tailscale's, whatever other rules allow."
 }
 
+function Get-OrcaGuardScript([string]$rule = $EdgeName, [string]$service = $Service) {
+  # What the guard task runs, as SYSTEM: the adapter rule brought up to the adapters there are, read
+  # back from the effective policy, and sshd stopped when that fails. Carried in the task itself
+  # (an encoded command), so there is no file for anyone else to change.
+  $text = @'
+$ErrorActionPreference = "Stop"
+$rule = "__RULE__"
+try {
+  $names = @(Get-NetIPInterface | ForEach-Object { [string]$_.InterfaceAlias } | Where-Object { $_ -and $_ -ne "__ADAPTER__" -and $_ -notmatch '^Loopback Pseudo-Interface' } | Sort-Object -Unique)
+  if ($names.Count) { Set-NetFirewallRule -Name $rule -PolicyStore PersistentStore -InterfaceAlias $names }
+  $found = @(Get-NetFirewallRule -Name $rule -PolicyStore ActiveStore)
+  if ($found.Count -ne 1 -or [string]$found[0].Enabled -ne "True" -or [string]$found[0].Action -ne "Block") { throw "the rule $rule is not in place" }
+  $named = @($found[0] | Get-NetFirewallInterfaceFilter | ForEach-Object { $_.InterfaceAlias } | ForEach-Object { [string]$_ })
+  if (-not $named.Count -or $named -contains "Any" -or $named -contains "__ADAPTER__") { throw "the rule $rule does not name the adapters" }
+  foreach ($name in $names) { if ($named -notcontains $name) { throw "the rule $rule does not name $name" } }
+} catch {
+  Stop-Service -Name "__SERVICE__" -Force -ErrorAction SilentlyContinue
+  exit 1
+}
+exit 0
+'@
+  return $text.Replace("__RULE__", $rule).Replace("__ADAPTER__", $Adapter).Replace("__SERVICE__", $service)
+}
+
+function Get-OrcaGuardArguments([string]$rule = $EdgeName, [string]$service = $Service) {
+  $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes((Get-OrcaGuardScript $rule $service)))
+  return "-NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $encoded"
+}
+
+function Get-OrcaGuardXml([string]$rule = $EdgeName, [string]$service = $Service) {
+  $e = { param($text) [Security.SecurityElement]::Escape($text) }
+  return @"
+<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo><Description>Added by orca-windows-ssh.ps1 (ORCA #1238): keeps the firewall rule $(& $e $rule) naming every network adapter but Tailscale's, and stops sshd when it cannot.</Description></RegistrationInfo>
+  <Triggers>
+    <BootTrigger><Enabled>true</Enabled></BootTrigger>
+    <EventTrigger><Enabled>true</Enabled><Subscription>$(& $e $GuardEvents)</Subscription></EventTrigger>
+    <TimeTrigger><Repetition><Interval>PT1M</Interval><StopAtDurationEnd>false</StopAtDurationEnd></Repetition><StartBoundary>2026-01-01T00:00:00</StartBoundary><Enabled>true</Enabled></TimeTrigger>
+  </Triggers>
+  <Principals><Principal id="Author"><UserId>S-1-5-18</UserId><RunLevel>HighestAvailable</RunLevel></Principal></Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <ExecutionTimeLimit>PT5M</ExecutionTimeLimit>
+    <Enabled>true</Enabled>
+  </Settings>
+  <Actions Context="Author"><Exec><Command>$(& $e $GuardShell)</Command><Arguments>$(& $e (Get-OrcaGuardArguments $rule $service))</Arguments></Exec></Actions>
+</Task>
+"@
+}
+
+function Measure-OrcaGuard($xml, [string]$rule = $EdgeName, [string]$service = $Service) {
+  # The guard task as registered: "ok" only when it runs exactly the guard, as SYSTEM, enabled, on
+  # all three triggers. Anything else is set up again (it is this script's own task, by its name).
+  if ($null -eq $xml) { return "missing" }
+  try {
+    $ns = New-Object Xml.XmlNamespaceManager $xml.NameTable
+    $ns.AddNamespace("t", "http://schemas.microsoft.com/windows/2004/02/mit/task")
+    $one = { param($path) $nodes = @($xml.SelectNodes($path, $ns)); if ($nodes.Count -eq 1) { [string]$nodes[0].InnerText } else { $null } }
+    $ok = (& $one "/t:Task/t:Principals/t:Principal/t:UserId") -in @("S-1-5-18", "SYSTEM", "NT AUTHORITY\SYSTEM") -and
+      (& $one "/t:Task/t:Principals/t:Principal/t:RunLevel") -eq "HighestAvailable" -and
+      (& $one "/t:Task/t:Settings/t:Enabled") -ne "false" -and
+      @($xml.SelectNodes("/t:Task/t:Actions/*", $ns)).Count -eq 1 -and
+      (& $one "/t:Task/t:Actions/t:Exec/t:Command") -eq $GuardShell -and
+      (& $one "/t:Task/t:Actions/t:Exec/t:Arguments") -eq (Get-OrcaGuardArguments $rule $service) -and
+      (& $one "/t:Task/t:Triggers/t:BootTrigger/t:Enabled") -ne "false" -and $null -ne (& $one "/t:Task/t:Triggers/t:BootTrigger") -and
+      (& $one "/t:Task/t:Triggers/t:EventTrigger/t:Enabled") -ne "false" -and (& $one "/t:Task/t:Triggers/t:EventTrigger/t:Subscription") -eq $GuardEvents -and
+      (& $one "/t:Task/t:Triggers/t:TimeTrigger/t:Enabled") -ne "false" -and (& $one "/t:Task/t:Triggers/t:TimeTrigger/t:Repetition/t:Interval") -eq "PT1M"
+    if ($ok) { return "ok" } else { return "wrong" }
+  } catch { return "wrong" }
+}
+
+function Get-OrcaGuardState([string]$path = $GuardPath, [string]$name = $GuardName, [string]$rule = $EdgeName, [string]$service = $Service) {
+  $task = Get-ScheduledTask -TaskPath $path -TaskName $name -ErrorAction SilentlyContinue
+  if (-not $task) { return "missing" }
+  return Measure-OrcaGuard ([xml](Export-ScheduledTask -TaskPath $path -TaskName $name)) $rule $service
+}
+
+function Install-OrcaGuard([string]$path = $GuardPath, [string]$name = $GuardName, [string]$rule = $EdgeName, [string]$service = $Service) {
+  $null = Register-ScheduledTask -TaskPath $path -TaskName $name -Xml (Get-OrcaGuardXml $rule $service) -Force
+}
+
 function New-OrcaEdgeRule([string]$name, [string[]]$adapters) {
   # Named adapters only: with none named, a rule would block every adapter, Tailscale's too.
   if (-not $adapters.Count) { throw "no network adapters to block SSH on" }
   $null = New-NetFirewallRule -PolicyStore PersistentStore -Name $name -DisplayName $EdgeDisplay -Direction Inbound -Action Block `
     -Protocol TCP -LocalPort 22 -InterfaceAlias $adapters -Profile Any `
-    -Description "Added by orca-windows-ssh.ps1 (ORCA #1238): no SSH on network adapters other than Tailscale's, whatever other rules allow. Run it again after adding an adapter."
+    -Description "Added by orca-windows-ssh.ps1 (ORCA #1238): no SSH on network adapters other than Tailscale's, whatever other rules allow. Kept up to date by the scheduled task $GuardPath$GuardName."
 }
 
 function Set-OrcaSshFirewall {
@@ -420,6 +514,7 @@ function Set-OrcaSshFirewall {
       $null = Set-NetFirewallRule -Name $EdgeName -PolicyStore PersistentStore -InterfaceAlias $adapters
     } else { New-OrcaEdgeRule $EdgeName $adapters }
   }
+  if ((Get-OrcaGuardState) -ne "ok") { Install-OrcaGuard }
   # Added again by the feature when it is installed: disabled after that, every time.
   $broad = Get-NetFirewallRule -Name $BroadRule -PolicyStore PersistentStore -ErrorAction SilentlyContinue
   if ($broad -and [string]$broad.Enabled -eq "True") { $null = $broad | Disable-NetFirewallRule }
@@ -435,6 +530,7 @@ function Assert-OrcaSshTailnetOnly {
   if ($firewall.Block -ne "ok") { throw "the firewall rule `"$BlockDisplay`" is not in place" }
   if ($firewall.Edge -ne "ok") { throw "the firewall rule `"$EdgeDisplay`" does not cover every network adapter but Tailscale's" }
   if ($firewall.Broad) { throw "the rule $BroadRule still allows SSH on every network" }
+  if ($state.Guard -ne "ok") { throw "the scheduled task $GuardPath$GuardName is not in place" }
 }
 
 function Start-OrcaSshService {
@@ -450,8 +546,9 @@ function Read-OrcaConsent([string]$question) {
 
 function Invoke-OrcaWindowsSsh {
   $state = Get-OrcaSshState
-  # Already on is left alone, unless it is this script's own setup with an adapter added since.
-  $ownStale = $state.Firewall.Ours -eq "ok" -and $state.Firewall.Edge -eq "stale"
+  # Already on is left alone, unless it is this script's own setup with an adapter rule or guard
+  # task out of date.
+  $ownStale = $state.Firewall.Ours -eq "ok" -and ($state.Firewall.Edge -eq "stale" -or $state.Guard -ne "ok")
   if ($state.Installed -and $state.Automatic -and $state.Running -and -not $ownStale) {
     # Its firewall policy is the person's own: left as it is, and not called Tailscale-only.
     Write-Host "The OpenSSH Server is already on. Nothing was changed."
@@ -487,10 +584,11 @@ function Invoke-OrcaWindowsSsh {
   if ($state.Firewall.Ours -ne "ok") { $firewall += "add the firewall rule `"$RuleDisplay`", which allows inbound SSH (TCP 22) only over the Tailscale adapter" }
   if ($state.Firewall.Edge -eq "missing") { $firewall += "add the firewall rule `"$EdgeDisplay`", which blocks inbound SSH on every network adapter but Tailscale's ($($state.Firewall.Adapters -join ', ')), whatever other rules allow" }
   elseif ($state.Firewall.Edge -eq "stale") { $firewall += "update the firewall rule `"$EdgeDisplay`" to block inbound SSH on every network adapter but Tailscale's ($($state.Firewall.Adapters -join ', '))" }
+  if ($state.Guard -ne "ok") { $firewall += "add the scheduled task $GuardPath$GuardName, which runs as SYSTEM at startup, whenever a network connects and every minute, keeps that rule naming every network adapter but Tailscale's as adapters come and go, and stops sshd when it cannot" }
   if ($state.Firewall.Block -ne "ok") { $firewall += "add the firewall rule `"$BlockDisplay`", which also blocks inbound SSH from every address outside Tailscale's (100.64.0.0/10 and fd7a:115c:a1e0::/48), on any adapter" }
   if (-not $state.Installed) { $firewall += "disable the rule the feature adds for every network ($BroadRule)" }
   elseif ($state.Firewall.Broad) { $firewall += "disable the feature's rule that allows SSH on every network ($BroadRule)" }
-  if ($firewall.Count) { $steps += , @(($firewall -join ", and "), "Set-OrcaSshFirewall") }
+  if ($firewall.Count) { $steps += , @(($firewall -join "; "), "Set-OrcaSshFirewall") }
   $steps += , @("check that SSH is blocked on every other network adapter and from every address outside Tailscale's, then set the sshd service to start automatically and start it", "Start-OrcaSshService")
   if ($state.Firewall.Others.Count) {
     Write-Host "These enabled firewall rules may allow inbound connections on other networks. They stay as they are; the ORCA block rules keep SSH out of them on other adapters: $($state.Firewall.Others -join '; ')."
@@ -513,7 +611,7 @@ function Invoke-OrcaWindowsSsh {
       return 1
     }
   }
-  Write-Host "The OpenSSH Server is on. SSH is blocked on every network adapter but Tailscale's, and from every address outside Tailscale's; after adding a network adapter, run this again. Add this machine from ORCA: Add a machine, or orca-cli remote add you@this-machine --tailnet."
+  Write-Host "The OpenSSH Server is on. SSH is blocked on every network adapter but Tailscale's, kept so by the scheduled task $GuardPath$GuardName (which stops sshd when it cannot), and from every address outside Tailscale's. Add this machine from ORCA: Add a machine, or orca-cli remote add you@this-machine --tailnet."
   return 0
 }
 
