@@ -54,7 +54,7 @@ const permissions: ConfiguredPermissionPolicy = {
   default: "allow",
   rules: [
     { match: { kind: "execute" }, decision: "ask" },
-    { match: { kind: "edit", pathGlob: "secrets/**" }, decision: "deny" },
+    { match: { kind: "edit", titlePattern: "secrets/" }, decision: "deny" },
   ],
 };
 

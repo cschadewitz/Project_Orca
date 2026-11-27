@@ -17,6 +17,7 @@ import {
   recordHookTelemetry,
   runClaudeRuntimeAttestation,
   type AgentSession,
+  type HookTelemetrySpool,
 } from "@orca/agents";
 import { makeSessionFactory } from "../src/bootstrap.js";
 
@@ -93,7 +94,8 @@ describe.runIf(process.platform !== "win32")("a hooked session's telemetry spool
     await plain.close();
 
     const session = await t.open({ toolCalls: "keep" });
-    const spool = session.hookTelemetry!;
+    // The hook program's route offers its spool itself, file and all.
+    const spool = session.hookTelemetry as HookTelemetrySpool;
     expect(spool).toBeDefined();
     const context = (await readdir(t.hookDir)).find((f) => f.endsWith(".json") && !f.endsWith(".runtime.json"))!;
     expect(JSON.parse(await readFile(join(t.hookDir, context), "utf8")).telemetry).toEqual(spool.target);
