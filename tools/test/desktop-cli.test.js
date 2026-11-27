@@ -184,6 +184,9 @@ describe("the Windows launcher and PATH edit", () => {
     expect(step.if).toBe("matrix.name == 'windows' && runner.environment == 'github-hosted'");
     expect(step.run).toContain("'/S', '/currentuser'");
     expect(step.run).toContain("$out = orca-cli --version");
+    // The CLI reports the root package.json version, which a rehearsal does not restamp.
+    expect(step.run).toContain("-ne $env:CLI_VERSION)");
+    expect(step.env.CLI_VERSION).toBe("${{ steps.version.outputs.cli }}");
     expect(step.run).toContain("if ($final -cne $before)");
     const cases = workflow.jobs.package.steps.find(
       (candidate) => candidate.name === "The installer's PATH edit round-trips the user PATH exactly",

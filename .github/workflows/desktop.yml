@@ -162,6 +162,9 @@ jobs:
             exit 1
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          # What the packaged CLI reports: the bundled daemon reads the root package.json, which a
+          # rehearsal (vX.Y.Z-dryrun.N) does not restamp. Equal to the version above for a release.
+          echo "cli=$(node -p 'require("./package.json").version')" >> "$GITHUB_OUTPUT"
           echo "packaging $version"
 
       # `tsc -b` for main and preload, Vite for the renderer (docs/DEVELOPMENT.md).
@@ -294,6 +297,7 @@ jobs:
         shell: pwsh
         env:
           VERSION: ${{ steps.version.outputs.version }}
+          CLI_VERSION: ${{ steps.version.outputs.cli }}
         run: |
           $ErrorActionPreference = 'Stop'
           $installers = @(Get-ChildItem "packages/app/dist/release/x64/ORCA-*-win-x64.exe")
@@ -323,11 +327,11 @@ jobs:
           if ((Get-Command orca-cli).Source -ne (Join-Path $bin 'orca-cli.cmd')) { throw "orca-cli resolved to $((Get-Command orca-cli).Source)" }
           $out = orca-cli --version
           if ($LASTEXITCODE -ne 0) { throw "orca-cli --version exited $LASTEXITCODE" }
-          if (($out | Select-Object -Last 1) -ne $env:VERSION) { throw "orca-cli --version said '$out', expected '$env:VERSION'" }
+          if (($out | Select-Object -Last 1) -ne $env:CLI_VERSION) { throw "orca-cli --version said '$out', expected '$env:CLI_VERSION'" }
           if (-not ((orca-cli --help) -match 'Orchestration Runtime for Coding Agents')) { throw "orca-cli --help did not print ORCA's usage" }
           orca-cli no-such-command *> $null
           if ($LASTEXITCODE -eq 0) { throw "orca-cli passed a failing exit code through as 0" }
-          Write-Output "orca-cli $env:VERSION from a new terminal's PATH"
+          Write-Output "orca-cli $env:CLI_VERSION from a new terminal's PATH"
           # The uninstaller hands itself to a copy in %TEMP% and returns, so wait for its effect.
           $uninstaller = Join-Path $app 'Uninstall ORCA.exe'
           Start-Process -FilePath $uninstaller -ArgumentList '/S', '/currentuser' -Wait
@@ -486,6 +490,7 @@ jobs:
         if: matrix.name == 'linux' && runner.environment == 'github-hosted'
         env:
           VERSION: ${{ steps.version.outputs.version }}
+          CLI_VERSION: ${{ steps.version.outputs.cli }}
         run: |
           set -euo pipefail
           shopt -s nullglob
@@ -594,7 +599,7 @@ jobs:
           test "$(dpkg -S /usr/bin/orca-cli)" = 'orca-desktop: /usr/bin/orca-cli'
           test "$(stat -c '%a %u:%g' /usr/bin/orca-cli /opt/ORCA/resources/bin/orca-cli)" = "$(printf '755 0:0\n755 0:0')"
           test "$(command -v orca-cli)" = /usr/bin/orca-cli
-          test "$(orca-cli --version)" = "$VERSION"
+          test "$(orca-cli --version)" = "$CLI_VERSION"
           orca-cli --help | grep -q 'Orchestration Runtime for Coding Agents'
           test "$(reader)" = "$before"
 

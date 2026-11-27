@@ -334,7 +334,9 @@ it("installs the .deb and launches it sandboxed on a restricted GitHub-hosted ru
   // The CLI (#1207): the package's own /usr/bin/orca-cli reaches this build beside the screen
   // reader, and goes with the package.
   expect(run).toContain("test \"$(dpkg -S /usr/bin/orca-cli)\" = 'orca-desktop: /usr/bin/orca-cli'");
-  expect(run).toContain('test "$(orca-cli --version)" = "$VERSION"');
+  // The CLI reports the root package.json version, which a rehearsal does not restamp.
+  expect(run).toContain('test "$(orca-cli --version)" = "$CLI_VERSION"');
+  expect(step.env.CLI_VERSION).toBe("${{ steps.version.outputs.cli }}");
   expect(run).toContain("test ! -e /usr/bin/orca-cli");
   expect(step.env.VERSION).toBe("${{ steps.version.outputs.version }}");
   expect(run).toContain('test "$(dpkg-deb -f "$deb" Package)" = orca-desktop');
