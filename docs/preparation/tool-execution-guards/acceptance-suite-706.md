@@ -96,8 +96,11 @@ them. The receipt shows the row's unsupported routes refused (an SSH host, a Cla
 than the pinned image) and runs live, through `claude-sdk-connected` (the route's
 `installed.live`), every case that runner makes and observes. The others (A02, A04, B01, F05,
 P03) are listed under `notRun` and run on `claude-sdk-hook` in the suite; the route has no
-installed diagnostics yet, so a tier B claim waits on them and on the lifecycle checks
-(#1129). Signing the receipt in `guard-receipts.yml` and recording it come next (#1128).
+installed diagnostics yet, so a tier B claim waits on them (#1129). The receipt also carries
+the tier B lifecycle evidence (#1129): a cancelled pending ask has no effect, a fresh session
+asks again and runs each call only on its own one-time answer (the MCP call included, since on
+this route it asks once), and a call whose policy cannot be read within ORCA's decision
+timeout (the policy sidecar is a FIFO nobody writes) is blocked with no effect. Signing the receipt in `guard-receipts.yml` and recording it come next (#1128).
 
 ## The connected proof
 

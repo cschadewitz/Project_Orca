@@ -16,6 +16,14 @@
  *   and observe, run live, with each call's independent evidence and ORCA's decision. The
  *   route's other cases (`notRun`) are not in this receipt: a live agent cannot make them, or
  *   Claude refuses them before ORCA answers. They run on the route itself in the #706 suite.
+ * - Lifecycle evidence for tier B (#1129), under `lifecycle`, each call's effect observed apart
+ *   from ORCA: `checks.cancelledNoEffect` (a pending ask whose turn is cancelled has no effect,
+ *   shown again after a wait, for an MCP call and a file write), `checks.freshSessionFreshDecision`
+ *   (a new session asks again, runs nothing unanswered, and runs each call on a one-time answer
+ *   bound to it; on this route that holds for the MCP call too), and
+ *   `checks.decisionTimeoutBlocks` (a call whose policy cannot be read within ORCA's decision
+ *   timeout is blocked and nothing runs). A Claude Code that could not block on a failed hook is
+ *   not the pinned image, and the unsupported-route probe shows that refused.
  *
  * `claude-sdk-acceptance.yml` runs this with ORCA_CLAUDE_SDK_CLAUDE and
  * ORCA_ENFORCEMENT_RECEIPT_DIR set and keeps the receipt it writes, unsigned. Without them only
@@ -28,13 +36,19 @@ import { appendFile, chmod, copyFile, mkdir, readFile, readdir, writeFile } from
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { CLAUDE_AGENT_SDK_VERSION, CLAUDE_SDK_VERIFIED_PAIRS } from "@orca/agents";
+import {
+  CLAUDE_AGENT_SDK_VERSION,
+  CLAUDE_SDK_DECISION_TIMEOUT_MS,
+  CLAUDE_SDK_VERIFIED_PAIRS,
+  permissionPolicyPath,
+} from "@orca/agents";
 import { childBundle } from "@orca/testing/child-bundle";
 import {
   REPO_ROOT,
   casesFor,
   installedCaseProblems,
   installedInputProblems,
+  lifecycleEvidenceProblems,
   loadAssertions,
   loadCatalogue,
   loadMatrix,
@@ -46,6 +60,8 @@ import { SCENARIOS } from "../guard-qualification/scenarios.js";
 import { createWorld } from "../guard-qualification/world.js";
 import { modelStandIn } from "../guard-qualification/connected/model-stand-in.js";
 import { claudeSdkConnected } from "../guard-qualification/connected/claude-sdk.js";
+import { effectFrom } from "../guard-qualification/connected/evidence.js";
+import { allowOnlyFixture, effectAgain, record } from "../guard-qualification/installed/lifecycle.js";
 
 const CLAUDE = process.env["ORCA_CLAUDE_SDK_CLAUDE"];
 const ROUTE = "claude-sdk-hook";
@@ -137,7 +153,7 @@ describe.skipIf(CLAUDE === undefined || process.platform !== "linux")("installed
   let model;
   let live;
   let bundle;
-  const receipt = { route: ROUTE, cases: [], uncoveredRoutes: [], checks: {}, observed: undefined };
+  const receipt = { route: ROUTE, cases: [], uncoveredRoutes: [], checks: {}, lifecycle: {}, observed: undefined };
 
   beforeAll(async () => {
     const built = childBundle("claude-sdk-factory-1128-installed", {
@@ -200,6 +216,102 @@ describe.skipIf(CLAUDE === undefined || process.platform !== "linux")("installed
       300_000,
     );
 
+  // #1129: a pending ask whose turn is cancelled has no effect, and a fresh session decides
+  // afresh. On this route an MCP call asks once (Claude's ask, in canUseTool) and the relay
+  // runs it on that one-time answer, so its positive case is shown too.
+  it("cancellation: a pending ask whose turn is cancelled has no effect, and a fresh session decides afresh", async () => {
+    const world = await realWorld();
+    try {
+      // The MCP recorder's log exists before the calls, so later a missing log is a failed
+      // observation, not an absence of calls.
+      await writeFile(join(world.root, "mcp-calls.jsonl"), "", { flag: "a" });
+      // Edits ask (MCP calls ask by default), so both calls wait on a person.
+      world.configured = { rules: [{ match: { kind: "edit" }, decision: "ask" }] };
+      const calls = [
+        { tool: "mcp", server: "github", name: "create_issue" },
+        { tool: "write", path: join(world.workspace, "cancelled.md") },
+      ];
+      const cancelled = [];
+      for (const action of calls) {
+        const turn = new AbortController();
+        const got = await live.decide(world, action, {
+          expect: ["ask"],
+          signal: turn.signal,
+          // The ask reached ORCA's human channel; the turn is cancelled and nobody answers.
+          onAsk: () => {
+            turn.abort();
+            return new Promise(() => {});
+          },
+        });
+        expect(got.outcome, JSON.stringify(got.detail)).toBe("ask");
+        expect(got.detail.approvals.map((a) => a.answer)).toEqual(["pending"]);
+        cancelled.push(got);
+      }
+      // Anything the cancelled calls set off would have landed by now: look again.
+      await new Promise((done) => setTimeout(done, 5_000));
+      const later = await Promise.all(cancelled.map((got, i) => effectAgain(world, got, calls[i])));
+      expect(later.map((ref) => effectFrom(ref))).toEqual(["none", "none"]);
+      receipt.lifecycle.cancelled = cancelled.map((got, i) => ({ ...record(got), afterWait: later[i] }));
+      receipt.checks.cancelledNoEffect = "pass";
+
+      // A fresh session: the same calls ask again, run nothing unanswered, and run only on their own answer.
+      await world.connected.session.close();
+      world.connected = undefined;
+      const fresh = [];
+      for (const action of calls) {
+        const unanswered = await live.decide(world, action, { expect: ["ask"], noAnswerer: true });
+        expect(unanswered.outcome, JSON.stringify(unanswered.detail)).toBe("ask");
+        fresh.push(record(unanswered));
+        const session = unanswered.detail.approvals[0]?.sessionId;
+        const once = await live.decide(world, action, {
+          expect: ["allow"],
+          onAsk: allowOnlyFixture(session, sdkToolName),
+        });
+        expect(once.outcome, JSON.stringify(once.detail)).toBe("allow");
+        expect(once.detail.approvals.map((a) => a.sessionId)).toEqual([session]);
+        expect(once.detail.approvals.map((a) => a.answer)).toEqual(["allow_once"]);
+        fresh.push(record(once));
+      }
+      const before = new Set(cancelled.map((got) => got.detail.toolUseId));
+      expect(fresh.filter((r) => before.has(r.toolUseId))).toEqual([]);
+      receipt.lifecycle.fresh = fresh;
+      receipt.checks.freshSessionFreshDecision = "pass";
+      // Re-derived from the evidence, as the matrix checker reads it.
+      expect(lifecycleEvidenceProblems(receipt, ["cancelledNoEffect", "freshSessionFreshDecision"])).toEqual([]);
+    } finally {
+      await world.dispose();
+    }
+  }, 300_000);
+
+  // #1129: a decision that cannot be made in time blocks. The policy sidecar is a FIFO nobody
+  // writes, so reading it hangs; with every edit allowed by rule, only that hang can stop the
+  // write. The read is released after the check.
+  it("decision timeout: a call whose policy cannot be read in time is blocked, and nothing runs", async () => {
+    const world = await realWorld();
+    const sidecar = permissionPolicyPath(world.configDir);
+    try {
+      world.configured = { rules: [{ match: { kind: "edit" }, decision: "allow" }] };
+      execFileSync("mkfifo", [sidecar]);
+      const started = Date.now();
+      const got = await live.decide(world, { tool: "write", path: join(world.workspace, "timed-out.md") });
+      const waited = Date.now() - started;
+      expect(got.outcome, JSON.stringify(got.detail)).toBe("block");
+      expect(got.detail.effect).toBe("none");
+      expect(got.detail.approvals).toEqual([]);
+      expect(waited, "the call was decided only after ORCA's decision timeout").toBeGreaterThanOrEqual(
+        CLAUDE_SDK_DECISION_TIMEOUT_MS,
+      );
+      receipt.lifecycle.decisionTimeout = [
+        { ...record(got), waitedMs: waited, timeoutMs: CLAUDE_SDK_DECISION_TIMEOUT_MS },
+      ];
+      receipt.checks.decisionTimeoutBlocks = "pass";
+    } finally {
+      // Release the hung read: a writer that closes at once gives it an empty file.
+      await writeFile(sidecar, "").catch(() => undefined);
+      await world.dispose();
+    }
+  }, 120_000);
+
   it("binds the receipt to what ran: the SDK, the Claude Code image, the bundled bridge and its settings", async () => {
     expect(receipt.observed, "the connects check read the running Claude Code").toBeDefined();
     const { exeSha256, settingSources, permissionMode } = receipt.observed;
@@ -252,6 +364,9 @@ describe.skipIf(CLAUDE === undefined || process.platform !== "linux")("installed
     expect(model.log.errors, "the model stand-in answered every request").toEqual([]);
   });
 });
+
+/** The tool's name on an ask from the SDK bridge (`askRequest` in permission-bridge.ts). */
+const sdkToolName = (req) => req.toolCall?._meta?.claudeAgentSdk?.toolName;
 
 /** `--setting-sources` and `--permission-mode` as a Claude Code command line carries them. */
 export function settingsFrom(argv) {
@@ -328,6 +443,7 @@ async function writeReceipt(receipt, bundle) {
         inputs: receipt.inputs,
         agentSettings: receipt.agentSettings,
         checks: receipt.checks,
+        lifecycle: receipt.lifecycle,
         uncoveredRoutes: receipt.uncoveredRoutes,
         cases: receipt.cases,
         notRun,
