@@ -10,6 +10,8 @@ const recovery: Record<FirstRunAgentCheck["state"], string> = {
     "Executable access or header could not be read. Check the configured path, file access and runtime prerequisites with an operator, then Save and review again. Setup does not change permissions.",
   architecture:
     "Executable architecture differs from the app runtime. Select an approved matching build in Config, Save, then review again. Physical CPU, translation and native execution remain unverified.",
+  unsupported:
+    "This agent's driver does not run on this computer: Claude through the Claude Agent SDK is not available on Windows, and ORCA refuses it before starting anything. Use the ACP route (claude-agent-acp) here instead: in Config, remove driver: claude-agent-sdk and set the command to the adapter, Save, then review again.",
   "handshake-required":
     "Executable file observed. Its contents, runtime prerequisites and compatibility remain unverified; no agent was started.",
 };
@@ -38,28 +40,36 @@ export function AgentPreflightReview({ checks }: { checks: readonly FirstRunAgen
         <div key={check.agentId}>
           <Well style="mono-id">{check.agentId}</Well>
           <Text style="caption">{recovery[check.state]}</Text>
-          <Text style="caption">{route[check.evidence.configuredRoute]}</Text>
-          <Text style="caption">
-            Agent/version support: {check.evidence.support}. Installed version: {check.evidence.version}. Architecture:{" "}
-            {check.evidence.architecture}. No version command was run. Scripts, interpreters and universal or
-            unrecognized formats need separate runtime review.
-          </Text>
-          <Text style="caption">
-            ACP: {check.evidence.acp === "not-checked" ? "not checked" : check.evidence.acp}. Sign-in:{" "}
-            {check.evidence.signIn}. An executable or ACP handshake alone does not prove a usable signed-in session.
-          </Text>
-          <Text style="caption">
-            Exact-command approval: {check.evidence.exactCommand} (#594). This review cannot clear that hold.
-          </Text>
+          {/* An unsupported route has no sign-in, handshake or evidence to suggest: only the way out. */}
+          {check.state !== "unsupported" && (
+            <>
+              <Text style="caption">{route[check.evidence.configuredRoute]}</Text>
+              <Text style="caption">
+                Agent/version support: {check.evidence.support}. Installed version: {check.evidence.version}.
+                Architecture: {check.evidence.architecture}. No version command was run. Scripts, interpreters and
+                universal or unrecognized formats need separate runtime review.
+              </Text>
+              <Text style="caption">
+                ACP: {check.evidence.acp === "not-checked" ? "not checked" : check.evidence.acp}. Sign-in:{" "}
+                {check.evidence.signIn}. An executable or ACP handshake alone does not prove a usable signed-in session.
+              </Text>
+              <Text style="caption">
+                Exact-command approval: {check.evidence.exactCommand} (#594). This review cannot clear that hold.
+              </Text>
+            </>
+          )}
         </div>
       ))}
-      <Text style="body">
-        Before real work, hand off the selected agent to an operator to verify its installed provider/bridge versions,
-        runtime and ACP support. If sign-in is required or expired, use the provider's own sign-in flow and review its
-        subscription or quota, then obtain separate authorization for a bounded connection and real-agent check. Review
-        project, transmission, cost, permissions and stop limits in Launch work. Keep credentials out of setup and
-        support exports. Binding here only preserves configuration for reopening; it enables no provider check.
-      </Text>
+      {/* Sign-in and handshake guidance only when some agent could use it. */}
+      {(checks.length === 0 || checks.some((check) => check.state !== "unsupported")) && (
+        <Text style="body">
+          Before real work, hand off the selected agent to an operator to verify its installed provider/bridge versions,
+          runtime and ACP support. If sign-in is required or expired, use the provider's own sign-in flow and review its
+          subscription or quota, then obtain separate authorization for a bounded connection and real-agent check.
+          Review project, transmission, cost, permissions and stop limits in Launch work. Keep credentials out of setup
+          and support exports. Binding here only preserves configuration for reopening; it enables no provider check.
+        </Text>
+      )}
     </>
   );
 }

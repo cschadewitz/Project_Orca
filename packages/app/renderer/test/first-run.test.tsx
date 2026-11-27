@@ -332,6 +332,23 @@ it.each([
     expect(screen.getByText(/installed identity is unverified/)).toBeTruthy();
   },
 );
+it("shows a Claude Agent SDK agent on Windows as unsupported, pointing to ACP, with no sign-in or handshake advice (#1320 review)", async () => {
+  const check: FirstRunAgentCheck = {
+    ...toolCheck("unsupported"),
+    evidence: { ...toolCheck("unsupported").evidence, configuredRoute: "claude-agent-sdk-candidate" },
+  };
+  const status: FirstRunStatus = {
+    state: "configuration-review",
+    review: { id: "review-handle", revision: "saved revision", agentCount: 1, checks: [check] },
+  };
+  setup({ status: async () => ({ ok: true, result: status }), bindConfiguration: vi.fn() });
+  const recovery = await screen.findByText(/not available on Windows/);
+  expect(recovery.textContent).toMatch(/Use the ACP route \(claude-agent-acp\) here instead/);
+  // The agent's entry is only the way out: no route, sign-in or handshake advice.
+  const entry = recovery.parentElement!;
+  expect(entry.textContent).not.toMatch(/sign-in|sign in|handshake|claude auth login/i);
+  expect(screen.queryByText(/If sign-in is required or expired/)).toBeNull();
+});
 it("cancels a configuration review without binding or connecting and restores section focus", async () => {
   const cancelConfigurationReview = vi.fn(async () => ({
     ok: true as const,

@@ -85,7 +85,8 @@ Opting Codex in to the hook is not evidence that the judge is available for it. 
 
 On the experimental `driver: claude-agent-sdk` route (held on its feature branch) the judge is
 not asked. Claude reads files itself there, so there is no read ORCA performs for the judge to
-allow, and every call your rules ask about goes to you. See
+allow, and every call your rules ask about goes to the run's configured answerer (a person in
+the app, or the client that started the run), never to the judge. See
 [agents/claude-agent-sdk.md](agents/claude-agent-sdk.md).
 
 ## Turning it off

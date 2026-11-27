@@ -1197,7 +1197,8 @@ export const AgentSpecSchema = z
      */
     driver: AgentDriverSchema.optional().describe(
       "How ORCA runs this agent. acp (the default) talks to an ACP adapter such as claude-agent-acp. " +
-        "claude-agent-sdk (experimental) runs your own signed-in claude through the Claude Agent SDK: " +
+        "claude-agent-sdk (experimental) runs your own signed-in claude through the Claude Agent SDK, " +
+        "on the daemon's own computer only, and not on Windows (refused there and on SSH hosts before anything starts): " +
         "bring your own Claude subscription or API key, one subscription per person; ORCA never signs you in, " +
         "and SDK work draws from your plan's usage limits. Leave command empty to use claude from PATH, or set its path.",
     ),

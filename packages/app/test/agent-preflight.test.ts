@@ -164,3 +164,22 @@ it("names a driver: claude-agent-sdk agent's route, finds claude on PATH when no
   const acp = await inspectLocalTool({ id: "claude", command: claude, env: {} });
   expect(acp.evidence.configuredRoute).toBe("unverified");
 });
+
+it("reports a driver: claude-agent-sdk agent unsupported on Windows without looking for or reading claude (#1320 review)", async () => {
+  const f = await fixture();
+  const claude = join(f.bin, "claude");
+  await writeFile(claude, "#!/bin/sh\n");
+  await chmod(claude, 0o700);
+  const check = await inspectLocalTool({
+    id: "claude-sdk",
+    command: "",
+    driver: "claude-agent-sdk",
+    platform: "win32",
+    env: { PATH: f.bin },
+  });
+  expect(check.state).toBe("unsupported");
+  expect(check.evidence).toMatchObject({ configuredRoute: "claude-agent-sdk-candidate", signIn: "unknown" });
+  // The ACP route on the same computer is reviewed as before.
+  const acp = await inspectLocalTool({ id: "claude", command: claude, platform: "win32", env: {} });
+  expect(acp.state).toBe("handshake-required");
+});

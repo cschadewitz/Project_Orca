@@ -4,7 +4,8 @@ import type { BridgeResult } from "./bridge.js";
 /** Observations only. Neither a command name nor readable bytes attest installed provider compatibility. */
 export interface FirstRunAgentCheck {
   readonly agentId: string;
-  readonly state: "missing" | "unavailable" | "architecture" | "handshake-required";
+  /** `unsupported`: the configured driver does not run on this computer at all (#1131). */
+  readonly state: "missing" | "unavailable" | "architecture" | "handshake-required" | "unsupported";
   readonly evidence: {
     readonly configuredRoute:
       | "claude-code-acp-candidate"

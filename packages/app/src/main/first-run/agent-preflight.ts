@@ -35,6 +35,8 @@ export async function inspectLocalTool(agent: {
   args?: readonly string[];
   env: Record<string, string>;
   driver?: string | undefined;
+  /** The computer the agent would run on (this one): `process.platform` unless given. */
+  platform?: NodeJS.Platform | undefined;
 }): Promise<FirstRunAgentCheck> {
   // A `driver: claude-agent-sdk` agent with no command runs `claude` from PATH, as the daemon does.
   const command = agent.command.length === 0 && agent.driver === "claude-agent-sdk" ? "claude" : agent.command;
@@ -51,6 +53,10 @@ export async function inspectLocalTool(agent: {
       exactCommand: "unsupported",
     },
   });
+  // The SDK driver does not run on Windows at all (the daemon refuses it before any session),
+  // so nothing is looked for: finding `claude` there would suggest a route that cannot work.
+  if (agent.driver === "claude-agent-sdk" && (agent.platform ?? process.platform) === "win32")
+    return result("unsupported");
   const candidates = isAbsolute(command)
     ? [command]
     : command.includes("/") || command.includes("\\")
