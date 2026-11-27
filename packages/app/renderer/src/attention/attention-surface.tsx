@@ -37,7 +37,7 @@
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type JSX } from "react";
 import type { ConnectionState } from "@orca/design";
-import type { OpenInputView, RunSummaryView } from "@orca/protocol";
+import { elicitationOf, type OpenInputView, type RunSummaryView } from "@orca/protocol";
 import { useWritability } from "../chrome/use-connection.js";
 import { useKeyboard } from "../keyboard-context.js";
 import { usePaletteWrites, type PaletteWrite } from "../palette/use-write-actions.js";
@@ -60,6 +60,7 @@ import { PendingCorrection } from "./revision-card.js";
 import { revisionSlotKey, type RevisionsFeed } from "./use-revisions.js";
 import { GateCard } from "./gate-card.js";
 import { PermissionCard } from "./permission-card.js";
+import { QuestionCard } from "./question-card.js";
 import { tierOf } from "./items.js";
 import type { AttentionFeed } from "./use-attention.js";
 import { useControls, type Controls } from "./use-controls.js";
@@ -433,7 +434,10 @@ function Wait({ input, registerCard, onLeaveHoldingFocus, revisions, ...rest }: 
       if (element?.contains(document.activeElement)) onLeaveHoldingFocus(id);
     };
   }, [id, onLeaveHoldingFocus]);
-  return tierOf(input) === "permission" ? (
+  const form = elicitationOf(input.context);
+  return form ? (
+    <QuestionCard input={input} form={form} placement="inbox" cardRef={cardRef} {...rest} />
+  ) : tierOf(input) === "permission" ? (
     <PermissionCard input={input} placement="inbox" cardRef={cardRef} {...rest} />
   ) : (
     <GateCard input={input} revisions={revisions} placement="inbox" cardRef={cardRef} {...rest} />

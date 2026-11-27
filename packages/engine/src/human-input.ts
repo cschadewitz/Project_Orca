@@ -12,6 +12,7 @@ import {
   OrcaError,
   toGateOption,
   type Clock,
+  type ElicitationForm,
   type GateOption,
   type GateOptionInput,
   type OrcaEvent,
@@ -37,6 +38,13 @@ export interface HumanInputQuery {
    * persisted/client context. Missing metadata cannot authorize ACP forwarding.
    */
   permissionOptions?: readonly Pick<PermissionOption, "optionId" | "kind">[];
+  /**
+   * An agent's question (#1133, #1169): the form its answer must fit, checked where the answer
+   * is accepted. Runtime-only like `permissionOptions`; the same form is in `context` for
+   * readers, but this one is the authority. Such a question holds the agent's turn open like a
+   * permission ask does, so it never parks a run and nobody answers it on a person's behalf.
+   */
+  elicitation?: ElicitationForm;
   context: Record<string, unknown>;
   /**
    * What `human.requested` published: the same text with sensitive launch values withheld.
@@ -82,6 +90,8 @@ export function humanInputCancelled(signal?: AbortSignal): OrcaError {
 export function autoHumanInput(option?: string): HumanInputPort {
   return {
     ask: async (q) => {
+      // An agent's question is a person's to answer: an unattended run has nobody to ask (#1133).
+      if (q.elicitation) return undefined;
       if (q.kind !== "permission") return option ?? q.options[0]?.id;
       return option !== undefined && q.options.some((o) => o.id === option) ? option : undefined;
     },
@@ -139,9 +149,18 @@ export function isHumanInputPending(e: unknown): e is HumanInputPending {
  */
 export class PausingHumanInput implements HumanInputPort {
   async ask(query: HumanInputQuery): Promise<string | undefined> {
-    if (query.kind === "permission") return undefined;
+    if (heldByAgentTurn(query)) return undefined;
     throw new HumanInputPending(query);
   }
+}
+
+/**
+ * Whether answering `query` is delivering to a live agent turn rather than recording a durable
+ * gate: a permission ask, or an agent's question (#1133). Neither can park a run, because the
+ * turn waiting on it does not outlive the session.
+ */
+export function heldByAgentTurn(query: Pick<HumanInputQuery, "kind" | "elicitation">): boolean {
+  return query.kind === "permission" || query.elicitation !== undefined;
 }
 
 /**
@@ -168,6 +187,8 @@ export async function askHumanInput(opts: {
   options: GateOptionInput[];
   /** Original permission semantics for in-process ports only; excluded from emitted payloads. */
   permissionOptions?: HumanInputQuery["permissionOptions"];
+  /** An agent question's form (#1133), runtime-only; its readable copy goes in `context`. */
+  elicitation?: ElicitationForm;
   /**
    * The agent whose turn this ask is holding open, recorded on `human.requested` so an
    * attention card can name it (#248). Only the permission path has one - a workflow gate
@@ -189,6 +210,7 @@ export async function askHumanInput(opts: {
     // Normalised before the event is emitted, so nothing written from here on is a bare string.
     options: opts.options.map(toGateOption),
     ...(opts.permissionOptions ? { permissionOptions: opts.permissionOptions } : {}),
+    ...(opts.elicitation ? { elicitation: opts.elicitation } : {}),
     context: opts.context ?? {},
     ...(opts.live ? { live: opts.live } : {}),
   };

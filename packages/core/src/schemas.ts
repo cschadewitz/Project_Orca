@@ -33,5 +33,6 @@ export * from "./model/recovery.js";
 
 export * from "./model/revision-input.js";
 export * from "./model/tool-telemetry.js";
+export * from "./model/elicitation.js";
 
 export { OrcaConfigSchema } from "./config.js";

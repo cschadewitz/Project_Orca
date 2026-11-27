@@ -52,10 +52,10 @@
  */
 import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { lstat, mkdir, open, readdir, rename, rm, rmdir, unlink, type FileHandle } from "node:fs/promises";
+import { lstat, mkdir, open, readdir, rm, rmdir, unlink, type FileHandle } from "node:fs/promises";
 import { join } from "node:path";
 import { OrcaError, ToolCallTelemetrySchema, type ToolCallTelemetry } from "@orca/core";
-import { syncDirectory } from "./durable-file.js";
+import { syncDirectory, replaceFile } from "./durable-file.js";
 import { withFileLock } from "./file-lock.js";
 
 /** The agent-denied diagnostics directory, under the store directory. */
@@ -266,7 +266,7 @@ async function writeNew(path: string, text: string): Promise<void> {
 async function writeMarker(path: string, dir: string, at: Date): Promise<void> {
   const temp = `${path}.${randomUUID()}.tmp`;
   await writeNew(temp, `${JSON.stringify({ deletedAt: at.toISOString() })}\n`);
-  await rename(temp, path);
+  await replaceFile(temp, path);
   await syncDirectory(dir);
 }
 
@@ -503,7 +503,7 @@ export class FileToolTelemetryStore implements ToolTelemetryStore {
       if (keep.length === records.length && lines === records.length) continue;
       const temp = `${path}.${randomUUID()}.tmp`;
       await writeNew(temp, keep.map((r) => JSON.stringify(r)).join("\n") + "\n");
-      await rename(temp, path);
+      await replaceFile(temp, path);
       await syncDirectory(dir).catch(() => undefined);
       removed += records.length - keep.length;
     }

@@ -60,6 +60,7 @@ import { useConfig } from "./config-context.js";
 import { DiagnosticsSection } from "../diagnostics/diagnostics-section.js";
 import "./config.css";
 import { ConfigurationStudioSurface } from "./configuration-studio-surface.js";
+import { NoDaemonView } from "../first-run/no-daemon-view.js";
 
 export interface ConfigSurfaceProps {
   /** Whether the daemon is answering. A screen nobody is updating says so rather than lying. */
@@ -172,12 +173,7 @@ function LegacyConfigSurface({ connection, open }: ConfigSurfaceProps): JSX.Elem
               action={{ label: "Try again", onClick: feed.reload }}
             />
           ) : (
-            <StateView
-              kind="disconnected"
-              title="No daemon to read the configuration from"
-              body="Start one with orca serve, then try again."
-              action={{ label: "Try again", onClick: feed.reload }}
-            />
+            <NoDaemonView title="No daemon to read the configuration from" onRetry={feed.reload} />
           )}
           <DiagnosticsSection key="diagnostics" />
         </div>

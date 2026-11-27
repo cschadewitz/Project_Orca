@@ -18,6 +18,7 @@ import { VirtualList } from "../list/index.js";
 import { Chip, RiskMatrix, StateView, Text, textClass, type RiskLevel } from "../ui/index.js";
 import { riskCountLabel } from "./risk-model.js";
 import type { RisksState } from "./use-risks.js";
+import { NoDaemonView } from "../first-run/no-daemon-view.js";
 
 export interface RiskModeProps {
   state: RisksState;
@@ -42,12 +43,7 @@ export function RiskMode({ state, risks, selectedId, onSelect, live, onRetry }: 
         action={{ label: "Try again", onClick: onRetry }}
       />
     ) : (
-      <StateView
-        kind="disconnected"
-        title="No daemon to read the risks from"
-        body="Start one with orca serve, then try again."
-        action={{ label: "Try again", onClick: onRetry }}
-      />
+      <NoDaemonView title="No daemon to read the risks from" onRetry={onRetry} />
     );
   }
   return (

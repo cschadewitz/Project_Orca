@@ -346,6 +346,7 @@ it("installs the .deb and launches it sandboxed on a restricted GitHub-hosted ru
   expect(run).toContain(`grep -qx 'chmod 0755 "$HELPER"' "$scripts/postinst"`);
   expect(run).toContain("update-mime-database|update-desktop-database");
   expect(run).toContain("grep -qx 'Exec=/opt/ORCA/orca-desktop %U' /usr/share/applications/orca-desktop.desktop");
+  expect(run).toContain("grep -qx 'StartupWMClass=orca-desktop' /usr/share/applications/orca-desktop.desktop");
   expect(run).toContain('test "$(id -u)" != 0');
   expect(run).toContain("sha256sum ORCA-*.deb");
   expect(run).toContain("/ns/user");

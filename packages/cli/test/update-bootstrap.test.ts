@@ -4,7 +4,8 @@ import { mkdir, mkdtemp, readFile, rm, writeFile, readdir, lstat } from "node:fs
 import { createServer, type Server } from "node:net";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+import { fsyncSync } from "node:fs";
 import { ClosedUpdateWindow, enterUpdateWriter, provisionUpdateWindow } from "@orca/protocol/update-window";
 import { bootstrapLocalOwner, openAuthDirectory } from "@orca/daemon";
 import { DaemonClient } from "../../app/src/client/daemon-client.js";
@@ -12,6 +13,14 @@ import { LocalDaemonToken } from "../../app/src/client/auth.js";
 import { randomUUID } from "node:crypto";
 import { fenceBoot, fenceDirectory, fenceHash, fenceWrite, acquireFirstRunFence } from "@orca/protocol/first-run-fence";
 import { fencePorts, selectFenceDirectory } from "../../protocol/test/fixtures/fence-ports.js";
+
+// Only the bulk provisioning test turns flushes off: its 128 fixtures make about 1,150 synchronous
+// fsyncs, so on a runner with slow disk flushes its wall time tracked disk latency (#1224).
+let skipFsync = false;
+vi.mock("node:fs", async (original) => {
+  const fs = await original<typeof import("node:fs")>();
+  return { ...fs, fsyncSync: vi.fn((fd: number) => (skipFsync ? undefined : fs.fsyncSync(fd))) };
+});
 
 const roots: string[] = [],
   children: ChildProcess[] = [],
@@ -135,15 +144,23 @@ it("does not resample a CLI fixture when a writer blocks capture after provision
 });
 
 it("provisions 128 CLI fixtures with at most eight concurrent allocations", async () => {
-  await Promise.all(
-    Array.from({ length: 8 }, async () => {
-      for (let trial = 0; trial < 16; trial++) {
-        const f = await fixture();
-        expect(f.owner.snapshot.phase).toBe("open");
-        expect(f.owner.snapshot.roots.map((root) => root.path)).toEqual([f.workspace]);
-      }
-    }),
-  );
+  skipFsync = true;
+  vi.mocked(fsyncSync).mockClear();
+  try {
+    await Promise.all(
+      Array.from({ length: 8 }, async () => {
+        for (let trial = 0; trial < 16; trial++) {
+          const f = await fixture();
+          expect(f.owner.snapshot.phase).toBe("open");
+          expect(f.owner.snapshot.roots.map((root) => root.path)).toEqual([f.workspace]);
+        }
+      }),
+    );
+  } finally {
+    skipFsync = false;
+  }
+  // Provisioning still reached every flush; only disk latency is off the timed path.
+  expect(vi.mocked(fsyncSync).mock.calls.length).toBeGreaterThanOrEqual(128 * 9);
 });
 
 const cli = resolve("packages/cli/src/main.ts");

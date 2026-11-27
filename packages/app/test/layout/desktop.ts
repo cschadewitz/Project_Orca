@@ -1,6 +1,9 @@
 /**
  * A disposable Linux desktop for the layout spec: Xvfb, a private session bus and an unlocked
- * GNOME keyring, so Config > Launch work can keep a run intent and render its form.
+ * GNOME keyring, so Config > Launch work can keep a run intent and render its form. On Windows
+ * (#1112's scaling audit on a GitHub-hosted Windows runner) the runner's own session is the
+ * desktop and DPAPI is the key store, so there is nothing to start: only a temp root and an
+ * environment without a daemon named in it.
  *
  * Lighter than `../native-linux/session.ts`: that one drives a *locked* keyring and its
  * unlock prompt with xdotool, which this spec has no use for. Everything lives under one temp
@@ -15,6 +18,13 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 
 const execute = promisify(execFile);
+
+/**
+ * The larger window size the spec measures at. 1280×900 under Xvfb, whose screen is larger
+ * still. A GitHub-hosted Windows runner's screen is 1024×768, and Windows keeps a window inside
+ * it, so there the larger size is one that fits with its frame.
+ */
+export const LARGE: readonly [number, number] = process.platform === "win32" ? [1000, 680] : [1280, 900];
 const TOOLS = ["Xvfb", "dbus-daemon", "gnome-keyring-daemon"];
 
 async function until<T>(what: string, probe: () => Promise<T | undefined>, timeout = 15_000): Promise<T> {
@@ -44,6 +54,14 @@ export class Desktop {
   ) {}
 
   static async start(): Promise<Desktop> {
+    if (process.platform === "win32") {
+      const env = Object.fromEntries(
+        Object.entries(process.env).filter(
+          (entry): entry is [string, string] => entry[1] !== undefined && !entry[0].startsWith("ORCA_DAEMON_"),
+        ),
+      );
+      return new Desktop(await mkdtemp(join(tmpdir(), "orca-layout-")), env);
+    }
     const missing: string[] = [];
     for (const tool of TOOLS)
       await execute("sh", ["-c", `command -v ${tool}`]).catch(() => {

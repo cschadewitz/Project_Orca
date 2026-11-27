@@ -155,7 +155,7 @@ describe("the Windows launcher and PATH edit", () => {
     );
     expect(nsh).toMatch(/!macro customInstall\s+!insertmacro orcaCliPath "add"\s+!macroend/);
     expect(nsh).toMatch(
-      /!macro customUnInstall[\s\S]*\$\{ifNot\} \$\{isUpdated\}\s+!insertmacro orcaCliPath "remove"\s+\$\{endIf\}\s+!macroend/,
+      /!macro customUnInstall[\s\S]*\$\{ifNot\} \$\{isUpdated\}\s+!insertmacro orcaCliPath "remove"\s+(?:(?!\$\{)[^\n]*\n\s*)*\$\{endIf\}\s+!macroend/,
     );
     // WM_SETTINGCHANGE to every top-level window, so new terminals see the change.
     expect(nsh).toContain('SendMessage 0xFFFF 0x1A 0 "STR:Environment" /TIMEOUT=5000');

@@ -7,12 +7,17 @@
  */
 import { useEffect, useRef, useState, type JSX } from "react";
 import type {
+  AgentSignInView,
+  HostAgentView,
+  LoginApprovalView,
   RemoteProfileInput,
   RemoteProfilesBridge,
   RemoteProfileView,
   ServerInspectionView,
   ServerSetupStepView,
   ServerSetupView,
+  TailnetMachinesView,
+  TailnetMachineView,
 } from "../../../src/daemon-connection.js";
 import { useTransientLayer } from "../layers-context.js";
 import { Button, Chip, ConfigField, Text, textClass } from "../ui/index.js";
@@ -29,6 +34,10 @@ interface Draft {
   serverCommand: string;
   serverConfig: string;
   readOnly: boolean;
+  /** Picked from the tailnet (#1226): bound to that node. Absent on an edit, which keeps it. */
+  tailnet?: { node: string; name: string };
+  /** An edit of a profile bound to a tailnet node: shown as such, and the binding is kept. */
+  bound?: boolean;
 }
 const EMPTY: Draft = {
   name: "",
@@ -79,8 +88,33 @@ function toInput(draft: Draft): RemoteProfileInput | string {
     ...(serverCommand ? { serverCommand } : {}),
     ...(serverConfig ? { serverConfig } : {}),
     ...(draft.readOnly ? { readOnly: true } : {}),
+    ...(draft.tailnet ? { tailnet: draft.tailnet } : {}),
   };
 }
+
+/** `user@host` with its host replaced, keeping the user the person typed. */
+export function withHost(destination: string, host: string): string {
+  const at = destination.lastIndexOf("@");
+  return at > 0 ? `${destination.slice(0, at)}@${host}` : host;
+}
+
+/** Why a machine cannot be picked, or undefined when it can. */
+export function machineUnavailable(machine: TailnetMachineView, settingUp: boolean): string | undefined {
+  if (!machine.online) return "offline";
+  if (settingUp && !machine.hostSupported) return "not Linux or Windows";
+  return undefined;
+}
+
+const TAILNET_STATE: Record<Exclude<TailnetMachinesView["state"], "running" | "off">, string> = {
+  absent: "Tailscale is not installed on this computer, so no machines from a tailnet are listed.",
+  stopped: "Tailscale is not connected on this computer, so no machines from your tailnet are listed.",
+  "signed-out": "Tailscale is signed out on this computer, so no machines from your tailnet are listed.",
+  error: "Tailscale's list of machines could not be read on this computer.",
+};
+
+/** A Windows server whose account may not register a boot task (#1238): what that means for it. */
+const LOGON_ONLY =
+  " Its daemon starts when its account logs on there, not at boot, because that account may not register a task that starts at boot. To start it at boot, set it up again while that account is an administrator there (an administrator's SSH sessions on Windows are elevated).";
 
 /** What a setup run came to, in a sentence; `alert` when the person has something to fix. */
 export function setupSummary(
@@ -96,7 +130,7 @@ export function setupSummary(
             alert: true,
           }
         : {
-            text: `${profile.name} is an ORCA server (v${setup.version ?? "?"}), and this computer is signed in.`,
+            text: `${profile.name} is an ORCA server (v${setup.version ?? "?"}), and this computer is signed in.${setup.startsAt === "logon" ? LOGON_ONLY : ""}`,
             alert: false,
           };
     case "refused":
@@ -164,11 +198,15 @@ export function ConnectionProfiles({
   const [steps, setSteps] = useState<ServerSetupStepView[]>([]);
   /** What the server was found to be, waiting for the person to confirm the setup. */
   const [confirming, setConfirming] = useState<{
-    profile: Pick<RemoteProfileView, "id" | "name" | "destination">;
+    profile: Pick<RemoteProfileView, "id" | "name" | "destination" | "tailnet">;
     inspection: ServerInspectionView;
   }>();
   /** The editor was opened by "Add a machine": saving it also sets the server up. */
   const [addingMachine, setAddingMachine] = useState(false);
+  /** Tailscale SSH waits for the person to approve a connection (#1228). */
+  const [approval, setApproval] = useState<LoginApprovalView>();
+  /** The profile whose server's agents are shown (#1236). */
+  const [agentsFor, setAgentsFor] = useState<string>();
   const live = useRef(true);
   /** The armed removal row: Keep takes focus when it appears (RULES.md 17). */
   const armedRow = useRef<HTMLDivElement>(null);
@@ -179,6 +217,7 @@ export function ConnectionProfiles({
       live.current = false;
     };
   }, [profiles]);
+  useEffect(() => profiles.onLoginApproval?.(setApproval), [profiles]);
   // Esc disarms the row first, through the layer stack, before it would close the dialog.
   useTransientLayer(armed !== undefined, { name: "daemon-profile-remove", close: () => setArmed(undefined) });
   useEffect(() => {
@@ -195,6 +234,7 @@ export function ConnectionProfiles({
     const result = await action();
     if (!live.current) return;
     setWorking(false);
+    setApproval(undefined);
     if (!result.ok) {
       setError(result.message);
       return;
@@ -212,7 +252,7 @@ export function ConnectionProfiles({
     else setNotice(summary.text);
   };
   /** First, read only: what the person confirms. Nothing is enrolled or installed yet. */
-  const setUp = (profile: Pick<RemoteProfileView, "id" | "name" | "destination">) => {
+  const setUp = (profile: Pick<RemoteProfileView, "id" | "name" | "destination" | "tailnet">) => {
     if (!inspectServer || !setUpServer) return;
     setConfirming(undefined);
     setSteps([]);
@@ -224,14 +264,17 @@ export function ConnectionProfiles({
       },
     );
   };
-  const confirmSetUp = () => {
+  const confirmSetUp = (carryBundle: boolean) => {
     if (!setUpServer || !confirming) return;
     const { profile, inspection } = confirming;
     setConfirming(undefined);
     setSettingUp(profile.id);
     setSteps([]);
     void run(
-      () => setUpServer(profile.id, inspection.confirmation),
+      () =>
+        profile.tailnet
+          ? setUpServer(profile.id, inspection.confirmation, { carryBundle })
+          : setUpServer(profile.id, inspection.confirmation),
       (view) => report(profile, view),
     ).finally(() => live.current && setSettingUp(undefined));
   };
@@ -259,6 +302,7 @@ export function ConnectionProfiles({
             {current === profile.id ? " · connected" : ""}
           </Text>
           <div className="orca-chips">
+            {profile.tailnet && <Chip>On your tailnet</Chip>}
             <Chip>{credentialChip(profile)}</Chip>
             {profile.pendingRevocations ? (
               <Chip>
@@ -332,6 +376,16 @@ export function ConnectionProfiles({
                   Set up ORCA server
                 </Button>
               )}
+              {profiles.hostAgents && profile.hostKeyPinned && (
+                <Button
+                  size="sm"
+                  disabled={disabled}
+                  aria-expanded={agentsFor === profile.id}
+                  onClick={() => setAgentsFor(agentsFor === profile.id ? undefined : profile.id)}
+                >
+                  Agents
+                </Button>
+              )}
               {profile.credentialImported && (
                 <Button
                   size="sm"
@@ -359,6 +413,7 @@ export function ConnectionProfiles({
                     serverCommand: profile.serverCommand ?? "",
                     serverConfig: profile.serverConfig ?? "",
                     readOnly: profile.readOnly ?? false,
+                    ...(profile.tailnet ? { bound: true } : {}),
                   })
                 }
               >
@@ -386,10 +441,20 @@ export function ConnectionProfiles({
           )}
         </div>
       ))}
+      {agentsFor && profiles.hostAgents && (
+        <HostAgents
+          key={agentsFor}
+          profiles={profiles}
+          profileId={agentsFor}
+          name={list.find((p) => p.id === agentsFor)?.name ?? "this machine"}
+        />
+      )}
       {editing ? (
         <ProfileEditor
           draft={editing}
           disabled={disabled}
+          settingUp={addingMachine}
+          {...(profiles.tailnetMachines ? { tailnetMachines: profiles.tailnetMachines } : {})}
           cancel={() => {
             setEditing(undefined);
             setAddingMachine(false);
@@ -440,14 +505,16 @@ export function ConnectionProfiles({
         <Text style="caption" as="p">
           Saving checks the machine over SSH and shows you its host keys, the account and what will be installed. Once
           you confirm, it sets the machine up as a managed ORCA server: this version&apos;s signed server bundle and a
-          systemd user service, then signs this computer in. It refuses a machine that already has an ORCA it did not
-          install. Linux x64 with Python 3.8 or newer.
+          systemd user service (on Windows, a scheduled task), then signs this computer in. It refuses a machine that
+          already has an ORCA it did not install. Linux x64 with Python 3.8 or newer, or Windows x64 with its OpenSSH
+          Server on.
         </Text>
       )}
       {confirming && (
         <ServerConfirmation
           inspection={confirming.inspection}
           name={confirming.profile.name}
+          carries={confirming.profile.tailnet !== undefined && confirming.inspection.os !== "windows"}
           disabled={disabled}
           confirm={confirmSetUp}
           cancel={() => setConfirming(undefined)}
@@ -471,6 +538,22 @@ export function ConnectionProfiles({
           ))}
         </ul>
       )}
+      {approval && (
+        <div className="orca-connection-stack" role="alert">
+          <Text style="caption" as="p">
+            Tailscale SSH is waiting for you to approve the connection to{" "}
+            {list.find((p) => p.id === approval.profileId)?.name ?? "this machine"}. The page is on{" "}
+            <span className={textClass("mono-id")}>{approval.host}</span>.
+          </Text>
+          {profiles.openLoginApproval && (
+            <div className="orca-dialog__actions">
+              <Button size="sm" tone="primary" onClick={() => void profiles.openLoginApproval?.(approval.profileId)}>
+                Open approval page
+              </Button>
+            </div>
+          )}
+        </div>
+      )}
       {error && (
         <Text style="caption" as="p" role="alert">
           {error}
@@ -486,6 +569,182 @@ export function ConnectionProfiles({
 }
 
 /**
+ * The agents ORCA can put on a managed server (#1236): each one's pinned version, whether that
+ * exact install is there and whether it is signed in. Install carries the pinned packages from
+ * this computer and shows the server config that runs the agent; Sign in runs the agent's own
+ * device-code sign-in there, and shows the page's host and the code. Main opens the page. An
+ * agent the person signs in themselves (Claude Code) gets the command to run there instead.
+ */
+export function HostAgents({
+  profiles,
+  profileId,
+  name,
+}: {
+  profiles: RemoteProfilesBridge;
+  profileId: string;
+  name: string;
+}): JSX.Element {
+  const [agents, setAgents] = useState<HostAgentView[]>();
+  const [working, setWorking] = useState<string>();
+  const [error, setError] = useState<string>();
+  const [settings, setSettings] = useState<{ agent: string; text: string }>();
+  const [prompt, setPrompt] = useState<AgentSignInView>();
+  const live = useRef(true);
+  const refresh = async () => {
+    const result = await profiles.hostAgents?.(profileId);
+    if (!live.current || !result) return;
+    if (result.ok) setAgents(result.value);
+    else setError(result.message);
+  };
+  useEffect(() => {
+    live.current = true;
+    void refresh();
+    return () => {
+      live.current = false;
+    };
+  }, [profileId]);
+  useEffect(
+    () =>
+      profiles.onAgentSignIn?.((next) => {
+        if (next.profileId === profileId) setPrompt(next);
+      }),
+    [profiles, profileId],
+  );
+  const act = async (
+    agent: string,
+    action: () => Promise<{ ok: true } | { ok: false; message: string } | undefined> | undefined,
+  ) => {
+    setWorking(agent);
+    setError(undefined);
+    const result = await action();
+    if (!live.current) return;
+    setWorking(undefined);
+    setPrompt(undefined);
+    if (result && !result.ok) setError(result.message);
+    await refresh();
+  };
+  return (
+    <div className="orca-connection-stack" role="group" aria-label={`Agents on ${name}`}>
+      <Text style="caption" as="p">
+        Agents on {name}. Installing copies the version this ORCA pins from this computer; signing in uses the
+        agent&apos;s own sign-in, approved in your browser, and the sign-in stays on that machine.
+      </Text>
+      {!agents && !error && (
+        <Text style="caption" as="p" role="status">
+          Checking the machine…
+        </Text>
+      )}
+      {agents?.map((agent) => (
+        <div key={agent.agent} className="orca-dialog__actions">
+          <Text style="caption" as="span">
+            {agent.name} {agent.version}:{" "}
+            {agent.problem
+              ? `not usable (${agent.problem})`
+              : !agent.installed
+                ? "not installed"
+                : agent.signIn === "yourself"
+                  ? "installed, you sign it in yourself"
+                  : agent.signedIn === "yes"
+                    ? "signed in"
+                    : agent.signedIn === "no"
+                      ? "not signed in"
+                      : "sign-in unknown"}
+          </Text>
+          {!agent.installed && !agent.problem && (
+            <Button
+              size="sm"
+              disabled={working !== undefined}
+              onClick={() =>
+                void act(agent.agent, async () => {
+                  const result = await profiles.installHostAgent?.(profileId, agent.agent);
+                  if (result?.ok) setSettings({ agent: agent.agent, text: result.value.settings });
+                  return result;
+                })
+              }
+            >
+              {working === agent.agent ? "Installing…" : "Install"}
+            </Button>
+          )}
+          {agent.installed && agent.signIn === "device-code" && agent.signedIn !== "yes" && (
+            <Button
+              size="sm"
+              disabled={working !== undefined}
+              onClick={() => void act(agent.agent, () => profiles.signInHostAgent?.(profileId, agent.agent))}
+            >
+              {working === agent.agent ? "Signing in…" : "Sign in"}
+            </Button>
+          )}
+        </div>
+      ))}
+      {agents
+        ?.filter((agent) => agent.installed && agent.signIn === "yourself")
+        .map((agent) => (
+          <div key={`${agent.agent}-sign-in`} className="orca-connection-stack">
+            <Text style="caption" as="p">
+              ORCA does not sign {agent.name} in. Sign in with your own account on {name}: connect to it (for example
+              with tailscale ssh) and run{agent.signInCommand ? ":" : " its auth login."}
+            </Text>
+            {agent.signInCommand && (
+              <pre className={textClass("mono-id")} aria-label={`Sign-in command for ${agent.agent}`}>
+                {agent.signInCommand}
+              </pre>
+            )}
+          </div>
+        ))}
+      {prompt && (
+        <div className="orca-connection-stack" role="alert">
+          <Text style="caption" as="p">
+            {prompt.code ? (
+              <>
+                Enter the code <span className={textClass("mono-id")}>{prompt.code}</span>
+                {prompt.host ? (
+                  <>
+                    {" "}
+                    on <span className={textClass("mono-id")}>{prompt.host}</span>
+                  </>
+                ) : null}
+                , then wait here.
+              </>
+            ) : (
+              <>
+                Sign in on <span className={textClass("mono-id")}>{prompt.host}</span>, then wait here.
+              </>
+            )}
+          </Text>
+          {prompt.host && profiles.openAgentSignIn && (
+            <div className="orca-dialog__actions">
+              <Button
+                size="sm"
+                tone="primary"
+                onClick={() => void profiles.openAgentSignIn?.(prompt.profileId, prompt.agent, prompt.attempt)}
+              >
+                Open sign-in page
+              </Button>
+            </div>
+          )}
+        </div>
+      )}
+      {settings && (
+        <div className="orca-connection-stack">
+          <Text style="caption" as="p">
+            To run it there, add this to the server&apos;s orca.config.yaml (Config &gt; Raw after connecting), then
+            apply it:
+          </Text>
+          <pre className={textClass("mono-id")} aria-label={`Server config for ${settings.agent}`}>
+            {settings.text}
+          </pre>
+        </div>
+      )}
+      {error && (
+        <Text style="caption" as="p" role="alert">
+          {error}
+        </Text>
+      )}
+    </div>
+  );
+}
+
+/**
  * Everything a setup is confirmed for (#881 review), as the read-only inspection found it: the
  * host keys (not trusted for the profile until this is confirmed), the account it runs as,
  * and what it will install and do.
@@ -493,26 +752,32 @@ export function ConnectionProfiles({
 function ServerConfirmation({
   inspection,
   name,
+  carries,
   disabled,
   confirm,
   cancel,
 }: {
   inspection: ServerInspectionView;
   name: string;
+  /** A machine on the tailnet: this computer can carry the bundle to it (#1234). */
+  carries: boolean;
   disabled: boolean;
-  confirm(this: void): void;
+  confirm(this: void, carryBundle: boolean): void;
   cancel(this: void): void;
 }): JSX.Element {
   const { fingerprints } = inspection;
+  const [carry, setCarry] = useState(true);
   return (
     <div className="orca-connection-stack" role="group" aria-label="Confirm server setup">
       <Text style="label-strong" as="p">
         Set up {name} as an ORCA server?
       </Text>
       <Text style="caption" as="p">
-        {inspection.firstUse
-          ? "This server has not been connected to before. Check that these host keys are the server's own (ssh-keygen -lf on the server) before you confirm: confirming pins them."
-          : "The server presented the host keys pinned for this profile."}
+        {inspection.advertised
+          ? "Your tailnet's coordination server advertises these host keys for this machine, and the machine presented them. Confirming pins them. Tailnet Lock does not sign them."
+          : inspection.firstUse
+            ? "This server has not been connected to before. Check that these host keys are the server's own (ssh-keygen -lf on the server) before you confirm: confirming pins them."
+            : "The server presented the host keys pinned for this profile."}
       </Text>
       <ul aria-label="Host keys">
         {fingerprints.server.map((key) => (
@@ -535,14 +800,35 @@ function ServerConfirmation({
         {inspection.current
           ? `verify and repair ORCA ${inspection.current} in ${inspection.root}`
           : `install ORCA ${inspection.version} from its signed server bundle in ${inspection.root}`}
-        , enable and start its systemd user service (with lingering, so it runs without a login), then sign this
-        computer in.
+        {inspection.os === "windows"
+          ? ", register and start its scheduled task (\\ORCA\\orca-server: at boot, so it runs without a login, where the account may register that; otherwise at the account's logon, and the setup says so), then sign this computer in."
+          : ", enable and start its systemd user service (with lingering, so it runs without a login), then sign this computer in."}
       </Text>
+      {carries && (
+        <ConfigField
+          label="Bundle"
+          path="setup.carryBundle"
+          help="For a machine with no internet access. Turn this off to have the machine download and verify the bundle itself, for example when this computer says it does not trust Sigstore's current root yet."
+        >
+          {(control) => (
+            <label className={textClass("caption")}>
+              <input
+                {...control}
+                type="checkbox"
+                checked={carry}
+                disabled={disabled}
+                onChange={(event) => setCarry(event.target.checked)}
+              />
+              Copy the signed bundle from this computer
+            </label>
+          )}
+        </ConfigField>
+      )}
       <div className="orca-dialog__actions">
         <Button size="sm" onClick={cancel}>
           Cancel
         </Button>
-        <Button size="sm" tone="primary" disabled={disabled} onClick={confirm}>
+        <Button size="sm" tone="primary" disabled={disabled} onClick={() => confirm(carries && carry)}>
           Set up
         </Button>
       </div>
@@ -553,16 +839,55 @@ function ServerConfirmation({
 function ProfileEditor({
   draft: initial,
   disabled,
+  settingUp,
+  tailnetMachines,
   save,
   cancel,
 }: {
   draft: Draft;
   disabled: boolean;
+  /** Opened by Add a machine: only a machine ORCA can set up may be picked. */
+  settingUp: boolean;
+  tailnetMachines?: RemoteProfilesBridge["tailnetMachines"];
   save(this: void, draft: Draft): void;
   cancel(this: void): void;
 }): JSX.Element {
   const [draft, setDraft] = useState(initial);
-  const field = (key: keyof Omit<Draft, "id" | "readOnly">, label: string, help: string, mono = true) => (
+  const [tailnet, setTailnet] = useState<TailnetMachinesView>();
+  // Only a new profile picks a machine; an edit keeps the node it is bound to.
+  const picking = !initial.id && tailnetMachines !== undefined;
+  useEffect(() => {
+    if (!picking) return;
+    let current = true;
+    void tailnetMachines?.().then((result) => current && result.ok && setTailnet(result.value));
+    return () => {
+      current = false;
+    };
+  }, [picking, tailnetMachines]);
+  const bound = draft.tailnet !== undefined || draft.bound === true;
+  const pick = (node: string) => {
+    const machine = tailnet?.state === "running" ? tailnet.machines.find((m) => m.node === node) : undefined;
+    if (!machine) {
+      const { tailnet: _unbound, ...rest } = draft;
+      void _unbound;
+      setDraft(rest);
+      return;
+    }
+    setDraft({
+      ...draft,
+      name: draft.name.trim() ? draft.name : machine.hostName,
+      destination: withHost(draft.destination.trim(), machine.name),
+      jumpDestination: "",
+      jumpPort: "",
+      tailnet: { node: machine.node, name: machine.name },
+    });
+  };
+  const field = (
+    key: keyof Omit<Draft, "id" | "readOnly" | "tailnet" | "bound">,
+    label: string,
+    help: string,
+    mono = true,
+  ) => (
     <ConfigField label={label} path={`profiles.${key}`} help={help}>
       {(control) => (
         <input
@@ -577,12 +902,55 @@ function ProfileEditor({
   );
   return (
     <div className="orca-connection-stack" role="group" aria-label={initial.id ? "Edit profile" : "New profile"}>
+      {picking && tailnet && tailnet.state !== "off" && tailnet.state !== "running" && (
+        <Text style="caption" as="p">
+          {TAILNET_STATE[tailnet.state]}
+        </Text>
+      )}
+      {picking && tailnet?.state === "running" && (
+        <ConfigField
+          label="Machine on your tailnet"
+          path="profiles.tailnet"
+          help={
+            settingUp
+              ? "A Linux machine that runs Tailscale. With Tailscale SSH on, its host keys come from your tailnet; nothing else needs to be installed there."
+              : "Optional. The profile follows the machine if it is renamed or its address changes."
+          }
+        >
+          {(control) => (
+            <select
+              {...control}
+              className={`orca-input ${textClass("mono-id")}`}
+              value={draft.tailnet?.node ?? ""}
+              disabled={disabled}
+              onChange={(event) => pick(event.target.value)}
+            >
+              <option value="">None: enter the server</option>
+              {tailnet.machines.map((machine) => {
+                const unavailable = machineUnavailable(machine, settingUp);
+                return (
+                  <option key={machine.node} value={machine.node} disabled={unavailable !== undefined}>
+                    {machine.name}
+                    {unavailable ? ` (${unavailable})` : machine.sharedIn ? " (shared in)" : ""}
+                  </option>
+                );
+              })}
+            </select>
+          )}
+        </ConfigField>
+      )}
       {field("name", "Name", "How this daemon is named in the app.", false)}
-      {field("destination", "Server", "user@host, as you would pass it to ssh.")}
+      {field(
+        "destination",
+        "Server",
+        bound
+          ? "user@machine. The machine stays the one picked from your tailnet."
+          : "user@host, as you would pass it to ssh.",
+      )}
       {field("sshPort", "SSH port", "Leave empty for 22.")}
       {field("identityFile", "Key file", "Optional full path to a private key. Empty: the keys your SSH agent offers.")}
-      {field("jumpDestination", "Jump host", "Optional user@host to reach the server through.")}
-      {field("jumpPort", "Jump host SSH port", "Leave empty for 22.")}
+      {!bound && field("jumpDestination", "Jump host", "Optional user@host to reach the server through.")}
+      {!bound && field("jumpPort", "Jump host SSH port", "Leave empty for 22.")}
       {field("remotePort", "Daemon port", "The daemon's port on the server's loopback. Default 6722.")}
       {field(
         "serverCommand",
