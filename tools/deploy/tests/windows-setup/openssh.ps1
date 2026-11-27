@@ -82,6 +82,16 @@ try {
     $adapters = Get-OrcaOtherAdapters
     Microsoft.PowerShell.Utility\Write-Host "      adapters: $($adapters -join ', ')"
     Assert ($adapters.Count -gt 0) "no network adapters found"
+    # For the record: which of them the firewall can name one by one, and where each comes from.
+    foreach ($one in $adapters) {
+      $probeName = "ORCA-test-probe-$([guid]::NewGuid().ToString('N'))"
+      $result = "ok"
+      try { $null = New-NetFirewallRule -PolicyStore PersistentStore -Name $probeName -DisplayName "ORCA probe" -Direction Inbound -Action Block -Protocol TCP -LocalPort 22 -InterfaceAlias $one -Enabled False } catch { $result = $_.Exception.Message.Trim() }
+      Remove-NetFirewallRule -Name $probeName -PolicyStore PersistentStore -ErrorAction SilentlyContinue
+      Microsoft.PowerShell.Utility\Write-Host "      '$one': $result"
+    }
+    Microsoft.PowerShell.Utility\Write-Host "      $(Get-NetAdapter -IncludeHidden | Select-Object Name, Status, Virtual, Hidden, InterfaceDescription | ConvertTo-Json -Compress)"
+    Microsoft.PowerShell.Utility\Write-Host "      $(Get-NetIPInterface | Select-Object InterfaceAlias, AddressFamily, ConnectionState | ConvertTo-Json -Compress)"
     $name = "ORCA-test-edge-$([guid]::NewGuid().ToString('N'))"
     try {
       New-OrcaEdgeRule $name $adapters
