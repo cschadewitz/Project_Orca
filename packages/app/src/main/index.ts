@@ -87,6 +87,7 @@ import {
   type TailnetMachinesView,
 } from "../daemon-connection.js";
 import { tailnetEnabled } from "@orca/protocol/tailnet";
+import { windowsSshBootstrap } from "@orca/protocol/server-setup";
 import { isLoopbackDaemon, LocalDaemonToken } from "../client/auth.js";
 import { PreferencesFile } from "../preferences/preferences-file.js";
 import type { Preferences, ThemePreference } from "../preferences/schema.js";
@@ -1566,6 +1567,9 @@ ipcMain.handle("orca:profiles.tailnetMachines", () =>
     const read = await remoteProfiles.tailnetMachines();
     if (read.state !== "running") return { state: read.state, ...(read.detail ? { detail: read.detail } : {}) };
     const { snapshot } = read;
+    const windows = snapshot.peers.some((peer) => peer.os.toLowerCase() === "windows")
+      ? windowsSshBootstrap(serverSetupScripts(), app.getVersion())
+      : undefined;
     return {
       state: "running",
       ...(snapshot.tailnetName ? { tailnetName: snapshot.tailnetName } : {}),
@@ -1578,6 +1582,9 @@ ipcMain.handle("orca:profiles.tailnetMachines", () =>
         tailscaleSsh: peer.tailscaleSsh,
         sharedIn: peer.sharedIn,
         hostSupported: peer.hostSupported,
+        ...(windows && peer.os.toLowerCase() === "windows"
+          ? { windowsSsh: { command: windows.command, sha256: windows.sha256 } }
+          : {}),
       })),
     };
   }),

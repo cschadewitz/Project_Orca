@@ -3,7 +3,7 @@
  * tailnet, ssh is checked against the host keys the tailnet advertises (#1227), and the profile
  * is bound to the node. The transport is a fake that behaves like the real one about pins.
  */
-import { generateKeyPairSync } from "node:crypto";
+import { createHash, generateKeyPairSync } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -193,9 +193,27 @@ describe("orca remote add --tailnet", () => {
       version: "0.9.0",
       tailnet: tailnet({ OS: "windows", sshHostKeys: undefined }),
     });
-    expect(errs.join("\n")).toContain("run orca-windows-ssh.ps1 on it from an administrator PowerShell");
+    expect(errs.join("\n")).toContain(
+      "run the line orca remote windows-ssh prints on it, in an administrator PowerShell",
+    );
     expect(errs.join("\n")).not.toContain("sudo tailscale");
     expect(lines.join("\n")).toMatch(/\(not pinned yet\)/);
+  });
+
+  it("prints the Windows OpenSSH bootstrap line bound to this checkout's own copy (#1238)", async () => {
+    const dir = scripts();
+    writeFileSync(join(dir, "orca-windows-ssh.ps1"), "Write-Host 'bootstrap'\n");
+    const { context, lines, errs } = ctx(["windows-ssh"]);
+    expect(await remoteCommand(context, { scripts: dir, version: "0.9.0" })).toBe(0);
+    const sha = createHash("sha256").update("Write-Host 'bootstrap'\n").digest("hex").toUpperCase();
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("/v0.9.0/tools/deploy/orca-windows-ssh.ps1");
+    expect(lines[0]).toContain(`.Hash -eq '${sha}'`);
+    expect(errs.join("\n")).toContain(sha);
+    expect(errs.join("\n")).toContain("asks before making any");
+    const json = ctx(["windows-ssh"], { json: true });
+    expect(await remoteCommand(json.context, { scripts: dir, version: "0.9.0" })).toBe(0);
+    expect(JSON.parse(json.lines[0]!)).toMatchObject({ sha256: sha, command: lines[0] });
   });
 
   it("never takes another tailnet's word for a shared-in machine's key", async () => {

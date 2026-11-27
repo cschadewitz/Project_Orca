@@ -80,12 +80,16 @@ it("gives the client's Windows setup session longer than every download deadline
   expect(minutes * 60).toBeGreaterThanOrEqual(downloads + 15 * 60);
 });
 
-it("documents the OpenSSH Server bootstrap line at the path it ships from, and tests it on Windows", () => {
+it("documents the OpenSSH Server bootstrap as a checked download, ships it, and tests it on Windows", () => {
   const docs = read("docs/MULTI-MACHINE.md");
-  const line = docs.match(/^irm (https:\/\/\S+) \| iex$/m)?.[1];
-  expect(line).toBe(
-    "https://raw.githubusercontent.com/cschadewitz/Project_Orca/v0.9.0/tools/deploy/orca-windows-ssh.ps1",
-  );
+  expect(docs).toContain("orca-cli remote windows-ssh");
+  // Never a download piped into an elevated session.
+  expect(docs).not.toMatch(/\|\s*iex\b|Invoke-Expression/);
+  const builder = parse(read("packages/app/electron-builder.yml"));
+  const setup = builder.extraResources.find((entry) => entry.to === "server-setup");
+  expect(setup.filter).toContain("orca-windows-ssh.ps1");
+  // Its digest is the shipped copy's: the same bytes on every checkout.
+  expect(read(".gitattributes")).toMatch(/^tools\/deploy\/orca-windows-ssh\.ps1 text eol=lf$/m);
   expect(read("tools/deploy/orca-windows-ssh.ps1")).toContain("Windows Update");
   expect(read("tools/deploy/tests/windows-setup/run.ps1")).toContain('"openssh.ps1"');
 });

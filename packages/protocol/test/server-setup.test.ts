@@ -2,6 +2,7 @@
  * The client side of one-step server setup (#881): what the person is shown and confirms is
  * exactly what ssh would print, and the confirmation is bound to all of it.
  */
+import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -27,6 +28,8 @@ import {
   WINDOWS_COMMAND,
   WINDOWS_SETUP_SCRIPT,
   WINDOWS_SETUP_TIMEOUT_MS,
+  WINDOWS_SSH_SCRIPT,
+  windowsSshBootstrap,
 } from "../src/server-setup.js";
 
 /** The shipped setup files. */
@@ -242,6 +245,34 @@ describe("a Windows server (#1238)", () => {
     expect(inspectInvocation("linux", DEPLOY, "0.9.0", 6722).timeoutMs).toBe(INSPECT_TIMEOUT_MS);
     expect(SETUP_TIMEOUT_MS).toBe(30 * 60_000);
     expect(WINDOWS_SETUP_TIMEOUT_MS).toBeGreaterThan(SETUP_TIMEOUT_MS);
+  });
+
+  it("gives a Windows OpenSSH bootstrap line that runs the download only if it is this ORCA's own copy", () => {
+    const { command, url, sha256 } = windowsSshBootstrap(DEPLOY, "0.9.0");
+    const own = createHash("sha256")
+      .update(readFileSync(join(DEPLOY, WINDOWS_SSH_SCRIPT)))
+      .digest("hex")
+      .toUpperCase();
+    expect(sha256).toBe(own);
+    expect(url).toBe(
+      "https://raw.githubusercontent.com/cschadewitz/Project_Orca/v0.9.0/tools/deploy/orca-windows-ssh.ps1",
+    );
+    expect(command).toContain(`Invoke-WebRequest -UseBasicParsing -Uri '${url}' -OutFile $f`);
+    // Downloaded, then checked, then run: never piped into the session.
+    expect(command).not.toMatch(/\biex\b|Invoke-Expression/);
+    const check = command.indexOf(`(Get-FileHash -Algorithm SHA256 -LiteralPath $f).Hash -eq '${own}'`);
+    expect(check).toBeGreaterThan(command.indexOf("Invoke-WebRequest"));
+    expect(command.indexOf("powershell -NoProfile -ExecutionPolicy Bypass -File $f")).toBeGreaterThan(check);
+    expect(command).toContain("else { Remove-Item -LiteralPath $f;");
+    // Another copy, another digest: the line is bound to the bytes shipped beside it.
+    const other = mkdtempSync(join(tmpdir(), "orca-windows-ssh-"));
+    try {
+      writeFileSync(join(other, WINDOWS_SSH_SCRIPT), "Write-Host 'something else'\n");
+      expect(windowsSshBootstrap(other, "0.9.0").sha256).not.toBe(own);
+    } finally {
+      rmSync(other, { recursive: true, force: true });
+    }
+    expect(() => windowsSshBootstrap(DEPLOY, "0.9.0'; calc; '")).toThrow(/Not a release version/);
   });
 
   it("reports a Windows daemon started at its account's logon, not at boot", () => {

@@ -351,28 +351,39 @@ Tailscale SSH has no Windows server, so a Windows x64 host uses the OpenSSH Serv
 itself ships (#1238). ORCA does not bundle, update or reconfigure it: Windows Update installs and
 updates it, and you maintain nothing for it beyond Windows Update.
 
-**On the Windows host**, install Tailscale and sign in to your tailnet. Then run this once from an
-administrator PowerShell, with your ORCA version in place of `v0.9.0`:
+**On the Windows host**, install Tailscale and sign in to your tailnet. Then turn its OpenSSH
+Server on with the line your own ORCA gives you, run once in an administrator PowerShell there:
 
-```powershell
-irm https://raw.githubusercontent.com/cschadewitz/Project_Orca/v0.9.0/tools/deploy/orca-windows-ssh.ps1 | iex
-```
+- In the desktop app, **Add a machine…** shows it when you pick a Windows machine, with what it
+  does, and copies it for you.
+- From a source checkout, `orca-cli remote windows-ssh` prints it (`--json` for the command and
+  digest alone).
 
-To read it first, download that file and run it with
-`powershell -NoProfile -ExecutionPolicy Bypass -File orca-windows-ssh.ps1`.
+The line downloads `tools/deploy/orca-windows-ssh.ps1` from your ORCA version's tag, checks its
+SHA-256 against the copy your ORCA install ships, and runs it only if they match; otherwise it
+deletes the download and runs nothing. It never pipes a download into the session. To read the
+script first, it is in your ORCA install's `resources/server-setup/` folder, and it runs the same
+way with `powershell -NoProfile -ExecutionPolicy Bypass -File orca-windows-ssh.ps1`.
 
 - If the OpenSSH Server is already installed, starts automatically and is running, it changes
-  nothing and says so.
+  nothing, its firewall rules included, and says so. It does not then claim SSH is limited to
+  Tailscale: that policy is yours.
 - Otherwise it lists exactly what it would change and asks first. Anything but `y` changes
-  nothing ("Nothing was changed"). The changes, only those still needed:
-  1. Install the OpenSSH Server Windows feature from Windows Update, and disable the firewall
-     rule that feature adds for every network (`OpenSSH-Server-In-TCP`).
-  2. Set the `sshd` service to start automatically, and start it.
-  3. Allow inbound SSH (TCP 22) only over the Tailscale adapter, with the firewall rule
-     "ORCA: OpenSSH Server over Tailscale".
+  nothing ("Nothing was changed"). The changes, only those still needed, in this order:
+  1. Install the OpenSSH Server Windows feature from Windows Update. Its `sshd` service stays
+     stopped.
+  2. Allow inbound SSH (TCP 22) only over the Tailscale adapter, with the firewall rule
+     "ORCA: OpenSSH Server over Tailscale", and disable the rule the feature adds for every
+     network (`OpenSSH-Server-In-TCP`).
+  3. Check that SSH is then allowed over Tailscale alone, and only then set `sshd` to start
+     automatically and start it.
 - It refuses, changing nothing, outside an administrator session, without the Tailscale
-  adapter, or on a Windows too old to have the feature (before Windows 10 1809 or Windows
-  Server 2019).
+  adapter, on a Windows too old to have the feature (before Windows 10 1809 or Windows Server
+  2019), or when SSH would stay open on another network: a firewall profile that is off or
+  allows inbound connections by default, another enabled rule that allows SSH (it changes no
+  rule it did not make, and none a policy manages), or a rule by its own name with another
+  scope.
+- A step that fails stops the run before `sshd` is started; run it again to finish.
 
 **From your own machine**, add it as above (`orca-cli remote add you@desk-1 --tailnet`, or **Add
 a machine…**). Its host key is not advertised by your tailnet, so you compare the fingerprint by

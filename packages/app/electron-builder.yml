@@ -64,13 +64,15 @@ extraResources:
     filter:
       - "**/*.mjs"
   # Server setup (#881): the app sends these to a machine it makes an ORCA server (and, for
-  # agents there, #1236), so they are this build's own, never fetched.
+  # agents there, #1236), so they are this build's own, never fetched. The Windows OpenSSH
+  # bootstrap (#1238) is shipped for its digest: a Windows host runs it only if its download matches.
   - from: ../../tools/deploy
     to: server-setup
     filter:
       [
         "orca-server-setup.py",
         "orca-server-setup.ps1",
+        "orca-windows-ssh.ps1",
         "orca-release.py",
         "orca-host-agents.py",
         "host-agents.lock.json",

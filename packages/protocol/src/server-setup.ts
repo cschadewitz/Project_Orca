@@ -40,6 +40,7 @@ import {
   type RemoteResult,
   type SshTunnelOptions,
 } from "./remote-access.js";
+import { BUNDLE_REPOSITORY } from "./server-courier.js";
 import { parseAdvertisedHostKey } from "./tailnet.js";
 
 /** The two files, as shipped: `server-setup/` in a packaged app, `tools/deploy/` in a checkout. */
@@ -47,6 +48,9 @@ export const SETUP_SCRIPT = "orca-server-setup.py";
 export const SETUP_ADAPTER = "orca-release.py";
 /** The Windows setup (#1238), shipped beside them. */
 export const WINDOWS_SETUP_SCRIPT = "orca-server-setup.ps1";
+
+/** The Windows OpenSSH Server bootstrap (#1238), run by the person on the Windows machine. */
+export const WINDOWS_SSH_SCRIPT = "orca-windows-ssh.ps1";
 
 /** The server's operating system, as the setup sees it: which setup runs, and in which forms. */
 export type ServerOs = "linux" | "windows";
@@ -252,6 +256,38 @@ export function setupInvocation(
 export async function serverOs(tunnel: Pick<SetupTunnel, "exec">): Promise<ServerOs> {
   const probe = await tunnel.exec(["ver"], 30_000);
   return probe.code === 0 && /^\s*Microsoft Windows \[Version \d+\.\d+\.\d+/m.test(probe.stdout) ? "windows" : "linux";
+}
+
+/** What a person runs on a Windows machine to turn its OpenSSH Server on for ORCA (#1238). */
+export interface WindowsSshBootstrap {
+  /** One line for an administrator PowerShell. */
+  command: string;
+  /** Where it downloads the bootstrap from: this release's own tag. */
+  url: string;
+  /** The SHA-256 of the bootstrap this ORCA ships, which the download must match before it runs. */
+  sha256: string;
+}
+
+/**
+ * The line that fetches this release's `orca-windows-ssh.ps1`, runs it only when its bytes are
+ * exactly the file this ORCA ships (`dir`), and otherwise deletes it and runs nothing. The digest
+ * comes from this installation, not from where the file is downloaded.
+ */
+export function windowsSshBootstrap(dir: string, version: string): WindowsSshBootstrap {
+  if (!VERSION.test(version)) throw new Error(`Not a release version: ${version}`);
+  const sha256 = createHash("sha256")
+    .update(readFileSync(join(dir, WINDOWS_SSH_SCRIPT)))
+    .digest("hex")
+    .toUpperCase();
+  const url = `https://raw.githubusercontent.com/${BUNDLE_REPOSITORY}/v${version}/tools/deploy/${WINDOWS_SSH_SCRIPT}`;
+  const command = [
+    // Windows PowerShell 5.1 on an older Windows may not offer TLS 1.2 by itself.
+    "[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072",
+    `$f = Join-Path $env:TEMP 'orca-windows-ssh-${version}.ps1'`,
+    `Invoke-WebRequest -UseBasicParsing -Uri '${url}' -OutFile $f`,
+    `if ((Get-FileHash -Algorithm SHA256 -LiteralPath $f).Hash -eq '${sha256}') { powershell -NoProfile -ExecutionPolicy Bypass -File $f } else { Remove-Item -LiteralPath $f; Write-Host 'Not the orca-windows-ssh.ps1 this ORCA ships, so it was deleted and nothing was run.' }`,
+  ].join("; ");
+  return { command, url, sha256 };
 }
 
 /** Inspection reads the server and the release directory: a minute or two at most. */
