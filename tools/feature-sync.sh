@@ -76,7 +76,8 @@ ACTIONS_APP_ID=15368
 # on, and fails; succeeds silently when it is. It needs one active ruleset on BRANCH that
 # requires a pull request and `check (node 24)` from GitHub Actions under the strict (up to
 # date with the base) policy, with no bypass actors at all, so no credential, the merging one
-# included, can merge past it. A ruleset whose bypass list cannot be read counts as unverified.
+# included, can merge past it. When the token cannot see the bypass list, GitHub's
+# current_user_can_bypass must be "never", so at least the merging credential cannot.
 # The message names why each candidate ruleset did not qualify.
 ruleset_problem() {
   local rules id ruleset
@@ -96,8 +97,12 @@ ruleset_problem() {
     # "qualifies" counts; a jq failure or any other output leaves the ruleset unverified.
     if ! why=$(jq -r --arg id "$id" '
       if .enforcement != "active" then "ruleset \($id) is not active"
-      elif (.bypass_actors | type) != "array" then "ruleset \($id) bypass list is not visible to this token"
-      elif (.bypass_actors | length) != 0 then "ruleset \($id) has bypass actors"
+      elif (.bypass_actors | type) == "array" and (.bypass_actors | length) != 0 then "ruleset \($id) has bypass actors"
+      # A token that cannot see the bypass list (the release App cannot) still gets an answer
+      # from GitHub on whether this token itself can bypass; only "never" keeps the unattended
+      # merge under the rules. A missing answer is no answer.
+      elif (.bypass_actors | type) != "array" and .current_user_can_bypass != "never" then
+        "ruleset \($id) bypass list is not visible to this token and the token is not reported as never able to bypass"
       elif any(.rules[]; .type == "pull_request") | not then "ruleset \($id) does not require a pull request"
       else "qualifies" end' <<<"$ruleset" 2>/dev/null); then
       seen+=("ruleset $id could not be parsed"); continue
