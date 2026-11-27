@@ -83,13 +83,13 @@ it("requires explicit directory review, create and connect actions, and labels t
   ).toBeTruthy();
 });
 describe("the agent choice (#1131)", () => {
-  function review(agentChoices: FirstRunAgentChoice[]) {
+  function review(agentChoices: FirstRunAgentChoice[], id = "agent-review") {
     return {
       ok: true as const,
       result: {
         state: "review" as const,
         review: {
-          id: "agent-review",
+          id,
           project: "/P",
           workspace: "/W",
           branch: "prepared",
@@ -117,6 +117,37 @@ describe("the agent choice (#1131)", () => {
     await act(async () => fireEvent.click(sdk));
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "Create reviewed sample files" })));
     expect(f.firstRun.prepare).toHaveBeenCalledExactlyOnceWith("agent-review", "claude-sdk");
+  });
+  it("keeps a pick for a retry of the same review, and starts each new review from ACP", async () => {
+    const f = setup();
+    f.firstRun.choose
+      .mockResolvedValueOnce(review(["claude-acp", "claude-sdk", "none"], "first-review"))
+      .mockResolvedValueOnce(review(["claude-acp", "claude-sdk", "none"], "second-review"));
+    f.firstRun.prepare.mockResolvedValueOnce({
+      ok: false,
+      error: { code: "AGENT_TRANSPORT", message: "Refused once." },
+    });
+    await screen.findByText("Explicit owned directories required.");
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Choose project and empty workspace" })));
+    const sdk = () =>
+      within(screen.getByRole("group", { name: "Agent" })).getByRole<HTMLInputElement>("radio", {
+        name: /Claude Agent SDK/,
+      });
+    await act(async () => fireEvent.click(sdk()));
+    // A refused write keeps the same review, and its pick.
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Create reviewed sample files" })));
+    expect(f.firstRun.prepare).toHaveBeenLastCalledWith("first-review", "claude-sdk");
+    expect(sdk().checked).toBe(true);
+    // Other directories: a new review, which starts from ACP again.
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Choose project and empty workspace" })));
+    expect(sdk().checked).toBe(false);
+    expect(
+      within(screen.getByRole("group", { name: "Agent" })).getByRole<HTMLInputElement>("radio", {
+        name: /Claude through ACP/,
+      }).checked,
+    ).toBe(true);
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Create reviewed sample files" })));
+    expect(f.firstRun.prepare).toHaveBeenLastCalledWith("second-review", "claude-acp");
   });
   it("does not offer the SDK driver when setup did not find claude, and can write no agent", async () => {
     const f = setup();

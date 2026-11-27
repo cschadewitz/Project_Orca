@@ -44,9 +44,13 @@ export function FirstRunSection(): JSX.Element | null {
   const [state, setState] = useState<FirstRunStatus>();
   const [busy, setBusy] = useState(false);
   const [outcome, setOutcome] = useState<Outcome>();
-  /* The Claude agent the new configuration gets (#1131): ACP is selected first, and a choice the current review
-     does not offer falls back to its first one. */
-  const [agentPick, setAgent] = useState<FirstRunAgentChoice>("claude-acp");
+  /* The Claude agent the new configuration gets (#1131), picked for one directory review: a retry of the same review
+     keeps it, and every new review starts from its first choice (ACP), as does a pick the review does not offer. */
+  const [agentPick, setAgentPick] = useState<{ review: string; choice: FirstRunAgentChoice }>();
+  const agentFor = (review: { id: string; agentChoices: readonly FirstRunAgentChoice[] }): FirstRunAgentChoice =>
+    agentPick?.review === review.id && review.agentChoices.includes(agentPick.choice)
+      ? agentPick.choice
+      : review.agentChoices[0]!;
   const revision = useRef(0);
   const alive = useRef(true);
   const section = useRef<HTMLElement>(null);
@@ -193,9 +197,9 @@ export function FirstRunSection(): JSX.Element | null {
           />
           <AgentChoice
             choices={state.review.agentChoices}
-            value={state.review.agentChoices.includes(agentPick) ? agentPick : state.review.agentChoices[0]!}
+            value={agentFor(state.review)}
             disabled={busy}
-            onChange={setAgent}
+            onChange={(choice) => setAgentPick({ review: state.review.id, choice })}
           />
           <Text style="caption" as="p">
             {state.review.creation
@@ -208,11 +212,7 @@ export function FirstRunSection(): JSX.Element | null {
               disabled={busy}
               onClick={() =>
                 void perform(
-                  () =>
-                    bridge.prepare(
-                      state.review.id,
-                      state.review.agentChoices.includes(agentPick) ? agentPick : state.review.agentChoices[0],
-                    ),
+                  () => bridge.prepare(state.review.id, agentFor(state.review)),
                   "Sample files prepared. Connect the selected local workspace when ready.",
                 )
               }

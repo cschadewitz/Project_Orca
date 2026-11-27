@@ -369,7 +369,8 @@ describe.skipIf(typeof process.getuid !== "function")("dedicated first-run proje
       await mkdir(bin);
       await symlink(execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim(), join(bin, "git"));
       if (claude) {
-        await writeFile(join(bin, "claude"), `#!/bin/sh\ntouch '${ran}'\n`);
+        // A builtin redirection, so it leaves the marker under this same PATH if anything runs it.
+        await writeFile(join(bin, "claude"), `#!/bin/sh\n: > '${ran}'\n`);
         await chmod(join(bin, "claude"), 0o755);
       }
       return { bin, ran };
@@ -391,6 +392,9 @@ describe.skipIf(typeof process.getuid !== "function")("dedicated first-run proje
       expect(config.agents).toEqual([{ id: "claude", driver: "claude-agent-sdk" }]);
       expect((await new FirstRunSetup(f.deps).status()).state).toBe("prepared");
       await expect(readFile(ran)).rejects.toThrow();
+      // The marker can fire: run under the same PATH, the fake leaves it.
+      execFileSync(join(bin, "claude"), { env: { PATH: bin } });
+      expect(await readFile(ran, "utf8")).toBe("");
     });
     it("offers ACP and none without claude, refuses a choice it did not offer, and writes the ACP adapter", async () => {
       const f = await rig();
