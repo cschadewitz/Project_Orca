@@ -12,13 +12,15 @@
  *   a person, but they are not something a person is being *asked*, so they are under the
  *   fold and out of the count.
  */
-import type { LiveDecisionTarget, OpenInputView, RunSummaryView } from "@orca/protocol";
+import { elicitationOf, type LiveDecisionTarget, type OpenInputView, type RunSummaryView } from "@orca/protocol";
 import type { AlertItem } from "../../../src/bridge.js";
 
 /** Tier 1 or tier 2. The kinds are the engine's; the tiers are the design's. */
 export type WaitTier = "permission" | "gate";
 
-export const tierOf = (input: OpenInputView): WaitTier => (input.kind === "permission" ? "permission" : "gate");
+/** An agent's question (#1133) holds the agent's turn like a permission ask, so it is tier 1 too. */
+export const tierOf = (input: OpenInputView): WaitTier =>
+  input.kind === "permission" || elicitationOf(input.context) ? "permission" : "gate";
 
 /**
  * Tier 1 first, then tier 2, each keeping the daemon's longest-waiting-first order.
@@ -51,7 +53,7 @@ export function liveInputKey(target: LiveDecisionTarget): string {
 }
 /** Keep the recoverable record visible, but never offer an answer to an expired callback. */
 export function invalidateLiveInput(input: OpenInputView, invalidated: ReadonlySet<string>): OpenInputView {
-  if (input.kind !== "permission" || !input.live || !invalidated.has(liveInputKey(input.live.target))) return input;
+  if (!input.live || !invalidated.has(liveInputKey(input.live.target))) return input;
   return { ...input, live: { ...input.live, state: "expired" } };
 }
 

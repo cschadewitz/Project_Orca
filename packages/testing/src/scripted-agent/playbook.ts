@@ -30,6 +30,19 @@ export const PlaybookEntrySchema = z.object({
   askPermission: z.boolean().default(false),
   /** Stable source path to ask about independently of the attempt-specific report path. */
   permissionPath: z.string().optional(),
+  /**
+   * Ask the client a question before writing (#1133, #1169): an ACP `elicitation/create` with
+   * this message and schema (mode `form` unless given). What came back, as JSON, is the
+   * `{answer}` placeholder; a refused request is `error:<code>`.
+   */
+  elicit: z
+    .object({
+      message: z.string(),
+      mode: z.string().optional(),
+      url: z.string().optional(),
+      requestedSchema: z.record(z.string(), z.unknown()).optional(),
+    })
+    .optional(),
   /** Return this stop reason instead of end_turn. */
   stopReason: z.enum(["end_turn", "max_tokens", "max_turn_requests", "refusal", "cancelled"]).optional(),
   delayMs: z.number().int().nonnegative().optional(),
