@@ -79,9 +79,53 @@ names: no error or log carries text the CLI printed.
 
 The agent must run on ORCA's own machine for now (SSH hosts: #1130). It takes no `args` (the SDK
 builds Claude's arguments) and no `codexExecGate`. ORCA's tool hook always runs on this route,
-in process (see "ORCA's tool hook" below): `nativeToolHook: experimental` or `off` changes
-nothing, and `on` is refused when the session opens, as on the ACP route, until a hook is
-guard-qualified.
+in process (see "ORCA's tool hook" below). `nativeToolHook: experimental` additionally
+requires the Claude Code that runs to be one ORCA verified (see "Which Claude Code runs");
+`off` changes nothing, and `on` is refused when the session opens, as on the ACP route, until a
+hook is guard-qualified.
+
+### Which Claude Code runs
+
+ORCA starts `claude` itself, so it checks the program it starts (#1124), twice when the agent
+has `nativeToolHook: experimental`:
+
+1. **Before it runs at all**, even for `claude --version`: the file at the resolved real path
+   must be a regular file (checked before it is opened, so a FIFO or device never blocks the
+   check) whose image is pinned for this SDK. ORCA then does not run that path: it runs its own
+   copy of exactly the bytes it hashed, kept read-only under `$XDG_CACHE_HOME/orca/claude-code`
+   (`~/.cache/orca/claude-code` by default) in a directory only your user can use, written once
+   per image and hashed again against the pin before every reuse (a copy that no longer matches
+   is replaced). The version probe, the auth probe and the session all run that copy, which must
+   report the pair's version. An update or replacement of your install between the check and a
+   launch therefore changes nothing that runs, and a file that is not a pinned image never runs
+   with the session's environment. The check has its own deadline (120 s, a first copy
+   included) and the session open's cancellation, and once either ends it, no probe is started.
+
+   This is a trusted cache, not isolation by the operating system: what it cannot stop is a
+   process running as your own user rewriting ORCA's copy between that hash and the launch. Such a
+   process can already read the session's environment and the daemon's memory, so no check
+   ORCA makes from that user could; the second check measures what runs again.
+2. **Once it runs**, after it has answered the SDK's `initialize` and before the session is
+   given work or its MCP servers start: ORCA hashes the image the kernel runs for that process
+   (`/proc/<pid>/exe`), checks that it is still the same process and still ORCA's own child, and
+   compares it with the same pin. This check has the open's own deadline and cancellation.
+
+Nothing Claude Code says about itself (a path, its process title) is read or run. The second
+check is a measurement of what runs, not a boundary before execution: the first is that.
+Verified pairs, Linux x64 only for now:
+
+| Claude Agent SDK | Claude Code | Image (`@anthropic-ai/claude-code-linux-x64`, `claude`) |
+| --- | --- | --- |
+| 0.3.332 | 2.1.332 | `sha256:a2df1f41bb00250992926420d0063f89b127cb81abdd284dbefb80c50ff1d026` |
+
+- **With `nativeToolHook: experimental`** an unverified Claude Code (another version, another
+  build of the same version, a wrapper, another platform) is refused before the session is
+  given any work.
+- **Otherwise** the session runs your own Claude Code whatever its version, and ORCA only logs
+  that it is not one it verified (the second check, not waited for). Such a session carries no
+  attestation claim.
+
+A pin moves only by a reviewed change with an acceptance run on the new pair.
 
 ## The session
 

@@ -51,16 +51,17 @@ exec "${process.execPath}" "${STAND_IN}" "$@"
     expect(open).not.toHaveBeenCalled();
   });
 
-  it("refuses nativeToolHook: on before anything runs, and opens with experimental: the hook runs in process (#1123)", async () => {
+  it("refuses nativeToolHook: on before anything runs, and with experimental an unverified Claude Code before it runs at all (#1123, #1124)", async () => {
     const claude = join(dir, "claude");
     const marker = join(dir, "ran");
+    const log = join(dir, "stand-in.log");
     await writeFile(
       claude,
       `#!/bin/sh
 touch "${marker}"
 if [ "$1" = "--version" ]; then echo "2.1.332 (Claude Code)"; exit 0; fi
 if [ "$1" = "auth" ]; then echo '{"loggedIn":true,"authMethod":"oauth_token","apiProvider":"firstParty"}'; exit 0; fi
-exec "${process.execPath}" "${STAND_IN}" "$@"
+STAND_IN_LOG="${log}" exec "${process.execPath}" "${STAND_IN}" "$@"
 `,
     );
     await chmod(claude, 0o755);
@@ -74,13 +75,18 @@ exec "${process.execPath}" "${STAND_IN}" "$@"
     });
     await expect(factory({ host, agent: on, cwd: dir })).rejects.toThrow(/nativeToolHook: on/);
     expect(existsSync(marker)).toBe(false);
-    const experimental = AgentSpecSchema.parse({ ...on, nativeToolHook: "experimental" });
-    const session = await factory({ host, agent: experimental, cwd: dir });
-    try {
-      expect((await session.prompt("hello")).stopReason).toBe("end_turn");
-    } finally {
-      await session.close();
-    }
+    // The version it would print is the pinned one, but the file is not a pinned image: it is
+    // refused before it is run at all, so it never sees the session's environment.
+    const experimental = AgentSpecSchema.parse({
+      ...on,
+      nativeToolHook: "experimental",
+      env: { ANTHROPIC_API_KEY: "sk-orca-1124-credential" },
+    });
+    await expect(factory({ host, agent: experimental, cwd: dir })).rejects.toThrow(
+      /its Claude Code is not one ORCA verified: .* is not a Claude Code ORCA verified .* ORCA refuses to run it at all/,
+    );
+    expect(existsSync(marker)).toBe(false);
+    expect(existsSync(log)).toBe(false);
   });
 
   it("refuses the session when claude is not signed in, before starting it", async () => {

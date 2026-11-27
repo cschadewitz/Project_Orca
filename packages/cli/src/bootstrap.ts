@@ -44,6 +44,7 @@ import {
   CLAUDE_ADAPTER_NAMES,
   claudeModePin,
   nativeToolHookNotQualified,
+  requireVerifiedClaudeSdkInstall,
   nativeToolHookRequested,
   nativeToolHookSession,
   sweepHookTelemetrySpools,
@@ -397,6 +398,11 @@ export function makeSessionFactory(
         orcaEnv: options.env ?? {},
         secrets,
         signal: options.origin?.signal,
+        // With the hook opted into, the file is checked against the pins before anything is
+        // run, and what runs is ORCA's own copy of the bytes it checked (#1124).
+        ...(options.agent.nativeToolHook === "experimental"
+          ? { verifyInstall: requireVerifiedClaudeSdkInstall(options.agent.id) }
+          : {}),
       }).catch((error: unknown) => {
         throw redactError(error, secrets.values);
       });
@@ -426,6 +432,9 @@ export function makeSessionFactory(
         withheldEnv: secrets.withheld,
         // The in-process hook's lines (#1123), stored by the engine as a native hook's are.
         toolCallTelemetry: options.agent.diagnostics?.toolCalls,
+        // The Claude Code ORCA started, attested from its own side (#1124): with the hook opted
+        // into (`experimental`) an unverified one is refused; otherwise it is logged.
+        runtimeAttestation: { required: options.agent.nativeToolHook === "experimental" },
       });
     }
     // ORCA's gate in Codex's executor path (#1026): its own route, which refuses every session

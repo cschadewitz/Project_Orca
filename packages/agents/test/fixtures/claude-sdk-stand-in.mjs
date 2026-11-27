@@ -18,6 +18,8 @@
  * `STAND_IN_MCP_EARLY=<server>` lists that in-process MCP server's tools as initialize arrives,
  * before answering it (as Claude Code may), and logs the answer as `{ mcp }`.
  * `STAND_IN_MCP_ON_END=<server>` lists them once its input has ended.
+ * `STAND_IN_CLAIM=<path>` makes it claim to be that program: its process title (so its
+ * `/proc/<pid>/cmdline`) and what it says in `initialize` and its init message name the path.
  */
 import { spawn } from "node:child_process";
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
@@ -28,6 +30,8 @@ const log = (o) => process.env.STAND_IN_LOG && appendFileSync(process.env.STAND_
 const out = (o) => process.stdout.write(JSON.stringify(o) + "\n");
 const SESSION = "stand-in-session";
 const startup = process.env.STAND_IN_STARTUP ?? "ok";
+const claim = process.env.STAND_IN_CLAIM;
+if (claim) process.title = claim;
 log({ argv: process.argv.slice(2), cwd: process.cwd(), env: process.env, pid: process.pid });
 if (startup === "exit") process.exit(3);
 
@@ -209,6 +213,7 @@ async function turn(text) {
     session_id: SESSION,
     uuid: "init",
     cwd: process.cwd(),
+    ...(claim ? { executable: claim, claude_code_path: claim } : {}),
     tools: [],
     model: "stand-in",
     permissionMode: "default",
@@ -337,6 +342,7 @@ lines.on("line", (line) => {
             hooks_applied: true,
             hook_on_failure_supported: startup !== "old",
             mcp_servers_applied: true,
+            ...(claim ? { executable: claim, path: claim } : {}),
           },
         },
       });

@@ -41,6 +41,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  # A pinned pair in CLAUDE_SDK_VERIFIED_PAIRS (claude-sdk/attestation.ts, #1124): the suite
+  # asserts this Claude Code attests.
   CLAUDE_CODE_VERSION: 2.1.332
 
 jobs:

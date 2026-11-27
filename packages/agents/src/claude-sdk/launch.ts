@@ -196,9 +196,23 @@ export interface ClaudeSdkPreflightOptions {
   timeoutMs?: number;
   signal?: AbortSignal | undefined;
   platform?: NodeJS.Platform | undefined;
+  /**
+   * Checked on the resolved `claude` before ORCA runs it at all, even for `--version` (#1124):
+   * throws to refuse it. A returned `claudeCode` is the version it must then report, and a
+   * returned `executable` is the file ORCA runs instead of the resolved one (its own copy of
+   * the verified bytes). It gets `verifyTimeoutMs` and the preflight's cancellation through
+   * `signal`; once either ends it, the preflight fails and no probe is started, whenever the
+   * check itself returns.
+   */
+  verifyInstall?:
+    | ((executable: string, signal: AbortSignal) => Promise<{ claudeCode: string; executable?: string } | undefined>)
+    | undefined;
+  /** How long `verifyInstall` gets, a first copy of the image included. Default 120 s. */
+  verifyTimeoutMs?: number | undefined;
 }
 
 export const CLAUDE_SDK_PREFLIGHT_TIMEOUT_MS = 20_000;
+export const CLAUDE_SDK_VERIFY_TIMEOUT_MS = 120_000;
 
 /** Output beyond this is not an answer `claude` gives to these two commands. */
 const MAX_OUTPUT_BYTES = 64 * 1024;
@@ -210,7 +224,12 @@ const MAX_OUTPUT_BYTES = 64 * 1024;
 export async function claudeSdkPreflight(options: ClaudeSdkPreflightOptions): Promise<ClaudeSdkPreflight> {
   const { agent, cwd } = options;
   const env = claudeSdkEnvironment(agent, options.baseEnv ?? process.env, options.orcaEnv, options.secrets);
-  const executable = await resolveClaudeExecutable(agent, env, cwd, options.platform);
+  const resolved = await resolveClaudeExecutable(agent, env, cwd, options.platform);
+  // Before it is run with the session's environment, credentials included.
+  const expected = options.verifyInstall
+    ? await verifyBounded(agent.id, resolved, options.verifyInstall, options.verifyTimeoutMs, options.signal)
+    : undefined;
+  const executable = expected?.executable ?? resolved;
   const timeoutMs = options.timeoutMs ?? CLAUDE_SDK_PREFLIGHT_TIMEOUT_MS;
   const run = (args: string[]) => runBounded(executable, args, { cwd, env, timeoutMs, signal: options.signal });
 
@@ -225,6 +244,12 @@ export async function claudeSdkPreflight(options: ClaudeSdkPreflightOptions): Pr
       `agent ${agent.id}: ${executable} --version ${versionOk ? "printed no Claude Code version" : describeFailure(version)}; ` +
         `it is not a Claude Code ORCA can run.`,
       { agentId: agent.id, executable, ...failureDetails(version) },
+    );
+  if (expected && versionNumber !== expected.claudeCode)
+    throw new OrcaError(
+      "NOT_SUPPORTED",
+      `agent ${agent.id}: ${executable} is the image ORCA verified for Claude Code ${expected.claudeCode}, but it reports ${versionNumber}; ORCA refuses it.`,
+      { agentId: agent.id, executable, expected: expected.claudeCode, reported: versionNumber },
     );
 
   const status = await run(["auth", "status", "--json"]);
@@ -261,6 +286,59 @@ export async function claudeSdkPreflight(options: ClaudeSdkPreflightOptions): Pr
     apiProvider: token(answer.apiProvider),
     env,
   };
+}
+
+/**
+ * `verify(resolved)` with a deadline and the preflight's cancellation, both of which end it
+ * through its signal and fail the preflight at once, even while the check is stuck in a call
+ * the signal cannot reach (an open on a slow file system). Its later answer is then ignored:
+ * the caller has already thrown, so no probe is started from it.
+ */
+async function verifyBounded(
+  agentId: string,
+  resolved: string,
+  verify: NonNullable<ClaudeSdkPreflightOptions["verifyInstall"]>,
+  timeoutMs: number = CLAUDE_SDK_VERIFY_TIMEOUT_MS,
+  outer: AbortSignal | undefined,
+): Promise<{ claudeCode: string; executable?: string } | undefined> {
+  const cancelled = () =>
+    new OrcaError("CANCELLED", `checking ${resolved} for agent ${agentId} was cancelled`, {
+      agentId,
+      executable: resolved,
+    });
+  if (outer?.aborted) throw cancelled();
+  const controller = new AbortController();
+  let ended: OrcaError | undefined;
+  let fail: (error: OrcaError) => void = () => undefined;
+  const stopped = new Promise<never>((_, reject) => (fail = reject));
+  const end = (error: OrcaError) => {
+    if (ended) return;
+    ended = error;
+    controller.abort();
+    fail(error);
+  };
+  const timer = setTimeout(
+    () =>
+      end(
+        new OrcaError(
+          "AGENT_TRANSPORT",
+          `agent ${agentId}: checking ${resolved} against ORCA's verified Claude Code took longer than ${Math.round(timeoutMs / 1000)} s; ORCA does not run it.`,
+          { agentId, executable: resolved, reason: "verify-timeout" },
+        ),
+      ),
+    timeoutMs,
+  );
+  const onAbort = () => end(cancelled());
+  outer?.addEventListener("abort", onAbort, { once: true });
+  try {
+    const result = await Promise.race([verify(resolved, controller.signal), stopped]);
+    if (ended) throw ended;
+    return result;
+  } finally {
+    clearTimeout(timer);
+    outer?.removeEventListener("abort", onAbort);
+    stopped.catch(() => undefined);
+  }
 }
 
 /** A Claude Code version number at the start of `claude --version`. */

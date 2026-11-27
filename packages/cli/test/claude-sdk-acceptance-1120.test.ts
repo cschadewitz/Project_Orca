@@ -25,9 +25,22 @@
  *   hooks do not run and its permission rules do not apply;
  * - an ORCA-run MCP server is served to Claude in process (#1125): the person is asked about the
  *   tool call once, ORCA's relay runs the real server, and a checkout's `.mcp.json` does not load;
+ * - with `nativeToolHook: experimental` the pinned Claude Code is attested and opens (#1124), and
+ *   a copy of it one byte longer, which would report the same version, is refused before it runs;
  * - cancel ends a turn as `cancelled`, and close leaves no Claude Code process behind.
  */
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  appendFile,
+  chmod,
+  copyFile,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  readlink,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { realpathSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -35,7 +48,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { AgentSpecSchema, configOptionValues, type HookTelemetryLine } from "@orca/core";
-import { LocalHost, type AgentSession, type SessionUpdateEvent } from "@orca/agents";
+import {
+  CLAUDE_SDK_VERIFIED_PAIRS,
+  LocalHost,
+  claudeSdkImageDir,
+  type AgentSession,
+  type SessionUpdateEvent,
+} from "@orca/agents";
 import { makeSessionFactory } from "../src/bootstrap.js";
 
 const CLAUDE = process.env["ORCA_CLAUDE_SDK_CLAUDE"];
@@ -475,6 +494,38 @@ rl.on("line", (line) => {
       }
       // Nor did it reach Claude's saved transcript.
       expect(await filesContaining(join(root, "claude-config"), token)).toEqual([]);
+    });
+
+    it("attests the pinned Claude Code it starts, and refuses another image of the same version (#1124)", async () => {
+      // nativeToolHook: experimental requires the attested pair: the pinned Claude Code verifies.
+      const session = await open({}, undefined, { nativeToolHook: "experimental" });
+      try {
+        expect((await session.prompt("hello")).stopReason).toBe("end_turn");
+        // What runs is ORCA's own copy of the checked bytes, not the install path.
+        const pin = CLAUDE_SDK_VERIFIED_PAIRS[0]!.images[`${process.platform}-${process.arch}`]!;
+        const copy = join(claudeSdkImageDir(), pin, "claude");
+        const running = await Promise.all(
+          (await readdir("/proc"))
+            .filter((e) => /^\d+$/.test(e))
+            .map((e) => readlink(`/proc/${e}/exe`).catch(() => "")),
+        );
+        expect(running).toContain(copy);
+        expect(running).not.toContain(realpathSync(CLAUDE!));
+      } finally {
+        await session.close();
+      }
+      // The same version, one byte longer: `claude --version` still says the pinned version.
+      const altered = join(root, "altered-claude");
+      await copyFile(CLAUDE!, altered);
+      await appendFile(altered, Buffer.from([0]));
+      await chmod(altered, 0o755);
+      try {
+        await expect(open({}, undefined, { nativeToolHook: "experimental", command: altered })).rejects.toThrow(
+          /is not a Claude Code ORCA verified .* ORCA refuses to run it at all/,
+        );
+      } finally {
+        await rm(altered, { force: true });
+      }
     });
 
     it("cancels a turn, and close leaves no Claude Code behind", async () => {
