@@ -5,7 +5,7 @@
  * Every refusal, and an interruption before the marker, leaves the store on SQLite as it was.
  */
 import { spawn } from "node:child_process";
-import { lstat, mkdtemp, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { link, lstat, mkdtemp, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -386,7 +386,10 @@ describe("switch back to files (#339)", () => {
       const backups = await mkdtemp(join(tmpdir(), "orca-switch-back-backup-"));
       const backup = join(backups, "metadata.sqlite");
       await backupSqliteMetadata(dir, backup);
-      // An earlier cleanup removed the database; the journal is still pending.
+      // An earlier cleanup removed the database; the journal is still pending. A link outside the
+      // store keeps the removed file's inode in use, so the file put in by hand below cannot be
+      // given the same inode number and pass for the database the switch journaled (#1342).
+      await link(file, `${dir}.removed-database`);
       await rm(file);
       await expect(restoreSqliteMetadata(backup, dir)).rejects.toMatchObject(refusal("SWITCH_PENDING"));
       await expect(importFileMetadata(dir)).rejects.toMatchObject(refusal("SWITCH_PENDING"));
