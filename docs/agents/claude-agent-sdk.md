@@ -91,6 +91,15 @@ agents:
 
 Leave `driver` out and the agent runs over ACP exactly as before.
 
+**From first-run setup.** The app's setup review asks which Claude agent the new configuration
+gets: Claude through ACP (`claude-agent-acp`, selected first), Claude through the Claude Agent
+SDK (experimental), or none yet. It offers the SDK driver only when it finds `claude` on `PATH`,
+on a computer the driver runs on (not Windows). Finding it runs nothing: no version, handshake or
+sign-in check happens during setup, and setup offers no sign-in. A `claude` that is not signed in
+is refused when a session opens, with "run `claude auth login`" (#1131). The pick writes the
+agent `claude`, with `command: claude-agent-acp` or with `driver: claude-agent-sdk` and no
+command; change it or add others in Config.
+
 ## What ORCA checks before a session
 
 These checks start two short-lived local processes, `claude --version` and `claude auth status

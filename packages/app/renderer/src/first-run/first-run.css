@@ -102,3 +102,33 @@
   border-left: var(--stroke-rail) solid var(--status-failed);
   border-radius: var(--radius-sm);
 }
+
+/* The agent choice (#1131): one option per row, its note under its label. */
+.orca-first-run__choice {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.orca-first-run__option {
+  display: flex;
+  gap: var(--space-2);
+  align-items: flex-start;
+  min-width: 0;
+}
+
+.orca-first-run__option-text {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+  max-width: var(--measure-prose);
+}
+
+.orca-first-run__option-text > :last-child {
+  color: var(--ink-secondary);
+}

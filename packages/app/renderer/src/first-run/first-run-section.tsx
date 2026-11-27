@@ -12,7 +12,7 @@ import {
 } from "react";
 import { CHROME_GLYPHS } from "@orca/design";
 import type { OrcaBridge } from "../../../src/bridge.js";
-import type { FirstRunBridge, FirstRunStatus } from "../../../src/first-run-contract.js";
+import type { FirstRunAgentChoice, FirstRunBridge, FirstRunStatus } from "../../../src/first-run-contract.js";
 import { AgentPreflightReview } from "./agent-preflight-review.js";
 import { useAnnounce } from "../a11y/announce-context.js";
 import { useTransientLayer } from "../layers-context.js";
@@ -44,6 +44,9 @@ export function FirstRunSection(): JSX.Element | null {
   const [state, setState] = useState<FirstRunStatus>();
   const [busy, setBusy] = useState(false);
   const [outcome, setOutcome] = useState<Outcome>();
+  /* The Claude agent the new configuration gets (#1131): ACP is selected first, and a choice the current review
+     does not offer falls back to its first one. */
+  const [agentPick, setAgent] = useState<FirstRunAgentChoice>("claude-acp");
   const revision = useRef(0);
   const alive = useRef(true);
   const section = useRef<HTMLElement>(null);
@@ -188,6 +191,12 @@ export function FirstRunSection(): JSX.Element | null {
               ],
             ]}
           />
+          <AgentChoice
+            choices={state.review.agentChoices}
+            value={state.review.agentChoices.includes(agentPick) ? agentPick : state.review.agentChoices[0]!}
+            disabled={busy}
+            onChange={setAgent}
+          />
           <Text style="caption" as="p">
             {state.review.creation
               ? "Create the displayed new private folder and sample files. Existing parent and project permissions stay unchanged."
@@ -199,7 +208,11 @@ export function FirstRunSection(): JSX.Element | null {
               disabled={busy}
               onClick={() =>
                 void perform(
-                  () => bridge.prepare(state.review.id),
+                  () =>
+                    bridge.prepare(
+                      state.review.id,
+                      state.review.agentChoices.includes(agentPick) ? agentPick : state.review.agentChoices[0],
+                    ),
                   "Sample files prepared. Connect the selected local workspace when ready.",
                 )
               }
@@ -420,6 +433,62 @@ function Step({ title, children }: { title: string; children: ReactNode }): JSX.
       </Text>
       {children}
     </section>
+  );
+}
+
+const AGENT_CHOICES: Record<FirstRunAgentChoice, { label: string; note: string }> = {
+  "claude-acp": {
+    label: "Claude through ACP",
+    note: "Runs the claude-agent-acp adapter. Install it yourself; the configuration review shows whether it is found.",
+  },
+  "claude-sdk": {
+    label: "Claude through the Claude Agent SDK (experimental)",
+    note: "Runs your own claude, found on PATH here, with your own sign-in: bring your own Claude subscription or API key, one subscription per person. ORCA never signs you in and does not check the sign-in now; a session refuses a claude that is not signed in. Work through the SDK draws from your plan's usage limits.",
+  },
+  none: {
+    label: "No agent yet",
+    note: "Add an agent in Config later.",
+  },
+};
+
+/**
+ * Which Claude agent setup writes into the new configuration (#1131). Choosing runs nothing: the SDK driver is
+ * offered only when claude is found on PATH, and its sign-in is checked when a session opens.
+ */
+function AgentChoice({
+  choices,
+  value,
+  disabled,
+  onChange,
+}: {
+  choices: readonly FirstRunAgentChoice[];
+  value: FirstRunAgentChoice;
+  disabled: boolean;
+  onChange: (choice: FirstRunAgentChoice) => void;
+}): JSX.Element {
+  const name = useId();
+  return (
+    <fieldset className="orca-first-run__choice" disabled={disabled}>
+      <legend className={textClass("label-strong")}>Agent</legend>
+      {choices.map((choice) => (
+        <label key={choice} className="orca-first-run__option">
+          <input
+            type="radio"
+            name={name}
+            value={choice}
+            checked={value === choice}
+            onChange={() => onChange(choice)}
+            aria-describedby={`${name}-${choice}`}
+          />
+          <span className="orca-first-run__option-text">
+            <span className={textClass("body")}>{AGENT_CHOICES[choice].label}</span>
+            <span id={`${name}-${choice}`} className={textClass("caption")}>
+              {AGENT_CHOICES[choice].note}
+            </span>
+          </span>
+        </label>
+      ))}
+    </fieldset>
   );
 }
 

@@ -20,7 +20,11 @@ overlapping roots, denied access or missing Git refuse with a safe recovery mess
 
 Only the empty app workspace receives `orca.config.yaml` and `first-run/` assets.
 Fresh configuration explicitly binds the local project root, separate `.orca` store,
-empty agents/roles/plugins/templates, the one workflow and pausing human input.
+empty roles/plugins/templates, the one workflow and pausing human input. Its agents are
+the person's pick in the review (#1131): one Claude agent over ACP (`claude-agent-acp`,
+selected first), one through the Claude Agent SDK (offered only when `claude` is found on
+PATH by lookup alone, never run, and not on Windows), or none. A pick setup did not offer,
+or the SDK driver once `claude` is no longer found, is refused before anything is written.
 No JEV/TypeSafe registration, provider credentials or standing grants are added.
 A separate main-profile selection receipt holds paths/identities/file hashes, no
 credentials or inputs. This app-owned receipt is atomically replaced only after an

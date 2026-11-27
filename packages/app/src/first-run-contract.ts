@@ -23,6 +23,13 @@ export interface FirstRunAgentCheck {
     readonly exactCommand: "unsupported";
   };
 }
+/**
+ * The Claude agent first run may write into the new configuration (#1131), as the person picks
+ * it: the ACP adapter (`claude-agent-acp`), the person's own `claude` through the Claude Agent
+ * SDK (experimental, offered only when `claude` is found on PATH on a computer the driver runs
+ * on), or none yet. Finding `claude` runs nothing: its sign-in is checked when a session opens.
+ */
+export type FirstRunAgentChoice = "claude-acp" | "claude-sdk" | "none";
 export interface FirstRunReview {
   readonly id: string;
   readonly project: string;
@@ -31,6 +38,8 @@ export interface FirstRunReview {
   readonly baseCommit: string;
   readonly creation?: { parent: string; kind: "private-child" };
   readonly sample: { id: string; version: string; revision: string };
+  /** What the person can pick, in order; the screen selects `claude-acp` first. */
+  readonly agentChoices: readonly FirstRunAgentChoice[];
 }
 export type FirstRunStatus =
   | {
@@ -60,7 +69,8 @@ export type FirstRunStatus =
 export interface FirstRunBridge {
   status(): Promise<BridgeResult<FirstRunStatus>>;
   choose(): Promise<BridgeResult<FirstRunStatus>>;
-  prepare(id: string): Promise<BridgeResult<FirstRunStatus>>;
+  /** `agent` left out writes no agent, as before #1131. */
+  prepare(id: string, agent?: FirstRunAgentChoice): Promise<BridgeResult<FirstRunStatus>>;
   prepareRecovery?(): Promise<BridgeResult<FirstRunStatus>>;
   reconcileRecovery?(id: string): Promise<BridgeResult<FirstRunStatus>>;
   endPreviousSession?(attemptId: string): Promise<BridgeResult<FirstRunStatus>>;

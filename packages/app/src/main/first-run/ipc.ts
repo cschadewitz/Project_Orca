@@ -2,7 +2,7 @@
 import type { IpcMain, IpcMainInvokeEvent } from "electron";
 import { z } from "zod";
 import type { BridgeResult } from "../../bridge.js";
-import type { FirstRunStatus } from "../../first-run-contract.js";
+import type { FirstRunAgentChoice, FirstRunStatus } from "../../first-run-contract.js";
 import type { FirstRunSetup } from "./setup.js";
 import { FirstRunOwnershipRefusal } from "./ownership.js";
 import { FirstRunRefusal, PRESERVED } from "./refusal.js";
@@ -78,7 +78,19 @@ export function installFirstRunIPC(
   };
   register("status", z.undefined(), () => setup.status());
   register("choose", z.undefined(), (_value, check) => setup.choose(check));
-  register("prepare", z.string().uuid(), (value, check) => setup.prepare(value as string, check));
+  register(
+    "prepare",
+    z.union([
+      z.string().uuid(),
+      z.object({ id: z.string().uuid(), agent: z.enum(["claude-acp", "claude-sdk", "none"]) }).strict(),
+    ]),
+    (value, check) => {
+      const request = value as string | { id: string; agent: FirstRunAgentChoice };
+      return typeof request === "string"
+        ? setup.prepare(request, check)
+        : setup.prepare(request.id, check, request.agent);
+    },
+  );
   register("prepareRecovery", z.undefined(), (_value, check) => setup.prepareRecovery(check));
   register("reconcileRecovery", z.string().uuid(), (value, check) => setup.reconcileRecovery(value as string, check));
   register("endPreviousSession", z.string().uuid(), (value, check) => setup.endPreviousSession(value as string, check));

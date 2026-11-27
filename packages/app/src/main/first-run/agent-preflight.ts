@@ -13,7 +13,7 @@ function configuredRoute(
   // Claude Agent SDK (#1131, experimental, held on its feature branch).
   if (driver === "claude-agent-sdk") return "claude-agent-sdk-candidate";
   const name = win32.basename(command).replace(/\.exe$/i, "");
-  if (name === "claude-code-acp") return "claude-code-acp-candidate";
+  if (name === "claude-code-acp" || name === "claude-agent-acp") return "claude-code-acp-candidate";
   if (name === "codex-acp") return "codex-acp-candidate";
   if (name.toLowerCase() === "copilot") return "copilot-cli-acp-candidate";
   if (name.toLowerCase() === "cline") return "cline-acp-candidate";

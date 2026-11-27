@@ -24,7 +24,7 @@ import type { DaemonClient } from "../../client/daemon-client.js";
 import { appSpeaks } from "../../client/protocol-window.js";
 import { dirname, join, isAbsolute } from "node:path";
 import { z } from "zod";
-import type { FirstRunReview, FirstRunStatus } from "../../first-run-contract.js";
+import type { FirstRunAgentChoice, FirstRunReview, FirstRunStatus } from "../../first-run-contract.js";
 import type { ConnectionCandidate } from "../connection-target.js";
 import { OperatorDiscoverySchema, ConfigGetResultSchema, FirstRunConfigSchema } from "@orca/protocol";
 import { FIRST_RUN_SAMPLE, FIRST_RUN_SAMPLE_FILES } from "../../first-run-sample.js";
@@ -94,6 +94,14 @@ export interface FirstRunDeps {
   };
 }
 const digest = (value: string) => createHash("sha256").update(value).digest("hex");
+/** The agent each first-run choice writes (#1131); a person changes or adds agents in Config. */
+const FIRST_RUN_AGENTS: Record<FirstRunAgentChoice, Record<string, string>[]> = {
+  "claude-acp": [{ id: "claude", command: "claude-agent-acp" }],
+  // No command: the daemon runs `claude` from PATH, as setup found it.
+  "claude-sdk": [{ id: "claude", driver: "claude-agent-sdk" }],
+  none: [],
+};
+
 export class FirstRunSetup {
   private selection: Selection | undefined;
   private busy = false;
@@ -249,7 +257,16 @@ export class FirstRunSetup {
     }
   }
 
-  private files(project: string): Record<string, string> {
+  /**
+   * The Claude agents first run can offer here (#1131): the ACP adapter always, the person's own
+   * `claude` through the Claude Agent SDK only when it is found on PATH (looked up, never run:
+   * no version, handshake or sign-in check) on a computer the driver runs on, and none.
+   */
+  private async agentChoices(): Promise<FirstRunAgentChoice[]> {
+    const claude = await inspectLocalTool({ id: "claude", command: "", driver: "claude-agent-sdk", env: {} });
+    return claude.state === "handshake-required" ? ["claude-acp", "claude-sdk", "none"] : ["claude-acp", "none"];
+  }
+  private files(project: string, agent: FirstRunAgentChoice = "none"): Record<string, string> {
     return {
       ...FIRST_RUN_SAMPLE_FILES,
       // Block YAML, as a person writes the file and as Config > Raw then shows it (#1200). It was
@@ -259,7 +276,7 @@ export class FirstRunSetup {
       "orca.config.yaml": stringifyYaml({
         version: 1,
         storeDir: ".orca",
-        agents: [],
+        agents: FIRST_RUN_AGENTS[agent],
         roles: {},
         plugins: [],
         hosts: [{ id: "local", type: "local" }],
@@ -299,16 +316,22 @@ export class FirstRunSetup {
           branch: project.branch,
           baseCommit: project.baseCommit,
           sample: FIRST_RUN_SAMPLE,
+          agentChoices: await this.agentChoices(),
           ...(parent ? { creation: { parent: parent.path, kind: "private-child" as const } } : {}),
         },
       };
       return this.status();
     });
   }
-  async prepare(id: string, assertCurrent: () => void): Promise<FirstRunStatus> {
+  async prepare(id: string, assertCurrent: () => void, agent: FirstRunAgentChoice = "none"): Promise<FirstRunStatus> {
     return this.exclusive(async () => {
       const selection = this.selection;
       if (!selection || selection.review.id !== id) throw staleReview();
+      // Only what was offered on screen, and the SDK driver only while `claude` is still found.
+      if (!selection.review.agentChoices.includes(agent) || !(await this.agentChoices()).includes(agent))
+        throw selectionFailure(
+          "The agent choice is not one setup offered here, or claude is no longer found on PATH. Read setup again and choose an agent.",
+        );
       assertCurrent();
       const project = await preparedProject(selection.project.path, this.deps.home);
       const parent = selection.parent ? windowsDirectory(selection.parent.path, "parent") : undefined;
@@ -332,7 +355,7 @@ export class FirstRunSetup {
       // Consume before the first write. Any incomplete preparation requires choosing a fresh empty directory.
       this.selection = undefined;
       if (parent) workspace = windowsPrivateChild(workspace.path, parent);
-      const files = this.files(project.path);
+      const files = this.files(project.path, agent);
       if (process.platform === "win32") windowsPrivateChild(join(workspace.path, "first-run"));
       else await mkdir(join(workspace.path, "first-run"), { mode: 0o700 });
       const assetDirectory = await ownedDirectory(join(workspace.path, "first-run"), this.deps.home);
