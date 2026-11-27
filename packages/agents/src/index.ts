@@ -17,6 +17,7 @@ export * from "./typed-sidecar.js";
 export * from "./managed-typed-store.js";
 export type * from "./scoped-permission-capture.js";
 export * from "./claude-pre-tool-hook.js";
+export * from "./claude-acp-title.js";
 export * from "./hook-telemetry.js";
 export * from "./native-tool-hook-session.js";
 export * from "./claude-mode.js";

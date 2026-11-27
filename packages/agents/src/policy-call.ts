@@ -26,6 +26,20 @@ export interface PolicyCall {
   readonly locations: readonly string[];
   /** An MCP tool the call's metadata claims to run and ORCA cannot verify (#1021). */
   readonly mcpClaim?: McpToolClaim | undefined;
+  /**
+   * Other forms of the title the same call takes on another route (the hook's own, #1119
+   * review): a deny or an ask title rule that matches any of them holds. No allow is matched
+   * by one.
+   */
+  readonly titleForms?: readonly string[] | undefined;
+  /**
+   * ORCA cannot reproduce how an ACP ask would describe this call (its title, or the locations
+   * it would name), so a rule written against that ask may or may not hold for it (#1119
+   * review). It is decided at least as strictly as the ask would be: no allow rule decides it,
+   * a deny or ask title rule whose other conditions hold decides it, and a fallthrough `allow`
+   * asks instead (`unverified-identity`).
+   */
+  readonly approximate?: true | undefined;
   /** The agent's own name for the tool (`Bash`, `mcp__github__create_issue`), when the route has one. */
   readonly toolName?: string | undefined;
   /** Who made the call: the root agent, or a subagent started by the parent tool call named. */

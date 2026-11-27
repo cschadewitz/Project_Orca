@@ -312,7 +312,10 @@ export function callFacts(
 ): {
   kind: string;
   commandLike: boolean;
-  /** The call claims an MCP tool ORCA cannot verify (#1021): no allow decides it. */
+  /**
+   * The call claims an MCP tool ORCA cannot verify (#1021), or is `approximate` (#1119 review):
+   * no allow decides it.
+   */
   claimed: boolean;
   /** The claimed `server: tool`, when the claim names both plainly. */
   claimedTitle: string | undefined;
@@ -356,7 +359,12 @@ export function callFacts(
         return decision !== "allow";
       }
     };
-    if (!byClaim) return test(title);
+    if (!byClaim) {
+      // A title ORCA reconstructed for another route (#1119 review): a title rule cannot be
+      // shown not to hold, so every restriction holds and no allow does.
+      if (call.approximate) return decision !== "allow";
+      return test(title) || (decision !== "allow" && (call.titleForms ?? []).some(test));
+    }
     return decision !== "allow" && claimedTitle !== undefined && test(claimedTitle);
   };
   const matchesCall = (m: PermissionRule["match"], decision: PermissionDecision, byClaim = false): boolean => {
@@ -376,7 +384,8 @@ export function callFacts(
     }
     return true;
   };
-  return { kind, commandLike, claimed: claim !== undefined, claimedTitle, matches: matchesCall };
+  const claimed = claim !== undefined || call.approximate === true;
+  return { kind, commandLike, claimed, claimedTitle, matches: matchesCall };
 }
 
 function strictness(decision: PermissionDecision): number {
@@ -986,7 +995,16 @@ export async function recordAlwaysDecision(opts: RecordAlwaysOptions): Promise<R
   // whichever way the rules arrive: derived here, or handed in already chosen.
   const mcpClaim = call.mcpClaim;
   const unverified =
-    mcpClaim !== undefined && opts.decision === "allow" ? derivePermissionRules({ mcpClaim }, "allow") : undefined;
+    mcpClaim !== undefined && opts.decision === "allow"
+      ? derivePermissionRules({ mcpClaim }, "allow")
+      : // Nor is a call whose ACP form ORCA could not reproduce (#1119 review): no allow holds for it.
+        call.approximate === true && opts.decision === "allow"
+        ? ({
+            ok: false,
+            reason: "unverified-identity",
+            detail: "ORCA cannot vouch for how this call would be described, so it is allowed only once",
+          } as const)
+        : undefined;
   const derived: ReturnType<typeof derivePermissionRules> =
     unverified ??
     (opts.rules
