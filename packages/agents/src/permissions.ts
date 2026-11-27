@@ -43,12 +43,12 @@ import { readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, sep } from "node:path";
 import { revisionOf, withPolicyLock } from "./permission-file.js";
 import type { JudgedLane } from "./judged-lane.js";
+import { asPolicyCall, commandSource, type PolicyCall, type PolicyCallInput } from "./policy-call.js";
 import type * as acp from "@agentclientprotocol/sdk";
 import {
   commandCatches,
   unverifiedExecuteAllowed,
   commandTextOf,
-  mcpToolClaimOf,
   mcpToolTitle,
   neutralPart,
   parseCommand,
@@ -119,9 +119,10 @@ export interface PermissionEvalContext {
   protectedPaths?: ProtectedPaths | undefined;
 }
 
+/** The policy's answer for one call: an ACP request, or any route's `PolicyCall` (#1119). */
 export function decidePermission(
   policy: PermissionPolicy,
-  request: acp.RequestPermissionRequest,
+  request: PolicyCallInput,
   ctx?: PermissionEvalContext,
 ): PermissionDecision {
   return explainPermission(policy, request, ctx).decision;
@@ -131,15 +132,17 @@ export function decidePermission(
  * `decidePermission`'s answer with what decided it (#702): ORCA's protected paths, the rule
  * that matched (its index in `policy.rules` and, when the loader recorded one, its origin), the
  * fallthrough, or the command restriction. This is the one evaluation; `decidePermission` is
- * its decision.
+ * its decision. It reads only the neutral call (`PolicyCall`, #1119), so every route that maps
+ * into it is decided by this same code.
  */
 export function explainPermission(
   policy: PermissionPolicy,
-  request: acp.RequestPermissionRequest,
+  request: PolicyCallInput,
   ctx?: PermissionEvalContext,
 ): PermissionExplanation {
-  if (protectedLocation(request, ctx) !== undefined) return { decision: "deny", basis: "protected" };
-  const found = decideByRules(policy, request, ctx);
+  const call = asPolicyCall(request);
+  if (protectedLocation(call, ctx) !== undefined) return { decision: "deny", basis: "protected" };
+  const found = decideByRules(policy, call, ctx);
   if (found.ruleIndex === undefined) return found;
   const origins = policy.origins;
   const origin = origins && origins.length === policy.rules.length ? origins[found.ruleIndex] : undefined;
@@ -238,15 +241,10 @@ export interface PermissionRuleRecord {
  * review). Every other kind of rule matches the call as a whole, as before, and a policy with
  * no `command` rule decides exactly as it did.
  */
-function decideByRules(
-  policy: PermissionPolicy,
-  request: acp.RequestPermissionRequest,
-  ctx?: PermissionEvalContext,
-): PermissionExplanation {
-  const { kind, commandLike, claimed, claimedTitle, matches } = callFacts(request, ctx);
+function decideByRules(policy: PermissionPolicy, call: PolicyCall, ctx?: PermissionEvalContext): PermissionExplanation {
+  const { kind, commandLike, claimed, claimedTitle, matches } = callFacts(call, ctx);
   let byClaim = false;
   const matchesCall = (m: PermissionRule["match"], decision: PermissionDecision) => matches(m, decision, byClaim);
-  const tc = request.toolCall;
   // Once commands are restricted by their words, no allow decides an `execute`, an
   // unclassified call or one whose input carries a command (#702 review): skipping them lets a restriction later in the list still
   // be reached, and nothing approves a call whose command ORCA cannot vouch for.
@@ -273,7 +271,7 @@ function decideByRules(
   // A policy with command rules: decide each part, take the strictest, and never allow. An
   // allow from an older rule, a kindless rule or the fallthrough is unverified (#702 review).
   const decideParts = (): PermissionExplanation => {
-    const text = commandTextOf(tc);
+    const text = commandTextOf(commandSource(call));
     const parts = text === undefined ? [] : parseCommand(text).parts.filter((p) => !neutralPart(p));
     const decisions = parts.length === 0 ? [decide(undefined)] : parts.map(decide);
     // The first denied part is what denied the call. Otherwise it is asked, and the record cites
@@ -309,7 +307,7 @@ function decideByRules(
  * a `command` match is decided per part by `decideByRules`.
  */
 export function callFacts(
-  request: acp.RequestPermissionRequest,
+  request: PolicyCallInput,
   ctx?: PermissionEvalContext,
 ): {
   kind: string;
@@ -324,7 +322,7 @@ export function callFacts(
    */
   matches: (m: PermissionRule["match"], decision: PermissionDecision, byClaim?: boolean) => boolean;
 } {
-  const tc = request.toolCall;
+  const call = asPolicyCall(request);
   // An MCP tool the call's own metadata names (#1021): Gemini CLI leaves the server out of its
   // title and puts it only there. The agent wrote it and ORCA cannot check it, so it is a
   // claim: a deny or ask rule is tested against the claimed `server: tool` as well as the
@@ -332,18 +330,18 @@ export function callFacts(
   // decides the call. It stays on the one-time path, asked each time unless something denies
   // it, and a grant on one server cannot reach the same tool name on another. Matching by the
   // claim may only add restrictions, never weaken one (#1021 review): see `decideByRules`.
-  const claim = mcpToolClaimOf(tc);
+  const claim = call.mcpClaim;
   const claimedTitle = claim?.identity ? mcpToolTitle(claim.identity) : undefined;
-  const title = tc.title ?? "";
-  const kind = tc.kind ?? "other";
+  const title = call.title;
+  const kind = call.kind;
   // A call the agent did not classify could be a command under another name, and so could one
   // that carries a command in its input whatever kind it claims: the kind is the adapter's
   // advice, not a fact ORCA checked (#702 review).
-  const raw = tc.rawInput;
+  const raw = call.input;
   const rawCommand = raw !== null && typeof raw === "object" ? (raw as { command?: unknown }).command : undefined;
   const commandLike = kind === "other" || (rawCommand !== undefined && rawCommand !== null && rawCommand !== "");
   const cwd = ctx?.workspaceCwd;
-  const locations = (tc.locations ?? []).map((l) => l.path);
+  const locations = call.locations;
   const paths = locations.flatMap((p) => permissionPathForms(p, cwd));
   // Both are false for a call with no locations, so `scope` never matches one (#140).
   const allInside = locations.length > 0 && locations.every((p) => workspaceRelativePath(p, cwd) !== undefined);
@@ -618,17 +616,12 @@ function within(inner: readonly string[], outer: readonly string[]): boolean {
  * `read` and `search` only look; every other kind — `execute` and `other` included — may
  * change what it touches, so it is held to the stricter list.
  */
-function protectedLocation(
-  request: acp.RequestPermissionRequest,
-  ctx: PermissionEvalContext | undefined,
-): string | undefined {
+function protectedLocation(call: PolicyCall, ctx: PermissionEvalContext | undefined): string | undefined {
   if (!ctx?.protectedPaths) return undefined;
-  const kind = request.toolCall.kind ?? "other";
+  const kind = call.kind;
   const access =
     kind === "read" || kind === "search" ? "read" : kind === "delete" || kind === "move" ? "remove" : "write";
-  return (request.toolCall.locations ?? [])
-    .map((l) => l.path)
-    .find((p) => protectedPathFor(p, access, ctx.protectedPaths, ctx.workspaceCwd) !== undefined);
+  return call.locations.find((p) => protectedPathFor(p, access, ctx.protectedPaths, ctx.workspaceCwd) !== undefined);
 }
 
 /**
@@ -936,8 +929,8 @@ export interface RecordAlwaysOptions {
   file: string;
   /** The agent whose policy is being added to. */
   agentId: string;
-  /** The request that was answered. */
-  request: acp.RequestPermissionRequest;
+  /** The call that was answered: an ACP request, or another route's `PolicyCall` (#1119). */
+  request: PolicyCallInput;
   /** `allow` for an `allow_always` answer, `deny` for `reject_always`. */
   decision: "allow" | "deny";
   /** Absolute path of the run's workspace. Without it, no path-scoped rule can be written. */
@@ -988,10 +981,10 @@ export interface RecordAlwaysResult {
  * instead of the second silently overwriting the first.
  */
 export async function recordAlwaysDecision(opts: RecordAlwaysOptions): Promise<RecordAlwaysResult> {
-  const tc = opts.request.toolCall;
+  const call = asPolicyCall(opts.request);
   // An MCP tool the agent claims but ORCA cannot verify is never granted standing (#1021),
   // whichever way the rules arrive: derived here, or handed in already chosen.
-  const mcpClaim = mcpToolClaimOf(tc);
+  const mcpClaim = call.mcpClaim;
   const unverified =
     mcpClaim !== undefined && opts.decision === "allow" ? derivePermissionRules({ mcpClaim }, "allow") : undefined;
   const derived: ReturnType<typeof derivePermissionRules> =
@@ -1000,12 +993,12 @@ export async function recordAlwaysDecision(opts: RecordAlwaysOptions): Promise<R
       ? { ok: true, rules: opts.rules.map((rule) => ({ match: { ...rule.match }, decision: opts.decision })) }
       : derivePermissionRules(
           {
-            kind: tc.kind,
-            title: tc.title,
+            kind: call.kind,
+            title: call.title,
             // A standing deny for a claimed MCP tool names it as `server: tool` (#1021).
             mcpClaim,
-            paths: (tc.locations ?? []).map((l) => l.path),
-            command: tc.kind === "execute" ? commandTextOf(tc) : undefined,
+            paths: [...call.locations],
+            command: call.kind === "execute" ? commandTextOf(commandSource(call)) : undefined,
             workspaceCwd: opts.workspaceCwd,
           },
           opts.decision,
@@ -1025,7 +1018,7 @@ export async function recordAlwaysDecision(opts: RecordAlwaysOptions): Promise<R
   const expiresAt = opts.expiresAt;
   if (expiresAt !== undefined && !(Date.parse(expiresAt) > at.getTime()))
     throw new OrcaError("CONFIG_INVALID", `a standing rule cannot expire at ${expiresAt}: that is not after now`);
-  const grantedFor = (tc.title ?? "").trim();
+  const grantedFor = call.title.trim();
   /** How long a rule lasts, for "does this answer outlast the one on file". */
   const until = (rule: SidecarPermissionRule): number =>
     rule.expiresAt === undefined ? Infinity : Date.parse(rule.expiresAt);

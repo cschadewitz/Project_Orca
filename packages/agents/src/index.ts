@@ -4,6 +4,7 @@ export * from "./hosts/local-host.js";
 export * from "./hosts/ssh-host.js";
 export * from "./hosts/registry.js";
 export * from "./permissions.js";
+export * from "./policy-call.js";
 export * from "./strict-permission.js";
 export * from "./strict-permission-source.js";
 export * from "./session.js";
