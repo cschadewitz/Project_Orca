@@ -67,6 +67,8 @@ function ConvertTo-OrcaRule($rule, $ports, $interfaces, $programs, $services) {
     LocalPort = @($ports[$id].LocalPort | ForEach-Object { [string]$_ })
     Interfaces = @($interfaces[$id].InterfaceAlias | ForEach-Object { [string]$_ })
     Program = [string]$programs[$id].Program
+    # An app package's own rule (a Store app's): only that app's process is let in.
+    Package = [string]$programs[$id].Package
     Service = [string]$services[$id].Service
   }
 }
@@ -112,6 +114,7 @@ function Test-OrcaRuleAllowsSsh($rule) {
   if (-not (Test-OrcaPortCovers22 $rule.LocalPort)) { return $false }
   if ($rule.Program -and $rule.Program -ne "Any" -and -not $rule.Program.EndsWith("\sshd.exe", [StringComparison]::OrdinalIgnoreCase)) { return $false }
   if ($rule.Service -and $rule.Service -ne "Any" -and $rule.Service -ne $Service) { return $false }
+  if ($rule.PSObject.Properties["Package"] -and $rule.Package) { return $false }
   return -not ($rule.Interfaces.Count -eq 1 -and $rule.Interfaces[0] -eq $Adapter)
 }
 
@@ -248,7 +251,7 @@ function Invoke-OrcaWindowsSsh {
   if ($state.Firewall.Ours -ne "ok") { $firewall += "add the firewall rule `"$RuleDisplay`", which allows inbound SSH (TCP 22) only over the Tailscale adapter" }
   if (-not $state.Installed) { $firewall += "disable the rule the feature adds for every network ($BroadRule)" }
   elseif ($state.Firewall.Broad) { $firewall += "disable the feature's rule that allows SSH on every network ($BroadRule)" }
-  if ($firewall.Count) { $steps += , @($firewall -join ", and ", "Set-OrcaSshFirewall") }
+  if ($firewall.Count) { $steps += , @(($firewall -join ", and "), "Set-OrcaSshFirewall") }
   $steps += , @("check that SSH is allowed only over Tailscale, then set the sshd service to start automatically and start it", "Start-OrcaSshService")
   Write-Host "To let ORCA reach this machine over your tailnet, this would, in order:"
   foreach ($step in $steps) { Write-Host "  - $($step[0].Substring(0, 1).ToUpper() + $step[0].Substring(1))." }

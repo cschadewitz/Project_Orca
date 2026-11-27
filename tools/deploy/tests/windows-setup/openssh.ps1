@@ -19,10 +19,10 @@ $checks = 0
 function Check([string]$title) { $script:checks++; Microsoft.PowerShell.Utility\Write-Host "  - $title" }
 
 function New-Rule([string]$name, [string]$protocol = "TCP", [string[]]$ports = @("22"), [string[]]$interfaces = @("Any"),
-  [string]$program = "Any", [string]$store = "Local", [bool]$enabled = $true, [string]$service = "Any") {
+  [string]$program = "Any", [string]$store = "Local", [bool]$enabled = $true, [string]$service = "Any", [string]$package = "") {
   return [pscustomobject]@{
     Name = $name; DisplayName = "rule $name"; Enabled = $enabled; Direction = "Inbound"; Action = "Allow"; Store = $store
-    Protocol = $protocol; LocalPort = $ports; Interfaces = $interfaces; Program = $program; Service = $service
+    Protocol = $protocol; LocalPort = $ports; Interfaces = $interfaces; Program = $program; Service = $service; Package = $package
   }
 }
 $ours = New-Rule $RuleName -interfaces @("Tailscale")
@@ -71,7 +71,8 @@ try {
   foreach ($closed in @(
       (New-Rule "udp" -protocol "UDP"), (New-Rule "other-port" -ports @("3389")), (New-Rule "keyword" -ports @("RPC")),
       (New-Rule "range-above" -ports @("23-80")), (New-Rule "other-program" -ports @("Any") -program "C:\app\app.exe"),
-      (New-Rule "other-service" -service "W32Time"), (New-Rule "tailnet-only" -interfaces @("Tailscale")))) {
+      (New-Rule "other-service" -service "W32Time"), (New-Rule "tailnet-only" -interfaces @("Tailscale")),
+      (New-Rule "store-app" -protocol "Any" -ports @("Any") -package "S-1-15-2-1910091885-1573563583-1104941280-2418270861-3411158377-2822700936-2990310272"))) {
     $measured = Get-Measured @($closed)
     Assert (-not $measured.Others.Count -and -not $measured.Broad) "$($closed.Name) is taken to allow SSH: $(ConvertTo-Json -Compress $measured)"
   }
