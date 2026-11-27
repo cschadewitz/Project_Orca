@@ -1,1 +1,0 @@
-Every surface's "no daemon" screen now points to Project setup in Config, as Attention already did, instead of telling a desktop user to run `orca serve`. On Linux, Config says local diagnostics are not available on this system rather than that they are unavailable, and the app no longer prints a window "fallback" warning on each first launch under Wayland.
