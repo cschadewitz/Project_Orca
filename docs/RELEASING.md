@@ -258,6 +258,42 @@ yet". Check with
 Dry runs build no server bundle: a rehearsed ref is untrusted and is never signed.
 linux-arm64 is deferred; the bundle is linux-x64 only.
 
+#### The Windows server bundle (incubating, #1238)
+
+From the 0.9 release line (`WIN_SERVER_FROM=0.9.0` in `tools/deploy/release-attach.sh`) a
+release may also carry the headless server for Windows x64 hosts, behind the incubating
+`tailnet-hosts` work: `orca-server-X.Y.Z-win-x64.zip` (the same layout as the Linux bundle,
+with `runtime/node.exe`, Node's own Windows x64 build of the same Node version, checked against
+nodejs.org's `SHASUMS256.txt`), its `.manifest.json` (`platform: win-x64`) and its
+`.manifest.json.sigstore.json`.
+
+**Release (Windows server bundle)** (`release-server-bundle-windows.yml`) produces them the same
+way as the Linux bundle, with its own identity
+(`https://github.com/cschadewitz/Project_Orca/.github/workflows/release-server-bundle-windows.yml@refs/heads/main`):
+Release (publish) dispatches it beside the Linux bundle, and its own reconcile every 6 hours
+retries a release without its record. Its clean-host job runs on a fresh GitHub-hosted Windows
+machine: the pinned cosign for Windows (`cosign-windows-amd64.exe`, checked against its digest)
+verifies the signature, the archive must match the signed manifest, Windows' `Expand-Archive`
+unpacks it, and `tools/deploy/server-bundle-smoke.mjs` runs it with its own `node.exe` (version,
+demo, `validate` and a temporary daemon's hello). Its record is
+`<!-- orca-server-win-x64-run: RUN archive manifest signature -->`, and its receipt job is named
+`windows server bundle receipt: release ID vX.Y.Z SHA sha256:R`, where `R` is the SHA-256 of
+`orca-server-receipt/1 platform=win-x64 release=ID version=X.Y.Z sha=SHA files=A M S`. The
+server commands of `release-attach.sh` work on it with `SERVER_PLATFORM=win-x64`.
+
+While Windows hosts incubate, the Windows bundle is **optional** on a release: a final is
+published without it, or with all three files, their record and its receipt, never with only
+part of it. Release (publish final) checks that receipt exactly as it checks the Linux one.
+An attach interrupted before it wrote its record leaves some or all of the Windows files with
+no record: nothing vouched for them, and since that attach and publishing share one queue,
+nothing is still writing them. Publishing removes exactly those files (each after a fresh read
+that the draft still has no Windows record) and publishes without the Windows bundle, so an
+interrupted attach never holds up a final. A **recorded** Windows bundle is never removed: if
+its files or receipt do not match, publishing stops, and the fix is by hand as for the Linux
+bundle. A
+Windows bundle that arrives after the final is published is not attached (a final is only
+written while it is a draft); the next release carries one.
+
 ## The artifacts
 
 Two, both from the merge commit that gets tagged, so their protocol versions agree by

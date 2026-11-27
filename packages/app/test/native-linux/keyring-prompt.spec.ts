@@ -51,6 +51,13 @@ test.beforeAll(async () => {
 
 test.afterEach(async () => {
   const info = test.info();
+  if (info.status !== info.expectedStatus) {
+    // Which prompts came up, when each was answered, how often and how long it stayed (#1177).
+    await info.attach("keyring-prompts", {
+      body: JSON.stringify(session.prompts, null, 2),
+      contentType: "application/json",
+    });
+  }
   if (open && info.status !== info.expectedStatus) {
     const shot = await open.page.screenshot().catch(() => undefined);
     if (shot) await info.attach("orca-window", { body: shot, contentType: "image/png" });
@@ -73,7 +80,8 @@ test("fresh install, cancel the keyring prompt: refused before send, no run", as
   await openLaunchWork(page);
 
   const launch = page.getByRole("region", { name: "Guided launch" });
-  // Opening Launch work reads the (absent) journal, which asks the keyring.
+  // Opening Launch work reads the (absent) journal, which asks the keyring. One ask is two
+  // prompts in a row on this fresh keyring; the watcher cancels each.
   await expect(page.getByText(/Secure run-intent storage is unavailable\. No run was submitted\./).first()).toBeVisible(
     {
       timeout: 30_000,

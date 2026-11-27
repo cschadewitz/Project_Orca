@@ -405,6 +405,11 @@ The Worker serves nothing of a version until its `complete.json` exists.
 2. Copy `tools/deploy/feed-worker/wrangler.toml.example` to `wrangler.toml` (git-ignored), set the
    bucket and custom domain, and run `npx wrangler deploy` there. Deploy from current main before
    the first feed run and whenever `worker.js` changes.
+   **Release-readiness gate for the first Orrery release (#1311):** redeploy the Worker from a
+   commit that carries the rename bridge (it serves both `ORCA-`/`orca-server-` and <!-- rename-keep: both names on purpose -->
+   `Orrery-`/`orrery-server-` files) **before** any `Orrery-` snapshot is fed. An older Worker
+   answers 404 for every `Orrery-` installer, blockmap and server bundle file, so v0.8 installs
+   would see the new channel file and then fail to download it.
 3. Mint a token per person with `node tools/deploy/feed-token.js RING` (`--server` for a server).
    Merge the printed entries into one JSON object and store it with
    `npx wrangler secret put FEED_TOKENS`. Revoke a person by removing their entry.

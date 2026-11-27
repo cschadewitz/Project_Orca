@@ -1,7 +1,8 @@
 # App-managed SSH tunnels to remote daemons (#874), against a real sshd on the runner's
 # loopback: the tunnel's refusals, host-key pinning and restart, and a profile connection
 # end to end through the app's Workspace to a loopback-only daemon, and automatic sign-in
-# (#875) with this checkout's own CLI as the server's ORCA command. Linux uses the distro
+# (#875) with this checkout's own CLI as the server's ORCA command, and on Windows the Windows
+# server setup sent over it (#1238). Linux uses the distro
 # OpenSSH; Windows uses the built-in OpenSSH client against the Windows OpenSSH server.
 # The unit halves of the same tests run in the main CI job without an sshd.
 name: SSH tunnel
@@ -12,6 +13,9 @@ on:
     paths:
       - packages/protocol/src/remote-access.ts
       - packages/protocol/test/remote-access.test.ts
+      - packages/protocol/src/server-setup.ts
+      - packages/protocol/test/server-setup-windows-live.test.ts
+      - tools/deploy/orca-server-setup.ps1
       - packages/app/src/main/remote-profiles.ts
       - packages/app/src/main/remote-credentials.ts
       - packages/cli/src/commands/auth.ts
@@ -92,7 +96,7 @@ jobs:
       - name: Build the CLI
         run: pnpm exec tsc -b packages/cli
       - name: Tunnel and profile tests against the sshd
-        run: pnpm exec vitest run packages/protocol/test/remote-access.test.ts packages/app/test/remote-profiles
+        run: pnpm exec vitest run packages/protocol/test/remote-access.test.ts packages/protocol/test/server-setup-windows-live.test.ts packages/app/test/remote-profiles
 
   windows:
     name: ssh tunnel (windows)
@@ -170,4 +174,4 @@ jobs:
       - name: Build the CLI
         run: pnpm exec tsc -b packages/cli
       - name: Tunnel and profile tests against the sshd
-        run: pnpm exec vitest run packages/protocol/test/remote-access.test.ts packages/app/test/remote-profiles
+        run: pnpm exec vitest run packages/protocol/test/remote-access.test.ts packages/protocol/test/server-setup-windows-live.test.ts packages/app/test/remote-profiles

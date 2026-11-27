@@ -69,6 +69,9 @@ export class UpstreamHumanInput implements HumanInputPort {
     // Live decisions use the authenticated owner-local answer path. An upstream
     // ACP option alone supplies neither current principal nor invocation identity.
     if (q.live) return this.fallback?.ask(q);
+    // An agent's question (#1133) is not forwarded upstream as a permission ask: its answer is
+    // a form's content, which no permission option can carry. Unanswered, the agent hears cancel.
+    if (q.elicitation) return undefined;
     // Permission semantics come only from the original callback, never from position,
     // labels, destructive hints or context. Refuse malformed metadata without making
     // up choices or falling through to an answerer that could choose one.

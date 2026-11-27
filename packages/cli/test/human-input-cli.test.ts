@@ -42,7 +42,7 @@ describe("cliHumanInput", () => {
   it("prints the question with numbered options and accepts the number", async () => {
     const { input, output, text } = streams(["2"]);
     expect(await cliHumanInput(input, output).ask(query())).toBe("hold");
-    expect(text()).toContain("[orca] decision for run run_1 / step step_gate\nShip it?\n");
+    expect(text()).toContain("[orca] decision for run run_1 / step step_gate\n  Ship it?\n");
     expect(text()).toContain("  1. ship\n  2. hold\n");
   });
 
