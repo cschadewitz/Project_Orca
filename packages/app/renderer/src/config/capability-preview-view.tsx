@@ -21,7 +21,14 @@ export function CapabilityPreview({ agents }: { agents: readonly AgentCapability
         these, or turn on ones the agent&apos;s scope lists as available.
       </Text>
       {agents.map((agent) => (
-        <div key={agent.agent} role="group" aria-label={`Capabilities of ${agent.agent}`}>
+        /* Its id, its note and its list each on a line of their own: as inline spans in a bare
+           div the id ran straight into its text ("asking-builderNo MCP servers…", #1200). */
+        <div
+          key={agent.agent}
+          role="group"
+          aria-label={`Capabilities of ${agent.agent}`}
+          className="orca-config__capability"
+        >
           <Text style="mono-id">{agent.agent}</Text>
           {agent.agentRemoved && <Text style="caption">Agent removed: it loses everything below.</Text>}
           {agent.entries.length === 0 ? (

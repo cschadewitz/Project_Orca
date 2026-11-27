@@ -1,8 +1,9 @@
 /** Owner-controlled identity metadata. Backups include this directory as a unit. */
 import { randomUUID } from "node:crypto";
-import { lstat, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { withFileLock } from "./file-lock.js";
+import { replaceFile } from "./durable-file.js";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const repair = () =>
@@ -65,7 +66,7 @@ async function identityOperation(storeDir: string, renew = false): Promise<strin
     const id = randomUUID();
     const tmp = join(dir, `${id}.tmp`);
     await writeFile(tmp, `${id}\n`, { flag: "wx", mode: 0o600 });
-    await rename(tmp, join(dir, "id"));
+    await replaceFile(tmp, join(dir, "id"));
     return id;
   });
 }

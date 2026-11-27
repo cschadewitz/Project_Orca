@@ -21,7 +21,17 @@ export async function remoteEnrollCommand(ctx: CommandContext): Promise<number> 
   const [, id, ...extra] = ctx.positionals;
   if (!id || extra.length) throw new OrcaError("CONFIG_INVALID", "remote enroll needs one remote id from remotes:");
   const { config, configDir } = await loadConfig(ctx.cwd, ctx.configPath);
-  assertNoUnownedFirstRunMutation(resolve(configDir));
+  try {
+    assertNoUnownedFirstRunMutation(resolve(configDir));
+  } catch (error) {
+    // A workspace the desktop app set up in first-run is written only by the daemon the app
+    // launched. That daemon enrolls through `remotes.enroll` (#1206): the app's Config surface,
+    // Remote daemons.
+    throw new OrcaError(
+      "CONFIG_INVALID",
+      `${(error as Error).message}. This workspace was set up by the desktop app, so only its own daemon may enroll a remote for it: open the app's Config surface and use Remote daemons.`,
+    );
+  }
   const remote = config.remotes.find((r) => r.id === id);
   if (!remote) throw new OrcaError("CONFIG_INVALID", `no remotes[] entry has id ${id}`);
   const profile = remoteProfile(remote);

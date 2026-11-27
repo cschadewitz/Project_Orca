@@ -11,13 +11,14 @@ that the other Playwright projects cannot see:
 | `package-restart.spec.ts` | #905 | With first-run setup done, `sudo apt-get install` upgrades to a second package of the same build stamped higher (`ORCA_NATIVE_NEXT_DEB`) beneath the running app. **Restart to finish update to X** appears; clicking it writes `update-handoff.json.<claim>` (from the running version, to the installed one, drained), the old app exits, the installed one starts by itself and its daemon spends the record. A second launch with no app workspace follows the offer as apt moves up, back and up again, then clicks it: the handoff is refused after the stop, nothing new starts, the app stays, and its message names the recovery. Then `ORCA_NATIVE_CURRENT_DEB` is reinstalled. Defined only when both are set. |
 | `sqlite-switch.spec.ts` | #339 | Started with `ORCA_SQLITE_SWITCH=1` (the switch is off otherwise): first-run setup and one sample run on files, then **Switch to SQLite** in Config's Workspace storage. The app exits, the installed one starts by itself, and its daemon switches the store (marker on SQLite, `metadata.sqlite` there, no switch journal left). Reopened, Config says SQLite, the run is still listed and a second sample runs. Then **Switch back to files** the same way: marker on files, database gone, both runs listed, and a third sample runs on files. |
 | `config-reopen.spec.ts` | #1192 | After first-run setup, an agent added in Config > Raw (Validate and review, Save reviewed changes, Apply saved configuration) is bound for reopening by the save itself. Quit and reopen connects to the bundled daemon with no setup step, and the agent is on Agents (screenshot attached). |
+| `remote-enroll.spec.ts` | #1206 | After first-run setup, a remote and an agent that delegates to it are added in Config > Raw (saved, applied and bound for reopening), and the app is quit and reopened so its daemon starts on them. Config's Remote daemons section then enrolls it with the fingerprint typed in: the record lands in the app's own workspace, with the key pinned and the credential issued by the worker over a loopback sshd. A delegated run then runs exactly once on a real worker daemon and succeeds in the app (screenshots attached). Needs `/usr/sbin/sshd`. |
 | `keyring-prompt.spec.ts` | #857 | With a locked GNOME login keyring and the real gcr unlock prompt: Cancel on a fresh install gives the before-send refusal and no run, with no in-app Retry. Quit, reopen and Unlock admits the sample once and it succeeds. Another reopen still lists exactly one run. Locking again with a journal on disk and cancelling gives the recovery-only refusal, Launch disabled, and no new run. |
 
 ## Run it
 
 ```sh
 # Ubuntu 24.04, as an unprivileged user (Chromium's sandbox refuses root)
-sudo apt-get install xvfb dbus dbus-bin gnome-keyring gcr libsecret-tools xdotool weston
+sudo apt-get install xvfb dbus dbus-bin gnome-keyring gcr libsecret-tools xdotool weston openssh-server
 pnpm run build && pnpm --filter @orca/app run build:daemon
 pnpm --filter @orca/app exec electron-builder --linux deb --x64 --publish never
 sudo apt-get install ./packages/app/dist/release/ORCA-*-linux-amd64.deb
@@ -59,6 +60,11 @@ publishing.
   different path. A watcher answers every "Unlock Login Keyring" window with xdotool: Escape
   to cancel, or the password and Return to unlock. Input goes through XTEST to the focused
   window; `xdotool --window` sends synthetic events, which GTK and Chromium ignore.
+  The watcher follows each prompt by its X window id. One ask of the app's is several prompts
+  in a row (two when cancelled on a fresh keyring, three once ORCA's key is stored), each a
+  new window about 25 ms after the last one closed, so "is a prompt showing" cannot tell an
+  answered prompt from the next one (#1177). A window still up a second after its answer is
+  answered again.
 - **`app.ts`** launches the installed binary with Playwright's `_electron.launch({ executablePath })`
   and `chromiumSandbox: true`. Without that option Playwright adds `--no-sandbox` on Linux.
   Every launch then fails unless the browser has no `--no-sandbox` and each renderer is in a
@@ -70,6 +76,18 @@ publishing.
 - **`flows.ts`** is the tester's path by role and accessible name: first-run setup of a
   disposable Git project and empty workspace, then Launch work with the harmless sample.
   The folder chooser is stubbed in the main process: GTK's dialog is GTK's to test.
+
+## While a keyring prompt is up
+
+Electron's `safeStorage` asks the keyring synchronously, so from the first prompt until the
+last one is answered the app's main process is inside that call. Playwright reaches the
+window through the main process: every locator, `expect` and screenshot waits until then,
+and its timeout keeps running. A failure in that time says "element(s) not found" and
+attaches a page from before the prompt, whatever the page shows by then. That is how #1177
+looked: the page was right, and the prompts had gone unanswered for 20 s. So when a spec
+times out near a keyring ask, look at the prompts before the page. `keyring-prompt.spec.ts`
+attaches the watcher's log on failure (`keyring-prompts`: each prompt's window, how often it
+was answered and how long it stayed up).
 
 ## Checked against the bugs
 

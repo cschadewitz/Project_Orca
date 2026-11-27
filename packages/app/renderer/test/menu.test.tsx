@@ -279,6 +279,7 @@ describe("menu placement", () => {
     expect(placeMenu({ trigger: near, menu: { width: 200, height: 200 }, viewport })).toEqual({
       block: "below",
       inline: "start",
+      room: 1340,
     });
     // happy-dom's zeros, and the first frame of any menu: the default placement.
     const zero = { top: 0, left: 0, width: 0, height: 0 };
@@ -304,6 +305,47 @@ describe("menu placement", () => {
     expect(placeMenu({ trigger: high, menu: { width: 200, height: 2000 }, viewport }).block).toBe("below");
     // Wider than the window from either edge: do not move for nothing.
     expect(placeMenu({ trigger: near, menu: { width: 4000, height: 100 }, viewport }).inline).toBe("start");
+  });
+
+  it("inside a scrolling pane, goes above only when it fits there whole (#1112)", () => {
+    // The pane can scroll down to a menu below its trigger, never up to one past its top.
+    const pane = { width: 1000, height: 410 };
+    const trigger = { top: 260, left: 200, width: 150, height: 24 };
+    const menu = { width: 420, height: 290 };
+    expect(placeMenu({ trigger, menu, viewport: pane }).block).toBe("above");
+    expect(placeMenu({ trigger, menu, viewport: pane, scrolls: true }).block).toBe("below");
+    expect(placeMenu({ trigger, menu: { width: 420, height: 200 }, viewport: pane, scrolls: true }).block).toBe(
+      "above",
+    );
+  });
+
+  it("never gives the menu more width than its pane has from the edge it aligns to (#1112)", () => {
+    // Launch work at 1000×680: a 719px pane, its trigger at the pane's start, and a menu at
+    // its widest of 720px ran a pixel past the pane, over the pane's scrollbar.
+    const pane = { width: 707, height: 540 };
+    const trigger = { top: 230, left: 0, width: 150, height: 28 };
+    expect(placeMenu({ trigger, menu: { width: 720, height: 290 }, viewport: pane, scrolls: true }).room).toBe(707);
+    // Aligned to its end edge, the room is what lies before the trigger's end.
+    const late = { top: 100, left: 1380, width: 20, height: 20 };
+    expect(placeMenu({ trigger: late, menu: { width: 200, height: 200 }, viewport })).toMatchObject({
+      inline: "end",
+      room: 1400,
+    });
+  });
+
+  it("hands the menu its room as --menu-room (#1112)", () => {
+    const measure = vi.fn((): MenuMeasurement => ({
+      trigger: { top: 100, left: 40, width: 20, height: 20 },
+      menu: { width: 720, height: 300 },
+      viewport: { width: 500, height: 900 },
+    }));
+    mount(
+      <Menu label="Versions" items={versions} onChoose={() => {}} measure={measure}>
+        v3
+      </Menu>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Versions" }));
+    expect(screen.getByRole("menu").style.getPropertyValue("--menu-room")).toBe("460px");
   });
 
   /** Rectangles a layout engine would have produced, handed to the component directly. */

@@ -78,6 +78,7 @@ export {
   type Enrollment,
   type EnrollOptions,
 } from "./enrollment.js";
+export { remotesModel, type RemotesModel, type RemotesSource } from "./remotes-model.js";
 
 /** Tunnel refusals that only the person can fix; a retry would meet them again. */
 const PERMANENT_TUNNEL: ReadonlySet<TunnelRefusalCode> = new Set([
@@ -157,7 +158,16 @@ export function readRemoteCredential(remote: RemoteDaemonSpec, file: string): st
     if (error instanceof OrcaError) throw error;
     throw missing("the file cannot be read");
   }
-  // The file may be a bare token, or `orca auth issue --json`'s output saved as is.
+  const token = parseRemoteCredential(text);
+  if (token === undefined) throw missing("it does not hold an ORCA token");
+  return token;
+}
+
+/**
+ * The ORCA token in a saved credential: a bare token, or `orca auth issue --json`'s output
+ * saved as is. Undefined when there is none. Never echoes the text.
+ */
+export function parseRemoteCredential(text: string): string | undefined {
   let token = text.trim();
   if (token.startsWith("{"))
     try {
@@ -166,8 +176,7 @@ export function readRemoteCredential(remote: RemoteDaemonSpec, file: string): st
     } catch {
       token = "";
     }
-  if (!TOKEN.test(token)) throw missing("it does not hold an ORCA token");
-  return token;
+  return TOKEN.test(token) ? token : undefined;
 }
 
 /**

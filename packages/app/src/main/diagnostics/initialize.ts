@@ -32,6 +32,7 @@ export function createDiagnosticsInitializer(options: DiagnosticsInitializerOpti
     payload,
     clock: loadNativeDiagnosticsClock(),
     chooseDestination: options.chooseDestination,
+    platformStorage: storage.platform !== false,
   });
   return {
     controller,

@@ -55,7 +55,7 @@ export function AgentCard({ agent, live, onEditPermissions }: AgentCardProps): J
       className={["orca-agent", agent.state === "ok" ? "" : `orca-agent--${agent.state}`].filter(Boolean).join(" ")}
       /* The state word first, so the card reads as "degraded, gemini" — the same ordering
          the run rows use (docs/design/50-accessibility-and-keyboard.md). */
-      aria-label={`${word}, ${agent.id}`}
+      aria-label={`${word}, ${agent.id}${agent.commandMissing ? ", command not found" : ""}`}
     >
       <span className={`orca-agent__health orca-agent__health--${agent.state} ${textClass("caption")}`}>
         <span aria-hidden="true">{glyph}</span>
@@ -87,7 +87,13 @@ export function AgentCard({ agent, live, onEditPermissions }: AgentCardProps): J
       )}
 
       <div className="orca-agents__meta">
-        {agent.state === "unknown" ? (
+        {agent.state === "unknown" && agent.commandMissing ? (
+          /* The daemon looked for the command on its own host and it is not there (#1200), so
+             this agent cannot start, which is not the same as nobody having asked it yet. */
+          <Text style="caption" className="orca-agents__unknown">
+            Command not found on this host. Check the agent&apos;s command in Config.
+          </Text>
+        ) : agent.state === "unknown" ? (
           /* Not a placeholder and not an error: nothing has asked this agent anything since
              the daemon started, and there is nothing older to fall back on because health
              does not survive a restart (#222). */

@@ -18,6 +18,7 @@ import { RawView } from "./raw-view.js";
 import { CapabilityPreview } from "./capability-preview-view.js";
 import { PermissionsView } from "./permissions-view.js";
 import { PreferencesSection } from "./preferences-section.js";
+import { RemotesSection } from "./remotes-section.js";
 import { StorageSection } from "./storage-section.js";
 import { JudgeSetup } from "./judge-setup.js";
 import { agentPolicies } from "./config-model.js";
@@ -33,11 +34,14 @@ export function ConfigurationStudioSurface({
   open,
   launch,
   onLaunch,
+  onCloseLaunch,
 }: {
   connection: ConnectionState;
   open?: ConfigDocument;
   launch?: ReactNode;
   onLaunch?: () => void;
+  /** Leaves Launch work for the configuration; the header's views call it first (#1112). */
+  onCloseLaunch?: () => void;
 }): JSX.Element {
   useSurfaceDensity();
   const narrow = useSidebarCollapsed();
@@ -70,6 +74,8 @@ export function ConfigurationStudioSurface({
   save.current = () => {
     void studio?.save(policyConfirmed);
   };
+  // Every disabled state of Apply names its own reason, never a stale "save first" (#1210).
+  const applyBlocked = studio ? (studio.busyReason ?? studio.reason("apply")) : undefined;
   const canSave = !launch && studio?.review !== undefined && !studio.busy && studio.reason("save") === undefined;
   useEffect(() => {
     if (!canSave || templates) return;
@@ -109,29 +115,34 @@ export function ConfigurationStudioSurface({
                 Launch work
               </Button>
             )}
-            {!launch && (
-              <>
-                <button
-                  type="button"
-                  className={`orca-seg__btn ${textClass("label")}`}
-                  aria-pressed={templates}
-                  onClick={() => showTemplates(true)}
-                >
-                  Templates
-                </button>
-                {(["form", "raw"] as const).map((mode) => (
-                  <button
-                    key={mode}
-                    type="button"
-                    className={`orca-seg__btn ${textClass("label")}`}
-                    aria-pressed={!templates && (studio?.mode ?? "form") === mode}
-                    onClick={() => switchMode(mode)}
-                  >
-                    {mode === "form" ? "Form" : "Raw"}
-                  </button>
-                ))}
-              </>
-            )}
+            {/* The views stay in the header while Launch work is open, so there is a way back
+                to the configuration from where a person looks for one (#1112). Choosing one
+                leaves Launch work first; none of them is pressed while it is open. */}
+            <button
+              type="button"
+              className={`orca-seg__btn ${textClass("label")}`}
+              aria-pressed={!launch && templates}
+              onClick={() => {
+                onCloseLaunch?.();
+                showTemplates(true);
+              }}
+            >
+              Templates
+            </button>
+            {(["form", "raw"] as const).map((mode) => (
+              <button
+                key={mode}
+                type="button"
+                className={`orca-seg__btn ${textClass("label")}`}
+                aria-pressed={!launch && !templates && (studio?.mode ?? "form") === mode}
+                onClick={() => {
+                  onCloseLaunch?.();
+                  switchMode(mode);
+                }}
+              >
+                {mode === "form" ? "Form" : "Raw"}
+              </button>
+            ))}
           </div>
         }
       />
@@ -315,8 +326,8 @@ export function ConfigurationStudioSurface({
                 )}
                 {state.phase === "saved" && (
                   <Button
-                    disabled={studio.busy || !!studio.reason("apply")}
-                    {...(studio.reason("apply") ? { disabledReason: studio.reason("apply")! } : {})}
+                    disabled={applyBlocked !== undefined}
+                    {...(applyBlocked ? { disabledReason: applyBlocked } : {})}
                     onClick={() => {
                       void studio.apply();
                     }}
@@ -382,6 +393,8 @@ export function ConfigurationStudioSurface({
         )}
         {/* Where the plain-language rule judge's setup stands (#701); offered only by a daemon that lists it. */}
         <JudgeSetup />
+        {/* Delegation remotes this daemon enrolls (#1206); offered only by a daemon that lists them. */}
+        <RemotesSection />
         <StorageSection />
         <PreferencesSection surfaces={SURFACES.map((surface) => ({ id: surface.id, label: surface.label }))} />
       </div>

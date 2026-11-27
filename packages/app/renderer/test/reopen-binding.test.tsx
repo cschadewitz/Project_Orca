@@ -1,6 +1,9 @@
 // @vitest-environment happy-dom
 /** #1192: a Config save keeps the first-run workspace reopenable, and a refused reopen says why on the first screen. */
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { readdirSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { FirstRunBridge, FirstRunStatus } from "../../src/first-run-contract.js";
 import { FIRST_RUN_SAMPLE } from "../../src/first-run-sample.js";
@@ -138,5 +141,17 @@ describe("the first screen without a daemon", () => {
       /Connect selected local workspace/,
     );
     expect(noDaemonReason({ state: "recovery", recovery: { state: "ready", requestId: "r" } })).toMatch(/recovery/);
+  });
+
+  /* #1109 item 1: every surface's "no daemon" screen, not only Attention's, points a desktop
+     user at Project setup. Only `NoDaemonView` keeps the command-line advice, for a daemon
+     named outside the app. */
+  it("leaves the orca serve advice to NoDaemonView alone", () => {
+    const root = join(dirname(fileURLToPath(import.meta.url)), "..", "src");
+    const sources = readdirSync(root, { recursive: true, encoding: "utf8" }).filter((file) => file.endsWith(".tsx"));
+    const advising = sources.filter((file) =>
+      readFileSync(join(root, file), "utf8").includes("orca serve, then try again"),
+    );
+    expect(advising).toEqual([join("first-run", "no-daemon-view.tsx")]);
   });
 });

@@ -1,0 +1,1 @@
+At 1000×680 and 150%, Runs folds into one column instead of clipping every title to a few letters, and a menu that opens in a scrolling pane (such as Launch work's workflow menu) stays inside the pane and off its scrollbar. The layout check now covers every screen on Windows too.
