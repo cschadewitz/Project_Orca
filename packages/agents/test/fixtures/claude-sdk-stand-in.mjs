@@ -25,7 +25,7 @@ const log = (o) => process.env.STAND_IN_LOG && appendFileSync(process.env.STAND_
 const out = (o) => process.stdout.write(JSON.stringify(o) + "\n");
 const SESSION = "stand-in-session";
 const startup = process.env.STAND_IN_STARTUP ?? "ok";
-log({ argv: process.argv.slice(2), cwd: process.cwd(), env: process.env });
+log({ argv: process.argv.slice(2), cwd: process.cwd(), env: process.env, pid: process.pid });
 if (startup === "exit") process.exit(3);
 
 const argv = process.argv.slice(2);

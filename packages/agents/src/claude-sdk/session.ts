@@ -154,14 +154,26 @@ export async function openClaudeSdkSession(options: ClaudeSdkSessionOptions): Pr
   const resume = options.resumeSessionId?.trim() ? options.resumeSessionId : undefined;
   const required = options.requireContextRecovery === true;
   if (required && !resume) throw contextRecoveryFailure("missing-session-id");
-  const opened = (session: AgentSession, continuity: SessionContinuity): AgentSession => {
-    options.onSessionContinuity?.(continuity);
+  // The open decides the session and its continuity; only then is the observer told, outside the
+  // load and its fallback. An observer that throws fails the open: the session it was told about
+  // is closed and its process awaited, and the error is the caller's, never a load failure.
+  const opened = async (session: AgentSession, continuity: SessionContinuity): Promise<AgentSession> => {
+    try {
+      options.onSessionContinuity?.(continuity);
+    } catch (error) {
+      await session.close().catch(() => undefined);
+      throw withStartupTermination(
+        error instanceof Error ? error : new OrcaError("INTERNAL", "the session continuity observer failed"),
+        session.terminated ?? Promise.resolve(),
+      );
+    }
     return session;
   };
   if (!resume) return opened(await openClaudeSdkProcess(options, undefined), { mode: "fresh", reason: "new" });
   if (CLAUDE_SESSION_ID.test(resume)) {
+    let resumed: AgentSession | undefined;
     try {
-      return opened(await openClaudeSdkProcess(options, resume), { mode: "loaded", reason: "load-supported" });
+      resumed = await openClaudeSdkProcess(options, resume);
     } catch (error) {
       // A cancelled open, or one refused before Claude Code started, is the open's own failure.
       if (error instanceof OrcaError && error.code === "CANCELLED") throw error;
@@ -174,6 +186,7 @@ export async function openClaudeSdkSession(options: ClaudeSdkSessionOptions): Pr
       // One Claude Code at a time: the fresh one starts once the refused one is gone.
       await exit.catch(() => undefined);
     }
+    if (resumed) return opened(resumed, { mode: "loaded", reason: "load-supported" });
   } else if (required) throw contextRecoveryFailure("load-failed");
   return opened(await openClaudeSdkProcess(options, undefined), { mode: "fresh", reason: "load-failed" });
 }

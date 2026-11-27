@@ -176,6 +176,51 @@ describe("Claude Agent SDK resume and context recovery (#1121)", () => {
     expect(argv[1]!.some((a) => a.startsWith("--session-id="))).toBe(true);
   });
 
+  describe("a continuity observer that throws fails the open, and nothing is left running (#1307 review)", () => {
+    const throwing = () => {
+      throw new Error("observer broke");
+    };
+    const started = async () =>
+      (await readFile(log, "utf8"))
+        .split("\n")
+        .filter(Boolean)
+        .map((l) => JSON.parse(l) as { argv?: string[]; pid?: number })
+        .flatMap((l) => (l.argv && l.pid !== undefined ? [l.pid] : []));
+    const alive = (pid: number) => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
+    const cases: [string, () => Promise<Partial<ClaudeSdkSessionOptions>>, number][] = [
+      ["a fresh open", () => Promise.resolve({}), 1],
+      [
+        "a resumed open (optional recovery)",
+        async () => {
+          const known = crypto.randomUUID();
+          await writeFile(join(transcripts, known), "");
+          return { resumeSessionId: known };
+        },
+        1,
+      ],
+      // The refused resume, then the fresh fallback the observer is told about.
+      ["a fresh fallback after a refused resume", () => Promise.resolve({ resumeSessionId: crypto.randomUUID() }), 2],
+    ];
+    for (const [name, setup, launched] of cases)
+      it(name, async () => {
+        const error = await failure(open({ ...(await setup()), onSessionContinuity: throwing }));
+        expect(error.message).toBe("observer broke");
+        await expect(startupTermination(error)).resolves.toBeUndefined();
+        // No further Claude Code was started for it, and every one that was is gone.
+        const pids = await started();
+        expect(pids).toHaveLength(launched);
+        for (const pid of pids) expect(alive(pid)).toBe(false);
+      });
+  });
+
   it("does not fall back when the open is cancelled while resuming", async () => {
     const known = crypto.randomUUID();
     await writeFile(join(transcripts, known), "");
