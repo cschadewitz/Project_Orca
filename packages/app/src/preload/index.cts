@@ -132,7 +132,7 @@ const bridge: OrcaBridge = {
   firstRun: {
     status: () => call("orca:workspace.firstRun.status"),
     choose: () => call("orca:workspace.firstRun.choose"),
-    prepare: (id) => call("orca:workspace.firstRun.prepare", id),
+    prepare: (id, agent) => call("orca:workspace.firstRun.prepare", agent === undefined ? id : { id, agent }),
     connect: () => call("orca:workspace.firstRun.connect"),
     prepareRecovery: () => call("orca:workspace.firstRun.prepareRecovery"),
     reconcileRecovery: (id) => call("orca:workspace.firstRun.reconcileRecovery", id),

@@ -358,6 +358,77 @@ describe.skipIf(typeof process.getuid !== "function")("dedicated first-run proje
       expect(f.dispose).toHaveBeenCalledTimes(1);
     },
   );
+  describe("the agent first run writes (#1131)", () => {
+    /**
+     * A PATH holding only `git` (setup's own) and, when asked, a `claude` that would mark it ran: finding it must not
+     * run it.
+     */
+    async function toolsPath(root: string, claude: boolean): Promise<{ bin: string; ran: string }> {
+      const bin = join(root, "bin");
+      const ran = join(root, "claude-ran");
+      await mkdir(bin);
+      await symlink(execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim(), join(bin, "git"));
+      if (claude) {
+        // A builtin redirection, so it leaves the marker under this same PATH if anything runs it.
+        await writeFile(join(bin, "claude"), `#!/bin/sh\n: > '${ran}'\n`);
+        await chmod(join(bin, "claude"), 0o755);
+      }
+      return { bin, ran };
+    }
+    it("offers the SDK driver when claude is on PATH, without running it, and writes the person's pick", async () => {
+      const f = await rig();
+      const { bin, ran } = await toolsPath(f.root, true);
+      vi.stubEnv("PATH", bin);
+      const selected = await f.setup.choose(f.assertCurrent);
+      if (selected.state !== "review") throw new Error("expected review");
+      expect(selected.review.agentChoices).toEqual(["claude-acp", "claude-sdk", "none"]);
+      expect(await f.setup.prepare(selected.review.id, f.assertCurrent, "claude-sdk")).toMatchObject({
+        state: "prepared",
+      });
+      const config = parseYaml(await readFile(join(f.workspace, "orca.config.yaml"), "utf8")) as Record<
+        string,
+        unknown
+      >;
+      expect(config.agents).toEqual([{ id: "claude", driver: "claude-agent-sdk" }]);
+      expect((await new FirstRunSetup(f.deps).status()).state).toBe("prepared");
+      await expect(readFile(ran)).rejects.toThrow();
+      // The marker can fire: run under the same PATH, the fake leaves it.
+      execFileSync(join(bin, "claude"), { env: { PATH: bin } });
+      expect(await readFile(ran, "utf8")).toBe("");
+    });
+    it("offers ACP and none without claude, refuses a choice it did not offer, and writes the ACP adapter", async () => {
+      const f = await rig();
+      vi.stubEnv("PATH", (await toolsPath(f.root, false)).bin);
+      const selected = await f.setup.choose(f.assertCurrent);
+      if (selected.state !== "review") throw new Error("expected review");
+      expect(selected.review.agentChoices).toEqual(["claude-acp", "none"]);
+      await expect(f.setup.prepare(selected.review.id, f.assertCurrent, "claude-sdk")).rejects.toThrow(
+        /not one setup offered here/,
+      );
+      expect(await readdir(f.workspace)).toEqual([]);
+      expect(await f.setup.prepare(selected.review.id, f.assertCurrent, "claude-acp")).toMatchObject({
+        state: "prepared",
+      });
+      const config = parseYaml(await readFile(join(f.workspace, "orca.config.yaml"), "utf8")) as Record<
+        string,
+        unknown
+      >;
+      expect(config.agents).toEqual([{ id: "claude", command: "claude-agent-acp" }]);
+    });
+    it("refuses the SDK driver when claude is gone by the time setup writes", async () => {
+      const f = await rig();
+      const { bin } = await toolsPath(f.root, true);
+      vi.stubEnv("PATH", bin);
+      const selected = await f.setup.choose(f.assertCurrent);
+      if (selected.state !== "review") throw new Error("expected review");
+      await rm(join(bin, "claude"));
+      await expect(f.setup.prepare(selected.review.id, f.assertCurrent, "claude-sdk")).rejects.toThrow(
+        /no longer found on PATH/,
+      );
+      expect(await readdir(f.workspace)).toEqual([]);
+    });
+  });
+
   it("keeps the saved selection through commits, a branch switch and a detached HEAD in the project", async () => {
     const f = await rig();
     await f.prepare();

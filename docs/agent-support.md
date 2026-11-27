@@ -30,8 +30,8 @@ Claude Code through the Claude Agent SDK (`driver: claude-agent-sdk`, SDK 0.3.33
 Code 2.1.332) is experimental and held on its feature branch until Anthropic's OK (#1132). It
 has an acceptance run against the real Claude Code with a scripted model
 (`claude-sdk-acceptance.yml`), but no support level is claimed for it yet: that is #1128. It
-runs your own signed-in `claude` on the daemon's own computer, not on Windows (Windows and SSH
-hosts are refused before anything starts; use the ACP route there), with your own Claude
+runs your own signed-in `claude` on the daemon's own computer or an SSH host, not on Windows
+(refused before anything starts; use the ACP route there), with your own Claude
 subscription or API key (one subscription per person); ORCA never signs you in. See
 [agents/claude-agent-sdk.md](agents/claude-agent-sdk.md) and its row in
 [agent-hook-coverage.md](agent-hook-coverage.md).

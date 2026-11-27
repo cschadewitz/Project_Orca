@@ -97,6 +97,17 @@ it("names a cline executable as a Cline ACP candidate, and nothing more (#711)",
     evidence: { configuredRoute: "cline-acp-candidate", support: "unknown", version: "unknown", signIn: "unknown" },
   });
 });
+it("names the claude-agent-acp adapter, the command first run writes, as the Claude ACP candidate (#1131)", async () => {
+  const f = await fixture();
+  for (const name of ["claude-agent-acp", "claude-code-acp"]) {
+    const adapter = join(f.bin, name);
+    await writeFile(adapter, "#!/bin/sh\nexit 0\n");
+    await chmod(adapter, 0o700);
+    expect((await inspectLocalTool({ id: "claude", command: adapter, env: {} })).evidence.configuredRoute).toBe(
+      "claude-code-acp-candidate",
+    );
+  }
+});
 function machO(cpu: number): Buffer {
   const bytes = Buffer.alloc(8);
   bytes.writeUInt32LE(0xfeedfacf, 0);

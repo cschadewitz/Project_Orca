@@ -2,7 +2,12 @@
 /** Directory review controls and safe refusal handling, with no automatic setup, provider or launch. */
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { FirstRunAgentCheck, FirstRunBridge, FirstRunStatus } from "../../src/first-run-contract.js";
+import type {
+  FirstRunAgentCheck,
+  FirstRunAgentChoice,
+  FirstRunBridge,
+  FirstRunStatus,
+} from "../../src/first-run-contract.js";
 import { FIRST_RUN_SAMPLE } from "../../src/first-run-sample.js";
 import { FirstRunSection } from "../src/first-run/first-run-section.js";
 import { useEscapeClosesTopLayer } from "../src/layers-context.js";
@@ -33,6 +38,7 @@ function setup(overrides: Partial<FirstRunBridge> = {}) {
           branch: "prepared",
           baseCommit: "base",
           sample: FIRST_RUN_SAMPLE,
+          agentChoices: ["claude-acp", "none"],
         },
       };
       return { ok: true, result: state };
@@ -68,7 +74,7 @@ it("requires explicit directory review, create and connect actions, and labels t
 
   expect(f.firstRun.prepare).not.toHaveBeenCalled();
   await act(async () => fireEvent.click(screen.getByRole("button", { name: "Create reviewed sample files" })));
-  expect(f.firstRun.prepare).toHaveBeenCalledExactlyOnceWith("main-review");
+  expect(f.firstRun.prepare).toHaveBeenCalledExactlyOnceWith("main-review", "claude-acp");
   expect(f.firstRun.connect).not.toHaveBeenCalled();
   await act(async () => fireEvent.click(screen.getByRole("button", { name: "Connect selected local workspace" })));
   expect(f.firstRun.connect).toHaveBeenCalledTimes(1);
@@ -76,6 +82,86 @@ it("requires explicit directory review, create and connect actions, and labels t
     screen.getByText(/The beta-first-job-v1 coding task and a real local-agent run require separate/),
   ).toBeTruthy();
 });
+describe("the agent choice (#1131)", () => {
+  function review(agentChoices: FirstRunAgentChoice[], id = "agent-review") {
+    return {
+      ok: true as const,
+      result: {
+        state: "review" as const,
+        review: {
+          id,
+          project: "/P",
+          workspace: "/W",
+          branch: "prepared",
+          baseCommit: "base",
+          sample: FIRST_RUN_SAMPLE,
+          agentChoices,
+        },
+      },
+    };
+  }
+  it("offers both Claude drivers with ACP selected, and sends the SDK driver when the person picks it", async () => {
+    const f = setup();
+    f.firstRun.choose.mockResolvedValueOnce(review(["claude-acp", "claude-sdk", "none"]));
+    await screen.findByText("Explicit owned directories required.");
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Choose project and empty workspace" })));
+    const group = screen.getByRole("group", { name: "Agent" });
+    const radios = within(group).getAllByRole<HTMLInputElement>("radio");
+    expect(radios.map((r) => r.value)).toEqual(["claude-acp", "claude-sdk", "none"]);
+    expect(within(group).getByRole<HTMLInputElement>("radio", { name: /Claude through ACP/ }).checked).toBe(true);
+    const sdk = within(group).getByRole("radio", { name: /Claude Agent SDK \(experimental\)/ });
+    expect(sdk.getAttribute("aria-describedby")).toBeTruthy();
+    expect(document.getElementById(sdk.getAttribute("aria-describedby")!)?.textContent).toMatch(
+      /ORCA never signs you in and does not check the sign-in now/,
+    );
+    await act(async () => fireEvent.click(sdk));
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Create reviewed sample files" })));
+    expect(f.firstRun.prepare).toHaveBeenCalledExactlyOnceWith("agent-review", "claude-sdk");
+  });
+  it("keeps a pick for a retry of the same review, and starts each new review from ACP", async () => {
+    const f = setup();
+    f.firstRun.choose
+      .mockResolvedValueOnce(review(["claude-acp", "claude-sdk", "none"], "first-review"))
+      .mockResolvedValueOnce(review(["claude-acp", "claude-sdk", "none"], "second-review"));
+    f.firstRun.prepare.mockResolvedValueOnce({
+      ok: false,
+      error: { code: "AGENT_TRANSPORT", message: "Refused once." },
+    });
+    await screen.findByText("Explicit owned directories required.");
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Choose project and empty workspace" })));
+    const sdk = () =>
+      within(screen.getByRole("group", { name: "Agent" })).getByRole<HTMLInputElement>("radio", {
+        name: /Claude Agent SDK/,
+      });
+    await act(async () => fireEvent.click(sdk()));
+    // A refused write keeps the same review, and its pick.
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Create reviewed sample files" })));
+    expect(f.firstRun.prepare).toHaveBeenLastCalledWith("first-review", "claude-sdk");
+    expect(sdk().checked).toBe(true);
+    // Other directories: a new review, which starts from ACP again.
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Choose project and empty workspace" })));
+    expect(sdk().checked).toBe(false);
+    expect(
+      within(screen.getByRole("group", { name: "Agent" })).getByRole<HTMLInputElement>("radio", {
+        name: /Claude through ACP/,
+      }).checked,
+    ).toBe(true);
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Create reviewed sample files" })));
+    expect(f.firstRun.prepare).toHaveBeenLastCalledWith("second-review", "claude-acp");
+  });
+  it("does not offer the SDK driver when setup did not find claude, and can write no agent", async () => {
+    const f = setup();
+    f.firstRun.choose.mockResolvedValueOnce(review(["claude-acp", "none"]));
+    await screen.findByText("Explicit owned directories required.");
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Choose project and empty workspace" })));
+    const group = screen.getByRole("group", { name: "Agent" });
+    expect(within(group).queryByRole("radio", { name: /Claude Agent SDK/ })).toBeNull();
+    await act(async () => fireEvent.click(within(group).getByRole("radio", { name: /No agent yet/ })));
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Create reviewed sample files" })));
+    expect(f.firstRun.prepare).toHaveBeenCalledExactlyOnceWith("agent-review", "none");
+  });
+});
+
 it("keeps the selected review after a refused write and shows the reason main gave", async () => {
   const f = setup();
   await screen.findByText("Explicit owned directories required.");
@@ -123,6 +209,7 @@ it("reviews Windows private child creation before passing the exact review to ma
         branch: "prepared",
         baseCommit: "base",
         sample: FIRST_RUN_SAMPLE,
+        agentChoices: ["claude-acp", "none"],
         creation: { parent: "C:\\Parent", kind: "private-child" },
       },
     },
@@ -135,7 +222,7 @@ it("reviews Windows private child creation before passing the exact review to ma
   await act(async () =>
     fireEvent.click(screen.getByRole("button", { name: "Create reviewed private workspace and sample files" })),
   );
-  expect(f.firstRun.prepare).toHaveBeenCalledExactlyOnceWith("windows-review");
+  expect(f.firstRun.prepare).toHaveBeenCalledExactlyOnceWith("windows-review", "claude-acp");
   expect(f.firstRun.connect).not.toHaveBeenCalled();
 });
 

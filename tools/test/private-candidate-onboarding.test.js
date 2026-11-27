@@ -424,6 +424,8 @@ describe.skipIf(process.platform === "win32" || typeof process.getuid !== "funct
           branch: "trial",
           baseCommit: head,
           sample: FIRST_RUN_SAMPLE,
+          // The Claude agent the person may pick (#1131); the SDK driver only where claude is on PATH.
+          agentChoices: expect.arrayContaining(["claude-acp", "none"]),
         },
       });
       // F4 says nothing is written by selection or review.
