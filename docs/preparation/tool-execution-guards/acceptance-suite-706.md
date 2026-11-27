@@ -50,6 +50,20 @@ installed runs are where they get verified. A path that cannot be asked a
 case says so in the matrix, with a reason; absence of a case is never counted as coverage, and
 synthetic results never count toward a tier.
 
+## The Claude Agent SDK route
+
+`claude-sdk-hook` (#1128) runs the cases through ORCA's permission bridge on a
+`driver: claude-agent-sdk` session, in process as the session runs it: the `PreToolUse` hook
+callback, then `canUseTool` for Claude's ask, then the MCP relay's dispatch check for an
+allowed ORCA-run MCP call. The path takes Claude's own check to ask about every call ORCA did
+not deny, the strictest case, so an allowed call must be allowed again by `canUseTool` with
+nobody asked, and a call the hook asked about must be decided by the run's answerer. Unlike
+`claude-native-hook`, ORCA's answerer is on this route, so the answerer cases run here. There
+are no raw frames, context file, installed settings or agent-offered options, so the cases
+that need them are excluded with that reason. It is a route of its own: nothing here counts
+toward Claude's `claude-native-hook` claim, and the route holds no tier until its own
+installed receipt exists.
+
 ## The connected proof
 
 `claude-connected` runs a real Claude Code (the pinned pair in `CLAUDE_HOOK_VERIFIED_PAIRS`)

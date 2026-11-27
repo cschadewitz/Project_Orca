@@ -1,0 +1,1 @@
+- **tools:** the #706 enforcement acceptance suite runs every case it can on the Claude Agent SDK route (`claude-sdk-hook`, #1128): ORCA's hook callback, its answer to Claude's ask and the MCP relay's check, in process. The route has its own support-matrix row, holds no tier and leaves the ACP route's claim untouched.

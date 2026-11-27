@@ -34,6 +34,12 @@ function concurrently(world, path, action, n, expected) {
     : Promise.all(actions.map((a) => path.decide(world, a, opts)));
 }
 
+/** The answer ran nothing: an ACP ask cancelled, or what the path says nothing ran on it. */
+function ranNothing(path, got) {
+  if (path.ranNothing) assert.ok(path.ranNothing(got), `${path.id}: ${JSON.stringify(got.response)}`);
+  else assert.deepEqual(got.response, { outcome: { outcome: "cancelled" } });
+}
+
 const secretOf = () => `orca706secret${randomBytes(8).toString("hex")}`;
 
 const validFrame = (world) =>
@@ -131,7 +137,7 @@ export const SCENARIOS = {
       return;
     }
     const none = await expectOutcome(world, path, issue, "ask", { noAnswerer: true });
-    assert.deepEqual(none.response, { outcome: { outcome: "cancelled" } });
+    ranNothing(path, none);
 
     const turn = new AbortController();
     const pending = path.decide(world, issue, {
@@ -141,11 +147,11 @@ export const SCENARIOS = {
     setTimeout(() => turn.abort(), 10);
     const ended = await pending;
     assert.equal(ended.detail, "ask:expired");
-    assert.deepEqual(ended.response, { outcome: { outcome: "cancelled" } });
+    ranNothing(path, ended);
 
     // An answer that is not one of the offered options runs nothing either.
     const invented = await path.decide(world, issue, { onAsk: async () => "allow-everything" });
-    assert.deepEqual(invented.response, { outcome: { outcome: "cancelled" } });
+    ranNothing(path, invented);
   },
 
   async F01(world, path) {

@@ -108,6 +108,24 @@
       ]
     },
     {
+      "id": "claude-sdk-hook",
+      "what": "ORCA's permission bridge on a Claude Agent SDK session (#1122, #1123, #1125), in process as the session runs it: the PreToolUse hook callback, then canUseTool for Claude's ask, then the MCP relay's dispatch check for an allowed ORCA-run MCP call",
+      "capabilities": ["answerer", "cwd", "mcp-grant-allows"],
+      "excluded": {
+        "F01": "The SDK hands the hook callback a parsed object in ORCA's own process; there are no raw bytes for ORCA to refuse.",
+        "F02": "Decided in the session's own process; there is no separate context file to lose.",
+        "F03": "Nothing is installed in Claude's settings for this route: the hook is a callback the session registers in the SDK's options, checked by the #1123 tests.",
+        "F04": "ORCA builds the ask itself in canUseTool; there are no agent-offered options for it to pick from.",
+        "P02": "No raw input or context file on this route (see F01 and F02)."
+      },
+      "verifies": "ORCA's answers on the route: the hook never allows, denies before the call runs, and sends every call the policy asks about (or that runs outside the workspace) to Claude's ask; canUseTool decides that ask again from the policy as it is now, by a rule only for a call the hook saw inside the workspace, otherwise by the run's answerer, for this call only; an allowed MCP call is checked again at the relay",
+      "unverified": [
+        "That Claude runs the hook on every call, and calls canUseTool for every call the hook asked about",
+        "That Claude obeys a deny, an ask and a timeout from the callbacks",
+        "That events, logs and stored records about the call are redacted"
+      ]
+    },
+    {
       "id": "claude-connected",
       "connected": true,
       "proves": "claude-native-hook",
