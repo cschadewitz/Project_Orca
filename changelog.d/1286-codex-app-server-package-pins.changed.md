@@ -3,4 +3,5 @@
   (`bwrap`), the code-mode host and `rg` must each be a plain file with the SHA-256 ORCA pinned
   for that Codex version. Codex prefers a `bwrap` on its `PATH` to its own and checks only its
   own, so ORCA also refuses to start it when a `bwrap` on that `PATH` could be replaced by your
-  own user, rather than being root's alone (#1286).
+  own user, rather than being root's alone, and refuses an agent whose `PATH` comes from a secret
+  (#1286).

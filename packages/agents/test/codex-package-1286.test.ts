@@ -11,7 +11,9 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   CODEX_VERIFIED_IMAGES,
   CODEX_VERIFIED_PACKAGE_FILES,
+  boundedCheck,
   checkCodexPackage,
+  checkCodexPreflight,
   checkSystemBwrap,
 } from "../src/index.js";
 
@@ -55,8 +57,7 @@ describe("checkCodexPackage", () => {
       await writeFile(join(root, file), text);
     }
   };
-  const check = (opts: { timeoutMs?: number } = {}) =>
-    checkCodexPackage(entrypoint(), "1.0.0", "linux-x64", { pins: PINS, ...opts });
+  const check = () => checkCodexPackage(entrypoint(), "1.0.0", "linux-x64", { pins: PINS });
 
   it("accepts a package whose files all have their pinned digests", async () => {
     await build();
@@ -107,9 +108,45 @@ describe("checkCodexPackage", () => {
     );
   });
 
-  it("gives up once its time for the whole package has passed", async () => {
+  it("runs under one deadline with the PATH check, as checkCodexPreflight", async () => {
     await build();
-    await expect(check({ timeoutMs: 0 })).resolves.toBe("ORCA's check of the package did not finish within 0 ms");
+    await expect(
+      checkCodexPreflight(entrypoint(), "1.0.0", "linux-x64", undefined, root, { pins: PINS }),
+    ).resolves.toBeUndefined();
+    await expect(
+      checkCodexPreflight(entrypoint(), "1.0.0", "linux-x64", undefined, root, { pins: PINS, timeoutMs: 0 }),
+    ).resolves.toBe("ORCA's check of the Codex package did not finish within 0 ms");
+  });
+});
+
+describe("boundedCheck", () => {
+  const LATE = "ORCA's check of the Codex package did not finish within 20 ms";
+
+  it("refuses once the deadline passes, and a result that arrives later never counts", async () => {
+    let finish!: (v: string | undefined) => void;
+    let seen: AbortSignal | undefined;
+    const result = boundedCheck(20, (signal) => new Promise((r) => ((seen = signal), (finish = r))));
+    await expect(result).resolves.toBe(LATE);
+    expect(seen?.aborted).toBe(true);
+    finish(undefined);
+    await expect(result).resolves.toBe(LATE);
+  });
+
+  it("refuses with the reason when the work throws", async () => {
+    await expect(boundedCheck(1_000, () => Promise.reject(new Error("broke")))).resolves.toBe("broke");
+  });
+
+  it("stops the package and PATH checks at their next step once the signal fires", async () => {
+    await mkdir(join(root, "bin"));
+    await writeFile(join(root, "bin", "codex"), "");
+    const stopped = AbortSignal.abort();
+    await expect(
+      checkCodexPackage(join(root, "bin", "codex"), "0.171.0", "linux-x64", { signal: stopped }),
+    ).rejects.toThrow("ORCA's check was stopped");
+    await writeFile(join(root, "bin", "bwrap"), "");
+    await expect(checkSystemBwrap(join(root, "bin"), root, { signal: stopped })).rejects.toThrow(
+      "ORCA's check was stopped",
+    );
   });
 });
 

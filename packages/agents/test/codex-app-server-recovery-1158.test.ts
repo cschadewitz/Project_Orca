@@ -468,6 +468,66 @@ describe("an app-server that exits", () => {
     expect(s.spawnAgent).toHaveBeenCalledTimes(1);
   });
 
+  it("starts nothing when a restart is cancelled or closed while its package is checked (#1286)", async () => {
+    const held = () => {
+      let release!: () => void;
+      let calls = 0;
+      const gate = new Promise<void>((r) => (release = r));
+      const packageCheck = vi.fn(async () => {
+        if (++calls > 1) await gate;
+        return undefined;
+      });
+      return { packageCheck, release: () => release() };
+    };
+
+    const a = held();
+    const s = scriptedHost(() => BASE);
+    const session = await open(s.host, { packageCheck: a.packageCheck });
+    s.procs[0]!.crash();
+    await settle();
+    const turn = session.prompt("go");
+    await settle();
+    expect(a.packageCheck).toHaveBeenCalledTimes(2);
+    const cancelled = session.cancel();
+    a.release();
+    await cancelled;
+    await expect(turn).resolves.toMatchObject({ stopReason: "cancelled" });
+    expect(s.spawnAgent).toHaveBeenCalledTimes(1);
+
+    const b = held();
+    const t = scriptedHost(() => BASE);
+    const other = await open(t.host, { packageCheck: b.packageCheck });
+    t.procs[0]!.crash();
+    await settle();
+    const pending = other.prompt("go");
+    await settle();
+    expect(b.packageCheck).toHaveBeenCalledTimes(2);
+    const closed = other.close();
+    b.release();
+    await closed;
+    await expect(pending).rejects.toMatchObject({ code: "RUN_STATE" });
+    expect(t.spawnAgent).toHaveBeenCalledTimes(1);
+  });
+
+  it("checks and gives a restart the PATH fixed at the open, not the daemon's PATH by then (#1286)", async () => {
+    const s = scriptedHost(() => BASE);
+    const packageCheck = vi.fn(async () => undefined);
+    const saved = process.env["PATH"];
+    const session = await open(s.host, { packageCheck });
+    try {
+      process.env["PATH"] = "/changed-after-open";
+      s.procs[0]!.crash();
+      await settle();
+      await expect(session.prompt("go")).resolves.toMatchObject({ stopReason: "end_turn" });
+    } finally {
+      process.env["PATH"] = saved;
+    }
+    expect(packageCheck.mock.calls.map((c) => (c as unknown[])[3])).toEqual([saved, saved]);
+    const started = s.spawnAgent.mock.calls.map((c) => ((c as unknown[])[1] as { env?: Record<string, string> }).env);
+    expect(started.map((env) => env?.["PATH"])).toEqual([saved, saved]);
+    await session.close();
+  });
+
   it("starts nothing when a restart is cancelled or closed while its file is checked (#1162)", async () => {
     const held = () => {
       let release!: () => void;
