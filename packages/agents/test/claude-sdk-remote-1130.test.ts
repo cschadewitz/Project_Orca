@@ -8,7 +8,7 @@
  * SDK stand-in (fixtures/claude-sdk-stand-in.mjs) behind a script that also answers
  * `--version` and `auth status`, so no account and no model are involved.
  */
-import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { spawn, spawnSync } from "node:child_process";
 import { readFileSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -69,9 +69,10 @@ beforeEach(async () => {
     ssh,
     `#!/bin/sh
 printf '%s' "$*" | tr '\\n' ' ' >> "${sshLog}"; echo >> "${sshLog}"
+case "$*" in *orca_relay*) ;; *orca_reap*) [ -e "${dir}/no-stop" ] && exit 255 ;; esac
 while [ "$#" -gt 0 ] && [ "$1" != "--" ]; do shift; done
 shift
-exec env -i PATH="${join(dir, "remote-bin")}:/usr/bin:/bin" HOME="${dir}" sh -c "$*"
+exec env -i PATH="${join(dir, "remote-bin")}:/usr/bin:/bin" HOME="${dir}" bash -c "$*"
 `,
   );
   await chmod(ssh, 0o755);
@@ -81,7 +82,7 @@ exec env -i PATH="${join(dir, "remote-bin")}:/usr/bin:/bin" HOME="${dir}" sh -c 
       type: "ssh",
       host: "build-box.invalid",
       sshBinary: ssh,
-      remoteShell: "sh -c",
+      remoteShell: "bash -c",
     }) as never,
   );
 });
@@ -96,7 +97,7 @@ describe("the remote command line (#1130)", () => {
   const token = "0123456789abcdef0123456789abcdef";
   /** Run a remote script with the local shell, as the stand-in ssh would, with `input` on stdin. */
   function runScript(script: string, input: string): { code: number | null; stdout: string } {
-    const r = spawnSync("sh", ["-c", script], { input, env: { PATH: process.env.PATH ?? "", HOME: dir } });
+    const r = spawnSync("bash", ["-c", script], { input, env: { PATH: process.env.PATH ?? "", HOME: dir } });
     return { code: r.status, stdout: r.stdout.toString("utf8") };
   }
 
@@ -113,7 +114,7 @@ describe("the remote command line (#1130)", () => {
     });
     expect(script).toContain("unset TOKEN || exit 125");
     expect(script).toContain(`cd '/work/o'\\''brien' || exit 125`);
-    expect(script).toContain(`setsid '/opt/claude code/claude' --print 'it'\\''s $HOME' <&3 3<&- &`);
+    expect(script).toContain(`env "$orca_k" '/opt/claude code/claude' --print 'it'\\''s $HOME' < <(`);
     expect(script).toContain("case $orca_n in FOO) ;;");
     expect(script).not.toMatch(/\benv [A-Z]/);
   });
@@ -172,33 +173,86 @@ describe("the remote command line (#1130)", () => {
     expect(() => claudeSdkRemoteStopScript("../x")).toThrow(/token/);
   });
 
-  it("owns claude's process group there: a stop kills it and what it started, and confirms it", async () => {
-    const t = claudeSdkRemoteToken();
-    const pids = join(dir, "pids");
+  /** Start a launch of `args` under bash, as the stand-in ssh would, its stdin left open. */
+  function launch(t: string, args: string[], heartbeat?: { intervalMs: number; timeoutS: number; graceS: number }) {
     const script = claudeSdkRemoteScript({
       agentId: "a",
       hostId: "h",
       command: "sh",
-      args: ["-c", `sleep 600 & echo "$$ $!" > ${pids}; wait`],
+      args,
       cwd: ws,
       names: [],
       token: t,
+      heartbeat,
     });
-    const launch = spawn("sh", ["-c", script], {
+    const child = spawn("bash", ["-c", script], {
       env: { PATH: process.env.PATH ?? "", HOME: dir },
       stdio: ["pipe", "ignore", "ignore"],
     });
-    launch.stdin.write(claudeSdkRemoteEnvInput({}));
-    await until(async () => (await readFile(pids, "utf8").catch(() => "")).trim().split(" ").length === 2);
-    const [shell, sleeper] = (await readFile(pids, "utf8")).trim().split(" ").map(Number);
-    expect(alive(shell!) && alive(sleeper!)).toBe(true);
-    // The wrapper keeps its stdin open, as a session's does: only the stop ends it.
+    child.stdin.write(claudeSdkRemoteEnvInput({}));
+    return child;
+  }
+  /** `sh -c` that ignores the end of its input and SIGTERM, with a `sleep` it started; both pids in `file`. */
+  const stubborn = (file: string) => [
+    "-c",
+    `trap '' TERM; sleep 600 & echo "$$ $!" > ${file}; while :; do sleep 1; done`,
+  ];
+  async function pidsIn(file: string): Promise<[number, number]> {
+    await until(async () => (await readFile(file, "utf8").catch(() => "")).trim().split(" ").length === 2);
+    return (await readFile(file, "utf8")).trim().split(" ").map(Number) as [number, number];
+  }
+
+  it("a stop kills every process of the launch, found by its marker, and confirms it", async () => {
+    const t = claudeSdkRemoteToken();
+    const pids = join(dir, "pids");
+    const child = launch(t, stubborn(pids));
+    const [shell, sleeper] = await pidsIn(pids);
+    expect(alive(shell) && alive(sleeper)).toBe(true);
     expect(runScript(claudeSdkRemoteStopScript(t), "").code).toBe(0);
-    await until(() => Promise.resolve(!alive(shell!) && !alive(sleeper!)));
-    launch.stdin.end();
-    // Its record is gone, and a second stop finds nothing to do.
-    expect(await readdir(join(dir, ".cache/orca/claude-sdk"))).not.toContain(`${t}.pid`);
+    expect(alive(shell) || alive(sleeper)).toBe(false);
+    child.stdin.end();
+    // A second stop finds nothing to do.
     expect(runScript(claudeSdkRemoteStopScript(t), "").code).toBe(0);
+  });
+
+  it("never signals a process it cannot show is the launch's: another launch's, or one with no marker", async () => {
+    const mine = claudeSdkRemoteToken();
+    const theirs = claudeSdkRemoteToken();
+    const child = launch(theirs, stubborn(join(dir, "theirs")));
+    const [shell, sleeper] = await pidsIn(join(dir, "theirs"));
+    const stranger = spawn("sleep", ["600"], { stdio: "ignore" });
+    try {
+      expect(runScript(claudeSdkRemoteStopScript(mine), "").code).toBe(0);
+      expect(alive(shell) && alive(sleeper) && alive(stranger.pid!)).toBe(true);
+    } finally {
+      stranger.kill("SIGKILL");
+      runScript(claudeSdkRemoteStopScript(theirs), "");
+      child.stdin.end();
+    }
+  });
+
+  it("stops everything by itself when ORCA's heartbeat stops arriving, with no connection back", async () => {
+    const t = claudeSdkRemoteToken();
+    const pids = join(dir, "pids");
+    // Input stays open and silent, as a connection to an unreachable daemon would.
+    const child = launch(t, stubborn(pids), { intervalMs: 500, timeoutS: 1, graceS: 0 });
+    const [shell, sleeper] = await pidsIn(pids);
+    await until(() => Promise.resolve(!alive(shell) && !alive(sleeper)), 10_000);
+    await until(() => Promise.resolve(child.exitCode !== null), 10_000);
+    child.stdin.end();
+  });
+
+  it("keeps claude while the heartbeat arrives, and stops it a grace after its input ends", async () => {
+    const t = claudeSdkRemoteToken();
+    const pids = join(dir, "pids");
+    const child = launch(t, stubborn(pids), { intervalMs: 300, timeoutS: 1, graceS: 1 });
+    const [shell, sleeper] = await pidsIn(pids);
+    const beat = setInterval(() => child.stdin.write("ORCA-CLAUDE-SDK-PING\n"), 300);
+    await new Promise((r) => setTimeout(r, 2_500));
+    clearInterval(beat);
+    expect(alive(shell) && alive(sleeper)).toBe(true);
+    child.stdin.end();
+    await until(() => Promise.resolve(!alive(shell) && !alive(sleeper)), 10_000);
   });
 
   it("starts nothing once a stop came first", async () => {
@@ -246,7 +300,7 @@ describe("preflight on an SSH host (#1130)", () => {
     expect(preflight).toMatchObject({ executable: "claude", version: "2.1.332", env: { ORCA_RUN: "r" } });
     const lines = (await readFile(sshLog, "utf8")).trim().split("\n");
     expect(lines).toHaveLength(2);
-    for (const line of lines) expect(line).toMatch(/^-T -o BatchMode=yes .*build-box\.invalid -- sh -c /);
+    for (const line of lines) expect(line).toMatch(/^-T -o BatchMode=yes .*build-box\.invalid -- bash -c /);
   });
 
   it("refuses a claude that is not signed in there, with guidance that names the host", async () => {
@@ -334,6 +388,20 @@ describe("a session on an SSH host (#1130)", () => {
     await session.close();
     expect(alive(pid)).toBe(false);
     expect(alive(descendant)).toBe(false);
+  });
+
+  it("reports a stop it cannot confirm, rather than closure, when the host cannot be reached for it", async () => {
+    const { session } = await open();
+    await session.prompt("hello");
+    sessions.splice(sessions.indexOf(session), 1);
+    await writeFile(join(dir, "no-stop"), "");
+    const closing = (await session.close().then(
+      () => undefined,
+      (e: unknown) => e,
+    )) as OrcaError | undefined;
+    expect(closing).toBeInstanceOf(OrcaError);
+    expect(closing?.details).toMatchObject({ reason: "remote-cleanup-unconfirmed", host: "build-box" });
+    await expect(session.terminated).rejects.toThrow(/could not confirm that Claude Code stopped on host build-box/);
   });
 
   it("refuses to attest a claude on another machine, so a required attestation refuses the session", async () => {

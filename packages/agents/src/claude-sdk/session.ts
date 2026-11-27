@@ -86,7 +86,7 @@ import type { ClaudeSdkPreflight } from "./launch.js";
 import { claudeSdkPermissionBridge } from "./permission-bridge.js";
 import { inProcessHookTelemetry } from "./tool-telemetry.js";
 import { rateLimitNotice, usageLimitFailure, usageUpdate, type CallSample } from "./usage.js";
-import type { ClaudeSdkRemoteLaunch } from "./remote.js";
+import { claudeSdkRemoteCleanupUnconfirmed, type ClaudeSdkRemoteLaunch } from "./remote.js";
 import { attestClaudeSdkRuntime, type ClaudeSdkRuntimeAttestation, type ClaudeSdkVerifiedPair } from "./attestation.js";
 
 export interface ClaudeSdkSessionOptions {
@@ -374,28 +374,33 @@ async function openClaudeSdkProcess(
   };
   /**
    * On another machine, what this launch started there is stopped there too, over a connection
-   * of its own, once (#1130); a stop that cannot be confirmed is logged, never thrown.
+   * of its own (#1130). A stop that cannot be confirmed is no evidence the process is gone:
+   * `terminated` rejects and `close()` throws, with reason `remote-cleanup-unconfirmed`.
    */
-  let remoteStopped: Promise<void> | undefined;
-  const stopRemote = (): Promise<void> =>
+  let remoteStopped: Promise<OrcaError | undefined> | undefined;
+  const stopRemote = (): Promise<OrcaError | undefined> =>
     (remoteStopped ??= remote
       ? remote.stop().then(
           (r) => {
-            if (!r.stopped)
-              logger.warn("ORCA could not confirm that Claude Code stopped on the remote host", {
-                agentId: options.agent.id,
-                host: remote.hostId,
-                reason: r.reason,
-              });
+            if (r.stopped) return undefined;
+            logger.warn("ORCA could not confirm that Claude Code stopped on the remote host", {
+              agentId: options.agent.id,
+              host: remote.hostId,
+              reason: r.reason,
+            });
+            return claudeSdkRemoteCleanupUnconfirmed(options.agent.id, remote.hostId, r.reason ?? "unknown");
           },
-          () => undefined,
+          (e: unknown) => claudeSdkRemoteCleanupUnconfirmed(options.agent.id, remote.hostId, errorName(e)),
         )
-      : Promise.resolve());
+      : Promise.resolve(undefined));
   // Once the process is gone, anything it started in its group goes too, here and there.
   const terminated: Promise<void> = exited.then(async () => {
     killGroup("SIGKILL");
-    if (spawned) await stopRemote();
+    const unconfirmed = spawned ? await stopRemote() : undefined;
+    if (unconfirmed) throw unconfirmed;
   });
+  // Nobody may ever await it (an aborted open); close() reports the same outcome.
+  terminated.catch(() => undefined);
 
   // ---- input, permissions, the query --------------------------------------------------------
   const id = newId("sess", clock.now());
@@ -505,7 +510,7 @@ async function openClaudeSdkProcess(
       } catch {
         // already closed
       }
-      // Closed means nothing of it still runs on the other machine either.
+      // Closed means nothing of it still runs on the other machine either, or says it may.
       if (spawned && remote) await stopRemote();
       await relayClosed;
       // The last lines the hook recorded are handed over before the session counts as closed.
@@ -859,8 +864,11 @@ async function openClaudeSdkProcess(
       requestCancel("cancel requested");
     },
 
-    close() {
-      return terminate();
+    async close() {
+      await terminate();
+      // On another machine, a stop that could not be confirmed is not reported as closure.
+      const unconfirmed = spawned && remote ? await stopRemote() : undefined;
+      if (unconfirmed) throw unconfirmed;
     },
   };
 }

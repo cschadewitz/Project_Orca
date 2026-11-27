@@ -146,7 +146,7 @@ echo '{"loggedIn":false}'; exit 1
 printf '%s' "$*" | tr '\\n' ' ' >> "${log}"; echo >> "${log}"
 while [ "$#" -gt 0 ] && [ "$1" != "--" ]; do shift; done
 shift
-exec env -i PATH="/usr/bin:/bin" HOME="${dir}" sh -c "$*"
+exec env -i PATH="/usr/bin:/bin" HOME="${dir}" bash -c "$*"
 `,
       );
       await chmod(ssh, 0o755);
@@ -166,7 +166,7 @@ exec "${process.execPath}" "${STAND_IN}" "$@"
           type: "ssh",
           host: "box.invalid",
           sshBinary: ssh,
-          remoteShell: "sh -c",
+          remoteShell: "bash -c",
         }) as never,
       );
       return { host, log, remoteClaude };

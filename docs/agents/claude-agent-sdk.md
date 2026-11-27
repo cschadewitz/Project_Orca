@@ -136,17 +136,31 @@ builtins before `claude` starts and is handed the rest of stdin. So a value appe
 process's argument list on either machine, and in no error or log ORCA writes. A real-sshd
 test scans every process's arguments while a session starts and runs.
 
-**The remote side owns the process.** The remote shell starts `claude` in a process group of
-its own (`setsid`, or job control where there is none). It records the group under a token
-unique to the launch in `~/.cache/orca/claude-sdk/` on the host, waits for `claude`, and kills
-the whole group when `claude` exits. Whenever a session ends (closed, cancelled while it opened,
-or its connection lost), ORCA also stops it over a new SSH connection: that connection kills
-the recorded group and checks that it is gone, and the session counts as closed only after it.
-A stop that cannot be confirmed (the host unreachable, say) is logged as a warning. A process
-that leaves the group by starting a session of its own is not followed, as on ORCA's own
-machine. The real-sshd tests check that a `claude` that ignores the end of its input, and a
-process it started, are gone after a close, after the connection is killed, and after a
-cancelled open.
+**The host owns the launch.** The host must be Linux with bash as the remote shell (the
+default `bash -lc`); anything else is refused before `claude` starts.
+
+- **A marker, not a number.** Every process of a launch carries
+  `ORCA_CLAUDE_SDK_LAUNCH=<token>` in its environment, with a token unique to the launch. A stop
+  signals a process only after reading that marker in `/proc/<pid>/environ` right before the
+  signal, so a reused pid or group id, or another launch's process, is never signalled. A
+  process that clears its own environment is not followed.
+- **The host stops it by itself.** `claude`'s input comes through a relay in the remote shell,
+  which drops a heartbeat line ORCA sends every 5 seconds. When the input ends (ORCA closed it,
+  or the connection did), the relay closes `claude`'s input and, 10 seconds later, stops every
+  process of the launch. When nothing arrives for 30 seconds (ORCA frozen or unreachable, the
+  link silently gone), it stops them at once. When `claude` exits, the remote shell stops what
+  it left. None of this needs a connection back.
+- **ORCA confirms it.** Whenever a session ends (closed, cancelled while it opened, or its
+  connection lost), ORCA also runs the stop over a new SSH connection and checks that nothing
+  of the launch runs. A stop that cannot be confirmed (the host unreachable, say) is not
+  reported as closure: `close()` throws and the session's termination is rejected with reason
+  `remote-cleanup-unconfirmed`, so ORCA keeps the agent slot until it knows. The host's own
+  stop is what remains.
+
+The real-sshd tests check each of these. After a close, a killed connection, a frozen ORCA
+(its ssh stopped, no stop sent), a cleanup connection that cannot be made, and a cancelled
+open, a `claude` that ignores the end of its input, and a process it started, are gone, and
+the unconfirmed case is reported as such.
 
 What does not hold on that machine yet, and so is refused or left out:
 

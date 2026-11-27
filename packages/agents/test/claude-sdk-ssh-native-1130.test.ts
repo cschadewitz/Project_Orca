@@ -10,12 +10,13 @@
 import { chmod, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { readFileSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { HostSpecSchema, OrcaError } from "@orca/core";
 import { loopbackSshd, type LoopbackSshd } from "@orca/testing/two-daemons";
 import {
+  CLAUDE_SDK_REMOTE_HEARTBEAT,
   SshHost,
   claudeSdkSshLaunch,
   claudeSdkSshPreflight,
@@ -67,14 +68,27 @@ afterAll(async () => {
 
 const agent = (env: Record<string, string> = {}) => ({ id: "claude-sdk", command: claude, env });
 
-async function open(log: string, env: Record<string, string>, extra: Record<string, unknown> = {}) {
-  const preflight = await claudeSdkSshPreflight({ host, agent: agent(env), cwd: dir, orcaEnv: { STAND_IN_LOG: log } });
+const FAST = { intervalMs: 500, timeoutS: 2, graceS: 1 };
+
+async function open(
+  log: string,
+  env: Record<string, string>,
+  extra: Record<string, unknown> = {},
+  on: SshHost = host,
+  heartbeat = CLAUDE_SDK_REMOTE_HEARTBEAT,
+) {
+  const preflight = await claudeSdkSshPreflight({
+    host: on,
+    agent: agent(env),
+    cwd: dir,
+    orcaEnv: { STAND_IN_LOG: log },
+  });
   const session = await openClaudeSdkSession({
     agent: { id: "claude-sdk", cancelGraceMs: 2_000 },
-    hostId: host.id,
+    hostId: on.id,
     cwd: dir,
     preflight,
-    remote: claudeSdkSshLaunch(host, "claude-sdk"),
+    remote: claudeSdkSshLaunch(on, "claude-sdk", undefined, heartbeat),
     startupTimeoutMs: 15_000,
     exitGraceMs: 500,
     ...extra,
@@ -160,6 +174,65 @@ describe("Claude Code over a real sshd (#1130)", () => {
     expect(alive(pid)).toBe(false);
     expect(alive(descendant)).toBe(false);
   }, 60_000);
+
+  it("an unreachable controller: the host stops claude by itself, with no connection back", async (context) => {
+    if (!sshd) return context.skip("no /usr/sbin/sshd; set ORCA_REQUIRE_SSHD=1 to require it");
+    const log = join(dir, "silent.log");
+    const session = await open(log, { STAND_IN_STUBBORN: "1", STAND_IN_DESCENDANT: "1" }, {}, host, FAST);
+    await session.prompt("hello");
+    const { pid, descendant } = await started(log);
+    // ORCA's ssh frozen: the connection stays up and nothing arrives, no EOF and no stop.
+    const ssh = (await allArgv()).filter((p) => p.ppid === process.pid && p.argv.includes("orca_relay"));
+    expect(ssh).toHaveLength(1);
+    process.kill(ssh[0]!.pid, "SIGSTOP");
+    try {
+      await until(() => Promise.resolve(!alive(pid) && !alive(descendant)), 15_000);
+    } finally {
+      process.kill(ssh[0]!.pid, "SIGKILL");
+    }
+    await session.terminated;
+  }, 60_000);
+
+  it("a cleanup connection that cannot be made: close reports it unconfirmed, and the host still stops claude", async (context) => {
+    if (!sshd) return context.skip("no /usr/sbin/sshd; set ORCA_REQUIRE_SSHD=1 to require it");
+    const own = (await loopbackSshd({ commands: true }))!;
+    const box = new SshHost(
+      HostSpecSchema.parse({
+        id: "doomed",
+        type: "ssh",
+        host: "127.0.0.1",
+        user: own.user,
+        sshArgs: own.sshArgs.slice(0, -1),
+        connectTimeoutMs: 2_000,
+      }) as never,
+      { sftp: false },
+    );
+    try {
+      const log = join(dir, "unreachable.log");
+      const session = await open(log, { STAND_IN_STUBBORN: "1", STAND_IN_DESCENDANT: "1" }, {}, box, FAST);
+      sessions.splice(sessions.indexOf(session), 1);
+      await session.prompt("hello");
+      const { pid, descendant } = await started(log);
+      // No new connection can be made any more; the session's own stays up.
+      const listener = (await allArgv()).filter((p) => p.ppid === process.pid && /sshd -D -f/.test(p.argv));
+      // This test's sshd: the listener whose files sit beside its client configuration.
+      const root = dirname(own.sshArgs[1]!);
+      const mine = listener.filter((l) => l.argv.includes(root));
+      expect(mine).toHaveLength(1);
+      process.kill(mine[0]!.pid, "SIGKILL");
+      const error = (await session.close().then(
+        () => undefined,
+        (e: unknown) => e,
+      )) as OrcaError | undefined;
+      expect(error).toBeInstanceOf(OrcaError);
+      expect(error?.details).toMatchObject({ reason: "remote-cleanup-unconfirmed", host: "doomed" });
+      await expect(session.terminated).rejects.toThrow(/could not confirm/);
+      // The host's own stop: the session's connection ended, so after the grace nothing runs.
+      await until(() => Promise.resolve(!alive(pid) && !alive(descendant)), 15_000);
+    } finally {
+      await own.close().catch(() => undefined);
+    }
+  }, 90_000);
 
   it("a cancelled open leaves nothing running there", async (context) => {
     if (!sshd) return context.skip("no /usr/sbin/sshd; set ORCA_REQUIRE_SSHD=1 to require it");
