@@ -1,0 +1,1 @@
+- **agents:** on a `driver: claude-agent-sdk` session ORCA's native tool hook runs in process (#1123): every call is decided as the ACP route's hook decides it, including asking a person about a call that runs outside the workspace; with `diagnostics.toolCalls: keep` it records the same tool-call telemetry lines (#1000). `nativeToolHook: on` is refused on this route as on ACP.

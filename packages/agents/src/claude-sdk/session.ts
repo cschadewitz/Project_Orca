@@ -50,6 +50,7 @@ import {
   systemClock,
   type AgentSpec,
   type Clock,
+  type HookTelemetryLine,
   type JudgedDecision,
   type Logger,
   type SessionConfigOption,
@@ -82,6 +83,7 @@ import {
 } from "./config-options.js";
 import type { ClaudeSdkPreflight } from "./launch.js";
 import { claudeSdkPermissionBridge } from "./permission-bridge.js";
+import { inProcessHookTelemetry } from "./tool-telemetry.js";
 
 export interface ClaudeSdkSessionOptions {
   agent: Pick<AgentSpec, "id" | "cancelGraceMs"> & Partial<Pick<AgentSpec, "permissions">>;
@@ -126,6 +128,11 @@ export interface ClaudeSdkSessionOptions {
   host?: AgentHost | undefined;
   /** Variables of ORCA's environment kept from Claude, and so from its MCP servers. */
   withheldEnv?: readonly string[] | undefined;
+  /**
+   * `keep`: the in-process hook records one line per decided call (#1123), which the session
+   * offers as `hookTelemetry` for the engine to store (`diagnostics.toolCalls`). Off by default.
+   */
+  toolCallTelemetry?: "off" | "keep" | undefined;
   /** Aborts the open while it is starting. */
   signal?: AbortSignal | undefined;
   logger?: Logger | undefined;
@@ -322,6 +329,7 @@ async function openClaudeSdkProcess(
   let failAsk: (turnId: string, error: unknown) => void = () => undefined;
   /** Aborted when the session ends: its MCP servers serve nothing after it (#1125). */
   const sessionLive = new AbortController();
+  const telemetry = options.toolCallTelemetry === "keep" ? inProcessHookTelemetry() : undefined;
   const { preToolUse, canUseTool, authorizeMcp } = claudeSdkPermissionBridge({
     agent: options.agent,
     sessionId: id,
@@ -337,6 +345,8 @@ async function openClaudeSdkProcess(
     parentOf: (toolUseId) => parents.get(toolUseId),
     onAskFailed: (turnId, error) => failAsk(turnId, error),
     sessionSignal: sessionLive.signal,
+    additionalDirectories: options.additionalDirectories,
+    ...(telemetry ? { onToolCallTelemetry: (line: HookTelemetryLine) => telemetry.record(line) } : {}),
     logger,
   });
   // ORCA's MCP relay (#1125): the real servers run on ORCA's side, started only for a request
@@ -414,6 +424,8 @@ async function openClaudeSdkProcess(
         // already closed
       }
       await relayClosed;
+      // The last lines the hook recorded are handed over before the session counts as closed.
+      await telemetry?.finish();
       resolveClosed();
     })());
 
@@ -629,6 +641,7 @@ async function openClaudeSdkProcess(
     closed,
     terminated,
     promptCapabilities: { embeddedContext: false },
+    ...(telemetry ? { hookTelemetry: telemetry } : {}),
     get configOptions() {
       return configOptions;
     },

@@ -114,12 +114,25 @@ async function setup(opts: { policy: () => PermissionPolicy; answer?: string; tu
   client = new Client({ name: "claude-stand-in", version: "0" });
   await client.connect(clientSide);
   /** What Claude does before an MCP tool call: ask ORCA (`canUseTool`), for this tool use. */
-  const claudeAsks = (toolUseId: string, input: Record<string, unknown> = {}) =>
-    bridge.canUseTool("mcp__tools__touch", input, {
+  const claudeAsks = async (toolUseId: string, input: Record<string, unknown> = {}) => {
+    // Claude's hook comes first: it settles where the call runs (#1123).
+    await bridge.preToolUse(
+      {
+        hook_event_name: "PreToolUse",
+        tool_name: "mcp__tools__touch",
+        tool_input: input,
+        tool_use_id: toolUseId,
+        cwd: dir,
+      } as never,
+      toolUseId,
+      { signal: new AbortController().signal },
+    );
+    return bridge.canUseTool("mcp__tools__touch", input, {
       signal: new AbortController().signal,
       toolUseID: toolUseId,
       mcpServer: { name: "tools", source: "sdk" },
     } as never);
+  };
   const callTool = (toolUseId?: string, args: Record<string, unknown> = {}) =>
     client!.callTool({
       name: "touch",

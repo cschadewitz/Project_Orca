@@ -14,7 +14,8 @@
  *   or an effort changes what Claude Code sends the model;
  * - ORCA's permission answers (#1122) with nobody to answer: a Read inside the workspace runs,
  *   Bash is asked and denied before it runs (the marker file never appears), Grep is denied, a
- *   Read outside the workspace is asked by Claude Code and answered no;
+ *   Read outside the workspace is asked by Claude Code and answered no; ORCA's in-process hook
+ *   (#1123) records one telemetry line for each of those calls;
  * - with a person answering: a Bash they allow runs, once, and the next identical one is asked
  *   again; one they decline does not run and the model is told why; a rule's ask reaches them
  *   for a read Claude would have run by itself;
@@ -33,7 +34,7 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { AgentSpecSchema, configOptionValues } from "@orca/core";
+import { AgentSpecSchema, configOptionValues, type HookTelemetryLine } from "@orca/core";
 import { LocalHost, type AgentSession, type SessionUpdateEvent } from "@orca/agents";
 import { makeSessionFactory } from "../src/bootstrap.js";
 
@@ -252,8 +253,13 @@ describe.runIf(CLAUDE !== undefined && process.platform !== "win32")(
       await session.terminated;
     });
 
-    it("runs a Read in the workspace; denies Bash, Grep and a Read outside it", async () => {
-      const session = await open();
+    it("runs a Read in the workspace; denies Bash, Grep and a Read outside it; the hook records each (#1123)", async () => {
+      const session = await open({}, undefined, { diagnostics: { toolCalls: "keep" } });
+      const lines: HookTelemetryLine[] = [];
+      session.hookTelemetry!.attach((l) => {
+        lines.push(...l);
+        return Promise.resolve();
+      });
       try {
         const events: SessionUpdateEvent[] = [];
         session.onUpdate((e) => events.push(e));
@@ -274,6 +280,14 @@ describe.runIf(CLAUDE !== undefined && process.platform !== "win32")(
       } finally {
         await session.close();
       }
+      // ORCA's in-process hook saw every call real Claude made, and recorded what it decided.
+      // (This Claude Code has no Grep tool: it refuses that call before any hook, and runs nothing.)
+      expect(lines.map((l) => [l.tool, l.decision, l.rule])).toEqual([
+        ["Read", "allow", "policy"],
+        ["Bash", "ask", "policy"],
+        ["Read", "ask", "policy"],
+      ]);
+      for (const line of lines) expect(line.toolUseId).toMatch(/^toolu_/);
     });
 
     it("asks the person, allows once only, and tells the model when they decline", async () => {

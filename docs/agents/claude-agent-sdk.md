@@ -78,7 +78,10 @@ names: no error or log carries text the CLI printed.
    ORCA cannot read fails it.
 
 The agent must run on ORCA's own machine for now (SSH hosts: #1130). It takes no `args` (the SDK
-builds Claude's arguments), and neither `nativeToolHook` nor `codexExecGate`.
+builds Claude's arguments) and no `codexExecGate`. ORCA's tool hook always runs on this route,
+in process (see "ORCA's tool hook" below): `nativeToolHook: experimental` or `off` changes
+nothing, and `on` is refused when the session opens, as on the ACP route, until a hook is
+guard-qualified.
 
 ## The session
 
@@ -163,6 +166,28 @@ rules, people and answerer as for Claude over ACP:
 An ask card shows the call as ORCA's rules read it, together with what Claude said about it:
 why it asks, the path it was blocked on, and for a subagent's call, the tool call that started
 the subagent. A note the person writes beside a decline does not reach Claude yet.
+
+### ORCA's tool hook
+
+On this route ORCA's native tool hook (#1123) is a `PreToolUse` callback inside the daemon,
+not a separate program per tool call. It sees every call Claude makes, MCP tools and a
+subagent's calls included, ahead of Claude's own rules, and decides it the way the ACP route's
+hook does:
+
+- a call touching ORCA's own files is denied; then the permission rules decide;
+- a call the rules allow but that runs outside the workspace (and outside
+  `additionalDirectories`) is asked about, and only a person can allow it, whatever the rules
+  say by the time Claude asks. So is a call that does not say where it runs, and any ask ORCA
+  cannot tie, as the first ask for it, to a call the hook saw inside the workspace in the same
+  turn, for the same tool, with the same input;
+- the hook never answers `allow`, so Claude's own check still runs;
+- every failure while deciding is an explicit deny, and the hook is installed with
+  `onFailure: "block"`, which Claude Code versions without it refuse before the session opens.
+
+With `diagnostics.toolCalls: keep`, the hook records one line per decided call in the ACP
+route's hook format (#1000), which ORCA stores as it does a hook program's lines. Recording
+can never change an answer, and never holds a session open: lines not stored within two
+seconds of the session closing are dropped.
 
 ### MCP servers
 

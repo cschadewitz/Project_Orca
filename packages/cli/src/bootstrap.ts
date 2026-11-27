@@ -374,6 +374,9 @@ export function makeSessionFactory(
         );
       // Refused before anything runs: no tested process-tree ownership on Windows yet.
       if (process.platform === "win32") throw claudeSdkPlatformUnsupported(options.agent.id);
+      // ORCA's hook runs in process on this route (#1123); `on` waits for a qualified hook here too.
+      const unqualifiedHook = nativeToolHookNotQualified(options.agent);
+      if (unqualifiedHook) throw unqualifiedHook;
       // Secret references (#1126) are planned, checked and read as on the ACP route, then given
       // to Claude only in the variables the agent's env names; the values are redacted from
       // everything after this, the run's events included.
@@ -421,6 +424,8 @@ export function makeSessionFactory(
         host: options.host,
         mcpServers: secrets.mcpServers,
         withheldEnv: secrets.withheld,
+        // The in-process hook's lines (#1123), stored by the engine as a native hook's are.
+        toolCallTelemetry: options.agent.diagnostics?.toolCalls,
       });
     }
     // ORCA's gate in Codex's executor path (#1026): its own route, which refuses every session

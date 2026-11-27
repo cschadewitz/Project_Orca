@@ -76,16 +76,17 @@ describe("config (#1118)", () => {
     expect(AgentSpecSchema.safeParse({ id: "x" }).success).toBe(false);
   });
 
-  it("refuses args, the ACP hook, the Codex gate and orca-daemon with the SDK driver", () => {
+  it("refuses args, the Codex gate and orca-daemon with the SDK driver, and takes nativeToolHook (#1123)", () => {
     const issues = (extra: Record<string, unknown>) => {
       const r = AgentSpecSchema.safeParse({ id: "c", driver: "claude-agent-sdk", ...extra });
       return r.success ? [] : r.error.issues.map((i) => i.path.join("."));
     };
     expect(issues({ args: ["--dangerously-skip-permissions"] })).toContain("args");
-    expect(issues({ nativeToolHook: "experimental" })).toContain("nativeToolHook");
     expect(issues({ codexExecGate: "experimental" })).toContain("codexExecGate");
     expect(issues({ type: "orca-daemon", profile: "p", workflow: "w" })).toContain("driver");
     expect(issues({ nativeToolHook: "off" })).toEqual([]);
+    expect(issues({ nativeToolHook: "experimental" })).toEqual([]);
+    expect(issues({ nativeToolHook: "on" })).toEqual([]); // refused when the session opens
   });
 });
 

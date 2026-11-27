@@ -36,3 +36,4 @@ export * from "./claude-sdk/config-options.js";
 export * from "./claude-sdk/permission-bridge.js";
 export * from "./claude-sdk/secrets.js";
 export * from "./claude-sdk/mcp-servers.js";
+export * from "./claude-sdk/tool-telemetry.js";

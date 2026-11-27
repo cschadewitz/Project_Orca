@@ -20,6 +20,7 @@ on:
       - packages/agents/src/permissions.ts
       - packages/agents/src/policy-call.ts
       - packages/agents/src/claude-pre-tool-hook.ts
+      - packages/agents/src/hook-telemetry.ts
       - packages/agents/src/claude-acp-title.ts
       - packages/agents/src/secrets.ts
       - packages/agents/src/mcp-relay.ts

@@ -51,6 +51,38 @@ exec "${process.execPath}" "${STAND_IN}" "$@"
     expect(open).not.toHaveBeenCalled();
   });
 
+  it("refuses nativeToolHook: on before anything runs, and opens with experimental: the hook runs in process (#1123)", async () => {
+    const claude = join(dir, "claude");
+    const marker = join(dir, "ran");
+    await writeFile(
+      claude,
+      `#!/bin/sh
+touch "${marker}"
+if [ "$1" = "--version" ]; then echo "2.1.332 (Claude Code)"; exit 0; fi
+if [ "$1" = "auth" ]; then echo '{"loggedIn":true,"authMethod":"oauth_token","apiProvider":"firstParty"}'; exit 0; fi
+exec "${process.execPath}" "${STAND_IN}" "$@"
+`,
+    );
+    await chmod(claude, 0o755);
+    const { factory } = factoryWithSpy();
+    const host = new LocalHost({ id: "local", type: "local" });
+    const on = AgentSpecSchema.parse({
+      id: "claude",
+      driver: "claude-agent-sdk",
+      command: claude,
+      nativeToolHook: "on",
+    });
+    await expect(factory({ host, agent: on, cwd: dir })).rejects.toThrow(/nativeToolHook: on/);
+    expect(existsSync(marker)).toBe(false);
+    const experimental = AgentSpecSchema.parse({ ...on, nativeToolHook: "experimental" });
+    const session = await factory({ host, agent: experimental, cwd: dir });
+    try {
+      expect((await session.prompt("hello")).stopReason).toBe("end_turn");
+    } finally {
+      await session.close();
+    }
+  });
+
   it("refuses the session when claude is not signed in, before starting it", async () => {
     const claude = join(dir, "claude");
     await writeFile(
