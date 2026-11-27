@@ -84,13 +84,27 @@ import {
 import type { ClaudeSdkPreflight } from "./launch.js";
 import { claudeSdkPermissionBridge } from "./permission-bridge.js";
 import { inProcessHookTelemetry } from "./tool-telemetry.js";
+import { attestClaudeSdkRuntime, type ClaudeSdkRuntimeAttestation, type ClaudeSdkVerifiedPair } from "./attestation.js";
 
 export interface ClaudeSdkSessionOptions {
   agent: Pick<AgentSpec, "id" | "cancelGraceMs"> & Partial<Pick<AgentSpec, "permissions">>;
   hostId: string;
   cwd: string;
   /** What `claudeSdkPreflight` found: the executable to run and the environment to run it with. */
-  preflight: Pick<ClaudeSdkPreflight, "executable" | "env">;
+  preflight: Pick<ClaudeSdkPreflight, "executable" | "env"> & Partial<Pick<ClaudeSdkPreflight, "version">>;
+  /**
+   * Which Claude Code the session runs (#1124), attested from ORCA's own side once it has
+   * answered `initialize`. `required`: the session is refused, before any work, unless the
+   * image is the one pinned for this SDK and Claude Code version; otherwise a mismatch is only
+   * logged. `pairs` replaces the pinned pairs (tests). `onResult` receives the outcome.
+   */
+  runtimeAttestation?:
+    | {
+        required?: boolean | undefined;
+        pairs?: readonly ClaudeSdkVerifiedPair[] | undefined;
+        onResult?: ((result: ClaudeSdkRuntimeAttestation) => void) | undefined;
+      }
+    | undefined;
   /** ORCA's own files, which no rule opens to a tool call (C4-01). */
   protectedPaths?: ProtectedPaths | undefined;
   /** Permission sidecars layered under the agent's configured rules, read again for every call. */
@@ -468,6 +482,42 @@ async function openClaudeSdkProcess(
       { agentId: options.agent.id, executable, ...details },
     );
   }
+
+  // ---- which Claude Code runs (#1124) ---------------------------------------------------------
+  const attestation = attestClaudeSdkRuntime({
+    pid: child?.pid,
+    claudeCodeVersion: options.preflight.version,
+    pairs: options.runtimeAttestation?.pairs,
+  }).then((result) => {
+    try {
+      options.runtimeAttestation?.onResult?.(result);
+    } catch {
+      // An observer's failure is not the session's.
+    }
+    return result;
+  });
+  if (options.runtimeAttestation?.required) {
+    const result = await attestation;
+    if (!result.verified) {
+      await terminate();
+      throw withStartupTermination(
+        new OrcaError(
+          "NOT_SUPPORTED",
+          `agent ${options.agent.id} has nativeToolHook: experimental, but the Claude Code it runs is not one ORCA verified: ${result.reason}. ` +
+            `ORCA refuses the session rather than run it unattested; use the pinned Claude Code (docs/agents/claude-agent-sdk.md), or remove nativeToolHook.`,
+          { agentId: options.agent.id, executable, reason: result.reason },
+        ),
+        spawned && !exitObserved ? terminated : Promise.resolve(),
+      );
+    }
+  } else
+    void attestation.then((result) => {
+      if (!result.verified)
+        logger.warn("the Claude Code this session runs is not one ORCA verified", {
+          agentId: options.agent.id,
+          reason: result.reason,
+        });
+    });
 
   // ---- the session -----------------------------------------------------------------------
   admit(true);
