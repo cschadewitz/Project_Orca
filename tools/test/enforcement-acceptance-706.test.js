@@ -176,16 +176,21 @@ describe("the matrix checker refuses claims beyond the evidence", () => {
     ...extra,
   });
   /**
-   * A stand-in for the committed assertion inventory: every case the connected path runs makes
+   * A stand-in for the committed assertion inventory: every case a connected path runs makes
    * one Write that ORCA must deny, which is what the fixture receipts below record.
    */
   const inventoryFor = (paths) => {
-    const connected = paths.find((p) => p.id === "claude-connected");
     return {
       format: "orca-706-assertions/1",
       paths: {
-        "claude-connected": Object.fromEntries(
-          casesFor(connected, catalogue).map((id) => [id, [{ tool: "Write", expected: ["deny"] }]]),
+        // Every connected path: claude-connected and the SDK route's claude-sdk-connected (#1128).
+        ...Object.fromEntries(
+          paths
+            .filter((p) => p.connected)
+            .map((p) => [
+              p.id,
+              Object.fromEntries(casesFor(p, catalogue).map((id) => [id, [{ tool: "Write", expected: ["deny"] }]])),
+            ]),
         ),
         "fixture-live": Object.fromEntries(catalogue.cases.map((c) => [c.id, [{ tool: "Write", expected: ["deny"] }]])),
       },
