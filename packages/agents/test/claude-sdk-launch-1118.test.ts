@@ -105,6 +105,10 @@ describe("environment (#1118)", () => {
         AWS_BEARER_TOKEN_BEDROCK: "bedrock",
         CLAUDECODE: "1",
         CLAUDE_SESSION_INGRESS_TOKEN_FILE: "/run/token",
+        // Claude overrides that change what it runs or loads (#1126).
+        CLAUDE_ENV_FILE: "/tmp/env.sh",
+        CLAUDE_EFFORT: "max",
+        claude_after_last_compact: "1",
       },
       { CLAUDE_CODE_OAUTH_TOKEN: "orca-must-not", ORCA_X: "1" },
     );
@@ -124,16 +128,34 @@ describe("environment (#1118)", () => {
       "anthropic_auth_token",
       "CLAUDE_CODE_OAUTH_TOKEN",
       "CLAUDE_CODE_USE_VERTEX",
+      "CLAUDE_ENV_FILE",
+      "CLAUDE_PID",
     ])
       expect(isClaudeCredentialVariable(name)).toBe(true);
     for (const name of ["CLAUDE_CONFIG_DIR", "PATH", "HOME", "AWS_PROFILE"])
       expect(isClaudeCredentialVariable(name)).toBe(false);
   });
 
-  it("refuses a secret reference until the driver delivers secrets (#1126)", () => {
-    expect(() => claudeSdkEnvironment(agent({ env: { ANTHROPIC_API_KEY: { secret: "k" } } }), {})).toThrow(
-      /does not deliver secrets yet \(#1126\)/,
+  it("fills a secret reference only from what was delivered, and withholds its source (#1126)", () => {
+    const withSecret = agent({ env: { ANTHROPIC_API_KEY: { secret: "k" }, FOO: "bar" } });
+    expect(() => claudeSdkEnvironment(withSecret, {})).toThrow(/not delivered to this session/);
+    const env = claudeSdkEnvironment(
+      withSecret,
+      { PATH: "/usr/bin", ORCA_KEY_SOURCE: "the-value", ANTHROPIC_API_KEY: "daemon-key" },
+      { FOO: "from-orca" },
+      { env: { ANTHROPIC_API_KEY: "the-value" }, withheld: ["ORCA_KEY_SOURCE"] },
     );
+    expect(env).toEqual({ PATH: "/usr/bin", FOO: "bar", ANTHROPIC_API_KEY: "the-value" });
+  });
+
+  it("withholds a secret's source from what ORCA adds as well, and keeps what the agent sets (#1308 review)", () => {
+    const env = claudeSdkEnvironment(
+      agent({ env: { TOKEN: { secret: "t" }, EXPLICIT_SOURCE: "agent-set" } }),
+      { PATH: "/usr/bin" },
+      { ORCA_SOURCE: "orca-added", orca_source_lower: "orca-added", EXPLICIT_SOURCE: "orca-added", ORCA_OK: "1" },
+      { env: { TOKEN: "delivered" }, withheld: ["ORCA_SOURCE", "ORCA_SOURCE_LOWER", "EXPLICIT_SOURCE"] },
+    );
+    expect(env).toEqual({ PATH: "/usr/bin", ORCA_OK: "1", EXPLICIT_SOURCE: "agent-set", TOKEN: "delivered" });
   });
 });
 

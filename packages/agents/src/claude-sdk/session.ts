@@ -55,6 +55,7 @@ import {
   type SessionConfigOption,
 } from "@orca/core";
 import { contextRecoveryFailure, type PermissionInvocation, type SessionContinuity } from "../acp-session.js";
+import { redactError, redactingLogger } from "../secrets.js";
 import type { PermissionRuleRecord, ProtectedPaths } from "../permissions.js";
 import {
   startupTermination,
@@ -104,6 +105,13 @@ export interface ClaudeSdkSessionOptions {
   requireContextRecovery?: boolean | undefined;
   /** Whether the session continued an earlier one, told once it is open. */
   onSessionContinuity?: ((state: SessionContinuity) => void) | undefined;
+  /** More directories Claude may work in beside `cwd` (Claude Code's `additionalDirectories`). */
+  additionalDirectories?: readonly string[] | undefined;
+  /**
+   * The values the agent's secret references were delivered (`claudeSdkSecrets`, #1126): taken
+   * out of everything this session logs or throws. Never logged or shown.
+   */
+  secretValues?: readonly string[] | undefined;
   /** Aborts the open while it is starting. */
   signal?: AbortSignal | undefined;
   logger?: Logger | undefined;
@@ -149,8 +157,33 @@ export function claudeSdkPlatformUnsupported(agentId: string): OrcaError {
 /** A Claude Code session id: what ORCA gives Claude Code and the only thing it resumes. */
 const CLAUDE_SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** Open a session that runs Claude through the Claude Agent SDK, continuing one when asked (#1121). */
+/**
+ * Open a session that runs Claude through the Claude Agent SDK, continuing one when asked (#1121).
+ * With `secretValues` (#1126), as on the ACP route, every error the open or a later call throws
+ * and everything the session logs has those values taken out, so a caller can return or write it
+ * as it is.
+ */
 export async function openClaudeSdkSession(options: ClaudeSdkSessionOptions): Promise<AgentSession> {
+  const values = [...(options.secretValues ?? [])].filter((v) => v.length > 0);
+  if (values.length === 0) return openClaudeSdkContinuing(options);
+  const redacted = <T>(work: () => Promise<T>) =>
+    work().catch((error: unknown) => {
+      throw redactError(error, values);
+    });
+  const session = await redacted(() =>
+    openClaudeSdkContinuing({
+      ...options,
+      logger: redactingLogger(options.logger ?? silentLogger, () => values),
+    }),
+  );
+  for (const method of ["prompt", "setConfigOption", "cancel", "close"] as const) {
+    const original = session[method].bind(session) as (...args: unknown[]) => Promise<unknown>;
+    (session as unknown as Record<string, unknown>)[method] = (...args: unknown[]) => redacted(() => original(...args));
+  }
+  return session;
+}
+
+async function openClaudeSdkContinuing(options: ClaudeSdkSessionOptions): Promise<AgentSession> {
   const resume = options.resumeSessionId?.trim() ? options.resumeSessionId : undefined;
   const required = options.requireContextRecovery === true;
   if (required && !resume) throw contextRecoveryFailure("missing-session-id");
@@ -294,6 +327,7 @@ async function openClaudeSdkProcess(
       pathToClaudeCodeExecutable: executable,
       env: { ...env },
       cwd,
+      ...(options.additionalDirectories?.length ? { additionalDirectories: [...options.additionalDirectories] } : {}),
       abortController: abort,
       permissionMode: "default",
       settingSources: [],

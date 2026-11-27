@@ -9,11 +9,13 @@
  * - **Executable.** `command` (or `claude` on PATH) is resolved to the file that would run, by
  *   its real path. One inside an `@anthropic-ai/claude-agent-sdk*` package is the SDK's bundled
  *   CLI, not the person's install, and is refused.
- * - **Credentials.** ORCA offers no login and never opens anything under Claude's config
- *   directory, keychain or token files. The child's environment is the daemon's with every
- *   Anthropic and Claude Code variable taken out (`claudeSdkEnvironment`), then the agent's own
- *   literal `env`: a credential reaches Claude only from the agent's config or from the login
- *   Claude keeps itself. Secret references wait for the session driver's secret delivery (#1126).
+ * - **Credentials and overrides.** ORCA offers no login and never opens anything under Claude's
+ *   config directory, keychain or token files. The child's environment is the daemon's with
+ *   every Anthropic and Claude variable taken out but `CLAUDE_CONFIG_DIR` (the person's choice
+ *   of login), and every variable a secret is read from withheld (`claudeSdkEnvironment`); then
+ *   the agent's own literal `env`, then the values its secret references were delivered
+ *   (`claude-sdk/secrets.ts`, #1126). A credential or a Claude override reaches Claude only
+ *   from the agent's config or from the login Claude keeps itself.
  * - **Login.** `claude auth status --json`, under a deadline, must say `loggedIn: true`. Not
  *   signed in is a session-open error that says to run `claude auth login` on that machine; no
  *   answer, a timeout or an answer ORCA cannot read is a failure too, never a pass.
@@ -43,47 +45,60 @@ export function claudeSdkNotAcp(agentId: string): OrcaError {
 }
 
 /**
- * Inherited variables Claude reads its account, credential or provider from, or that mark the
- * process as running inside another Claude Code. None of them comes from the daemon's
- * environment: the agent's own `env` is the only place ORCA takes one from.
+ * Inherited variables that choose Claude's account, credential or provider, change what Claude
+ * runs or loads (`CLAUDE_*` overrides such as an env file or a second config), or mark the
+ * process as running inside another Claude Code (#1126). None of them comes from the daemon's
+ * environment: the agent's own `env` is the only place ORCA takes one from. `CLAUDE_CONFIG_DIR`
+ * is kept: it is where the person's own login and settings live, and ORCA writes nothing there.
  */
 export function isClaudeCredentialVariable(name: string): boolean {
   const upper = name.toUpperCase();
   if (upper === "CLAUDE_CONFIG_DIR") return false;
   return (
     upper.startsWith("ANTHROPIC_") ||
-    upper.startsWith("CLAUDE_CODE_") ||
+    upper.startsWith("CLAUDE_") ||
     upper === "CLAUDECODE" ||
-    upper.startsWith("CLAUDE_SESSION_") ||
     upper === "AWS_BEARER_TOKEN_BEDROCK"
   );
 }
 
+/** What the agent's secret references were delivered, from `claudeSdkSecrets`. */
+export interface ClaudeSdkDeliveredSecrets {
+  env: Readonly<Record<string, string>>;
+  withheld: readonly string[];
+}
+
 /**
  * The environment the SDK's `claude` runs with: `base` (the daemon's) without any Claude or
- * Anthropic credential variable, then the agent's literal `env`. `orcaEnv`, what ORCA itself adds
- * to a session, is filtered the same way, so ORCA never sets a credential variable the agent's
- * config did not.
+ * Anthropic variable and without what `delivered` withholds, then `orcaEnv` (what ORCA itself
+ * adds to a session, filtered the same way and withheld the same way, so ORCA never sets a
+ * variable the agent's config did not), the agent's literal `env`, and last the variables its secret references fill. A secret
+ * reference that was not delivered is refused: it never falls back to anything inherited.
  */
 export function claudeSdkEnvironment(
   agent: Pick<AgentSpec, "id" | "env">,
   base: Readonly<Record<string, string | undefined>>,
   orcaEnv: Readonly<Record<string, string>> = {},
+  delivered: ClaudeSdkDeliveredSecrets = { env: {}, withheld: [] },
 ): Record<string, string> {
-  const refs = Object.entries(agent.env)
-    .filter(([, v]) => isSecretRef(v))
+  const missing = Object.entries(agent.env)
+    .filter(([k, v]) => isSecretRef(v) && delivered.env[k] === undefined)
     .map(([k]) => k);
-  if (refs.length > 0)
+  if (missing.length > 0)
     throw new OrcaError(
-      "NOT_SUPPORTED",
-      `agent ${agent.id} has driver: claude-agent-sdk and takes ${refs.join(", ")} from a secret reference; ` +
-        `the Claude Agent SDK driver does not deliver secrets yet (#1126). Sign in with \`claude auth login\` instead, or use the ACP route.`,
-      { agentId: agent.id, variables: refs },
+      "INTERNAL",
+      `agent ${agent.id} takes ${missing.join(", ")} from a secret reference that was not delivered to this session.`,
+      { agentId: agent.id, variables: missing },
     );
+  const withheld = new Set(delivered.withheld.map((k) => k.toUpperCase()));
   const env: Record<string, string> = {};
-  for (const [k, v] of Object.entries(base)) if (v !== undefined && !isClaudeCredentialVariable(k)) env[k] = v;
-  for (const [k, v] of Object.entries(orcaEnv)) if (!isClaudeCredentialVariable(k)) env[k] = v;
-  return { ...env, ...literalEnv(agent.env) };
+  for (const [k, v] of Object.entries(base))
+    if (v !== undefined && !isClaudeCredentialVariable(k) && !withheld.has(k.toUpperCase())) env[k] = v;
+  for (const [k, v] of Object.entries(orcaEnv))
+    if (!isClaudeCredentialVariable(k) && !withheld.has(k.toUpperCase())) env[k] = v;
+  const filled: Record<string, string> = {};
+  for (const [k, v] of Object.entries(agent.env)) if (isSecretRef(v)) filled[k] = delivered.env[k]!;
+  return { ...env, ...literalEnv(agent.env), ...filled };
 }
 
 /** A path segment that marks the SDK's own packages, the bundled per-platform CLI among them. */
@@ -175,6 +190,8 @@ export interface ClaudeSdkPreflightOptions {
   baseEnv?: Readonly<Record<string, string | undefined>>;
   /** What ORCA adds to the session's environment (filtered like `baseEnv`). */
   orcaEnv?: Readonly<Record<string, string>>;
+  /** What the agent's secret references were delivered (`claudeSdkSecrets`). */
+  secrets?: ClaudeSdkDeliveredSecrets | undefined;
   /** Each of `claude --version` and `claude auth status` gets this long. Default 20 s. */
   timeoutMs?: number;
   signal?: AbortSignal | undefined;
@@ -192,7 +209,7 @@ const MAX_OUTPUT_BYTES = 64 * 1024;
  */
 export async function claudeSdkPreflight(options: ClaudeSdkPreflightOptions): Promise<ClaudeSdkPreflight> {
   const { agent, cwd } = options;
-  const env = claudeSdkEnvironment(agent, options.baseEnv ?? process.env, options.orcaEnv);
+  const env = claudeSdkEnvironment(agent, options.baseEnv ?? process.env, options.orcaEnv, options.secrets);
   const executable = await resolveClaudeExecutable(agent, env, cwd, options.platform);
   const timeoutMs = options.timeoutMs ?? CLAUDE_SDK_PREFLIGHT_TIMEOUT_MS;
   const run = (args: string[]) => runBounded(executable, args, { cwd, env, timeoutMs, signal: options.signal });

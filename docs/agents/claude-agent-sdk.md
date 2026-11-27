@@ -21,14 +21,23 @@ claude auth status          # ORCA asks the same before every session
 ```
 
 ORCA never opens Claude's credentials file, keychain entries or token files, and never shows or
-forwards a login. It takes no Anthropic or Claude Code variable (`ANTHROPIC_*`, `CLAUDE_CODE_*`)
-from the daemon's own environment: the only credential Claude gets beyond its own login is one
-written in the agent's `env`. `CLAUDE_CONFIG_DIR` is kept, so a daemon started with it uses the
-login in that directory.
+forwards a login. It takes no Anthropic or Claude variable (`ANTHROPIC_*`, `CLAUDE_*`, such as
+`CLAUDE_CODE_OAUTH_TOKEN` or `CLAUDE_ENV_FILE`) from the daemon's own environment: the only
+credential or Claude override Claude gets beyond its own login is one set in the agent's `env`.
+`CLAUDE_CONFIG_DIR` is kept, so a daemon started with it uses the login in that directory. ORCA
+writes nothing there itself (Claude Code keeps its own session transcripts there).
 
 To use an API key or a cloud provider instead, set its variables in the agent's `env`, as on the
-ACP route. Secret references (`{ secret: … }`) are refused on this driver until it delivers
-secrets (#1126).
+ACP route, written out or as a secret reference (`{ secret: … }`). A secret reference works as it
+does over ACP (#1126):
+
+- The session's use check must allow it, or the session is refused before Claude starts.
+- The value is read on ORCA's own machine just before Claude starts, and is put only in the
+  variable the agent's `env` names.
+- Every daemon variable a secret is read from is kept from Claude, whether this agent uses that
+  secret or not.
+- The value is taken out of the run's events and logs, and out of every error the session
+  reports.
 
 ## 2. One subscription, one person
 
@@ -82,8 +91,10 @@ ORCA does not yet own the whole process tree there. Leave `driver` out to run Cl
 
 ORCA starts Claude with a fixed setup:
 
-- **No settings files** (`settingSources: []`): your user, project and local Claude settings,
-  hooks and permission rules are not loaded. Your login is still used.
+- **No settings files** (`settingSources: []`): your user settings and a checkout's
+  `.claude/settings.json` and `settings.local.json` are not loaded, so their hooks do not run and
+  their permission rules and `env` do not apply. Your login is still used. Loading them by choice
+  is not offered yet.
 - **No MCP servers** (`--strict-mcp-config` with none).
 - Claude Code's own system prompt, and permission mode `default`.
 - **Session transcripts are kept** where Claude Code always keeps them, in its own config
