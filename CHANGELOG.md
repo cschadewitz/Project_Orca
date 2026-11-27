@@ -29,6 +29,132 @@ Pending entries live in [`changelog.d/`](changelog.d/), one file per entry; prep
 release renders them into a dated section below. Run `node tools/release.js notes --unreleased`
 to read them as they stand.
 
+## 0.8.1 - 2026-11-27
+
+### Store format
+
+No change.
+
+### Changed
+
+#### app
+
+- a remote daemon profile created with the server command left empty now saves
+  `orca-cli` (#1207), the command desktop installs provide. Profiles saved before 0.8.1 that
+  left it empty keep using `orca`, and each issued credential records the command it was
+  issued through, so it is revoked through the same one. A workspace config's
+  `remotes[].serverCommand` still means `orca` when omitted; write `orca-cli` for a server
+  with a desktop install, where on Ubuntu Desktop `orca` is the screen reader.
+- The Linux update notice also finds releases from the renamed `cschadewitz/Orrery`
+  repository and packages named `Orrery-`, so it can offer the first Orrery release.
+
+#### server updates
+
+- Managed servers accept a server bundle signed by either
+  `cschadewitz/Project_Orca` or `cschadewitz/Orrery` and named either `orca-server` or
+  `orrery-server`, so v0.8.1 can update to the first Orrery release.
+
+### Fixed
+
+Every surface's "no daemon" screen now points to Project setup in Config, as Attention already did, instead of telling a desktop user to run `orca serve`. On Linux, Config says local diagnostics are not available on this system rather than that they are unavailable, and the app no longer prints a window "fallback" warning on each first launch under Wayland.
+
+The window no longer scrolls sideways under Plan, Workflows and Agents at narrow sizes or at 125% and 150% scaling: hidden screen-reader labels inside sideways-scrolling panes pushed the whole window wider. A wide workflow graph opens fitted to the canvas instead of on its first few nodes. The layout check now covers the Connect to a daemon dialog and every surface at 100%, 125% and 150%, on Linux and Windows.
+
+At 1000×680 and 150%, Runs folds into one column instead of clipping every title to a few letters, and a menu that opens in a scrolling pane (such as Launch work's workflow menu) stays inside the pane and off its scrollbar. The layout check now covers every screen on Windows too.
+
+On Windows, saving workspace state no longer fails with a permission error when another program briefly has the file open, such as an antivirus scan.
+
+#### app
+
+- The step detail's Variables update when a step finishes instead of after the run is
+  selected again. Config says that an agent's `nativeToolHook` is off when absent and that
+  `experimental` opts in. On Linux the dock shows ORCA's icon for the running window and the
+  menu bar follows an explicit dark theme. The Windows uninstaller removes the updater's
+  installer copy (#1109).
+- Runs keeps run titles and its Tree/Board/Search buttons in view at 800×600 and at
+  150% zoom (#1193). Plan's schedule header, Risks pins and Decisions columns no longer
+  overlap or collapse, the collapsed sidebar no longer clips or scrolls sideways, the status
+  bar no longer covers content, the Config view switcher stays after Launch work, and menus
+  open inside the pane that scrolls them (#1112).
+- In a window as narrow as 800×600 at 150% zoom, Runs folds the step detail under
+  the tree once a run is selected, so run titles stay readable (#1193).
+- Attention cards count how long they have waited instead of showing "waiting 0s",
+  and permission cards name the run and work item they belong to (#1194).
+- a watched or focused machine that stops answering without closing the connection,
+  such as a server that lost power, now shows as reconnecting within 11 seconds instead of
+  connected until the SSH tunnel's keepalive gave up. The push stream asks a silent daemon
+  whether it is still there after 3 s and reopens when nothing answers within 3 s (#1198).
+- Launch work shows each fact on its own line; first-run setup writes
+  `orca.config.yaml` as block YAML; the Linux folder picker says "Choose folder"; an agent
+  whose command is not on the host says so instead of "unknown" (#1200).
+- on Linux, where the app has no local diagnostics storage, Config no longer shows
+  "Cleanup is pending… Retry cleanup" while diagnostics are off. Nothing can have been
+  collected there, so nothing is waiting to be removed. A cleanup that really is pending now
+  says whether it waits on an earlier export or on retained history and key material.
+- desktop installs ship ORCA's command line as `orca-cli` (#1207). The Windows
+  installer puts it on the user `PATH` (open a new terminal after installing) and the
+  uninstaller takes it off; the Ubuntu `.deb` installs `/usr/bin/orca-cli`. It is never plain
+  `orca`, which on Ubuntu Desktop is the GNOME screen reader. The docs now write commands as
+  `orca-cli …`.
+- Ctrl+Q quits the desktop app on Windows, as it does on Linux and macOS. Electron's
+  Quit role carries no shortcut on Windows, so the menu now names it.
+- a disabled **Apply saved configuration** says why it is disabled: already applied
+  (and whether the daemon needs a restart), refused as invalid, or a read in progress. It no
+  longer asks you to save a draft you already saved.
+- Attention, its sidebar badge and Machines show the same waiting count. Attention
+  now reads the daemon's list again a moment after any change that can move it, so an ask its
+  live updates missed, or one a run closed without an answer, no longer leaves it one off
+  (#1213).
+- the status bar no longer shows a stale "event N". That number was the plan
+  journal's sequence number leaking into the store-wide stream's cursor; the event cursor is
+  per run and stays beside the run, in its timeline (#1213).
+
+#### app/daemon
+
+- A workspace the desktop app set up can now enroll a delegation remote. Config
+  has a Remote daemons section that lists the configured remotes and their enrollment, and
+  Enroll there pins the host key you give and has the worker issue the credential (on Windows,
+  paste one the worker issued; it is proved first and saved only when the enrollment commits,
+  so a refused one never replaces the credential in use). The app's own daemon runs the enrollment, so the workspace's
+  first-run fence still refuses `orca remote enroll` from the CLI, now with a message naming the
+  app route.
+
+#### cli
+
+- the daemon's continuation recovery logs once when it starts failing, with the error
+  code and message, and once when it runs again, instead of "Continuation recovery requires
+  explicit attention" every 5 seconds with no reason (#1197).
+
+#### core
+
+- the prompt template parser scans tags and `{{#each}}` headers in linear time. A
+  long run of spaces inside an `{{#each}}` tag, or many unclosed `{{!--`, could hold the
+  daemon for seconds to minutes while it validated or previewed a template.
+
+#### daemon
+
+- enrolling with a credential the worker refuses now answers `DELEGATION_REFUSED`
+  instead of an internal error. An enrollment record for a pasted credential names its own
+  token file; ORCA 0.8.0 cannot read such a record and asks for the remote to be enrolled again.
+- `inputs.list` no longer fails pending-correction discovery for a run that is busy
+  writing events. It observes the run again, and reports one that never settles as an
+  omission, so Attention says part of the list is unavailable instead of "could not be
+  refreshed". When a refresh really fails, the notice now says to choose Refresh corrections
+  (#1213).
+
+#### protocol
+
+- 2.13 adds `remotes.list` (`config.read`) and `remotes.enroll` (`config.write`,
+  audited), offered by a daemon that may write its workspace.
+
+#### store
+
+- a lock left behind by a power loss no longer wedges the daemon on Linux. A lock
+  whose owner token records an earlier kernel boot is cleared even when its pid was reused or
+  its contents never reached the disk (the boot id and a tag for this machine are now in the token's name too), so a
+  managed server that lost power while a background tick held the retry journal's lock
+  recovers on its own instead of failing every 5 s (#1197).
+
 ## 0.8.0 - 2026-11-26
 
 ### Store format
