@@ -10,7 +10,7 @@
  */
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { spawn, spawnSync } from "node:child_process";
-import { readFileSync, realpathSync } from "node:fs";
+import { readFileSync, readdirSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -291,6 +291,65 @@ describe("the remote command line (#1130)", () => {
     await expect(readFile(marker)).rejects.toThrow();
   });
 
+  it("a stop during startup waits for admission and leaves nothing running: launch and stop share one lock", async () => {
+    const t = claudeSdkRemoteToken();
+    const pids = join(dir, "pids");
+    // An `env` that takes a second before it starts claude: the child exists, unmarked, all that time.
+    const slow = join(dir, "slow-bin");
+    await mkdir(slow);
+    const realEnv = spawnSync("sh", ["-c", "command -v env"]).stdout.toString("utf8").trim();
+    await writeFile(join(slow, "env"), `#!/bin/sh\ntouch ${join(dir, "entered")}\nsleep 1\nexec ${realEnv} "$@"\n`);
+    await chmod(join(slow, "env"), 0o755);
+    const script = claudeSdkRemoteScript({
+      agentId: "a",
+      hostId: "h",
+      command: "sh",
+      args: stubborn(pids),
+      cwd: ws,
+      names: [],
+      token: t,
+    });
+    const child = spawn("bash", ["-c", script], {
+      env: { PATH: `${slow}:${process.env.PATH ?? ""}`, HOME: dir },
+      stdio: ["pipe", "ignore", "ignore"],
+    });
+    child.stdin.write(claudeSdkRemoteEnvInput({}));
+    const exited = new Promise<number | null>((r) => child.once("exit", (code) => r(code)));
+    const state = join(dir, ".cache", "orca", "claude-sdk", `${t}.state`);
+    await until(async () => (await readFile(join(dir, "entered")).catch(() => undefined)) !== undefined);
+    // The stop comes inside the window: it waits for the lock, then finds claude by its marker.
+    const began = Date.now();
+    const stop = spawnSync("bash", ["-c", claudeSdkRemoteStopScript(t)], {
+      env: { PATH: process.env.PATH ?? "", HOME: dir },
+    });
+    expect(stop.status).toBe(0);
+    expect(Date.now() - began).toBeGreaterThanOrEqual(500);
+    expect(markedBy(t)).toEqual([]);
+    await new Promise((r) => setTimeout(r, 1_500));
+    expect(markedBy(t)).toEqual([]);
+    expect(await exited).toBe(137);
+    expect((await readFile(state, "utf8")).trim()).toBe("stopped");
+    child.stdin.end();
+  });
+
+  it("writes done only after the end, under the lock, and a later stop confirms it", async () => {
+    const t = claudeSdkRemoteToken();
+    const script = claudeSdkRemoteScript({
+      agentId: "a",
+      hostId: "h",
+      command: "sh",
+      args: ["-c", "exit 3"],
+      cwd: ws,
+      names: [],
+      token: t,
+    });
+    expect(runScript(script, claudeSdkRemoteEnvInput({})).code).toBe(3);
+    const state = join(dir, ".cache", "orca", "claude-sdk", `${t}.state`);
+    expect((await readFile(state, "utf8")).trim()).toBe("done");
+    expect(runScript(claudeSdkRemoteStopScript(t), "").code).toBe(0);
+    expect((await readFile(state, "utf8")).trim()).toBe("done");
+  });
+
   it("carries the agent's literal env and ORCA's, without credentials ORCA would carry, and refuses a secret reference", () => {
     expect(
       claudeSdkRemoteEnvironment(
@@ -486,6 +545,21 @@ async function until(check: () => Promise<boolean>, ms = 5_000): Promise<void> {
     if (Date.now() > end) throw new Error("condition not reached");
     await new Promise((r) => setTimeout(r, 25));
   }
+}
+
+/** Every process whose environment carries launch `token`'s marker. */
+function markedBy(token: string): number[] {
+  const found: number[] = [];
+  for (const entry of readdirSync("/proc")) {
+    if (!/^\d+$/.test(entry) || !alive(Number(entry))) continue;
+    try {
+      if (readFileSync(`/proc/${entry}/environ`, "utf8").split("\0").includes(`ORCA_CLAUDE_SDK_LAUNCH=${token}`))
+        found.push(Number(entry));
+    } catch {
+      // gone, or not ours to read
+    }
+  }
+  return found;
 }
 
 /** Running, not a zombie waiting for a parent that does not reap (a container's init). */

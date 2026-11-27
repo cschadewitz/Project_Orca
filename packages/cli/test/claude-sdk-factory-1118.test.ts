@@ -191,7 +191,7 @@ exec "${process.execPath}" "${STAND_IN}" "$@"
       const lines = (await readFile(log, "utf8")).trim().split("\n");
       expect(lines).toHaveLength(4);
       expect(lines[2]).toContain("--permission-mode=default");
-      expect(lines[3]).toMatch(/\.stop/);
+      expect(lines[3]).toMatch(/orca_set stopped/);
       expect(open).not.toHaveBeenCalled();
     });
 

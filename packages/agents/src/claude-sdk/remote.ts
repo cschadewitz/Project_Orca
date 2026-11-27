@@ -8,7 +8,7 @@
  * sign-in found there. ORCA reads no credentials there and offers no login: an unauthenticated
  * `claude` is refused with `claude auth login` guidance that names the host. The host must be
  * Linux (ownership below reads `/proc`) with bash as the remote shell (the relay below uses
- * `read -t`); anything else is refused before `claude` starts.
+ * `read -t`) and `flock` (util-linux); anything else is refused before `claude` starts.
  *
  * **No value in an argument list.** The remote command line holds names, the directory, the
  * command and its arguments, never an environment value: ORCA writes each value to the
@@ -24,23 +24,36 @@
  * launch's process, is never signalled. A process that clears its own environment is not
  * followed.
  *
+ * **One supervisor, explicit states.** Each launch has a state file on the host (`starting`,
+ * `running`, `stopped`, `done`) that is written only while holding the launch's lock (`flock`).
+ * The remote shell holds the lock from before `claude` starts until `claude` carries the
+ * marker, and again while it stops what `claude` left; a stop (ORCA's, or the host's own)
+ * holds it while it marks the launch `stopped` and kills what carries the marker. So a stop
+ * never runs while a launch is started but not yet visible, a launch a stop overtook never
+ * starts, and `done` is written only once nothing of the launch is left
+ * (`claudeSdkRemoteScript`, `claudeSdkRemoteStopScript`).
+ *
  * **The host stops it by itself.** `claude`'s stdin comes through a relay in the remote shell,
  * which forwards ORCA's lines, drops ORCA's heartbeat (`CLAUDE_SDK_REMOTE_PING`, every
  * `heartbeat.intervalMs` while the input is between lines), and records a beat for every line it
- * reads. A watchdog, a separate process that forwards nothing, stops every process of the launch
+ * reads. A watchdog, a separate process that forwards nothing, stops the launch as a stop does
  * when no beat is recorded for `heartbeat.timeoutS` (ORCA unreachable, the connection silently
  * gone, or a `claude` that stopped reading so the relay is stuck writing to it), or
- * `heartbeat.graceS` after the input ended (ORCA closed it, or the connection did). When
- * `claude` exits, the remote shell stops what it left. None of this needs a connection back,
- * and nothing but a marked process is ever signalled: the relay and the watchdog end by
- * themselves once `claude` is done.
+ * `heartbeat.graceS` after the input ended (ORCA closed it, or the connection did). Its
+ * deadlines are elapsed time (`/proc/uptime`), not the wall clock. None of this needs a
+ * connection back, and the relay and the watchdog end by themselves once the launch is `done`
+ * or `stopped`.
  *
  * **ORCA confirms it.** After every session end ORCA also runs the stop over a new SSH
- * connection and checks that nothing of the launch runs (`ClaudeSdkRemoteLaunch.stop`); its
- * tombstone (`<token>.stop`) keeps a launch it overtook from starting. A stop that cannot be
- * confirmed (the host unreachable) is not reported as closure: the session's `terminated`
- * rejects with reason `remote-cleanup-unconfirmed`, and the host's own heartbeat stop is what
- * remains.
+ * connection and checks that nothing of the launch runs (`ClaudeSdkRemoteLaunch.stop`). A stop
+ * that cannot be confirmed (the host unreachable, the lock not free in time) is not reported as
+ * closure: the session's `terminated` rejects with reason `remote-cleanup-unconfirmed`, and the
+ * host's own heartbeat stop is what remains.
+ *
+ * What the supervisor does not cover: the remote shell killed with SIGKILL during admission
+ * (nothing of ORCA sends it one; hangup, interrupt and terminate are deferred there) leaves
+ * `starting` with the lock free; the stop then looks again a second later, and a child that
+ * takes the marker after that is not followed.
  *
  * What does not hold on that machine yet, and so is refused or left out:
  * - The pre-tool hook's qualification (`nativeToolHook: experimental`) is refused on any
@@ -80,10 +93,14 @@ export const CLAUDE_SDK_REMOTE_PING = "ORCA-CLAUDE-SDK-PING";
 export const CLAUDE_SDK_LAUNCH_VARIABLE = "ORCA_CLAUDE_SDK_LAUNCH";
 /** Where the remote shell keeps each launch's state files, under the remote `$HOME`. */
 const STATE_DIR = '"$HOME/.cache/orca/claude-sdk"';
-/** How long the stop's own SSH connection may take beyond the host's connect timeout. */
-const STOP_MARGIN_MS = 15_000;
+/** How long the stop's own SSH connection may take beyond the host's connect timeout: the lock's wait, the kills, a margin. */
+const STOP_MARGIN_MS = 30_000;
+/** How long a script waits for a launch's lock, in seconds; no holder keeps it longer than about fifteen. */
+const LOCK_WAIT_S = 20;
+/** How many tenths of a second admission waits for `claude` to carry the marker. */
+const ADMIT_TRIES = 100;
 /** Exit codes the remote scripts use. */
-const EXIT = { refused: 125, unsupported: 126, missing: 127, stopped: 137, survived: 4 } as const;
+const EXIT = { refused: 125, unsupported: 126, missing: 127, stopped: 137, survived: 4, busy: 5 } as const;
 
 /** The host-side stop when ORCA goes silent: a heartbeat this often, given up after `timeoutS`. */
 export interface ClaudeSdkRemoteHeartbeat {
@@ -162,13 +179,21 @@ function checkToken(token: string): void {
 }
 
 /**
- * Shell functions both scripts share: `orca_own` prints the pid of every process carrying the
- * launch's marker, and `orca_reap` signals each one (after reading the marker again) until none
- * is left, failing when one outlives about five seconds of kills.
+ * The supervisor's shell functions, shared by the launch and the stop. Each launch has a state
+ * file (`<token>.state`: `starting`, `running <pid>`, `stopped` or `done`) written only while
+ * holding its lock (`<token>.lock`, `flock`), and every process it starts carries its marker.
+ * - `orca_own` prints the pid of every process carrying the marker; `orca_reap` signals each
+ *   one (after reading the marker again) until none is left, failing when one outlives about
+ *   five seconds of kills.
+ * - `orca_up` reads elapsed time (`/proc/uptime`, whole seconds) into `orca_u`, so no deadline
+ *   depends on the wall clock.
+ * - `orca_state` reads the state into `orca_st` (and a pid into `orca_sp`); `orca_set` writes it.
  */
-function ownershipFunctions(token: string): string[] {
+function supervisorFunctions(token: string): string[] {
   return [
     `orca_k=${CLAUDE_SDK_LAUNCH_VARIABLE}=${token}`,
+    `orca_sf="$orca_d/${token}.state"`,
+    `orca_lk="$orca_d/${token}.lock"`,
     `orca_mine() { tr '\\000' '\\n' < "/proc/$1/environ" 2>/dev/null | grep -qxF "$orca_k"; }`,
     `orca_own() {`,
     `  for orca_e in /proc/[0-9]*; do`,
@@ -192,15 +217,49 @@ function ownershipFunctions(token: string): string[] {
     `    sleep 0.1`,
     `  done`,
     `}`,
+    `orca_up() { IFS=' .' read -r orca_u _ < /proc/uptime; }`,
+    `orca_state() { orca_st=; orca_sp=; [ -f "$orca_sf" ] && read -r orca_st orca_sp < "$orca_sf"; return 0; }`,
+    `orca_set() { printf '%s\\n' "$1" > "$orca_sf"; }`,
   ];
 }
 
 /**
+ * A launch's files are removed once it ended (`done` or `stopped`) more than a day ago; a
+ * launch still starting or running keeps them. This age is the one place a wall clock is read,
+ * and only for housekeeping.
+ */
+const TIDY = [
+  `for orca_f in "$orca_d"/*.state; do`,
+  `  [ -f "$orca_f" ] || continue`,
+  `  orca_g=; read -r orca_g _ < "$orca_f"`,
+  `  case $orca_g in done|stopped) ;; *) continue ;; esac`,
+  `  [ -n "$(find "$orca_f" -mmin +1440 2>/dev/null)" ] && rm -f "\${orca_f%.state}".*`,
+  `done`,
+];
+
+/** What both scripts need on the host: bash, `/proc` and `flock`. */
+const SUPPORTED = `[ -n "\${BASH_VERSION:-}" ] && [ -r /proc/self/environ ] && command -v flock >/dev/null 2>&1 || exit ${EXIT.unsupported}`;
+
+/**
  * The remote shell script that starts `command` in `cwd`: `withheld` unset, the variables
- * `names` read from stdin (`claudeSdkRemoteEnvInput`) and exported, `claude` started with the
- * launch's marker and its input through the relay, waited for, and every process of the launch
- * stopped when it exits. Exits 127 when `command` is not found there, 126 on a host that is not
- * Linux with bash, 137 when a stop came first. Names are checked, the rest quoted; no value is
+ * `names` read from stdin (`claudeSdkRemoteEnvInput`) and exported, then the launch, as a
+ * supervisor with explicit states:
+ *
+ * 1. **Admission**, holding the lock: a `stopped` state ends it (137) before anything starts;
+ *    otherwise `starting`, the relay and the watchdog, then `claude` started with the marker,
+ *    and the lock is held until `claude` carries the marker (or has exited), so a stop can
+ *    never find a launch that is started but not yet visible. A child that does not carry it
+ *    within about ten seconds is killed by its pid, which is safe because it is the shell's own
+ *    unreaped child. Hangup, interrupt and terminate are deferred meanwhile. Then `running <pid>`.
+ * 2. **Running**: `claude`'s input through the relay; the shell waits for it.
+ * 3. **End**, holding the lock: every process of the launch stopped and checked gone, then
+ *    `done`, unless a stop got there first (`stopped`, exit 137). When one outlives the kills
+ *    the state stays `running`, so the watchdog keeps watching.
+ *
+ * The watchdog stops the launch the same way under the lock (`stopped`) when the heartbeat
+ * ends; it and the relay end by themselves once the state is `done` or `stopped`. Exits 127
+ * when `command` is not found there, 126 on a host without bash, `/proc` or `flock`, 125 on
+ * input it refuses, 137 when a stop came first. Names are checked, the rest quoted; no value is
  * in it.
  */
 export function claudeSdkRemoteScript(o: {
@@ -224,7 +283,7 @@ export function claudeSdkRemoteScript(o: {
   const command = shellQuote(o.command);
   const run = `${command} ${o.args.map(shellQuote).join(" ")}`.trim();
   return [
-    `[ -n "\${BASH_VERSION:-}" ] && [ -r /proc/self/environ ] || exit ${EXIT.unsupported}`,
+    SUPPORTED,
     ...(o.withheld ?? []).map((name) => `unset ${name} || exit ${EXIT.refused}`),
     // The environment, from stdin, with builtins only; any other name or a bad line ends it.
     `orca_env() {`,
@@ -243,90 +302,133 @@ export function claudeSdkRemoteScript(o: {
     `command -v ${command} >/dev/null 2>&1 || exit ${EXIT.missing}`,
     `orca_d=${STATE_DIR}`,
     `(umask 077 && mkdir -p "$orca_d") || exit ${EXIT.refused}`,
-    `find "$orca_d" -type f -mmin +1440 -exec rm -f {} + 2>/dev/null`,
-    `orca_t="$orca_d/${o.token}.stop"`,
-    `[ -e "$orca_t" ] && exit ${EXIT.stopped}`,
-    ...ownershipFunctions(o.token),
+    ...TIDY,
+    ...supervisorFunctions(o.token),
     `orca_hb="$orca_d/${o.token}.beat"`,
     `orca_eof="$orca_d/${o.token}.eof"`,
-    `orca_done="$orca_d/${o.token}.done"`,
+    // Exited, or a zombie not yet waited for: nothing of it can still take the marker.
+    `orca_gone() {`,
+    `  orca_z=`,
+    `  { read -r orca_z < "/proc/$1/stat"; } 2>/dev/null || return 0`,
+    `  orca_z=\${orca_z##*) }`,
+    `  [ "\${orca_z%% *}" = Z ]`,
+    `}`,
     // The relay: ORCA's lines to claude, its heartbeat dropped, each line read (heartbeat or
-    // not) recorded as a beat. It decides nothing and is never signalled: it ends when the input
-    // ends (recorded for the watchdog), when claude stops taking input, or once claude is done.
+    // not) recorded as a beat (elapsed time). It decides nothing and is never signalled: it ends
+    // when the input ends (recorded for the watchdog), when claude stops taking input, or once
+    // the launch is done or stopped.
     `orca_relay() {`,
     `  orca_buf=`,
     `  while :; do`,
     `    IFS= read -r -t 1 orca_line`,
     `    orca_r=$?`,
     `    if [ "$orca_r" -eq 0 ]; then`,
-    `      : > "$orca_hb"`,
+    `      orca_up; printf '%s\\n' "$orca_u" > "$orca_hb"`,
     `      orca_line=$orca_buf$orca_line`,
     `      orca_buf=`,
     `      [ "$orca_line" = ${CLAUDE_SDK_REMOTE_PING} ] && continue`,
     `      printf '%s\\n' "$orca_line" || return 1`,
     `    elif [ "$orca_r" -gt 128 ]; then`,
-    `      if [ -n "$orca_line" ]; then orca_buf=$orca_buf$orca_line; : > "$orca_hb"; fi`,
-    `      [ -e "$orca_done" ] && return 1`,
+    `      if [ -n "$orca_line" ]; then orca_buf=$orca_buf$orca_line; orca_up; printf '%s\\n' "$orca_u" > "$orca_hb"; fi`,
+    `      orca_state`,
+    `      case $orca_st in done|stopped) return 1 ;; esac`,
     `    else`,
     `      orca_line=$orca_buf$orca_line`,
     `      [ -n "$orca_line" ] && printf '%s' "$orca_line"`,
-    `      : > "$orca_eof"`,
+    `      orca_up; printf '%s\\n' "$orca_u" > "$orca_eof"`,
     `      return 0`,
     `    fi`,
     `  done`,
     `}`,
-    `: > "$orca_hb" || exit ${EXIT.refused}`,
+    // Admission, under the lock.
+    `exec 9>>"$orca_lk" || exit ${EXIT.refused}`,
+    `flock -w ${LOCK_WAIT_S} 9 || exit ${EXIT.refused}`,
+    `orca_state`,
+    `[ "$orca_st" = stopped ] && exit ${EXIT.stopped}`,
+    `[ -z "$orca_st" ] || exit ${EXIT.refused}`,
+    `orca_up; printf '%s\\n' "$orca_u" > "$orca_hb" || exit ${EXIT.refused}`,
+    `orca_set starting || exit ${EXIT.refused}`,
+    `trap : HUP INT TERM`,
     // The watchdog, apart from the relay so a relay blocked on a claude that stopped reading
-    // cannot hold it: no beat for the timeout, or the grace over after the input ended, and
-    // every process of the launch is stopped. It only ever signals through orca_reap.
+    // cannot hold it: no beat for the timeout, or the grace over after the input ended, and the
+    // launch is stopped under the lock (its own descriptor, so the lock is really taken). It only
+    // ever signals through orca_reap.
     `(`,
-    `  exec </dev/null >/dev/null 2>&1`,
-    `  orca_end=`,
+    `  exec </dev/null >/dev/null 2>&1 8>>"$orca_lk"`,
     `  while :; do`,
-    `    [ -e "$orca_done" ] && exit 0`,
-    `    orca_now=$(date +%s)`,
-    `    if [ -e "$orca_eof" ]; then`,
-    `      [ -z "$orca_end" ] && orca_end=$orca_now`,
-    `      [ $((orca_now - orca_end)) -ge ${beat.graceS} ] && { orca_reap; exit 0; }`,
+    `    orca_state`,
+    `    case $orca_st in done|stopped) exit 0 ;; esac`,
+    `    orca_up; orca_w=`,
+    `    if [ -f "$orca_eof" ]; then`,
+    `      read -r orca_w < "$orca_eof"; orca_lim=${beat.graceS}`,
     `    else`,
-    `      orca_seen=$(stat -c %Y "$orca_hb" 2>/dev/null || echo 0)`,
-    `      [ $((orca_now - orca_seen)) -ge ${beat.timeoutS} ] && { orca_reap; exit 0; }`,
+    `      read -r orca_w < "$orca_hb"; orca_lim=${beat.timeoutS}`,
+    `    fi`,
+    // A file read while it is rewritten reads empty: that round is skipped.
+    `    case $orca_w in ''|*[!0-9]*) sleep 1; continue ;; esac`,
+    `    if [ $((orca_u - orca_w)) -ge "$orca_lim" ] && flock -w ${LOCK_WAIT_S} 8; then`,
+    `      orca_state`,
+    `      case $orca_st in done|stopped) exit 0 ;; esac`,
+    `      orca_set stopped`,
+    `      orca_reap`,
+    `      exit 0`,
     `    fi`,
     `    sleep 1`,
     `  done`,
-    `) &`,
+    `) 9>&- &`,
     `exec 3<&0 </dev/null`,
     // claude's input from the relay through a process substitution, so wait waits for claude
-    // alone; fd 3 closed for claude only after the relay, expanded first, took it.
-    `env "$orca_k" ${run} < <(exec 2>/dev/null; orca_relay <&3) 3<&- &`,
+    // alone; fd 3 closed for claude only after the relay, expanded first, took it. Neither
+    // keeps the lock's descriptor.
+    `env "$orca_k" ${run} < <(exec 2>/dev/null 9>&-; orca_relay <&3) 3<&- 9>&- &`,
     `orca_p=$!`,
     `exec 3<&-`,
-    // A stop that came while it started: it ends here too.
-    `if [ -e "$orca_t" ]; then orca_reap; : > "$orca_done"; exit ${EXIT.stopped}; fi`,
+    `orca_i=0`,
+    `until orca_mine "$orca_p" || orca_gone "$orca_p"; do`,
+    `  orca_i=$((orca_i + 1))`,
+    `  if [ "$orca_i" -gt ${ADMIT_TRIES} ]; then kill -9 "$orca_p" 2>/dev/null; break; fi`,
+    `  sleep 0.1`,
+    `done`,
+    `orca_set "running $orca_p"`,
+    `flock -u 9`,
+    `trap - HUP INT TERM`,
     `wait "$orca_p"`,
-    `orca_s=$?`,
-    // Done: the relay and the watchdog end by themselves; what claude left is stopped.
-    `: > "$orca_done"`,
-    `orca_reap`,
-    `exit "$orca_s"`,
+    `orca_x=$?`,
+    // The end, under the lock: what claude left is stopped and checked gone, then done.
+    `flock -w ${LOCK_WAIT_S} 9 || exit "$orca_x"`,
+    `orca_state`,
+    `if orca_reap && [ "$orca_st" = running ]; then orca_set done; fi`,
+    `flock -u 9`,
+    `[ "$orca_st" = stopped ] && exit ${EXIT.stopped}`,
+    `exit "$orca_x"`,
   ].join("\n");
 }
 
 /**
- * The remote shell script that stops the launch `token`: a tombstone first (so a launch that
- * has not started `claude` yet never does), then every process carrying its marker signalled
- * and checked gone. Exits 0 once nothing of it runs, 4 when one outlives the kills, 126 on a
- * host without `/proc`.
+ * The remote shell script that stops the launch `token`, holding its lock (so never while a
+ * launch is being admitted or ended): the state set to `stopped` (so a launch not yet admitted
+ * never starts, and the watchdog and the relay end), then every process carrying the marker
+ * signalled and checked gone. A `starting` state seen here means the remote shell died during
+ * admission; the stop then checks again a second later. Exits 0 once nothing of it runs, 4
+ * when one outlives the kills, 5 when the lock is not free in time, 126 on a host without
+ * bash, `/proc` or `flock`.
  */
 export function claudeSdkRemoteStopScript(token: string): string {
   checkToken(token);
   return [
-    `[ -r /proc/self/environ ] || exit ${EXIT.unsupported}`,
+    SUPPORTED,
     `orca_d=${STATE_DIR}`,
     `(umask 077 && mkdir -p "$orca_d") || exit ${EXIT.refused}`,
-    `: > "$orca_d/${token}.stop" || exit ${EXIT.refused}`,
-    ...ownershipFunctions(token),
+    ...supervisorFunctions(token),
+    `exec 9>>"$orca_lk" || exit ${EXIT.refused}`,
+    `flock -w ${LOCK_WAIT_S} 9 || exit ${EXIT.busy}`,
+    `orca_state`,
+    `orca_was=$orca_st`,
+    `[ "$orca_was" = done ] || orca_set stopped || exit ${EXIT.refused}`,
     `orca_reap`,
+    `orca_r=$?`,
+    `if [ "$orca_was" = starting ]; then sleep 1; orca_reap; orca_r=$?; fi`,
+    `exit "$orca_r"`,
   ].join("\n");
 }
 
@@ -355,7 +457,8 @@ function stopReason(r: BoundedResult): string | undefined {
   if (r.signal) return `the stop ended on ${r.signal}`;
   if (r.code === 0) return undefined;
   if (r.code === EXIT.survived) return "a process of the launch outlived the kills";
-  if (r.code === EXIT.unsupported) return "the host has no /proc to check ownership with";
+  if (r.code === EXIT.busy) return "the launch's lock was not free in time";
+  if (r.code === EXIT.unsupported) return "the host lacks bash, /proc or flock";
   if (r.code === 255) return "ssh could not reach the host";
   return `the stop exited with ${r.code}`;
 }
@@ -420,7 +523,7 @@ export async function claudeSdkSshPreflight(options: ClaudeSdkSshPreflightOption
     if (result.code === EXIT.unsupported)
       throw new OrcaError(
         "NOT_SUPPORTED",
-        `agent ${agent.id}: host ${host.id} is not one ORCA runs Claude Code on through the Claude Agent SDK; it needs Linux and bash as the remote shell.`,
+        `agent ${agent.id}: host ${host.id} is not one ORCA runs Claude Code on through the Claude Agent SDK; it needs Linux, bash as the remote shell, and flock.`,
         { agentId: agent.id, host: host.id },
       );
     return result;

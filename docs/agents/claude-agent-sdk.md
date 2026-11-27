@@ -137,27 +137,42 @@ process's argument list on either machine, and in no error or log ORCA writes. A
 test scans every process's arguments while a session starts and runs.
 
 **The host owns the launch.** The host must be Linux with bash as the remote shell (the
-default `bash -lc`); anything else is refused before `claude` starts.
+default `bash -lc`) and `flock` (util-linux); anything else is refused before `claude` starts.
 
 - **A marker, not a number.** Every process of a launch carries
   `ORCA_CLAUDE_SDK_LAUNCH=<token>` in its environment, with a token unique to the launch. A stop
   signals a process only after reading that marker in `/proc/<pid>/environ` right before the
   signal, so a reused pid or group id, or another launch's process, is never signalled. A
   process that clears its own environment is not followed.
+- **One supervisor, explicit states.** Each launch has a state on the host (`starting`,
+  `running`, `stopped`, `done`), written only while holding the launch's lock (`flock`). The
+  remote shell holds the lock from before `claude` starts until `claude` carries the marker, and
+  again while it stops what `claude` left; every stop holds it while it marks the launch
+  `stopped` and kills what carries the marker. So a stop never runs while a launch is started
+  but not yet visible, a launch a stop overtook never starts, and `done` is written only once
+  nothing of the launch is left. A test holds a launch in that startup window and stops it
+  there.
 - **The host stops it by itself.** `claude`'s input comes through a relay in the remote shell,
   which drops a heartbeat line ORCA sends every 5 seconds and records a beat for every line it
   reads. A separate watchdog, which forwards nothing, stops every process of the launch when no
   beat comes for 30 seconds: ORCA frozen or unreachable, the link silently gone, or a `claude`
   that stopped reading so the relay is stuck writing to it. It also stops them 10 seconds after
-  the input ended (ORCA closed it, or the connection did). When `claude` exits, the remote shell
-  stops what it left. None of this needs a connection back, and only marked processes are ever
-  signalled: the relay and the watchdog end by themselves.
+  the input ended (ORCA closed it, or the connection did), taking the lock as any stop does.
+  These deadlines are elapsed time (`/proc/uptime`), not the wall clock. When `claude` exits,
+  the remote shell stops what it left. None of this needs a connection back, and only marked
+  processes are ever signalled: the relay and the watchdog end by themselves.
 - **ORCA confirms it.** Whenever a session ends (closed, cancelled while it opened, or its
   connection lost), ORCA also runs the stop over a new SSH connection and checks that nothing
-  of the launch runs. A stop that cannot be confirmed (the host unreachable, say) is not
+  of the launch runs. A stop that cannot be confirmed (the host unreachable, or the lock not
+  free in time) is not
   reported as closure: `close()` throws and the session's termination is rejected with reason
   `remote-cleanup-unconfirmed`, so ORCA keeps the agent slot until it knows. The host's own
   stop is what remains.
+
+One case is not covered: the remote shell killed with SIGKILL during the startup window
+(nothing of ORCA sends it one, and hangup, interrupt and terminate are deferred there). A stop
+then finds `starting` with the lock free and looks again a second later; a child that takes the
+marker after that is not followed.
 
 The real-sshd tests check each of these. After a close, a killed connection, a frozen ORCA
 (its ssh stopped, no stop sent), a cleanup connection that cannot be made, a `claude` that
