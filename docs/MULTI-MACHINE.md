@@ -385,7 +385,7 @@ way with `powershell -NoProfile -ExecutionPolicy Bypass -File orca-windows-ssh.p
 - A Windows Firewall block rule wins over every allow rule, so other rules that allow inbound
   connections, such as the ones Windows adds for its own apps, cannot open SSH on another
   adapter. It lists them and leaves them as they are.
-- A network adapter added later (a new VPN, say) is not named by the adapter rule until you run
+- A network adapter added or enabled later (a new VPN, say) is not named by the adapter rule until you run
   the line again; until then only the address rule covers it. Run it again after adding one: on a
   machine it set up, it updates its own rule, after asking.
 - It refuses, changing nothing, outside an administrator session, without the Tailscale

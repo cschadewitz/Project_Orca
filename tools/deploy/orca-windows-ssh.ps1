@@ -33,7 +33,7 @@ in this order:
 
 A Windows Firewall block rule wins over every allow rule, local or a policy's, so other rules
 that allow inbound connections (Windows' own app rules, say) cannot open SSH on another
-adapter; they are listed, and left as they are. An adapter added later is not named by the
+adapter; they are listed, and left as they are. An adapter added or enabled later is not named by the
 adapter rule until this runs again (the address rule still applies to it); run this again after
 adding one, and it updates its own rule. Before asking, it refuses, changing nothing, when that block
 would not hold: a Windows Firewall profile that is off or does not block inbound connections by
@@ -160,10 +160,11 @@ function Read-OrcaFirewall {
 }
 
 function Get-OrcaOtherAdapters {
-  # Every network interface but Tailscale's and loopback, connected or not: the ones SSH must not
-  # come in on. Read in full or not at all.
-  $names = @(Get-NetAdapter -ErrorAction Stop | ForEach-Object { [string]$_.Name }) +
-    @(Get-NetIPInterface -ErrorAction Stop | ForEach-Object { [string]$_.InterfaceAlias })
+  # Every IP interface but Tailscale's and loopback, connected or not: where SSH could come in, and
+  # what the firewall names an adapter by. An adapter with none (disabled, or a virtual function
+  # that carries another one's traffic) takes no IP traffic itself until it has one; then it is
+  # here, and this rule needs updating. Read in full or not at all.
+  $names = @(Get-NetIPInterface -ErrorAction Stop | ForEach-Object { [string]$_.InterfaceAlias })
   return @($names | Where-Object { $_ -and $_ -ne $Adapter -and $_ -notmatch '^Loopback Pseudo-Interface' } | Sort-Object -Unique)
 }
 
