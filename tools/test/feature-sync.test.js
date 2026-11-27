@@ -255,7 +255,9 @@ describe("tools/feature-sync.sh", () => {
     expect(attempt({ RULESET: "{not json" })).not.toContain(merge);
     expect(readFileSync(join(work, "summary"), "utf8")).toContain("ruleset 7 could not be parsed");
     expect(attempt({ RULESET: "null" })).not.toContain(merge);
-    expect(attempt({ RULESET: JSON.stringify({ id: 7, enforcement: "active", bypass_actors: [] }) })).not.toContain(merge);
+    expect(attempt({ RULESET: JSON.stringify({ id: 7, enforcement: "active", bypass_actors: [] }) })).not.toContain(
+      merge,
+    );
     // The feature branch advanced after the run fetched it: the checked tree is no longer proof.
     expect(attempt({ FEATURE_REF: "b".repeat(40) })).not.toContain(merge);
     expect(readFileSync(join(work, "summary"), "utf8")).toContain("moved since sync #12 was checked");
