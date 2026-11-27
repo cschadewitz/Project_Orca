@@ -76,6 +76,14 @@ check runs in its default mode instead of allowing every tool; whatever runs, OR
 The cases Claude Code refuses on its own before the hook (F05, A02, B01, P03) are run as
 diagnostics there too, as on the ACP route.
 
+The route has its own agent row, `claude-sdk` (`driver: "claude-agent-sdk"`), apart from
+`claude`: its pin names Claude Code and the Agent SDK (`sdkVersion` in place of
+`adapterVersion`) and, from an installed receipt, the SDK's lockfile integrity, the Claude Code
+image ORCA ran and `bridgeSha256`, the code that decides a call in ORCA's process. A row and its
+receipts share one driver (`PIN_SHAPES` in `check-support-matrix.js`), so a receipt from one
+Claude route never backs the other's row, and an SDK receipt must also show that the session
+loaded no Claude settings and ran Claude's own check in its default mode.
+
 ## The connected proof
 
 `claude-connected` runs a real Claude Code (the pinned pair in `CLAUDE_HOOK_VERIFIED_PAIRS`)

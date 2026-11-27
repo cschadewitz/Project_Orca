@@ -28,6 +28,42 @@ import { effectFrom } from "./connected/evidence.js";
 const here = dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = resolve(here, "..", "..");
 const TIERS = ["none", "A", "B", "C"];
+
+/**
+ * What a row pins, by the driver its agent runs on (#1128). An ACP row pins its agent and the
+ * ACP adapter, with the adapter's lockfile integrity, the runtime image and ORCA's hook program.
+ * A Claude Agent SDK row (`driver: "claude-agent-sdk"`) has no adapter or hook program: it pins
+ * Claude Code and the Agent SDK, with the SDK's lockfile integrity, the Claude Code image ORCA
+ * ran and the digest of the code that decides a call in ORCA's process (`bridgeSha256`). A row
+ * and its receipts share one driver, so a receipt from one route never backs the other's row.
+ * `bridgeSha256` carries no claim yet: nothing may rest on it until it binds the daemon artifact
+ * a run actually exercised, not a selection of source files (#1323 review).
+ */
+export const PIN_SHAPES = Object.freeze({
+  acp: Object.freeze({
+    versions: ["agentVersion", "adapterVersion"],
+    artifacts: ["adapterIntegrity", "runtimeSha256", "hookProgramSha256"],
+    needs: "a pinned agent version, adapter version, host and exact build",
+  }),
+  "claude-agent-sdk": Object.freeze({
+    versions: ["agentVersion", "sdkVersion"],
+    artifacts: ["sdkIntegrity", "runtimeSha256", "bridgeSha256"],
+    needs: "a pinned agent version, SDK version, host and exact build",
+  }),
+});
+
+/** The driver a row or receipt names; one that names none is an ACP one. */
+export const driverOf = (rowOrReceipt) => rowOrReceipt?.driver ?? "acp";
+
+/** The pin shape for a row or receipt, or undefined for a driver ORCA has none for. */
+export const pinShape = (rowOrReceipt) => PIN_SHAPES[driverOf(rowOrReceipt)];
+
+/** Whether `pin` names every version, the host and an exact build, as `shape` requires. */
+const completePin = (pin, shape) =>
+  Boolean(pin) &&
+  shape.versions.every((v) => Boolean(pin[v])) &&
+  Boolean(pin.host) &&
+  /^[0-9a-f]{40}$/.test(pin.build ?? "");
 /**
  * Tiers a row may be promoted to on attested receipts: none yet. A and B open in a separate,
  * reviewed change once guard-receipts.yml has produced, verified and checked end to end
@@ -118,8 +154,9 @@ export function receiptProblems(
   // A receipt made to test the verifier (`e2e-check.js`) is never evidence, whatever it shows.
   if (receipt.scope !== undefined) problems.push(`a ${receipt.scope} receipt, never evidence`);
   if (receipt.agent !== agent.id) problems.push(`agent ${receipt.agent}`);
-  if (receipt.agentVersion !== agent.pin?.agentVersion) problems.push(`agentVersion ${receipt.agentVersion}`);
-  if (receipt.adapterVersion !== agent.pin?.adapterVersion) problems.push(`adapterVersion ${receipt.adapterVersion}`);
+  if (driverOf(receipt) !== driverOf(agent)) problems.push(`driver ${driverOf(receipt)}, needs ${driverOf(agent)}`);
+  for (const v of (pinShape(agent) ?? PIN_SHAPES.acp).versions)
+    if (receipt[v] !== agent.pin?.[v]) problems.push(`${v} ${receipt[v]}`);
   if (receipt.host !== agent.pin?.host) problems.push(`host ${receipt.host}`);
   if (receipt.route !== route) problems.push(`route ${receipt.route}`);
   if (receipt.build !== agent.pin?.build) problems.push(`build ${receipt.build}, expected ${agent.pin?.build}`);
@@ -414,15 +451,36 @@ export function installedSettingsProblems(settings) {
 export function installedInputProblems(receipt, agent, profile) {
   const inputs = receipt.inputs;
   const hex = (v) => typeof v === "string" && /^[0-9a-f]{64}$/.test(v);
-  if (
-    typeof inputs?.adapter?.integrity !== "string" ||
-    !inputs.adapter.integrity.startsWith("sha512-") ||
+  const sri = (v) => typeof v === "string" && v.startsWith("sha512-");
+  if (driverOf(agent) === "claude-agent-sdk") {
+    // The SDK route: the Agent SDK as installed, the Claude Code image ORCA ran, the code that
+    // decides a call in ORCA's process, and the settings ORCA passed to the SDK: none loaded,
+    // Claude's own check in its default mode.
+    if (
+      !sri(inputs?.sdk?.integrity) ||
+      !hex(inputs?.runtime?.sha256) ||
+      !hex(inputs?.bridge?.sha256) ||
+      !hex(inputs?.profile) ||
+      !Array.isArray(inputs?.settingSources) ||
+      inputs?.permissionMode === undefined
+    )
+      return [
+        "needs inputs: the SDK's integrity, the runtime and bridge digests, the setting sources, the permission mode and the profile",
+      ];
+  } else if (
+    !sri(inputs?.adapter?.integrity) ||
     !hex(inputs.runtime?.sha256) ||
     !hex(inputs.hookProgram?.sha256) ||
     !hex(inputs.profile)
   )
     return ["needs inputs: the adapter's integrity, the runtime and hook program digests, and the profile"];
   const problems = [];
+  if (driverOf(agent) === "claude-agent-sdk") {
+    if (inputs.settingSources.length !== 0)
+      problems.push(`loaded Claude settings (${inputs.settingSources.join(",")}); the route loads none`);
+    if (inputs.permissionMode !== "default")
+      problems.push(`ran Claude in permission mode ${String(inputs.permissionMode)}, not default`);
+  }
   if (profile !== undefined && inputs.profile !== profile)
     problems.push("ran against other requirements than the matrix states now (profile differs)");
   const pinned = agent.pin?.artifacts ?? {};
@@ -431,8 +489,30 @@ export function installedInputProblems(receipt, agent, profile) {
   return problems;
 }
 
+/**
+ * Why `receipt` is not one `row` may hold or be pinned to: another agent or driver, a route
+ * that is not one of the row's, or a kind other than an installed receipt. Applied to rows on
+ * the Claude Agent SDK driver (#1128), in the checker at every tier and before recording; a
+ * connected receipt is a diagnostic there and never pins the row. ACP rows are as they were.
+ */
+export function rowReceiptProblems(receipt, row) {
+  const problems = [];
+  if (receipt?.agent !== row.id) problems.push(`agent ${receipt?.agent}, not ${row.id}`);
+  if (driverOf(receipt) !== driverOf(row)) problems.push(`driver ${driverOf(receipt)}, needs ${driverOf(row)}`);
+  if (!(row.routes ?? []).includes(receipt?.route))
+    problems.push(`route ${receipt?.route} is not one of the row's (${(row.routes ?? []).join(",") || "none"})`);
+  if (receipt?.kind !== "installed") problems.push(`a ${receipt?.kind} receipt; the row holds installed ones only`);
+  return problems;
+}
+
 /** The artifact digests a row pins from an installed receipt. */
 export function artifactsOf(receipt) {
+  if (driverOf(receipt) === "claude-agent-sdk")
+    return {
+      sdkIntegrity: receipt.inputs?.sdk?.integrity,
+      runtimeSha256: receipt.inputs?.runtime?.sha256,
+      bridgeSha256: receipt.inputs?.bridge?.sha256,
+    };
   return {
     adapterIntegrity: receipt.inputs?.adapter?.integrity,
     runtimeSha256: receipt.inputs?.runtime?.sha256,
@@ -634,6 +714,10 @@ export function checkSupportMatrix(
       r.trust = verifyReceipt(r.file, r.receipt);
       if (tier === 0 && r.trust.some((p) => p !== UNVERIFIED))
         problems.push(`${at}: receipt ${r.file}: ${r.trust.join("; ")}`);
+      // A signature shows where a receipt came from, not that it belongs to this row. An SDK
+      // row holds only its own installed receipts for its own routes, at every tier (#1128).
+      if (driverOf(agent) === "claude-agent-sdk")
+        for (const p of rowReceiptProblems(r.receipt, agent)) problems.push(`${at}: receipt ${r.file}: ${p}`);
     }
     // The cases a tier B claim leaves out are named on the row, so the claim reads as its scope.
     const diagnostics = [
@@ -656,8 +740,13 @@ export function checkSupportMatrix(
     if (!promotable.includes(agent.tier)) problems.push(`${at}: ${PROMOTION_DISABLED}`);
 
     const pin = agent.pin;
-    if (!pin || !pin.agentVersion || !pin.adapterVersion || !pin.host || !/^[0-9a-f]{40}$/.test(pin.build ?? "")) {
-      problems.push(`${at}: tier ${agent.tier} needs a pinned agent version, adapter version, host and exact build`);
+    const shape = pinShape(agent);
+    if (!shape) {
+      problems.push(`${at}: driver ${driverOf(agent)} has no pin shape`);
+      continue;
+    }
+    if (!completePin(pin, shape)) {
+      problems.push(`${at}: tier ${agent.tier} needs ${shape.needs}`);
       continue;
     }
     if (agent.routes.length === 0) problems.push(`${at}: tier ${agent.tier} needs at least one enforcement route`);
@@ -778,16 +867,9 @@ export function scopedProblems(
     return problems;
   }
   const pin = s.pin;
-  const artifacts = ["adapterIntegrity", "runtimeSha256", "hookProgramSha256"];
-  if (
-    !pin ||
-    !pin.agentVersion ||
-    !pin.adapterVersion ||
-    !pin.host ||
-    !/^[0-9a-f]{40}$/.test(pin.build ?? "") ||
-    artifacts.some((k) => typeof pin.artifacts?.[k] !== "string")
-  )
-    problems.push("needs a pinned agent version, adapter version, host, exact build and artifact digests");
+  const shape = pinShape(agent) ?? PIN_SHAPES.acp;
+  if (!completePin(pin, shape) || shape.artifacts.some((k) => typeof pin.artifacts?.[k] !== "string"))
+    problems.push(`needs ${shape.needs.replace(" and exact build", ", exact build and artifact digests")}`);
   const settings = s.settings;
   if (!settings || typeof settings !== "object" || Array.isArray(settings) || Object.keys(settings).length === 0)
     problems.push("needs the ORCA settings the claim holds under");
