@@ -56,6 +56,11 @@ import {
 } from "@orca/core";
 import { contextRecoveryFailure, type PermissionInvocation, type SessionContinuity } from "../acp-session.js";
 import { redactError, redactingLogger } from "../secrets.js";
+import { redactSecretValues } from "@orca/core";
+import type { AgentHost } from "../host.js";
+import { createMcpRelay, type McpRelay, type RelayedMcpServer } from "../mcp-relay.js";
+import { ORCA_CLIENT_INFO } from "../acp-session.js";
+import { checkClaudeSdkMcpServers, claudeSdkMcpServers } from "./mcp-servers.js";
 import type { PermissionRuleRecord, ProtectedPaths } from "../permissions.js";
 import {
   startupTermination,
@@ -112,6 +117,15 @@ export interface ClaudeSdkSessionOptions {
    * out of everything this session logs or throws. Never logged or shown.
    */
   secretValues?: readonly string[] | undefined;
+  /**
+   * The agent's MCP servers, their secrets filled in (#1125). ORCA runs each one itself through
+   * its MCP relay, on `host`, and Claude is given only an in-process SDK server by that name.
+   */
+  mcpServers?: readonly RelayedMcpServer[] | undefined;
+  /** Where ORCA runs the MCP servers: the session's own host (ORCA's machine). */
+  host?: AgentHost | undefined;
+  /** Variables of ORCA's environment kept from Claude, and so from its MCP servers. */
+  withheldEnv?: readonly string[] | undefined;
   /** Aborts the open while it is starting. */
   signal?: AbortSignal | undefined;
   logger?: Logger | undefined;
@@ -237,6 +251,7 @@ async function openClaudeSdkProcess(
   const exitGraceMs = options.exitGraceMs ?? CLAUDE_SDK_EXIT_GRACE_MS;
 
   if (process.platform === "win32") throw claudeSdkPlatformUnsupported(options.agent.id);
+  checkClaudeSdkMcpServers(options.agent.id, options.mcpServers ?? []);
   if (options.signal?.aborted)
     throw new OrcaError("CANCELLED", `opening agent ${options.agent.id} was cancelled before it started`);
 
@@ -305,7 +320,9 @@ async function openClaudeSdkProcess(
   const parents = new Map<string, string>();
   // Set once the session is up; an ask before then has no turn and is denied anyway.
   let failAsk: (turnId: string, error: unknown) => void = () => undefined;
-  const { preToolUse, canUseTool } = claudeSdkPermissionBridge({
+  /** Aborted when the session ends: its MCP servers serve nothing after it (#1125). */
+  const sessionLive = new AbortController();
+  const { preToolUse, canUseTool, authorizeMcp } = claudeSdkPermissionBridge({
     agent: options.agent,
     sessionId: id,
     cwd,
@@ -319,8 +336,30 @@ async function openClaudeSdkProcess(
         : undefined,
     parentOf: (toolUseId) => parents.get(toolUseId),
     onAskFailed: (turnId, error) => failAsk(turnId, error),
+    sessionSignal: sessionLive.signal,
     logger,
   });
+  // ORCA's MCP relay (#1125): the real servers run on ORCA's side, started only for a request
+  // the bridge allows; Claude is told a name and nothing else.
+  const mcpServers = options.mcpServers ?? [];
+  let relay: McpRelay | undefined;
+  if (mcpServers.length > 0) {
+    if (!options.host)
+      throw new OrcaError("INTERNAL", `agent ${options.agent.id}: MCP servers need the session's host to run on`);
+    const secretValues = [...(options.secretValues ?? [])];
+    relay = createMcpRelay({
+      host: options.host,
+      cwd,
+      withheldEnv: options.withheldEnv,
+      redact: (text) => redactSecretValues(text, secretValues),
+      servers: mcpServers.map((m) => ({ name: m.name, command: m.command, args: [...m.args], env: { ...m.env } })),
+      admitted: Promise.resolve(true),
+      authorize: authorizeMcp,
+      logger,
+      clientInfo: { ...ORCA_CLIENT_INFO },
+      exitGraceMs,
+    });
+  }
   const q: Query = query({
     prompt: input,
     options: {
@@ -334,7 +373,8 @@ async function openClaudeSdkProcess(
       // Kept, so that a later session can continue it (#1121), as Claude Code does over ACP.
       persistSession: true,
       ...(resume ? { resume } : { sessionId: acpSessionId }),
-      mcpServers: {},
+      // Only ORCA's relayed servers; `strictMcpConfig` keeps every other MCP config out.
+      mcpServers: relay ? claudeSdkMcpServers(relay, mcpServers) : {},
       strictMcpConfig: true,
       systemPrompt: { type: "preset", preset: "claude_code" },
       canUseTool,
@@ -357,11 +397,13 @@ async function openClaudeSdkProcess(
         await within(exited, KILL_SETTLE_MS);
       }
       abort.abort();
+      sessionLive.abort();
       try {
         q.close();
       } catch {
         // already closed
       }
+      await relay?.close().catch(() => undefined);
       resolveClosed();
     })());
 

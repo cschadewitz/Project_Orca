@@ -1,0 +1,1 @@
+- **agents:** a `driver: claude-agent-sdk` session serves the agent's `mcpServers` to Claude (#1125). ORCA runs each server through the same MCP relay and checks as the ACP route and gives Claude only an in-process server by name; a tool call reaches the server only as the call the permission rules decided, in the live turn. Skills on this route are refused rather than dropped.

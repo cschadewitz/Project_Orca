@@ -39,6 +39,9 @@ does over ACP (#1126):
 - The value is taken out of the run's events and logs, and out of every error the session
   reports.
 
+A secret reference in one of the agent's MCP servers' `env` is checked and read the same way,
+and reaches only that server, in the variable its `env` names (see "MCP servers" below).
+
 ## 2. One subscription, one person
 
 A Claude subscription belongs to one person. Run the SDK driver only on your own daemon, for your
@@ -95,7 +98,8 @@ ORCA starts Claude with a fixed setup:
   `.claude/settings.json` and `settings.local.json` are not loaded, so their hooks do not run and
   their permission rules and `env` do not apply. Your login is still used. Loading them by choice
   is not offered yet.
-- **No MCP servers** (`--strict-mcp-config` with none).
+- **Only ORCA's MCP servers** (`--strict-mcp-config`): the agent's own `mcpServers`, run by ORCA
+  (see below). A checkout's `.mcp.json` and your own Claude MCP config are not loaded.
 - Claude Code's own system prompt, and permission mode `default`.
 - **Session transcripts are kept** where Claude Code always keeps them, in its own config
   directory, under a session id ORCA picks (the session's `acpSessionId`), so the session can be
@@ -159,6 +163,22 @@ rules, people and answerer as for Claude over ACP:
 An ask card shows the call as ORCA's rules read it, together with what Claude said about it:
 why it asks, the path it was blocked on, and for a subagent's call, the tool call that started
 the subagent. A note the person writes beside a decline does not reach Claude yet.
+
+### MCP servers
+
+The agent's `mcpServers` work as on the ACP route (#1125), with the same checks. ORCA runs each
+server itself and gives Claude only its name, as an in-process server: Claude never sees the
+server's command, arguments or environment, and its secrets stay on ORCA's side.
+
+- A server starts only when Claude first lists its tools or calls one, in a live session.
+- **A tool call** is decided by the agent's permission rules when Claude asks for it, as above
+  (titles read `<server>: <tool>`). It reaches the server only inside the live turn, and only as
+  the call that was decided, with the same arguments. A rule that denies the call since, or an
+  automatic allow the rules no longer give, refuses it. Nobody is asked a second time.
+- Every request has the relay's deadline, and Claude is told only a short reason when one fails.
+- A server's name may hold only letters, digits, `-` and single `_`, at most 64 characters, so
+  Claude's tool names (`mcp__<server>__<tool>`) stay unambiguous. Another name refuses the
+  session before anything starts.
 
 ### How your permission rules read these calls
 

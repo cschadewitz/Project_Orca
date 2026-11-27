@@ -22,6 +22,7 @@ on:
       - packages/agents/src/claude-pre-tool-hook.ts
       - packages/agents/src/claude-acp-title.ts
       - packages/agents/src/secrets.ts
+      - packages/agents/src/mcp-relay.ts
       - packages/agents/package.json
       - packages/cli/src/bootstrap.ts
       - packages/cli/test/claude-sdk-acceptance-1120.test.ts

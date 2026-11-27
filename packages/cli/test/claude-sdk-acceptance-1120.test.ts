@@ -22,6 +22,8 @@
  *   earlier turn; a required resume of an unknown id is refused as a failed load;
  * - a checkout's `.claude/settings.json` and `settings.local.json` do not load (#1126): its
  *   hooks do not run and its permission rules do not apply;
+ * - an ORCA-run MCP server is served to Claude in process (#1125): the person is asked about the
+ *   tool call once, ORCA's relay runs the real server, and a checkout's `.mcp.json` does not load;
  * - cancel ends a turn as `cancelled`, and close leaves no Claude Code process behind.
  */
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -198,6 +200,7 @@ describe.runIf(CLAUDE !== undefined && process.platform !== "win32")(
     const open = (
       extra: Partial<Parameters<ReturnType<typeof makeSessionFactory>>[0]> = {},
       permissions?: unknown,
+      agentExtra: Record<string, unknown> = {},
     ): Promise<AgentSession> => {
       const factory = makeSessionFactory({ configDir: join(root, "orca"), storeDir: ".orca" }, () =>
         Promise.reject(new Error("ACP opened")),
@@ -213,6 +216,7 @@ describe.runIf(CLAUDE !== undefined && process.platform !== "win32")(
           CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
         },
         ...(permissions ? { permissions } : {}),
+        ...agentExtra,
       });
       return factory({ host: new LocalHost({ id: "local", type: "local" }), agent, cwd: workspace, ...extra });
     };
@@ -378,6 +382,65 @@ describe.runIf(CLAUDE !== undefined && process.platform !== "win32")(
         // A loaded `deny: Read` would have refused this; a loaded hook would have left its marker.
         expect(texts(events).join("")).toContain("orca-1126-checkout");
         await expect(readFile(hookMarker, "utf8")).rejects.toThrow(/ENOENT/);
+      } finally {
+        await session.close();
+      }
+    });
+
+    it("serves ORCA's MCP server to Claude in process, and no other MCP config loads (#1125)", async () => {
+      const serverLog = join(root, "mcp-server.log");
+      const script = join(root, "mcp-server.cjs");
+      await writeFile(
+        script,
+        `const rl = require("node:readline").createInterface({ input: process.stdin });
+const fs = require("node:fs");
+const send = (o) => process.stdout.write(JSON.stringify(o) + "\\n");
+rl.on("line", (line) => {
+  const m = JSON.parse(line);
+  fs.appendFileSync(process.env.SERVER_LOG, (m.method || "response") + "\\n");
+  if (m.method === "initialize")
+    send({ jsonrpc: "2.0", id: m.id, result: { protocolVersion: "2025-06-18", capabilities: { tools: {} }, serverInfo: { name: "real", version: "1" } } });
+  else if (m.method === "tools/list")
+    send({ jsonrpc: "2.0", id: m.id, result: { tools: [{ name: "touch", description: "t", inputSchema: { type: "object", properties: {} } }] } });
+  else if (m.method === "tools/call")
+    send({ jsonrpc: "2.0", id: m.id, result: { content: [{ type: "text", text: "orca-1125-served" }] } });
+  else if (m.id !== undefined) send({ jsonrpc: "2.0", id: m.id, error: { code: -32601, message: "no" } });
+});
+`,
+      );
+      // A checkout's own MCP config, which must not load.
+      const checkout = join(root, "mcp-checkout");
+      await mkdir(checkout, { recursive: true });
+      await writeFile(
+        join(checkout, ".mcp.json"),
+        JSON.stringify({ mcpServers: { "orca-1125-project": { command: "/bin/true" } } }),
+      );
+      const asked: string[] = [];
+      const session = await open(
+        {
+          cwd: checkout,
+          askPermission: (request) => {
+            asked.push(request.toolCall.title ?? "");
+            return Promise.resolve(request.options.find((o) => o.kind === "allow_once")!.optionId);
+          },
+        },
+        undefined,
+        {
+          mcpServers: [
+            { name: "orca-tools", command: process.execPath, args: [script], env: { SERVER_LOG: serverLog } },
+          ],
+        },
+      );
+      try {
+        const events: SessionUpdateEvent[] = [];
+        session.onUpdate((e) => events.push(e));
+        const before = model.requests.length;
+        await session.prompt(`CALL:${JSON.stringify({ name: "mcp__orca-tools__touch", input: {} })}`);
+        expect(texts(events).join("")).toContain("orca-1125-served");
+        expect(asked).toEqual(["orca-tools: touch"]);
+        expect(await readFile(serverLog, "utf8")).toContain("tools/call");
+        const sent = JSON.stringify(model.requests.slice(before));
+        expect(sent).not.toContain("orca-1125-project");
       } finally {
         await session.close();
       }

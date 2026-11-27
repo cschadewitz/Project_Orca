@@ -28,6 +28,7 @@ import type * as acp from "@agentclientprotocol/sdk";
 import type { CanUseTool, HookCallback, HookJSONOutput } from "@anthropic-ai/claude-agent-sdk";
 import type { ConfiguredPermissionPolicy, JudgedDecision, Logger, PermissionPolicy } from "@orca/core";
 import type { PermissionInvocation } from "../acp-session.js";
+import type { McpRelayCall, McpRelayContext, McpRelayDispatch } from "../mcp-relay.js";
 import { claudeToolPolicyCall } from "../claude-pre-tool-hook.js";
 import {
   explainPermission,
@@ -101,7 +102,18 @@ export interface ClaudeSdkPermissionBridgeOptions {
   decisionTimeoutMs?: number | undefined;
   /** Reads the effective policy; the agent's rules over `permissionFiles` when left out (tests replace it). */
   loadPolicy?: (() => Promise<PermissionPolicy>) | undefined;
+  /** Aborts when the session ends: no MCP request is served after it (#1125). */
+  sessionSignal?: AbortSignal | undefined;
   logger: Logger;
+}
+
+/** What Claude's ask decided for one MCP tool use, so the relayed call is not asked twice (#1125). */
+interface McpGrant {
+  turnId: string;
+  server: string;
+  tool: string;
+  arguments: string;
+  grantedBy: "allow" | "ask:allow_once";
 }
 
 /** The SDK's `canUseTool` context, as far as the ask card shows it. */
@@ -112,7 +124,11 @@ const MAX_CONTEXT = 300;
 export function claudeSdkPermissionBridge(o: ClaudeSdkPermissionBridgeOptions): {
   preToolUse: HookCallback;
   canUseTool: CanUseTool;
+  /** The relay's `authorize` for the session's ORCA-run MCP servers (#1125). */
+  authorizeMcp: (call: McpRelayCall, request: AbortSignal, context?: McpRelayContext) => Promise<McpRelayDispatch>;
 } {
+  /** Claude's tool uses of ORCA-run MCP tools that ORCA allowed, by tool use id; each is used once. */
+  const mcpGrants = new Map<string, McpGrant>();
   const scope: PermissionEvalContext = {
     workspaceCwd: o.cwd,
     ...(o.protectedPaths ? { protectedPaths: o.protectedPaths } : {}),
@@ -275,6 +291,16 @@ export function claudeSdkPermissionBridge(o: ClaudeSdkPermissionBridgeOptions): 
         return refuse("allow:ask-since", CLAUDE_SDK_DENIALS.askedSince, false, rule);
       if (!live()) return refuse(`${decision}:turn-ended`, CLAUDE_SDK_DENIALS.cancelled, true, rule);
       record(call, toolUseId, decision, rule);
+      const mcp = mcpToolName(toolName);
+      // An answer from an earlier turn can no longer be used: dropped, so the map stays small.
+      for (const [id, g] of mcpGrants) if (g.turnId !== turn.id) mcpGrants.delete(id);
+      if (mcp)
+        mcpGrants.set(toolUseId, {
+          turnId: turn.id,
+          ...mcp,
+          arguments: JSON.stringify(toolInput ?? null),
+          grantedBy: decision,
+        });
       // This call only. No `updatedPermissions`: Claude remembers nothing, and asks again.
       return { behavior: "allow", updatedInput: asInput(toolInput), toolUseID: toolUseId };
     }
@@ -291,7 +317,82 @@ export function claudeSdkPermissionBridge(o: ClaudeSdkPermissionBridgeOptions): 
     return refuse(decision, message, false, rule);
   };
 
-  return { preToolUse, canUseTool };
+  /**
+   * A request to one of the session's ORCA-run MCP servers (#1125), as the relay checks it at
+   * dispatch, with the ACP route's rules: a listing needs a live session; a tool call needs the
+   * live turn and ORCA's policy for `"<server>: <tool>"`, read now and again at the handoff.
+   *
+   * Claude asks ORCA about the tool use first (the hook, then `canUseTool`), so the relay asks
+   * nobody: a call Claude's ask allowed for this tool use, in this turn, with these arguments,
+   * stands as that answer did (a deny since wins; an automatic allow needs the policy still to
+   * allow). Any other call is served only while the policy allows it outright. Each answer is
+   * used once.
+   */
+  const authorizeMcp = async (
+    call: McpRelayCall,
+    request: AbortSignal,
+    context?: McpRelayContext,
+  ): Promise<McpRelayDispatch> => {
+    const sessionSignal = o.sessionSignal ?? new AbortController().signal;
+    if (sessionSignal.aborted) throw new Error("the session has ended");
+    if (call.method !== "tools/call") {
+      const check = () => {
+        if (sessionSignal.aborted) throw new Error("the session ended before the request was sent");
+      };
+      return { signal: sessionSignal, dispatch: check, recheck: async () => check() };
+    }
+    const toolName = `mcp__${call.server}__${call.tool}`;
+    const policyCall = describe(toolName, call.arguments);
+    const refuse = (decision: string, reason: string): never => {
+      record(policyCall, context?.toolUseId, `mcp:${decision}`);
+      throw new Error(reason);
+    };
+    const turn = o.liveTurn();
+    if (!turn) return refuse("no-turn", "no live turn: ORCA relays tool calls only in one");
+    const live = () => o.liveTurn()?.id === turn.id && !sessionSignal.aborted && !request.aborted;
+    let grantedBy: McpGrant["grantedBy"] | undefined;
+    if (context?.toolUseId !== undefined) {
+      const grant = mcpGrants.get(context.toolUseId);
+      mcpGrants.delete(context.toolUseId);
+      if (
+        grant &&
+        grant.turnId === turn.id &&
+        grant.server === call.server &&
+        grant.tool === call.tool &&
+        grant.arguments === JSON.stringify(call.arguments ?? null)
+      )
+        grantedBy = grant.grantedBy;
+    }
+    const decide = async (stage: string) => {
+      const now = explainPermission(await policy(), policyCall, scope).decision;
+      if (now === "deny") return refuse(`${stage}denied`, "ORCA's policy denies it");
+      if (now === "ask" && grantedBy !== "ask:allow_once")
+        return refuse(`${stage}asks`, "ORCA's policy asks about it, and nobody was asked for this call");
+      if (!live()) return refuse(`${stage}turn-ended`, "the turn ended before the tool call was sent");
+    };
+    await decide("");
+    record(policyCall, context?.toolUseId, `mcp:${grantedBy ?? "allow"}`);
+    return {
+      signal: turn.signal,
+      dispatch: () => {
+        if (!live()) refuse("dispatch:turn-ended", "the turn ended before the tool call was sent");
+      },
+      // At the handoff to the server: the policy as it is now, the same turn.
+      recheck: () => decide("recheck:"),
+    };
+  };
+
+  return { preToolUse, canUseTool, authorizeMcp };
+}
+
+/** Claude's split of `mcp__<server>__<tool>` for a server name without `__` (`mcp-servers.ts`). */
+function mcpToolName(name: string): { server: string; tool: string } | undefined {
+  if (!name.startsWith("mcp__")) return undefined;
+  const rest = name.slice("mcp__".length);
+  const separator = rest.indexOf("__");
+  if (separator <= 0) return undefined;
+  const tool = rest.slice(separator + 2);
+  return tool ? { server: rest.slice(0, separator), tool } : undefined;
 }
 
 /** The default for `decisionTimeoutMs`: the SDK waits far longer for a callback. */
