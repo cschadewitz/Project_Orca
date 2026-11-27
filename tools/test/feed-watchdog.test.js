@@ -237,6 +237,18 @@ describe("channel files", () => {
     expect(channelProblems("internal", "x64", channel).join()).toContain(message);
   });
 
+  // The Orrery rename bridge (v0.8.1). rename-keep-start: both names on purpose
+  it("accepts an installer under either side of the rename, and nothing else", () => {
+    const channel = good();
+    for (const url of ["Orrery-0.7.0-win-x64.exe", "ORCA-0.7.0-win-x64.exe"]) {
+      channel.files[0].url = channel.path = url;
+      expect(channelProblems("stable", "x64", channel)).toEqual([]);
+    }
+    channel.files[0].url = channel.path = "Kepler-0.7.0-win-x64.exe";
+    expect(channelProblems("stable", "x64", channel).join()).toContain("is not x64's installer");
+  });
+  // rename-keep-end
+
   it("refuses an installer for another architecture", () => {
     const channel = parseChannel(yml("0.7.0", "arm64", "x"));
     expect(channelProblems("stable", "x64", channel).join()).toContain("is not x64's installer");
@@ -503,6 +515,14 @@ describe("server bundle channel (#877)", () => {
       expect((await run(both({ internal: "0.8.0-rc.1" }), { record: stopped })).problems).toContain(
         "internal server/latest-linux-x64.yml: rings.json stops servers, but the feed answered 200",
       );
+      // The stop header under the name after the Orrery rename (the v0.8.1 bridge). rename-keep
+      const renamed = (inner) => ({
+        fetch: (url, init) =>
+          String(url).endsWith("/server/latest-linux-x64.yml") && init.headers?.Authorization
+            ? new Response(null, { status: 503, headers: { "X-Orrery-Feed-Stop": "servers" } })
+            : inner.fetch(url, init),
+      });
+      expect((await run(renamed(both({ internal: "0.8.0-rc.1" })), { record: stopped })).problems).toEqual([]);
       // A stop the record does not set: a failure too.
       expect(
         (await run(stop(both({ internal: "0.8.0-rc.1" })), { record: { format: 1, rings: desktop, server } })).problems,

@@ -578,6 +578,26 @@ jobs:
             -f version="$VERSION" -f source_sha="$SHA"
           echo "Dispatched Release (server bundle) for v$VERSION at \`$SHA\`." >> "$GITHUB_STEP_SUMMARY"
 
+      # The Windows x64 server bundle (#1238, incubating) starts with the 0.9 line
+      # (WIN_SERVER_FROM in tools/deploy/release-attach.sh). It is optional on a release: a final
+      # publishes without it, never with part of it. Its own reconcile retries a missed dispatch.
+      - name: Dispatch Release (Windows server bundle) for the release commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ needs.check.outputs.sha }}
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          set -euo pipefail
+          [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::invalid release commit"; exit 1; }
+          WIN_SERVER_FROM=0.9.0
+          if [ "$(printf '%s\n%s\n' "$WIN_SERVER_FROM" "${VERSION%%-*}" | sort -V | head -n1)" != "$WIN_SERVER_FROM" ]; then
+            echo "v$VERSION is before the Windows server bundle's $WIN_SERVER_FROM line; nothing dispatched." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          gh workflow run release-server-bundle-windows.yml --repo "$GITHUB_REPOSITORY" --ref main \
+            -f version="$VERSION" -f source_sha="$SHA"
+          echo "Dispatched Release (Windows server bundle) for v$VERSION at \`$SHA\`." >> "$GITHUB_STEP_SUMMARY"
+
   # A line's prerelease (X.Y.Z-rc.N) is published by `publish` itself, so main's record of it
   # is requested here; a final is only drafted here and Release (publish final) requests it
   # once the release is really published. Release (sync main) reads the published release back

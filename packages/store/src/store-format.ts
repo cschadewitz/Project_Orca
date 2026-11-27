@@ -23,8 +23,8 @@
  * them together. Changing the epoch means appending to {@link STORE_FORMAT_HISTORY}.
  */
 import { randomUUID } from "node:crypto";
-import { lstat, mkdir, readdir, readFile, rename, rm } from "node:fs/promises";
-import { createDurable, syncDirectory, syncFile } from "./durable-file.js";
+import { lstat, mkdir, readdir, readFile, rm } from "node:fs/promises";
+import { createDurable, syncDirectory, syncFile, replaceFile } from "./durable-file.js";
 import type { Stats } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
@@ -352,7 +352,7 @@ async function stamp(
     await rm(tmp, { force: true });
     throw error;
   }
-  await rename(tmp, join(storeDir, STORE_FORMAT_FILE));
+  await replaceFile(tmp, join(storeDir, STORE_FORMAT_FILE));
   await afterRename?.();
   await syncMarker(storeDir);
 }

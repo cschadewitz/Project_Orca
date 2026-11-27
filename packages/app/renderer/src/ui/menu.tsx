@@ -48,6 +48,7 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  type CSSProperties,
   type JSX,
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
@@ -206,10 +207,12 @@ function visibleArea(trigger: Element): Rect & { scrolls: boolean } {
     // happy-dom measures every box as zero: nothing there to clip against.
     if (box.width === 0 && box.height === 0) continue;
     if (/auto|scroll/.test(style.overflowY)) scrolls = true;
+    // Inside the pane's own scrollbars: a menu over the scrollbar hides the one way to scroll.
+    const inner = node.clientWidth > 0;
     top = Math.max(top, box.top);
     left = Math.max(left, box.left);
-    right = Math.min(right, box.left + box.width);
-    bottom = Math.min(bottom, box.top + box.height);
+    right = Math.min(right, inner ? box.left + node.clientLeft + node.clientWidth : box.left + box.width);
+    bottom = Math.min(bottom, inner ? box.top + node.clientTop + node.clientHeight : box.top + box.height);
   }
   return { top, left, width: Math.max(0, right - left), height: Math.max(0, bottom - top), scrolls };
 }
@@ -481,6 +484,7 @@ export function Menu({
       {open && (
         <ul
           className={placementClass(placement)}
+          style={placement.room === undefined ? undefined : ({ "--menu-room": `${placement.room}px` } as CSSProperties)}
           role="menu"
           aria-label={label}
           ref={list}

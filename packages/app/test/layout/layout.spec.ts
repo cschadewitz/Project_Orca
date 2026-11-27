@@ -23,7 +23,7 @@ import { _electron as electron, expect, test, type ElectronApplication, type Pag
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { Desktop } from "./desktop.js";
+import { Desktop, LARGE } from "./desktop.js";
 import { startSeededDaemon, type SeededDaemon } from "./seeded-daemon.js";
 
 const appDir = resolve(fileURLToPath(new URL("../../", import.meta.url)));
@@ -44,6 +44,8 @@ test.beforeAll(async () => {
   desktop = await Desktop.start();
   daemon = await startSeededDaemon();
   profile = await mkdtemp(join(desktop.root, "profile-"));
+  // No permission notifications from the seeded asks; the other tiers are off by default.
+  await writeFile(join(profile, "preferences.json"), JSON.stringify({ alerts: { permission: false } }));
   app = await electron.launch({
     // `-r` runs before Playwright's own loader appends `--password-store=basic`; the switch it
     // sets is read later, so the libsecret store wins and Launch work can keep an intent.
@@ -55,6 +57,14 @@ test.beforeAll(async () => {
   await expect
     .poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().some((win) => win.isVisible())))
     .toBe(true);
+  // A permission ask takes a focused window to its card whatever the alert preferences say
+  // (alerts.ts: it is not a notification), and under Xvfb with no window manager the window is
+  // always focused. The seeded asking-builders keep asking, so the window would leave the
+  // surface a test is measuring. The window says it is not focused instead; nothing else here
+  // reads focus.
+  await app.evaluate(({ BrowserWindow }) => {
+    for (const win of BrowserWindow.getAllWindows()) win.isFocused = () => false;
+  });
   if (OUT) await mkdir(OUT, { recursive: true });
 });
 
@@ -74,11 +84,13 @@ async function frame(width: number, height: number, zoom = 1) {
     },
     { width, height, zoom },
   );
+  // Within a device pixel: at 125% a 1000 px window is 800 CSS px, which reads back as 1001.
   await expect
-    .poll(() =>
-      page.evaluate(() => [Math.round(innerWidth * devicePixelRatio), Math.round(innerHeight * devicePixelRatio)]),
-    )
-    .toEqual([width, height]);
+    .poll(async () => {
+      const [w, h] = await page.evaluate(() => [innerWidth * devicePixelRatio, innerHeight * devicePixelRatio]);
+      return Math.abs(w - width) <= 1 && Math.abs(h - height) <= 1;
+    })
+    .toBe(true);
   await settled();
 }
 
@@ -135,7 +147,12 @@ test("#1193 Runs keeps twenty characters of title and its toolbar at 800×600 an
   await expect(page.locator(".orca-runs__tree .orca-tree-row").first()).toBeVisible({ timeout: 30_000 });
   for (const [width, height, zoom, name] of [
     [800, 600, 1, "1193-runs-800x600"],
-    [1280, 900, 1.5, "1193-runs-1280x900-150"],
+    [...LARGE, 1.5, `1193-runs-${LARGE[0]}x${LARGE[1]}-150`],
+    // Just wider than the old fold point (44em): the step detail at its floor left the tree
+    // too narrow for twenty characters, on every platform (found on Windows, #1284).
+    [1000, 680, 1.5, "1193-runs-1000x680-150"],
+    // Both at once: about 530 CSS pixels, where the step detail folds under the tree.
+    [800, 600, 1.5, "1193-runs-800x600-150"],
   ] as const) {
     await frame(width, height, zoom);
     await expect(page.locator(".orca-runs__tree .orca-runs__name").first()).toBeVisible({ timeout: 30_000 });
@@ -179,11 +196,32 @@ test("#1193 Runs keeps twenty characters of title and its toolbar at 800×600 an
       expect(view.bottom, `${name}: ${view.label}`).toBeLessThanOrEqual(measured.height);
     }
   }
-  await frame(1280, 900);
+  await frame(...LARGE);
+});
+
+test("#1193 at 800×600 and 150% the step detail folds under the tree, and only once a run is selected", async () => {
+  await surface("Runs");
+  await frame(800, 600, 1.5);
+  const tree = page.locator(".orca-runs__tree");
+  const detail = page.locator(".orca-runs__detail");
+  await expect(tree.locator(".orca-runs__name").first()).toBeVisible({ timeout: 30_000 });
+  await expect(detail).toBeHidden();
+  // The seeded runs are still moving: a click that met a row being redrawn is tried again.
+  await expect(async () => {
+    await page.getByRole("treeitem").first().click({ timeout: 2_000 });
+    await expect(detail).toBeVisible({ timeout: 2_000 });
+  }).toPass({ timeout: 30_000 });
+  const [treeBox, detailBox] = await Promise.all([tree.boundingBox(), detail.boundingBox()]);
+  await shot("1193-runs-800x600-150-selected");
+  // One column: the detail under the tree, as wide as it, not beside it.
+  expect(detailBox!.y).toBeGreaterThanOrEqual(treeBox!.y + treeBox!.height - 0.5);
+  expect(Math.abs(detailBox!.width - treeBox!.width)).toBeLessThanOrEqual(1);
+  await page.keyboard.press("Escape");
+  await frame(...LARGE);
 });
 
 test("#1112 Plan schedule header cells never overlap", async () => {
-  await frame(1280, 900);
+  await frame(...LARGE);
   await surface("Plan");
   const head = page.locator(".orca-plan__head").first();
   await expect(head).toBeVisible({ timeout: 30_000 });
@@ -285,11 +323,11 @@ test("#1112 at 800 the collapsed sidebar has no clipped label or sideways scroll
     expect(b.top).toBeGreaterThanOrEqual(measured.bar.top - 0.5);
     expect(b.bottom).toBeLessThanOrEqual(measured.bar.bottom + 0.5);
   }
-  await frame(1280, 900);
+  await frame(...LARGE);
 });
 
 test("#1112 #1200 Launch work: facts on their own lines, a menu inside its pane, and a switcher that comes back", async () => {
-  await frame(1280, 900);
+  await frame(...LARGE);
   await surface("Config");
   await press("Launch work");
   const trigger = page.locator("button", { hasText: "Choose a workflow" }).first();
@@ -357,7 +395,7 @@ test("#1112 #1200 Launch work: facts on their own lines, a menu inside its pane,
 });
 
 test("#1194 permission cards name their run and show how long they have waited", async () => {
-  await frame(1280, 900);
+  await frame(...LARGE);
   await surface("Attention");
   const cards = page.locator(".orca-attn__card", { hasText: "permission" });
   await expect(cards.nth(1)).toBeVisible({ timeout: 30_000 });
@@ -378,4 +416,138 @@ test("#1200 an agent whose command is missing says so", async () => {
   await expect(missing.first()).toBeVisible({ timeout: 30_000 });
   await missing.first().scrollIntoViewIfNeeded();
   await shot("1200-agents-command-missing");
+});
+
+test("#1112 Workflows: a wide graph opens fitted, every node in the canvas", async () => {
+  await frame(...LARGE);
+  await surface("Workflows");
+  const row = page.locator("tr", { hasText: "wide-graph" }).first();
+  await expect(row).toBeVisible({ timeout: 30_000 });
+  await row.getByRole("button", { name: "Open", exact: true }).click();
+  const canvas = page.locator(".orca-wfcanvas__viewport, [role='listbox'][aria-label$='graph']").first();
+  await expect(canvas).toBeVisible({ timeout: 30_000 });
+  await settled();
+  const measured = await canvas.evaluate((el) => {
+    const view = el.getBoundingClientRect();
+    const nodes = [...el.querySelectorAll<HTMLElement>("[role='option']")].map((node) => {
+      const r = node.getBoundingClientRect();
+      return { id: node.id, left: r.left, right: r.right, top: r.top, bottom: r.bottom };
+    });
+    return { view: { left: view.left, right: view.right, top: view.top, bottom: view.bottom }, nodes };
+  });
+  await shot("1112-workflows-wide-graph");
+  expect(measured.nodes.length, "wide-graph's nodes").toBeGreaterThanOrEqual(10);
+  await expectFittedOrCentred(measured);
+  await page.keyboard.press("Escape");
+});
+
+/** Every node in the canvas, or, where the graph is wider than the canvas even at the smallest zoom, that zoom centred on the graph. */
+async function expectFittedOrCentred(measured: { view: Box; nodes: (Box & { id: string })[] }): Promise<void> {
+  if (measured.nodes.every((node) => inside(node, measured.view))) return;
+  // Fitting stops at the smallest zoom. Where the canvas is narrower than the graph at that zoom
+  // (1000×680, beside the inspector), it opens there, centred on the graph, not on its first nodes.
+  const reset = page.getByRole("button", { name: /^Reset the zoom and the pan, now / });
+  await expect(reset).toHaveAccessibleName(/now 25%$/);
+  const box = {
+    left: Math.min(...measured.nodes.map((n) => n.left)),
+    right: Math.max(...measured.nodes.map((n) => n.right)),
+    top: Math.min(...measured.nodes.map((n) => n.top)),
+    bottom: Math.max(...measured.nodes.map((n) => n.bottom)),
+  };
+  const v = measured.view;
+  // Only a graph that cannot fit gets this allowance: at 25%, the nodes alone (no margin) must
+  // be wider or taller than the canvas. On an axis where they do fit, every node is in view.
+  const wide = box.right - box.left > v.right - v.left;
+  const tall = box.bottom - box.top > v.bottom - v.top;
+  expect(wide || tall, `the graph at 25% (${JSON.stringify(box)}) cannot fit the canvas (${JSON.stringify(v)})`).toBe(
+    true,
+  );
+  for (const node of measured.nodes) {
+    if (!wide) expect(node.left >= v.left - 0.5 && node.right <= v.right + 0.5, `${node.id} across`).toBe(true);
+    if (!tall) expect(node.top >= v.top - 0.5 && node.bottom <= v.bottom + 0.5, `${node.id} down`).toBe(true);
+  }
+  // Where it does not fit, it is centred on the graph, not on its first nodes.
+  expect(Math.abs((box.left + box.right) / 2 - (v.left + v.right) / 2), "centred across").toBeLessThan(24);
+  expect(Math.abs((box.top + box.bottom) / 2 - (v.top + v.bottom) / 2), "centred down").toBeLessThan(24);
+}
+
+/*
+ * #1112's scope: the whole app at common window sizes and at 100%, 125% and 150%. Every surface
+ * is opened at each size and zoom; the page never scrolls sideways, and no two visible buttons
+ * are drawn over each other. The surface-specific checks above cover the sites the sweeps found.
+ */
+test("#1112 every surface at a large window and 800×600, at 100%, 125% and 150%: no sideways page and no button on a button", async () => {
+  test.setTimeout(300_000);
+  const problems: string[] = [];
+  for (const [width, height] of [LARGE, [800, 600] as const]) {
+    for (const zoom of [1, 1.25, 1.5]) {
+      await frame(width, height, zoom);
+      for (const name of ["Attention", "Runs", "Plan", "Workflows", "Agents", "Config", "Machines"]) {
+        await surface(name);
+        const found = await page.evaluate(() => {
+          /* What of an element the window can show: its box cut by every ancestor that clips,
+             so a row scrolled out of its pane is not "under" the status bar. */
+          const shown = (el: Element) => {
+            const r = el.getBoundingClientRect();
+            let box = { left: r.left, right: r.right, top: r.top, bottom: r.bottom };
+            for (let p = el.parentElement; p; p = p.parentElement) {
+              const style = getComputedStyle(p);
+              if (style.overflowX === "visible" && style.overflowY === "visible") continue;
+              const c = p.getBoundingClientRect();
+              box = {
+                left: Math.max(box.left, c.left),
+                right: Math.min(box.right, c.right),
+                top: Math.max(box.top, c.top),
+                bottom: Math.min(box.bottom, c.bottom),
+              };
+            }
+            return box;
+          };
+          const visible = (el: Element) => {
+            const style = getComputedStyle(el);
+            if (style.visibility === "hidden" || style.opacity === "0") return false;
+            const b = shown(el);
+            return b.right - b.left > 1 && b.bottom - b.top > 1;
+          };
+          const buttons = [...document.querySelectorAll("button")].filter(visible);
+          const pairs: string[] = [];
+          for (let i = 0; i < buttons.length; i++)
+            for (let j = i + 1; j < buttons.length; j++) {
+              const a = buttons[i]!;
+              const b = buttons[j]!;
+              if (a.contains(b) || b.contains(a)) continue;
+              const ra = shown(a);
+              const rb = shown(b);
+              if (
+                Math.min(ra.right, rb.right) - Math.max(ra.left, rb.left) > 1 &&
+                Math.min(ra.bottom, rb.bottom) - Math.max(ra.top, rb.top) > 1
+              )
+                pairs.push(`"${(a.textContent ?? "").trim()}" / "${(b.textContent ?? "").trim()}"`);
+            }
+          return {
+            // Whether the window can actually be scrolled sideways, which is what a person sees.
+            sideways: (() => {
+              const top = scrollY;
+              scrollTo(10_000, top);
+              const moved = scrollX > 0;
+              scrollTo(0, top);
+              return moved;
+            })(),
+            // What reaches the scrolled edge, to name in the failure.
+            wide: [...document.body.querySelectorAll<HTMLElement>("*")]
+              .filter((el) => Math.abs(el.getBoundingClientRect().right - document.documentElement.scrollWidth) < 2)
+              .slice(0, 3)
+              .map((el) => `${el.tagName.toLowerCase()}.${String(el.className).split(" ")[0]}`),
+            pairs,
+          };
+        });
+        const where = `${name} at ${width}×${height} ${Math.round(zoom * 100)}%`;
+        if (found.sideways) problems.push(`${where}: the page scrolls sideways (${found.wide.join("; ")})`);
+        for (const pair of found.pairs) problems.push(`${where}: ${pair} overlap`);
+        if (zoom === 1.5) await shot(`1112-audit-${name.toLowerCase()}-${width}x${height}-150`);
+      }
+    }
+  }
+  await frame(...LARGE);
+  expect(problems).toEqual([]);
 });

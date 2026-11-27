@@ -35,7 +35,14 @@ export interface FeatureFlag {
  * Every flag, in name order. A new workstream adds its flag here as `incubating` with its first
  * pull request; promotion moves it to `experimental` or `stable` in the release that ships it.
  */
-export const FEATURES: readonly FeatureFlag[] = [];
+export const FEATURES: readonly FeatureFlag[] = [
+  {
+    name: "tailnet-hosts",
+    stage: "incubating",
+    issue: 1225,
+    summary: "Find, pin and set up remote daemon hosts from the user's own Tailscale tailnet.",
+  },
+];
 
 export interface FeatureContext {
   /** Defaults to `process.env` where there is one. */

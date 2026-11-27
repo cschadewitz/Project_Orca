@@ -110,3 +110,11 @@ it("runs the layout check on a GitHub-hosted runner only, so its installs never 
   // And nothing in the self-hosted-capable smoke job runs it or installs for it.
   expect(JSON.stringify(workflow.jobs.smoke)).not.toContain("app:layout");
 });
+
+it("runs the Windows layout check on a fresh GitHub-hosted Windows VM, never a persistent host (#1112)", () => {
+  const layout = workflow.jobs["layout-windows"];
+  expect(layout["runs-on"]).toBe("windows-latest");
+  expect(layout.needs).toBeUndefined();
+  expect(layout.steps.find(({ name }) => name === "Layout check").run).toContain("pnpm run app:layout");
+  expect(JSON.stringify(layout)).not.toContain("ORCA_SMOKE_NO_SANDBOX");
+});

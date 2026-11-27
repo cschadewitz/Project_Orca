@@ -2,6 +2,13 @@
 ; file (nsis.include in electron-builder.yml) and inserts the macros below at the end of its
 ; install section and at the start of its uninstall section, before any file is removed.
 ;
+; It also removes the updater's cache on a real uninstall (#1109): the installer keeps a copy of
+; itself under %LOCALAPPDATA%\@orcaapp-updater for differential updates, and the updater keeps
+; its pending download beside it, but electron-builder's uninstaller never removed that folder,
+; so a full installer stayed behind. The name is electron-builder's `updaterCacheDirName`:
+; package.json's name, `@orca/app`, sanitized to `@orcaapp`, plus `-updater`
+; (test/windows-uninstall-cache.test.ts holds the two together).
+;
 ; The installer puts the CLI launcher's directory, resources\bin under the install directory
 ; (it holds orca-cli.cmd and nothing else), on the PATH of the user who ran it, and the
 ; uninstaller takes exactly that entry off again. The edit itself is
@@ -31,7 +38,10 @@
 !macro customUnInstall
   ; An update runs the old version's uninstaller with --updated, and the new installer adds the
   ; same entry back, so an update leaves the PATH alone.
+  ; The updater's cache is what the next differential update starts from, so it stays then too.
   ${ifNot} ${isUpdated}
     !insertmacro orcaCliPath "remove"
+    SetShellVarContext current
+    RMDir /r "$LOCALAPPDATA\@orcaapp-updater"
   ${endIf}
 !macroend
