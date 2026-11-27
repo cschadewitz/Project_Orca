@@ -58,9 +58,9 @@ No change.
 
 Every surface's "no daemon" screen now points to Project setup in Config, as Attention already did, instead of telling a desktop user to run `orca serve`. On Linux, Config says local diagnostics are not available on this system rather than that they are unavailable, and the app no longer prints a window "fallback" warning on each first launch under Wayland.
 
-The window no longer scrolls sideways under Plan, Workflows and Agents at narrow sizes or at 125% and 150% scaling: hidden screen-reader labels inside sideways-scrolling panes pushed the whole window wider. A wide workflow graph opens fitted to the canvas instead of on its first few nodes. The layout check now covers the Connect to a daemon dialog and every surface at 100%, 125% and 150%, on Linux and Windows.
+The window no longer scrolls sideways under Plan, Workflows and Agents at narrow sizes or at 125% and 150% Electron app zoom: hidden screen-reader labels inside sideways-scrolling panes pushed the whole window wider. A wide workflow graph opens fitted to the canvas instead of on its first few nodes. The automated layout check now covers the Connect to a daemon dialog and every surface at 100%, 125% and 150% Electron app zoom, on Linux and Windows. It does not measure OS display scaling (Windows DPI or GNOME fractional scaling); that check is deferred to #1310.
 
-At 1000×680 and 150%, Runs folds into one column instead of clipping every title to a few letters, and a menu that opens in a scrolling pane (such as Launch work's workflow menu) stays inside the pane and off its scrollbar. The layout check now covers every screen on Windows too.
+At 1000×680 and 150% app zoom, Runs folds into one column instead of clipping every title to a few letters, and a menu that opens in a scrolling pane (such as Launch work's workflow menu) stays inside the pane and off its scrollbar. The layout check now covers every screen on Windows too.
 
 On Windows, saving workspace state no longer fails with a permission error when another program briefly has the file open, such as an antivirus scan.
 
@@ -68,15 +68,16 @@ On Windows, saving workspace state no longer fails with a permission error when 
 
 - The step detail's Variables update when a step finishes instead of after the run is
   selected again. Config says that an agent's `nativeToolHook` is off when absent and that
-  `experimental` opts in. On Linux the dock shows ORCA's icon for the running window and the
-  menu bar follows an explicit dark theme. The Windows uninstaller removes the updater's
+  `experimental` opts in. On Linux the running window now declares ORCA's app identity and icon for the dock, and
+  the menu bar follows an explicit dark theme (not yet verified in a native GNOME session;
+  see #1310). The Windows uninstaller removes the updater's
   installer copy (#1109).
 - Runs keeps run titles and its Tree/Board/Search buttons in view at 800×600 and at
-  150% zoom (#1193). Plan's schedule header, Risks pins and Decisions columns no longer
+  150% app zoom (#1193). Plan's schedule header, Risks pins and Decisions columns no longer
   overlap or collapse, the collapsed sidebar no longer clips or scrolls sideways, the status
   bar no longer covers content, the Config view switcher stays after Launch work, and menus
   open inside the pane that scrolls them (#1112).
-- In a window as narrow as 800×600 at 150% zoom, Runs folds the step detail under
+- In a window as narrow as 800×600 at 150% app zoom, Runs folds the step detail under
   the tree once a run is selected, so run titles stay readable (#1193).
 - Attention cards count how long they have waited instead of showing "waiting 0s",
   and permission cards name the run and work item they belong to (#1194).
