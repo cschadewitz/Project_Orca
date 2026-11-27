@@ -18,6 +18,16 @@ guard. To use Codex today, use the ACP adapter (`codex-acp`) with no `driver`.
   `codex` command is a Node script that starts the native binary, so point `command` at the
   binary itself, for example
   `node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex`.
+- **Codex's whole package, as installed.** Codex runs other files from its package: its
+  bundled bubblewrap (`codex-resources/bwrap`, the sandbox), `bin/codex-code-mode-host` and
+  `codex-path/rg`. ORCA pins these too, and before every start checks that each one is a plain
+  file in the package with its pinned SHA-256 (#1286). Leave the package as npm installed it;
+  a file that was changed, moved or replaced by a link is refused.
+- **No bubblewrap on Codex's `PATH` that you could replace.** Codex runs a `bwrap` it finds on
+  its `PATH` before its bundled one, and checks only the bundled one. ORCA therefore accepts a
+  `bwrap` on that `PATH` only when it, and every directory above it, is owned by root and
+  writable by no one else, as an installed `bubblewrap` system package is. A `bwrap` in your
+  home directory or under `/tmp` is refused.
 - **Your own `codex login`.** ORCA never signs in, never refreshes a token and never reads
   Codex's credential files. Run `codex login` yourself. A Codex that reports no login is
   refused with "run `codex login`".
@@ -55,4 +65,7 @@ signed in.
 - **A cancel is not proof that a command stopped.** Codex can end a cancelled turn while a
   command it started runs on (#1299). ORCA reports such a cancel as `unconfirmed` or
   `not-carried-out`, and then takes no further prompt on that session.
+- **A process of your own user.** The pins are checked by path, before Codex starts. They
+  catch a package that drifted or had a file swapped, not a process running as you that
+  changes Codex while it starts or runs (#1286).
 - **The judge advises on commands only** on this driver ([plain-language rules](../plain-language-rules.md#codex)).

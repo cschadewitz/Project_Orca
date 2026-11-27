@@ -936,6 +936,21 @@ describe("the Codex image ORCA starts (#1162)", () => {
     expect(t.spawnAgent).not.toHaveBeenCalled();
   });
 
+  it("checks the package and Codex's PATH bubblewrap for the verified version, and starts nothing when they fail (#1286)", async () => {
+    const t = scriptedHost(BASE);
+    const packageCheck = vi.fn(
+      async () => "the package's codex-resources/bwrap is not the file ORCA verified for Codex 0.171.0",
+    );
+    const error = (await open(t.host, { packageCheck }).catch((e: unknown) => e)) as OrcaError;
+    expect(packageCheck).toHaveBeenCalledWith(realpathSync(process.execPath), "0.171.0");
+    expect(error.code).toBe("NOT_SUPPORTED");
+    expect(error.message).toMatch(
+      /the package's codex-resources\/bwrap is not the file ORCA verified for Codex 0\.171\.0\. ORCA verified Codex 0\.171\.0 for linux-x64\. ORCA does not start this session\./,
+    );
+    expect(error.details).toMatchObject({ reason: "codex-image-unverified", check: "codex-package" });
+    expect(t.spawnAgent).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["another inode", { ...PINNED_IMAGE, ino: PINNED_IMAGE.ino + 1 }],
     ["another digest", { ...PINNED_IMAGE, sha256: OTHER }],

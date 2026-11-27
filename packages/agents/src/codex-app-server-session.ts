@@ -42,6 +42,7 @@ import { randomUUID } from "node:crypto";
 import type * as acp from "@agentclientprotocol/sdk";
 import {
   newId,
+  literalEnv,
   OrcaError,
   redactSecretValues,
   silentLogger,
@@ -75,6 +76,8 @@ import { processCleanup } from "./process-cleanup.js";
 import {
   CODEX_VERIFIED_IMAGES,
   codexImageTarget,
+  checkCodexPackage,
+  checkSystemBwrap,
   codexVersionForImage,
   fileImageIdentity,
   ownChildImageDigest,
@@ -245,6 +248,11 @@ export interface OpenCodexAppServerSessionOptions {
   imageDigest?: (pid: number | undefined) => Promise<ImageIdentity | { error: string }>;
   /** For tests: this machine's `<platform>-<arch>`, the key of the verified images. */
   imageTarget?: string;
+  /**
+   * For tests: how the package around a verified entrypoint, and the bubblewrap Codex would
+   * find on its PATH, are checked before ORCA starts it (#1286); why not, or undefined.
+   */
+  packageCheck?: (command: string, version: string) => Promise<string | undefined>;
 }
 
 /** As `SessionContinuity` on the ACP route: the thread was resumed, or a new one started. */
@@ -877,6 +885,13 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
     );
   }
   const spec: AgentSpec = { ...secretPlan.agent, command, args: launch.args };
+  /** The `PATH` Codex is started with, as the host builds its environment. */
+  const childPath =
+    opts.env?.["PATH"] ??
+    literalEnv(spec.env)["PATH"] ??
+    (secretPlan.withheldEnv.includes("PATH") ? undefined : process.env["PATH"]);
+  const packageCheck = async (entrypoint: string, version: string) =>
+    (await checkCodexPackage(entrypoint, version, imageTarget)) ?? (await checkSystemBwrap(childPath, opts.cwd));
   /** The `$TMPDIR` Codex sees, which a workspace-write sandbox lets it write unless excluded. */
   const fromAgent = agent.env.TMPDIR;
   const tmpdir = opts.env?.TMPDIR ?? (typeof fromAgent === "string" ? fromAgent : process.env.TMPDIR);
@@ -1529,6 +1544,16 @@ export async function openCodexAppServerSession(opts: OpenCodexAppServerSessionO
           : `ORCA could not check the Codex at its command before starting it: ${file.error}`,
         "sha256" in file ? { sha256: file.sha256 } : {},
       );
+      if (replacement) breakSession(refusal);
+      throw refusal;
+    }
+    // The rest of the package Codex runs from it (its sandbox, code-mode host and rg), and any
+    // bubblewrap on its PATH that Codex would run instead of its own (#1286).
+    const packageProblem = await (opts.packageCheck ?? packageCheck)(spec.command, fileVersion);
+    const late = stopped();
+    if (late) throw late;
+    if (packageProblem !== undefined) {
+      const refusal = codexImageRefusal(agent.id, imageTarget, packageProblem, { check: "codex-package" });
       if (replacement) breakSession(refusal);
       throw refusal;
     }
