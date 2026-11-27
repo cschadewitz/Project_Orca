@@ -364,6 +364,31 @@ def signer(repository):
     return f"https://github.com/{repository}/.github/workflows/release-server-bundle.yml@refs/heads/main"
 
 
+# rename-keep-start: the admission variable of either product
+def admission_keys(entry):
+    """The admission variables the daemon at ENTRY reads, in the order it honors them. An
+    `orca-daemon.mjs` bundle or the source layout reads only ORCA_ADMISSION_FILE. An
+    `orrery-daemon.mjs` bundle reads ORRERY_ADMISSION_FILE, and adopts ORCA_ADMISSION_FILE only
+    when the new name is unset (core's adoptLegacyEnv). Launchers set both to the same value."""
+    if Path(entry).name == "orrery-daemon.mjs":
+        return ("ORRERY_ADMISSION_FILE", "ORCA_ADMISSION_FILE")
+    return ("ORCA_ADMISSION_FILE",)
+
+
+def admission_guarded(entry, environment, pending):
+    """True only when the admission variable the running daemon actually honors (the first of
+    admission_keys present) names exactly PENDING, once. A variable the daemon ignores never
+    counts, and a disagreeing honored one refuses even when another is right. ENVIRONMENT is
+    /proc/<pid>/environ split on NUL."""
+    for key in admission_keys(entry):
+        prefix = key.encode() + b"="
+        values = [item[len(prefix):] for item in environment if item.startswith(prefix)]
+        if values:
+            return values == [str(pending).encode()]
+    return False
+# rename-keep-end
+
+
 def both_env_names(env, names):
     """The daemon environment this adapter sets, under the old and the new prefix (the rename
     bridge): either release reads its own, whichever adapter launched it."""
@@ -1012,8 +1037,7 @@ class Deployment(BundleSource):
         if process_dir.stat().st_uid != os.getuid() or expected not in args or b"serve" not in args:
             raise RuntimeError("Service PID is not the expected managed daemon; inspect the actual launch method")
         environment = (process_dir / "environ").read_bytes().split(b"\0")
-        gates = [(prefix + "ADMISSION_FILE=" + str(self.pending)).encode() for prefix in ENV_PREFIXES]
-        if not any(gate in environment for gate in gates):
+        if not admission_guarded(expected.decode(), environment, self.pending):
             raise RuntimeError("Managed daemon lacks the persistent admission guard; migrate its launcher first")
         return service_pid
 

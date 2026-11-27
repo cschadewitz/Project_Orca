@@ -492,6 +492,34 @@ class ServerBundleTests(unittest.TestCase):
         self.assertEqual(env, {"ORCA_RELEASE": "r", "ORRERY_RELEASE": "r", "ORRERY_ADMISSION_FILE": "a",
                                "ORCA_ADMISSION_FILE": "a", "HOME": "h"})
 
+    def test_bridge_admission_guard_is_the_key_the_running_daemon_honors(self):
+        pending = "/srv/orca/.pending-activation.json"
+        good, bad = pending.encode(), b"/elsewhere"
+        old, new = "/srv/orca/releases/a/orca-daemon.mjs", "/srv/orca/releases/b/orrery-daemon.mjs"
+        source = "/srv/orca/releases/c/packages/cli/dist/main.js"
+        env = lambda **keys: [b"HOME=/h", *(k.encode() + b"=" + v for k, v in keys.items())]
+        cases = [
+            # (entry, environment, guarded)
+            (old, env(ORCA_ADMISSION_FILE=good), True),                 # old-only on an old daemon
+            (source, env(ORCA_ADMISSION_FILE=good), True),
+            (new, env(ORRERY_ADMISSION_FILE=good), True),               # new-only on a new daemon
+            (new, env(ORCA_ADMISSION_FILE=good), True),                 # adopted when the new name is unset
+            (old, env(ORCA_ADMISSION_FILE=good, ORRERY_ADMISSION_FILE=good), True),
+            (new, env(ORCA_ADMISSION_FILE=good, ORRERY_ADMISSION_FILE=good), True),
+            (old, env(ORRERY_ADMISSION_FILE=good), False),              # only the inactive key is right
+            (source, env(ORRERY_ADMISSION_FILE=good), False),
+            (old, env(ORCA_ADMISSION_FILE=bad, ORRERY_ADMISSION_FILE=good), False),   # active key disagrees
+            (new, env(ORRERY_ADMISSION_FILE=bad, ORCA_ADMISSION_FILE=good), False),
+            (new, env(ORRERY_ADMISSION_FILE=b"", ORCA_ADMISSION_FILE=good), False),   # set but empty still wins
+            (old, env(), False),
+            (new, env(), False),
+            (old, env(ORCA_ADMISSION_FILE=good) + [b"ORCA_ADMISSION_FILE=" + bad], False),  # ambiguous
+            (old, env(ORCA_ADMISSION_FILE_X=good), False),
+        ]
+        for entry, environment, guarded in cases:
+            with self.subTest(entry=entry, environment=environment):
+                self.assertIs(release.admission_guarded(entry, environment, Path(pending)), guarded)
+
     def test_bridge_reads_either_hello_version_field(self):
         meta = {"version": "0.8.0", "compatibility": {"protocol": 3, "capabilities": []}}
         for field in ("orcaVersion", "orreryVersion"):
