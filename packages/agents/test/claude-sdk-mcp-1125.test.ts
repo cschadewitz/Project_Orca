@@ -122,6 +122,7 @@ async function setup(opts: { policy: () => PermissionPolicy; answer?: string; tu
         tool_name: "mcp__tools__touch",
         tool_input: input,
         tool_use_id: toolUseId,
+        cwd: dir,
       } as never,
       toolUseId,
       { signal: new AbortController().signal },

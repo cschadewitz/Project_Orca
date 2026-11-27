@@ -240,6 +240,43 @@ describe("ORCA's native tool hook, in process (#1123)", () => {
       expect(asked).toHaveLength(3);
     });
 
+    it("when the hook was not told where the call runs", async () => {
+      const { b, asked, ask } = counted({ policy: allowAll });
+      for (const [id, cwd] of [
+        ["t1", undefined],
+        ["t2", ""],
+      ] as const) {
+        expect(
+          await b.hook({ toolName: "Read", toolInput: { file_path: "a.ts" }, cwd: cwd as never, toolUseId: id }),
+        ).toMatchObject({
+          hookSpecificOutput: { permissionDecision: "ask" },
+        });
+        expect(await ask(id)).toMatchObject({ behavior: "deny", message: CLAUDE_SDK_DENIALS.declined });
+      }
+      expect(asked).toHaveLength(2);
+      expect(b.lines.map((l) => l.rule)).toEqual(["cwd-outside-workspace", "cwd-outside-workspace"]);
+    });
+
+    it("when the ask is for another tool than the hook saw under that id", async () => {
+      const { b, asked } = counted({ policy: allowAll });
+      await b.hook(read("t1", ws, { file_path: "a.ts" }));
+      const other = await b.canUseTool("Write", { file_path: "a.ts" }, {
+        signal: new AbortController().signal,
+        toolUseID: "t1",
+      } as never);
+      expect(other).toMatchObject({ behavior: "deny" });
+      expect(asked).toHaveLength(1);
+    });
+
+    it("for a second ask while the first for the same use is still being decided", async () => {
+      const { b, asked, ask } = counted({ policy: allowAll });
+      await b.hook(read("t1", ws));
+      const [first, second] = await Promise.all([ask("t1"), ask("t1")]);
+      expect(first).toMatchObject({ behavior: "allow" });
+      expect(second).toMatchObject({ behavior: "deny", message: CLAUDE_SDK_DENIALS.declined });
+      expect(asked).toHaveLength(1);
+    });
+
     it("once its answer is settled, and once the session has forgotten it", async () => {
       const { b, asked, ask } = counted({ policy: allowAll });
       await b.hook(read("t1", ws));

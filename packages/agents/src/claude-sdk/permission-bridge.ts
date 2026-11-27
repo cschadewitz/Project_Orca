@@ -151,11 +151,12 @@ export function claudeSdkPermissionBridge(o: ClaudeSdkPermissionBridgeOptions): 
   const mcpGrants = new Map<string, McpGrant>();
   /**
    * Where the hook found each tool use running, for `canUseTool`: by tool use id, bound to the
-   * turn and the exact input. Only a use the hook saw inside the workspace, in this turn, with
-   * this input, may be allowed by a rule; any other (outside, unknown, forgotten, from another
-   * turn or with other input) is decided by a person only.
+   * turn, the tool and the exact input. Only a use the hook saw inside the workspace, in this
+   * turn, for this tool, with this input, may be allowed by a rule, and only by the first ask
+   * that draws on it; any other (outside, cwd not reported, unknown, forgotten, from another
+   * turn, another tool, other input, a second ask) is decided by a person only.
    */
-  const workspaceScope = new Map<string, { turnId: string; input: string; inside: boolean }>();
+  const workspaceScope = new Map<string, { turnId: string; tool: string; input: string; inside: boolean }>();
   const scope: PermissionEvalContext = {
     workspaceCwd: o.cwd,
     ...(o.protectedPaths ? { protectedPaths: o.protectedPaths } : {}),
@@ -249,13 +250,19 @@ export function claudeSdkPermissionBridge(o: ClaudeSdkPermissionBridgeOptions): 
     // policy says now or when Claude asks, a call outside the workspace is a person's to allow.
     // A rule is relative to the workspace: a call running somewhere else is not the call it granted.
     const roots = [o.cwd, ...(o.additionalDirectories ?? [])];
-    const where = typeof hookInput.cwd === "string" && hookInput.cwd !== "" ? hookInput.cwd : o.cwd;
-    const inside = roots.some((root) => existingDirectoryWithin(where, root));
+    // A call that does not say where it runs is not known to run in the workspace.
+    const where = typeof hookInput.cwd === "string" && hookInput.cwd !== "" ? hookInput.cwd : undefined;
+    const inside = where !== undefined && roots.some((root) => existingDirectoryWithin(where, root));
     if (toolUseId) {
       for (const [id, entry] of workspaceScope) if (entry.turnId !== turn.id) workspaceScope.delete(id);
       // Forgetting the oldest only makes its call a person's to decide.
       while (workspaceScope.size >= WORKSPACE_SCOPE_LIMIT) workspaceScope.delete(workspaceScope.keys().next().value!);
-      workspaceScope.set(toolUseId, { turnId: turn.id, input: JSON.stringify(hookInput.tool_input ?? null), inside });
+      workspaceScope.set(toolUseId, {
+        turnId: turn.id,
+        tool: toolName,
+        input: JSON.stringify(hookInput.tool_input ?? null),
+        inside,
+      });
     }
     const seen = { unreadable: false };
     const explained = explainPermission(await policy(seen), call, scope);
@@ -299,14 +306,14 @@ export function claudeSdkPermissionBridge(o: ClaudeSdkPermissionBridgeOptions): 
     } catch (error) {
       o.logger.warn("ORCA could not answer a Claude permission ask; denying it", { error: errorName(error) });
       return { behavior: "deny", message: CLAUDE_SDK_DENIALS.failed, toolUseID: ctx.toolUseID };
-    } finally {
-      // Settled: the hook's record for this use is spent, and a later ask for it is a person's.
-      workspaceScope.delete(ctx.toolUseID);
     }
   };
 
   const answer: CanUseTool = async (toolName, toolInput, ctx) => {
     const toolUseId = ctx.toolUseID;
+    // Taken before anything is awaited, so no other ask for this use can draw on it.
+    const where = workspaceScope.get(toolUseId);
+    workspaceScope.delete(toolUseId);
     const parent = o.parentOf(toolUseId);
     const reason = claudeLabel(ctx.decisionReason, MAX_CONTEXT);
     const call = describe(toolName, toolInput, {
@@ -328,11 +335,11 @@ export function claudeSdkPermissionBridge(o: ClaudeSdkPermissionBridgeOptions): 
     };
     const live = () => o.liveTurn()?.id === turn.id && !invocation.signal.aborted;
     // Unless the hook saw this very call inside the workspace in this turn, no rule's allow
-    // covers it: a person decides. The record stays until the answer is settled.
-    const where = workspaceScope.get(toolUseId);
+    // covers it: a person decides.
     const personOnly = !(
       where?.inside &&
       where.turnId === turn.id &&
+      where.tool === toolName &&
       where.input === JSON.stringify(toolInput ?? null)
     );
     let resolved: Awaited<ReturnType<typeof resolvePermission>>;
