@@ -49,6 +49,30 @@ own work. **A daemon that runs other people's work must not route it through one
 login**: give that daemon its own API key in the agent's `env`, or use the ACP route with each
 person's own setup.
 
+### How it counts against your limits
+
+Work run through the Claude Agent SDK draws from your Claude plan's usage limits like Claude
+Code does ([Anthropic: use the Claude Agent SDK with your Claude plan](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan)).
+People have measured SDK and `claude -p` traffic using up the 5-hour limit faster than
+interactive Claude Code, so expect a run to use more of it than the same work typed by hand.
+ORCA does not try to change that: Claude Code reports the SDK's own entrypoint (`sdk-ts`), and
+ORCA never claims to be another product. An entrypoint of ORCA's own waits on Anthropic's
+answer. With an API key the work is billed to that key's account instead (#1127).
+
+What ORCA shows, all from what Claude Code itself sends (ORCA calls no usage service and reads
+no credentials):
+
+- **Each turn's usage** in the run: the context the last call used against the model's window,
+  the session's token totals, and Claude Code's estimated cost so far, priced at API rates. The
+  cost is an estimate, not a bill; on a subscription you pay by plan, not by it.
+- **A limit that is close** (a claude.ai sign-in only) as a warning in the run, with how much of
+  it is used and when it resets.
+- **A limit that stopped a turn** ends the step with what happened and when the limit resets,
+  for example "Claude reached the weekly limit of its subscription, so the step ended. It
+  resets at 2026-11-28T09:00:00.000Z; run the step again after that." An API key's rate limit
+  (HTTP 429), once Claude Code stops retrying, ends the step with its own message. ORCA does not
+  retry either itself, and never switches to another account.
+
 ## 3. Add the agent
 
 ```yaml

@@ -38,6 +38,7 @@ import {
   type Query,
   type SDKControlInitializeResponse,
   type SDKMessage,
+  type SDKRateLimitInfo,
   type SDKUserMessage,
   type SpawnedProcess,
   type SpawnOptions,
@@ -84,6 +85,7 @@ import {
 import type { ClaudeSdkPreflight } from "./launch.js";
 import { claudeSdkPermissionBridge } from "./permission-bridge.js";
 import { inProcessHookTelemetry } from "./tool-telemetry.js";
+import { rateLimitNotice, usageLimitFailure, usageUpdate, type CallUsage } from "./usage.js";
 import { attestClaudeSdkRuntime, type ClaudeSdkRuntimeAttestation, type ClaudeSdkVerifiedPair } from "./attestation.js";
 
 export interface ClaudeSdkSessionOptions {
@@ -176,6 +178,8 @@ interface ActiveTurn {
   reject: (e: Error) => void;
   cancelReason?: string;
   grace?: ReturnType<typeof setTimeout>;
+  /** A main-loop call in this turn failed on a rate limit (#1127). */
+  rateLimitedCall?: boolean;
 }
 
 /**
@@ -606,6 +610,8 @@ async function openClaudeSdkProcess(
   };
   const listeners = new Set<(e: SessionUpdateEvent) => void>();
   const tools = new Map<string, string>();
+  let lastCall: CallUsage | undefined;
+  let rateLimit: SDKRateLimitInfo | undefined;
   let ended: Error | undefined;
 
   const emit = (raw: acp.SessionUpdate) => {
@@ -634,9 +640,33 @@ async function openClaudeSdkProcess(
     if (m.type === "assistant" && typeof m.parent_tool_use_id === "string")
       for (const block of m.message.content) if (block.type === "tool_use") parents.set(block.id, m.parent_tool_use_id);
     for (const update of sessionUpdates(m, tools)) emit(update);
+    // Usage and limits as Claude Code reports them (#1127).
+    if (m.type === "assistant" && m.parent_tool_use_id === null) {
+      if (m.message.usage) lastCall = m.message.usage;
+      if (m.error === "rate_limit" && activeTurn) activeTurn.rateLimitedCall = true;
+    }
+    if (m.type === "rate_limit_event") {
+      rateLimit = m.rate_limit_info;
+      const notice = rateLimitNotice(m.rate_limit_info);
+      if (notice) emit(notice);
+    }
+    if (m.type === "result") {
+      const usage = usageUpdate(m, lastCall, model);
+      if (usage) emit(usage);
+    }
+    // A turn that went through says a reached limit has lifted, whether or not Claude Code said so.
+    if (m.type === "result" && m.subtype === "success" && !m.is_error && rateLimit?.status === "rejected")
+      rateLimit = undefined;
     if (m.type === "result" && activeTurn) {
       const turn = activeTurn;
-      settle(turn, turnOutcome(m, turn, clock.now(), options.agent.id));
+      const limit = turn.cancelReason
+        ? undefined
+        : usageLimitFailure(options.agent.id, m, {
+            rateLimit,
+            rateLimitedCall: turn.rateLimitedCall === true,
+            now: clock.now(),
+          });
+      settle(turn, limit ?? turnOutcome(m, turn, clock.now(), options.agent.id));
     }
   };
 

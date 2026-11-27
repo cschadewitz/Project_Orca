@@ -180,9 +180,23 @@ export function summarizeUpdate(u: acp.SessionUpdate): AgentUpdateSummary {
       };
     case "config_option_update":
       return { kind: u.sessionUpdate, text: describeConfigOptions(u.configOptions) };
+    case "usage_update":
+      return { kind: u.sessionUpdate, text: describeUsage(u) };
+    case "notice":
+      return { kind: u.sessionUpdate, text: u.description ? `${u.title}. ${u.description}` : u.title };
     default:
       return { kind: (u as { sessionUpdate: string }).sessionUpdate };
   }
+}
+
+/** `12,345 of 200,000 context tokens used · ~$0.42 so far (estimate)`. */
+function describeUsage(u: { used: number; size: number; cost?: { amount: number; currency: string } | null }): string {
+  const n = (v: number) => (Number.isFinite(v) ? Math.max(0, Math.round(v)).toLocaleString("en-US") : "?");
+  const context = `${n(u.used)} of ${n(u.size)} context tokens used`;
+  if (!u.cost || !Number.isFinite(u.cost.amount)) return context;
+  const amount =
+    u.cost.currency === "USD" ? `$${u.cost.amount.toFixed(2)}` : `${u.cost.amount.toFixed(2)} ${u.cost.currency}`;
+  return `${context} · ~${amount} so far (estimate)`;
 }
 
 /**

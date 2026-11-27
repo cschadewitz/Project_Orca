@@ -291,6 +291,91 @@ async function turn(text) {
       });
     case "fail":
       return result({ is_error: true, result: `API Error: ${text}` });
+    case "usage": {
+      // `usage [utilization]`: a turn's usage, and the subscription limit close when given.
+      const utilization = text.split(/\s+/)[1];
+      if (utilization)
+        out({
+          type: "rate_limit_event",
+          session_id: SESSION,
+          uuid: `rl${nextRequest++}`,
+          rate_limit_info: {
+            status: "allowed_warning",
+            rateLimitType: "five_hour",
+            utilization: Number(utilization),
+            resetsAt: 1795000000,
+          },
+        });
+      out({
+        type: "assistant",
+        session_id: SESSION,
+        uuid: `a${nextRequest++}`,
+        parent_tool_use_id: null,
+        message: {
+          id: "msg",
+          type: "message",
+          role: "assistant",
+          model: "stand-in",
+          content: [{ type: "text", text: "counted" }],
+          stop_reason: null,
+          usage: {
+            input_tokens: 1200,
+            cache_read_input_tokens: 30000,
+            cache_creation_input_tokens: 500,
+            output_tokens: 300,
+          },
+        },
+      });
+      return result({
+        total_cost_usd: 0.4249,
+        modelUsage: {
+          "claude-stand-in": {
+            inputTokens: 1200,
+            outputTokens: 300,
+            cacheReadInputTokens: 30000,
+            cacheCreationInputTokens: 500,
+            webSearchRequests: 0,
+            costUSD: 0.4249,
+            contextWindow: 200000,
+            maxOutputTokens: 32000,
+          },
+        },
+      });
+    }
+    case "limit":
+    case "throttle": {
+      // `limit [resetsAt]`: the subscription limit is reached; `throttle`: an API key's HTTP 429.
+      if (word === "limit") {
+        const at = text.split(/\s+/)[1];
+        out({
+          type: "rate_limit_event",
+          session_id: SESSION,
+          uuid: `rl${nextRequest++}`,
+          rate_limit_info: {
+            status: "rejected",
+            rateLimitType: "seven_day",
+            ...(at === "none" ? {} : { resetsAt: Number(at ?? 1795000000) }),
+          },
+        });
+      }
+      out({
+        type: "assistant",
+        session_id: SESSION,
+        uuid: `a${nextRequest++}`,
+        parent_tool_use_id: null,
+        error: "rate_limit",
+        message: {
+          id: "msg",
+          type: "message",
+          role: "assistant",
+          model: "<synthetic>",
+          content: [{ type: "text", text: "SENTINEL-1127-cli-text limit reached" }],
+          stop_reason: "stop_sequence",
+          usage: {},
+        },
+      });
+      return result({ is_error: true, api_error_status: 429, result: "SENTINEL-1127-cli-text limit reached" });
+    }
     case "maxturns":
       return result({ subtype: "error_max_turns", is_error: true, errors: [] });
     case "die":
