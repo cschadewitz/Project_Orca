@@ -90,7 +90,14 @@ import type {
 } from "@orca/core";
 
 export interface PermissionContext {
+  /** The ask as ACP describes it: what the person is shown, and the options the answer picks from. */
   request: acp.RequestPermissionRequest;
+  /**
+   * The call the policy decides, when the route has its own mapping (#1122): the Claude Agent
+   * SDK's `claudeToolPolicyCall`, with its title forms and `approximate` mark. Without it the
+   * policy decides `request`, as on the ACP route.
+   */
+  call?: PolicyCall | undefined;
   /**
    * Called for `ask`; returns the chosen optionId, or undefined to cancel. `judged` is what the
    * judged lane said about this call, when it looked (#701): shown with the ask, never an answer.
@@ -452,9 +459,10 @@ export async function resolvePermission(
   ctx: PermissionContext,
 ): Promise<{ response: acp.RequestPermissionResponse; decision: string; rule?: PermissionRuleRecord }> {
   if (ctx.signal?.aborted) return { response: { outcome: { outcome: "cancelled" } }, decision: "ask:expired" };
+  const decided = ctx.call ?? ctx.request;
   const explained = ctx.judged
-    ? await ctx.judged(policy, ctx.request, ctx.scope, ctx.signal ?? new AbortController().signal)
-    : explainPermission(policy, ctx.request, ctx.scope);
+    ? await ctx.judged(policy, decided, ctx.scope, ctx.signal ?? new AbortController().signal)
+    : explainPermission(policy, decided, ctx.scope);
   // A judge may take a while: a turn that ended meanwhile is answered as expired, never allowed.
   if (ctx.signal?.aborted)
     return {

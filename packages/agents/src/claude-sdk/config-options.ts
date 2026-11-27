@@ -31,7 +31,8 @@ const MAX_LABEL = 80;
 const MAX_DESCRIPTION = 200;
 const MAX_MODELS = 64;
 
-function label(value: unknown, max: number): string | undefined {
+/** CLI text cleaned for showing to people: control and direction characters out, cut to `max`. */
+export function claudeLabel(value: unknown, max: number): string | undefined {
   if (typeof value !== "string") return undefined;
   // eslint-disable-next-line no-control-regex
   const clean = value.replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069]/g, " ").trim();
@@ -53,10 +54,10 @@ export function claudeModelChoices(models: unknown): ClaudeModelChoice[] {
       m.supportsEffort === true && Array.isArray(m.supportedEffortLevels)
         ? EFFORTS.filter((e) => (m.supportedEffortLevels as unknown[]).includes(e))
         : [];
-    const description = label(m.description, MAX_DESCRIPTION);
+    const description = claudeLabel(m.description, MAX_DESCRIPTION);
     choices.push({
       value: m.value,
-      name: label(m.displayName, MAX_LABEL) ?? m.value,
+      name: claudeLabel(m.displayName, MAX_LABEL) ?? m.value,
       ...(description ? { description } : {}),
       efforts,
     });

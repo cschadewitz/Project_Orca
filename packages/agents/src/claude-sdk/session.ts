@@ -16,11 +16,9 @@
  *   run's model selection (#187) reaches Claude.
  * - **Fixed setup.** No settings files (`settingSources: []`), no MCP servers, no session
  *   files, Claude Code's own system prompt, permission mode `default`.
- * - **Tools, until #1122.** ORCA does not answer Claude's permission asks yet: every ask is
- *   denied. A `PreToolUse` hook denies every tool call but `Read` of a file ORCA does not
- *   protect, and `TodoWrite`, before it runs, also the ones
- *   Claude's own rules would have allowed. What it lets through still meets Claude's own
- *   permission check, so a read outside the working directory is asked, and denied.
+ * - **Tools (#1122).** Every tool call is decided by ORCA's permission policy, its people and
+ *   the run's answerer, in a `PreToolUse` hook and in `canUseTool` (`permission-bridge.ts`).
+ *   An allow is for one call only: Claude is never told to remember it.
  *
  * Nothing Claude prints reaches an ORCA error: the CLI's output is untrusted, and its stderr is
  * not read at all.
@@ -30,8 +28,6 @@ import { randomUUID } from "node:crypto";
 import type * as acp from "@agentclientprotocol/sdk";
 import {
   query,
-  type CanUseTool,
-  type HookCallback,
   type Query,
   type SDKControlInitializeResponse,
   type SDKMessage,
@@ -47,10 +43,12 @@ import {
   systemClock,
   type AgentSpec,
   type Clock,
+  type JudgedDecision,
   type Logger,
   type SessionConfigOption,
 } from "@orca/core";
-import { protectedPathFor, type ProtectedPaths } from "../permissions.js";
+import type { PermissionInvocation } from "../acp-session.js";
+import type { PermissionRuleRecord, ProtectedPaths } from "../permissions.js";
 import {
   summarizeUpdate,
   withStartupTermination,
@@ -69,15 +67,29 @@ import {
   type ClaudeEffort,
 } from "./config-options.js";
 import type { ClaudeSdkPreflight } from "./launch.js";
+import { claudeSdkPermissionBridge } from "./permission-bridge.js";
 
 export interface ClaudeSdkSessionOptions {
-  agent: Pick<AgentSpec, "id" | "cancelGraceMs">;
+  agent: Pick<AgentSpec, "id" | "cancelGraceMs"> & Partial<Pick<AgentSpec, "permissions">>;
   hostId: string;
   cwd: string;
   /** What `claudeSdkPreflight` found: the executable to run and the environment to run it with. */
   preflight: Pick<ClaudeSdkPreflight, "executable" | "env">;
-  /** Paths no tool call may read (`noAccess`) — the read-only tools are checked against them. */
+  /** ORCA's own files, which no rule opens to a tool call (C4-01). */
   protectedPaths?: ProtectedPaths | undefined;
+  /** Permission sidecars layered under the agent's configured rules, read again for every call. */
+  permissionFiles?: readonly string[] | undefined;
+  /** The run's answerer for a call ORCA's policy asks about; absent, such a call is denied. */
+  askPermission?:
+    | ((
+        req: acp.RequestPermissionRequest,
+        invocation?: PermissionInvocation,
+        judged?: JudgedDecision,
+      ) => Promise<string | undefined>)
+    | undefined;
+  /** Each permission decision, for the run log. */
+  onPermission?:
+    ((info: { toolCallId?: string; title: string; decision: string; rule?: PermissionRuleRecord }) => void) | undefined;
   /** Aborts the open while it is starting. */
   signal?: AbortSignal | undefined;
   logger?: Logger | undefined;
@@ -95,14 +107,11 @@ export const CLAUDE_SDK_EXIT_GRACE_MS = 5_000;
 /** How long cleanup waits for the exit after the kill before it gives up observing it. */
 const KILL_SETTLE_MS = 1_000;
 
-/** The tools a session may use before ORCA answers permission asks (#1122). */
-// Glob and Grep stay denied too: a recursive search can reach a protected path below its
-// starting path, or through a link, and ORCA cannot show it would not (#1274 review).
-const NO_FILE_TOOLS = new Set(["TodoWrite"]);
-const DENIED = "ORCA does not run this tool for a Claude Agent SDK session yet (#1122): it was denied before it ran.";
-const ASK_DENIED = "ORCA does not answer Claude's permission asks yet (#1122): this one was denied.";
-
 interface ActiveTurn {
+  /** Which turn a permission ask belongs to. */
+  id: string;
+  /** Aborted when the turn ends or is cancelled: its asks are retired. */
+  abort: AbortController;
   started: number;
   resolve: (r: TurnResult) => void;
   reject: (e: Error) => void;
@@ -190,20 +199,31 @@ export async function openClaudeSdkSession(options: ClaudeSdkSessionOptions): Pr
   // Once the process is gone, anything it started in its group goes too.
   const terminated: Promise<void> = exited.then(() => killGroup("SIGKILL"));
 
-  // ---- input, tool gate, the query ----------------------------------------------------------
+  // ---- input, permissions, the query --------------------------------------------------------
+  const id = newId("sess", clock.now());
   const input = new InputQueue();
   const abort = new AbortController();
-  // Only ever a denial: an `allow` from a hook would skip Claude Code's own permission check, so a
-  // tool call the gate lets through still meets Claude's rules and, for an ask, `canUseTool`.
-  const preToolUse: HookCallback = async (hookInput) => {
-    if (hookInput.hook_event_name !== "PreToolUse") return {};
-    const reason = toolRefusal(hookInput.tool_name, hookInput.tool_input, cwd, options.protectedPaths);
-    if (!reason) return {};
-    return {
-      hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason },
-    };
-  };
-  const canUseTool: CanUseTool = async () => ({ behavior: "deny", message: ASK_DENIED });
+  let activeTurn: ActiveTurn | undefined;
+  /** Which tool call started the subagent that made a tool call, from the stream (this turn's). */
+  const parents = new Map<string, string>();
+  // Set once the session is up; an ask before then has no turn and is denied anyway.
+  let failAsk: (turnId: string, error: unknown) => void = () => undefined;
+  const { preToolUse, canUseTool } = claudeSdkPermissionBridge({
+    agent: options.agent,
+    sessionId: id,
+    cwd,
+    protectedPaths: options.protectedPaths,
+    permissionFiles: options.permissionFiles,
+    askPermission: options.askPermission,
+    onPermission: options.onPermission,
+    liveTurn: () =>
+      activeTurn && !activeTurn.cancelReason && !activeTurn.abort.signal.aborted
+        ? { id: activeTurn.id, signal: activeTurn.abort.signal }
+        : undefined,
+    parentOf: (toolUseId) => parents.get(toolUseId),
+    onAskFailed: (turnId, error) => failAsk(turnId, error),
+    logger,
+  });
   const q: Query = query({
     prompt: input,
     options: {
@@ -283,7 +303,6 @@ export async function openClaudeSdkSession(options: ClaudeSdkSessionOptions): Pr
   }
 
   // ---- the session -----------------------------------------------------------------------
-  const id = newId("sess", clock.now());
   const models = claudeModelChoices(initResult.models);
   let model = initialModel(models);
   let effort = CLAUDE_SDK_DEFAULT_EFFORT;
@@ -360,7 +379,6 @@ export async function openClaudeSdkSession(options: ClaudeSdkSessionOptions): Pr
   const acpSessionId = randomUUID();
   const listeners = new Set<(e: SessionUpdateEvent) => void>();
   const tools = new Map<string, string>();
-  let activeTurn: ActiveTurn | undefined;
   let ended: Error | undefined;
 
   const emit = (raw: acp.SessionUpdate) => {
@@ -377,12 +395,17 @@ export async function openClaudeSdkSession(options: ClaudeSdkSessionOptions): Pr
   const settle = (turn: ActiveTurn, outcome: TurnResult | Error) => {
     if (activeTurn !== turn) return;
     activeTurn = undefined;
+    turn.abort.abort("turn ended");
+    parents.clear();
     if (turn.grace) clearTimeout(turn.grace);
     if (outcome instanceof Error) turn.reject(outcome);
     else turn.resolve(outcome);
   };
 
   const handle = (m: SDKMessage) => {
+    // A subagent's tool calls name the tool call that started it.
+    if (m.type === "assistant" && typeof m.parent_tool_use_id === "string")
+      for (const block of m.message.content) if (block.type === "tool_use") parents.set(block.id, m.parent_tool_use_id);
     for (const update of sessionUpdates(m, tools)) emit(update);
     if (m.type === "result" && activeTurn) {
       const turn = activeTurn;
@@ -409,6 +432,7 @@ export async function openClaudeSdkSession(options: ClaudeSdkSessionOptions): Pr
     const turn = activeTurn;
     if (!turn || turn.cancelReason) return;
     turn.cancelReason = reason;
+    turn.abort.abort(reason);
     logger.debug("interrupting claude turn", { reason, graceMs: cancelGraceMs });
     void q.interrupt().catch(() => undefined /* the process may already be gone */);
     turn.grace = setTimeout(() => {
@@ -422,6 +446,23 @@ export async function openClaudeSdkSession(options: ClaudeSdkSessionOptions): Pr
       );
       void terminate();
     }, cancelGraceMs);
+  };
+
+  // An answerer that failed fails the live turn it was asked in, as on the ACP route, and the
+  // session is retired with it: Claude's turn has not ended, and whatever it sends later must
+  // never be taken for the next prompt's (#1306 review).
+  failAsk = (turnId, error) => {
+    const turn = activeTurn;
+    if (!turn || turn.id !== turnId) return;
+    ended = new OrcaError(
+      "AGENT_TRANSPORT",
+      `agent ${options.agent.id}: the session was stopped after its permission answerer failed`,
+    );
+    settle(
+      turn,
+      error instanceof Error ? error : new OrcaError("INTERNAL", "permission callback failed", {}, { cause: error }),
+    );
+    void terminate();
   };
 
   return {
@@ -448,7 +489,7 @@ export async function openClaudeSdkSession(options: ClaudeSdkSessionOptions): Pr
       const content = claudeContent(promptInput);
       let turn!: ActiveTurn;
       const done = new Promise<TurnResult>((resolve, reject) => {
-        turn = { started: clock.now(), resolve, reject };
+        turn = { id: randomUUID(), abort: new AbortController(), started: clock.now(), resolve, reject };
       });
       activeTurn = turn;
       const onAbort = () => requestCancel(`aborted: ${String(promptOptions.signal?.reason ?? "cancelled")}`);
@@ -576,28 +617,6 @@ export function claudeContent(input: string | acp.ContentBlock[]): ClaudeContent
         throw new OrcaError("NOT_SUPPORTED", `a Claude Agent SDK prompt cannot carry a ${b.type} block yet`);
     }
   });
-}
-
-/**
- * Why a tool call is refused before it runs, or undefined to let it run. Until ORCA's permission
- * answers reach this driver (#1122) only `TodoWrite` and a `Read` of one file ORCA does not
- * protect from reads run. Recursive searches (`Glob`, `Grep`) are denied: their starting path
- * says nothing about what the search visits below it.
- */
-export function toolRefusal(
-  tool: string,
-  toolInput: unknown,
-  cwd: string,
-  protectedPaths: ProtectedPaths | undefined,
-): string | undefined {
-  if (NO_FILE_TOOLS.has(tool)) return undefined;
-  if (tool !== "Read") return DENIED;
-  const args = (typeof toolInput === "object" && toolInput !== null ? toolInput : {}) as Record<string, unknown>;
-  const path = args.file_path;
-  if (typeof path !== "string" || path.length === 0) return DENIED;
-  if (protectedPathFor(path, "read", protectedPaths, cwd) !== undefined)
-    return "ORCA protects this path from agents; it was not read.";
-  return undefined;
 }
 
 const TOOL_KINDS: Record<string, acp.ToolKind> = {

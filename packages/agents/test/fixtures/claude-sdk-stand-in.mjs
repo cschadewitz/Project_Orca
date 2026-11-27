@@ -56,6 +56,8 @@ let hookId;
 let nextRequest = 0;
 const pending = new Map();
 let interrupted;
+/** The last `can_use_tool` answer, with the hook's decision, for the `call` script. */
+let lastAnswer;
 
 /** Ask the SDK something (a hook callback or a permission) and wait for its answer. */
 function ask(request) {
@@ -64,12 +66,12 @@ function ask(request) {
   return new Promise((resolve) => pending.set(id, resolve));
 }
 
-const assistant = (content) =>
+const assistant = (content, parent = null) =>
   out({
     type: "assistant",
     session_id: SESSION,
     uuid: `a${nextRequest++}`,
-    parent_tool_use_id: null,
+    parent_tool_use_id: parent,
     message: {
       id: "msg",
       type: "message",
@@ -109,10 +111,12 @@ const result = (extra = {}) =>
 
 /**
  * Run one tool use through the SDK the way Claude Code does: hook first; a hook `allow` skips the
- * permission check, no decision leaves it to Claude's rules, which may ask (`asks`).
+ * permission check, a hook `ask` always asks, no decision leaves it to Claude's rules, which may
+ * ask (`asks`). `extra` goes on the ask (`agent_id`, `decision_reason`, …); `parent` is the
+ * tool call that started the subagent making this one.
  */
-async function tool(id, name, input, asks = false) {
-  assistant([{ type: "tool_use", id, name, input }]);
+async function tool(id, name, input, asks = false, extra = {}, parent = null) {
+  assistant([{ type: "tool_use", id, name, input }], parent);
   const hook = await ask({
     subtype: "hook_callback",
     callback_id: hookId,
@@ -131,8 +135,9 @@ async function tool(id, name, input, asks = false) {
     toolResult(id, hook.hookSpecificOutput.permissionDecisionReason, true);
     return "denied";
   }
-  if (asks && decision !== "allow") {
-    const answer = await ask({ subtype: "can_use_tool", tool_name: name, input, tool_use_id: id });
+  if (decision === "ask" || (asks && decision !== "allow")) {
+    const answer = await ask({ subtype: "can_use_tool", tool_name: name, input, tool_use_id: id, ...extra });
+    lastAnswer = { hook: decision ?? null, ...answer };
     toolResult(id, answer.message ?? "allowed", answer.behavior !== "allow");
     return answer.behavior;
   }
@@ -154,6 +159,15 @@ async function turn(text) {
     permissionMode: "default",
   });
   switch (word) {
+    case "call": {
+      // `call {"name":…,"input":…,"asks":true,"extra":{…},"parent":"…"}`: one tool use, and
+      // what the hook and the permission answer were.
+      const c = JSON.parse(text.slice("call ".length));
+      lastAnswer = undefined;
+      const ran = await tool(`c${nextRequest++}`, c.name, c.input, c.asks ?? false, c.extra ?? {}, c.parent ?? null);
+      assistant([{ type: "text", text: JSON.stringify({ ran, answer: lastAnswer ?? null }) }]);
+      return result();
+    }
     case "config":
       assistant([{ type: "text", text: JSON.stringify(state) }]);
       return result();

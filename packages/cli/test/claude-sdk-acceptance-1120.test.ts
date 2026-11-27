@@ -12,9 +12,12 @@
  * - the launch checks pass, a turn runs and ends on Claude's result, with the text reported;
  * - Claude Code's own model list reaches the session's `model` option, and choosing a model
  *   or an effort changes what Claude Code sends the model;
- * - the tool gate (#1122 pending): a Read inside the workspace runs, Bash and Grep are
- *   denied before they run (the marker file never appears), a Read outside the workspace is
- *   asked by Claude Code and answered no;
+ * - ORCA's permission answers (#1122) with nobody to answer: a Read inside the workspace runs,
+ *   Bash is asked and denied before it runs (the marker file never appears), Grep is denied, a
+ *   Read outside the workspace is asked by Claude Code and answered no;
+ * - with a person answering: a Bash they allow runs, once, and the next identical one is asked
+ *   again; one they decline does not run and the model is told why; a rule's ask reaches them
+ *   for a read Claude would have run by itself;
  * - cancel ends a turn as `cancelled`, and close leaves no Claude Code process behind.
  */
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -188,7 +191,10 @@ describe.runIf(CLAUDE !== undefined && process.platform !== "win32")(
       await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
     });
 
-    const open = (): Promise<AgentSession> => {
+    const open = (
+      extra: Partial<Parameters<ReturnType<typeof makeSessionFactory>>[0]> = {},
+      permissions?: unknown,
+    ): Promise<AgentSession> => {
       const factory = makeSessionFactory({ configDir: join(root, "orca"), storeDir: ".orca" }, () =>
         Promise.reject(new Error("ACP opened")),
       );
@@ -202,8 +208,9 @@ describe.runIf(CLAUDE !== undefined && process.platform !== "win32")(
           CLAUDE_CONFIG_DIR: join(root, "claude-config"),
           CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
         },
+        ...(permissions ? { permissions } : {}),
       });
-      return factory({ host: new LocalHost({ id: "local", type: "local" }), agent, cwd: workspace });
+      return factory({ host: new LocalHost({ id: "local", type: "local" }), agent, cwd: workspace, ...extra });
     };
 
     const texts = (events: SessionUpdateEvent[]) =>
@@ -256,6 +263,53 @@ describe.runIf(CLAUDE !== undefined && process.platform !== "win32")(
         const updates = events.filter((e) => e.summary.kind === "tool_call_update").map((e) => e.summary.status);
         expect(updates).toEqual(["completed", "failed", "failed", "failed"]);
         expect(texts(events).join("")).not.toContain("orca-1120-outside");
+      } finally {
+        await session.close();
+      }
+    });
+
+    it("asks the person, allows once only, and tells the model when they decline", async () => {
+      const asked: string[] = [];
+      let answer = "allow";
+      const session = await open(
+        {
+          askPermission: (request) => {
+            asked.push(request.toolCall.title ?? "");
+            return Promise.resolve(
+              request.options.find((o) => o.kind === (answer === "allow" ? "allow_once" : "reject_once"))!.optionId,
+            );
+          },
+        },
+        { rules: [{ match: { kind: "read", titlePattern: "^Read notes\\.txt$" }, decision: "ask" }] },
+      );
+      try {
+        const events: SessionUpdateEvent[] = [];
+        session.onUpdate((e) => events.push(e));
+        const call = (name: string, input: unknown) => `CALL:${JSON.stringify({ name, input })}`;
+        const marker = join(workspace, "allowed.txt");
+        const bash = call("Bash", { command: `echo x >> ${marker}`, description: "m" });
+
+        await session.prompt(bash);
+        expect(await readFile(marker, "utf8")).toBe("x\n");
+        // Allowed once: Claude remembers nothing, and the same command is asked again.
+        await session.prompt(bash);
+        expect(await readFile(marker, "utf8")).toBe("x\nx\n");
+        expect(asked.filter((t) => t.startsWith("echo x"))).toHaveLength(2);
+
+        answer = "reject";
+        const before = model.requests.length;
+        await session.prompt(
+          call("Bash", { command: `echo y > ${join(workspace, "declined.txt")}`, description: "m" }),
+        );
+        await expect(readFile(join(workspace, "declined.txt"), "utf8")).rejects.toThrow(/ENOENT/);
+        // The model is told the person declined it.
+        const told = JSON.stringify(model.requests.slice(before).map((r) => r.messages.at(-1)));
+        expect(told).toContain("The person declined this tool call.");
+
+        // A read Claude would run by itself still reaches the person when a rule asks about it.
+        await session.prompt(call("Read", { file_path: join(workspace, "notes.txt") }));
+        expect(asked.at(-1)).toBe("Read notes.txt");
+        expect(texts(events).join("")).not.toContain("orca-1120-inside");
       } finally {
         await session.close();
       }
