@@ -26,7 +26,7 @@ import {
   type TelemetryText,
   type ToolCallTelemetry,
 } from "@orca/core";
-import type { HookTelemetrySpool } from "@orca/agents";
+import type { HookTelemetrySource } from "@orca/agents";
 import type { ToolTelemetryStore } from "@orca/store";
 
 /** How often a running session's spool is drained. */
@@ -96,7 +96,7 @@ export function toolTelemetryRecords(
 }
 
 export interface AttachHookTelemetryOptions {
-  spool: HookTelemetrySpool;
+  spool: HookTelemetrySource;
   store: ToolTelemetryStore;
   scope: HookTelemetryScope;
   /** The run's redaction: its sessions' resolved secret values and its sensitive inputs. */

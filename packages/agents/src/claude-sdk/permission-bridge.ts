@@ -22,15 +22,28 @@
  *
  * Every call is described to the policy by `claudeToolPolicyCall`, which titles it the way
  * Claude's ACP adapter does and keeps any call it cannot describe exactly strict (#1119).
+ *
+ * The hook is ORCA's native tool hook for this route (#1123), run in process: the decision the
+ * ACP route's hook program makes (`checkPreToolCall`'s order: ORCA's own files, then the
+ * policy, then a call running outside the workspace asks), with every failure an explicit deny,
+ * and, when the agent keeps tool-call telemetry, the same v1 line per decided call.
  */
 import { randomUUID } from "node:crypto";
 import type * as acp from "@agentclientprotocol/sdk";
 import type { CanUseTool, HookCallback, HookJSONOutput } from "@anthropic-ai/claude-agent-sdk";
-import type { ConfiguredPermissionPolicy, JudgedDecision, Logger, PermissionPolicy } from "@orca/core";
+import {
+  HOOK_TELEMETRY_LINE_VERSION,
+  type ConfiguredPermissionPolicy,
+  type HookTelemetryLine,
+  type JudgedDecision,
+  type Logger,
+  type PermissionPolicy,
+} from "@orca/core";
 import type { PermissionInvocation } from "../acp-session.js";
 import type { McpRelayCall, McpRelayContext, McpRelayDispatch } from "../mcp-relay.js";
 import { claudeToolPolicyCall } from "../claude-pre-tool-hook.js";
 import {
+  existingDirectoryWithin,
   explainPermission,
   loadEffectivePermissionPolicy,
   resolvePermission,
@@ -104,6 +117,10 @@ export interface ClaudeSdkPermissionBridgeOptions {
   loadPolicy?: (() => Promise<PermissionPolicy>) | undefined;
   /** Aborts when the session ends: no MCP request is served after it (#1125). */
   sessionSignal?: AbortSignal | undefined;
+  /** Other directories the session may work in; a call running in none of these and not the cwd asks. */
+  additionalDirectories?: readonly string[] | undefined;
+  /** One line per call the hook decided, when the agent keeps tool-call telemetry (#1123, #1000). */
+  onToolCallTelemetry?: ((line: HookTelemetryLine) => void) | undefined;
   logger: Logger;
 }
 
@@ -129,6 +146,8 @@ export function claudeSdkPermissionBridge(o: ClaudeSdkPermissionBridgeOptions): 
 } {
   /** Claude's tool uses of ORCA-run MCP tools that ORCA allowed, by tool use id; each is used once. */
   const mcpGrants = new Map<string, McpGrant>();
+  /** Tool uses the hook found running outside the workspace: only a person may allow them. */
+  const outsideWorkspace = new Set<string>();
   const scope: PermissionEvalContext = {
     workspaceCwd: o.cwd,
     ...(o.protectedPaths ? { protectedPaths: o.protectedPaths } : {}),
@@ -137,10 +156,11 @@ export function claudeSdkPermissionBridge(o: ClaudeSdkPermissionBridgeOptions): 
   const warned = new Set<string>();
   const decisionTimeoutMs = o.decisionTimeoutMs ?? CLAUDE_SDK_DECISION_TIMEOUT_MS;
   // A policy that cannot be read in time decides nothing: the caller denies (#1306 review).
-  const policy = () =>
+  const policy = (seen?: { unreadable: boolean }) =>
     bounded(
       o.loadPolicy?.() ??
         loadEffectivePermissionPolicy(agent, o.permissionFiles ?? [], (file) => {
+          if (seen) seen.unreadable = true;
           if (warned.has(file)) return;
           warned.add(file);
           o.logger.warn("permission sidecar unreadable; asking instead of allowing anything it could have refused", {
@@ -165,54 +185,99 @@ export function claudeSdkPermissionBridge(o: ClaudeSdkPermissionBridgeOptions): 
     hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason },
   });
 
+  const askClaude = (reason: string): HookJSONOutput => ({
+    hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "ask", permissionDecisionReason: reason },
+  });
+
+  /** The hook's answer, and what the telemetry line says it decided and why. */
+  type Gated = { out: HookJSONOutput; decision: "allow" | "ask" | "deny"; rule: string; call: PolicyCall };
+
   // Every failure on the way to a verdict is an explicit deny: a rejected callback is not one
   // (#1306 review), and nothing here relies on how the SDK treats it.
-  const preToolUse: HookCallback = async (hookInput, toolUseId, options) => {
+  const preToolUse: HookCallback = async (hookInput) => {
+    if (hookInput.hook_event_name !== "PreToolUse") return {};
+    const started = performance.now();
+    const at = new Date().toISOString();
+    let gated: Gated | undefined;
+    let out: HookJSONOutput;
     try {
-      return await gate(hookInput, toolUseId, options);
+      gated = await gate(hookInput);
+      out = gated.out;
     } catch (error) {
       o.logger.warn("ORCA could not decide a Claude tool call; denying it", { error: errorName(error) });
-      return deny(CLAUDE_SDK_DENIALS.failed);
+      out = deny(CLAUDE_SDK_DENIALS.failed);
     }
+    // The answer is settled; recording is beside it and can never replace it.
+    if (o.onToolCallTelemetry)
+      try {
+        o.onToolCallTelemetry(telemetryLine(hookInput, gated, at, Math.max(0, performance.now() - started)));
+      } catch {
+        // A line that cannot be built or kept is dropped, never the answer.
+      }
+    return out;
   };
 
-  const gate: HookCallback = async (hookInput) => {
-    if (hookInput.hook_event_name !== "PreToolUse") return {};
+  const gate = async (hookInput: PreToolUseInput): Promise<Gated> => {
     const toolName = hookInput.tool_name;
-    if (STATE_ONLY_TOOLS.has(toolName)) return {};
     const call = describe(toolName, hookInput.tool_input);
     const toolUseId = hookInput.tool_use_id;
+    const gated = (out: HookJSONOutput, decision: Gated["decision"], rule: string): Gated => ({
+      out,
+      decision,
+      rule,
+      call,
+    });
+    if (STATE_ONLY_TOOLS.has(toolName)) return gated({}, "allow", "state-only");
     if (CLAUDE_SDK_SEARCH_TOOLS.has(toolName)) {
       record(call, toolUseId, "gate:deny:search");
-      return deny(CLAUDE_SDK_DENIALS.search);
+      return gated(deny(CLAUDE_SDK_DENIALS.search), "deny", "search");
     }
     const turn = o.liveTurn();
     if (!turn) {
       record(call, toolUseId, "gate:no-turn");
-      return deny(CLAUDE_SDK_DENIALS.noTurn);
+      return gated(deny(CLAUDE_SDK_DENIALS.noTurn), "deny", "no-turn");
     }
-    const explained = explainPermission(await policy(), call, scope);
+    const seen = { unreadable: false };
+    const explained = explainPermission(await policy(seen), call, scope);
     if (o.liveTurn()?.id !== turn.id) {
       record(call, toolUseId, "gate:turn-ended");
-      return deny(CLAUDE_SDK_DENIALS.noTurn);
+      return gated(deny(CLAUDE_SDK_DENIALS.noTurn), "deny", "no-turn");
     }
     if (explained.decision === "deny") {
       const isProtected = explained.basis === "protected";
       record(call, toolUseId, isProtected ? "gate:deny:protected" : "gate:deny", ruleOf(explained));
-      return deny(isProtected ? CLAUDE_SDK_DENIALS.protected : CLAUDE_SDK_DENIALS.policy);
+      return gated(
+        deny(isProtected ? CLAUDE_SDK_DENIALS.protected : CLAUDE_SDK_DENIALS.policy),
+        "deny",
+        isProtected ? "protected" : seen.unreadable ? "sidecar-unreadable" : "policy",
+      );
     }
     // To Claude's ask, so `canUseTool` decides it: a call Claude would let through by itself
     // still reaches ORCA's answerer.
     if (explained.decision === "ask")
-      return {
-        hookSpecificOutput: {
-          hookEventName: "PreToolUse",
-          permissionDecision: "ask",
-          permissionDecisionReason: "ORCA's permission policy asks about this tool call.",
-        },
-      };
+      return gated(
+        askClaude("ORCA's permission policy asks about this tool call."),
+        "ask",
+        seen.unreadable ? "sidecar-unreadable" : "policy",
+      );
+    // A rule is relative to the workspace: a call running somewhere else is not the call it
+    // granted, so it is asked about, as by the ACP route's hook.
+    const roots = [o.cwd, ...(o.additionalDirectories ?? [])];
+    const where = typeof hookInput.cwd === "string" && hookInput.cwd !== "" ? hookInput.cwd : o.cwd;
+    if (!roots.some((root) => existingDirectoryWithin(where, root))) {
+      if (toolUseId) {
+        if (outsideWorkspace.size >= 1024) outsideWorkspace.clear();
+        outsideWorkspace.add(toolUseId);
+      }
+      record(call, toolUseId, "gate:ask:cwd-outside-workspace");
+      return gated(
+        askClaude("This tool call runs outside the run's workspace, so no workspace grant covers it."),
+        "ask",
+        "cwd-outside-workspace",
+      );
+    }
     // Allowed by ORCA: Claude's own check still runs, and any ask it makes comes to `canUseTool`.
-    return {};
+    return gated({}, "allow", "policy");
   };
 
   const canUseTool: CanUseTool = async (toolName, toolInput, ctx) => {
@@ -246,9 +311,12 @@ export function claudeSdkPermissionBridge(o: ClaudeSdkPermissionBridgeOptions): 
       signal: AbortSignal.any([turn.signal, ctx.signal]),
     };
     const live = () => o.liveTurn()?.id === turn.id && !invocation.signal.aborted;
+    // A call the hook found outside the workspace: no rule's allow covers it, a person decides.
+    const personOnly = outsideWorkspace.delete(toolUseId);
     let resolved: Awaited<ReturnType<typeof resolvePermission>>;
     try {
-      resolved = await resolvePermission(await policy(), {
+      const loaded = await policy();
+      resolved = await resolvePermission(personOnly ? withoutAllows(loaded) : loaded, {
         request: askRequest(o.sessionId, toolUseId, call, toolInput, ctx),
         call,
         signal: invocation.signal,
@@ -474,5 +542,42 @@ function askRequest(
       _meta: { claudeAgentSdk: sdk },
     },
     options: ctx.defaultToNo ? [reject, allow] : [allow, reject],
+  };
+}
+
+type PreToolUseInput = Extract<Parameters<HookCallback>[0], { hook_event_name: "PreToolUse" }>;
+
+/**
+ * The telemetry line for one call the hook decided, in the ACP route's hook's v1 shape
+ * (`preToolTelemetryLine`): the tool, its id and input as Claude sent them, the kind, the hook's
+ * title, the decision and its reason. A failure is `block`, `hook-error`.
+ */
+function telemetryLine(
+  hookInput: PreToolUseInput,
+  gated: { decision: "allow" | "ask" | "deny"; rule: string; call: PolicyCall } | undefined,
+  at: string,
+  latencyMs: number,
+): HookTelemetryLine {
+  const base = {
+    v: HOOK_TELEMETRY_LINE_VERSION,
+    at,
+    tool: hookInput.tool_name || "(unreadable)",
+    ...(hookInput.tool_use_id ? { toolUseId: hookInput.tool_use_id } : {}),
+    input: asInput(hookInput.tool_input),
+    latencyMs,
+  } as const;
+  if (!gated) return { ...base, decision: "block", rule: "hook-error", hookError: "internal error" };
+  // The hook's own form of the title, as the ACP route's hook records it (its deny and ask
+  // title rules match it here too), so one call reads the same in telemetry on both routes.
+  const title = gated.call.titleForms?.[0] ?? gated.call.title;
+  return { ...base, kind: gated.call.kind, title, decision: gated.decision, rule: gated.rule };
+}
+
+/** The policy with every grant taken away: what would allow asks instead; denies still deny. */
+function withoutAllows(policy: PermissionPolicy): PermissionPolicy {
+  return {
+    ...policy,
+    default: policy.default === "allow" ? "ask" : policy.default,
+    rules: policy.rules.filter((rule) => rule.decision !== "allow"),
   };
 }

@@ -170,7 +170,7 @@ const result = (extra = {}) =>
  * ask (`asks`). `extra` goes on the ask (`agent_id`, `decision_reason`, …); `parent` is the
  * tool call that started the subagent making this one.
  */
-async function tool(id, name, input, asks = false, extra = {}, parent = null) {
+async function tool(id, name, input, asks = false, extra = {}, parent = null, cwd = process.cwd()) {
   assistant([{ type: "tool_use", id, name, input }], parent);
   const hook = await ask({
     subtype: "hook_callback",
@@ -182,7 +182,7 @@ async function tool(id, name, input, asks = false, extra = {}, parent = null) {
       tool_input: input,
       tool_use_id: id,
       session_id: SESSION,
-      cwd: process.cwd(),
+      cwd,
     },
   });
   const decision = hook?.hookSpecificOutput?.permissionDecision;
@@ -215,11 +215,19 @@ async function turn(text) {
   });
   switch (word) {
     case "call": {
-      // `call {"name":…,"input":…,"asks":true,"extra":{…},"parent":"…"}`: one tool use, and
-      // what the hook and the permission answer were.
+      // `call {"name":…,"input":…,"asks":true,"extra":{…},"parent":"…","cwd":"…"}`: one tool
+      // use (run in `cwd`, its own by default), and what the hook and the permission answer were.
       const c = JSON.parse(text.slice("call ".length));
       lastAnswer = undefined;
-      const ran = await tool(`c${nextRequest++}`, c.name, c.input, c.asks ?? false, c.extra ?? {}, c.parent ?? null);
+      const ran = await tool(
+        `c${nextRequest++}`,
+        c.name,
+        c.input,
+        c.asks ?? false,
+        c.extra ?? {},
+        c.parent ?? null,
+        c.cwd ?? process.cwd(),
+      );
       assistant([{ type: "text", text: JSON.stringify({ ran, answer: lastAnswer ?? null }) }]);
       return result();
     }

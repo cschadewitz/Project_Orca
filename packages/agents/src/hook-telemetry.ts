@@ -206,6 +206,13 @@ export interface HookTelemetrySpool {
   finish(): Promise<HookTelemetryDrainReport>;
 }
 
+/**
+ * What the engine reads a session's tool-call telemetry through: a spool's `attach`, `drain`
+ * and `finish`. An in-process hook (the Claude Agent SDK route, #1123) has no spool file and
+ * hands its lines over through the same three calls.
+ */
+export type HookTelemetrySource = Pick<HookTelemetrySpool, "attach" | "drain" | "finish">;
+
 export interface OpenHookTelemetrySpoolOptions {
   /**
    * ORCA's private directory for the session's hook files. It must be inside one of

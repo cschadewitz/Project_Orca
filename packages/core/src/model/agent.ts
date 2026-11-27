@@ -1291,13 +1291,8 @@ export const AgentSpecSchema = z
           path: ["args"],
           message: "driver: claude-agent-sdk builds Claude's arguments itself; args do not apply to it",
         });
-      if (agent.nativeToolHook === "on" || agent.nativeToolHook === "experimental")
-        ctx.addIssue({
-          code: "custom",
-          path: ["nativeToolHook"],
-          message:
-            "nativeToolHook installs ORCA's hook through the ACP adapter; driver: claude-agent-sdk does not take it",
-        });
+      // `nativeToolHook` is accepted: ORCA's hook runs in process on this route for every call,
+      // whatever it says (#1123), and `on` is refused when the session opens, as on the ACP route.
       if (agent.codexExecGate === "experimental")
         ctx.addIssue({
           code: "custom",
