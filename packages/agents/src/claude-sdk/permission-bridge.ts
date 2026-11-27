@@ -69,6 +69,7 @@ export const CLAUDE_SDK_DENIALS = {
   protected: "ORCA keeps this path from agents; the tool call was denied before it ran.",
   policy: "ORCA's permission policy denies this tool call.",
   declined: "The person declined this tool call.",
+  unanswered: "Nobody answered ORCA's ask about this tool call; it was denied.",
   noAnswerer: "ORCA's permission policy asks a person about this tool call, and nobody can answer in this run.",
   noTurn: "ORCA answers tool permission asks only during a live turn; this one was denied.",
   cancelled: "The turn was cancelled; the tool call was denied.",
@@ -410,7 +411,10 @@ export function claudeSdkPermissionBridge(o: ClaudeSdkPermissionBridgeOptions): 
             ? CLAUDE_SDK_DENIALS.noAnswerer
             : decision.startsWith("ask:reject")
               ? CLAUDE_SDK_DENIALS.declined
-              : CLAUDE_SDK_DENIALS.failed;
+              : // No answer, or one that was not an offered option (#1128): an ask, not a failure.
+                decision === "ask:cancelled"
+                ? CLAUDE_SDK_DENIALS.unanswered
+                : CLAUDE_SDK_DENIALS.failed;
     return refuse(decision, message, false, rule);
   };
 

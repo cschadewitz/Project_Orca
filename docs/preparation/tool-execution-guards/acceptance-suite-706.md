@@ -66,6 +66,16 @@ that need them are excluded with that reason. It is a route of its own: nothing 
 toward Claude's `claude-native-hook` claim, and the route holds no tier until its own
 installed receipt exists.
 
+`claude-sdk-connected` is its connected proof: the same cases through a real Claude Code
+driven by the Claude Agent SDK, in a session ORCA's factory opened for a
+`driver: claude-agent-sdk` agent with `nativeToolHook: experimental`, against the same model
+stand-in and recorders as `claude-connected` (`connected/claude-sdk.js`,
+`tools/test/enforcement-connected-sdk-1128.test.js`, run by `claude-sdk-acceptance.yml`, which
+keeps the receipt as an artifact). The SDK session loads no Claude settings, so Claude's own
+check runs in its default mode instead of allowing every tool; whatever runs, ORCA allowed.
+The cases Claude Code refuses on its own before the hook (F05, A02, B01, P03) are run as
+diagnostics there too, as on the ACP route.
+
 ## The connected proof
 
 `claude-connected` runs a real Claude Code (the pinned pair in `CLAUDE_HOOK_VERIFIED_PAIRS`)

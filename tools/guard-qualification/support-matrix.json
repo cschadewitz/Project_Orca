@@ -152,6 +152,34 @@
         "B01": "Claude Code refuses Edits of ORCA files that do not exist yet, and a change to a file whose read ORCA denied, before any hook runs, so those assertions' ORCA decisions are unobserved; the denied writes in the same case cannot stand in for them.",
         "P03": "The call to a 4 KB unknown tool name is refused by Claude Code (not offered) before any hook runs, so ORCA's answer for it is unobserved; the other calls' short answers cannot stand in for it."
       }
+    },
+    {
+      "id": "claude-sdk-connected",
+      "connected": true,
+      "proves": "claude-sdk-hook",
+      "what": "A real Claude Code driven through the Claude Agent SDK, in a session opened by ORCA's session factory for a driver: claude-agent-sdk agent (permission bridge, in-process hook, MCP relay, nativeToolHook: experimental attestation), Claude's own check in its default mode with no settings loaded, and a model stand-in making each case's tool calls (tools/guard-qualification/connected/claude-sdk.js)",
+      "capabilities": ["answerer", "agent-turn", "mcp-grant-allows"],
+      "excluded": {
+        "F01": "Claude builds the hook's input itself; a live run cannot hand the callback malformed input. Run on claude-sdk-hook.",
+        "F02": "Decided in the session's own process; there is no context file to damage.",
+        "F03": "Nothing is installed in Claude's settings on this route; the callback's registration is checked by the #1123 tests.",
+        "F04": "ORCA builds the ask in canUseTool; there are no agent-offered options to pick from.",
+        "A04": "One session has one working directory, fixed when it opens; a live agent cannot make a call from another one.",
+        "P02": "No raw input or context file on this route (see F01 and F02)."
+      },
+      "verifies": "End to end on the SDK route: whether each case's call took effect, was asked about through ORCA's human channel, or came back to the model as ORCA's denial or block, judged from the files, the MCP recorder, the shell recorder and the tool results",
+      "unverified": [
+        "Behaviour of a real model, which may make calls in shapes the stand-in does not",
+        "Claude Code and SDK versions other than the pinned pair; hosts other than linux-x64",
+        "Calls Claude Code refuses itself before the hook (a tool it does not offer, an Edit of a missing file, a change to a file it has not read after ORCA denied the read). Nothing runs, but ORCA's decision is unobserved: each is recorded as orcaDecision unobserved and does not count",
+        "That events, logs and stored records about the call are redacted"
+      ],
+      "unobserved": {
+        "F05": "Claude Code refuses a tool it does not offer (No such tool available) before any hook runs, so ORCA's decision is never observed. Run as a diagnostic: nothing runs, shown by the request's tool list.",
+        "A02": "The relative Edit (../elsewhere/a.md) is refused by Claude Code (the file does not exist from its working directory) before any hook runs, so that assertion's ORCA decision is unobserved; the case's other calls are observed but cannot stand in for it.",
+        "B01": "Claude Code refuses Edits of ORCA files that do not exist yet, and a change to a file whose read ORCA denied, before any hook runs, so those assertions' ORCA decisions are unobserved; the denied writes in the same case cannot stand in for them.",
+        "P03": "The call to a 4 KB unknown tool name is refused by Claude Code (not offered) before any hook runs, so ORCA's answer for it is unobserved; the other calls' short answers cannot stand in for it."
+      }
     }
   ],
   "agents": [

@@ -51,12 +51,16 @@ const CLAUDE_SETTINGS = {
   },
 };
 
-const MARKERS = { deny: "Denied by ORCA", block: "Blocked by ORCA" };
+/** What ORCA's refusal says in the tool result handed back to the model, on this route. */
+const MARKERS = { deny: ["Denied by ORCA"], block: ["Blocked by ORCA"] };
 
 /**
- * @param {{ adapter: string, hookScript: string, model: { url: string, log: any } }} env
+ * @param {{ adapter: string, hookScript: string, model: { url: string, log: any },
+ *   markers?: { deny: string[], block: string[] } }} env `markers` replace the ACP route's
+ *   refusal texts, for a connected path over another Claude route that reuses this one.
  */
 export function claudeConnected(env) {
+  const markers = env.markers ?? MARKERS;
   const path = {
     id: "claude-connected",
     capabilities: ["answerer", "agent-turn", "mcp-grant-allows"],
@@ -247,13 +251,14 @@ export function claudeConnected(env) {
         try {
           const read = await path.turn(world, [{ name: "Read", input: { file_path: p.input.file_path } }]);
           const c = read.calls[0];
-          p.primed = c.result?.text.includes(MARKERS.deny)
-            ? "deny"
-            : c.approvals.length
-              ? `asked:${c.approvals.map((a) => a.answer).join(",")}`
-              : c.result && !c.result.isError
-                ? "allow"
-                : "refused";
+          p.primed =
+            refusalOf(c, markers) === "orca-deny"
+              ? "deny"
+              : c.approvals.length
+                ? `asked:${c.approvals.map((a) => a.answer).join(",")}`
+                : c.result && !c.result.isError
+                  ? "allow"
+                  : "refused";
         } finally {
           state.answer = undefined;
         }
@@ -286,7 +291,7 @@ export function claudeConnected(env) {
         const c = seen.calls[i];
         const effectRef = await effectRefOf(p, c, { shellRan, mcpRan, prepared, surfaces: seen.surfaces });
         const effect = effectFrom(effectRef);
-        const refusal = refusalOf(c);
+        const refusal = refusalOf(c, markers);
         const unobserved = orcaUnobserved(p, c, refusal, effect);
         const outcome = outcomeOf(c, refusal, effect, unobserved);
         const record = {
@@ -348,10 +353,10 @@ function logs(world) {
 }
 
 /** What the tool result said, kept apart from what happened. */
-function refusalOf(c) {
+function refusalOf(c, markers) {
   const text = c.result?.text ?? "";
-  if (text.includes(MARKERS.deny)) return "orca-deny";
-  if (text.includes(MARKERS.block)) return "orca-block";
+  if (markers.deny.some((m) => text.includes(m))) return "orca-deny";
+  if (markers.block.some((m) => text.includes(m))) return "orca-block";
   if (c.result === undefined) return c.made ? "no-result" : "no-call";
   return c.result.isError ? `agent:${text.slice(0, 120)}` : null;
 }

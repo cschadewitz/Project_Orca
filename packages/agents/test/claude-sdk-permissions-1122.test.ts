@@ -242,6 +242,21 @@ describe("ORCA answers Claude's permission asks (#1122)", () => {
     });
   });
 
+  it("tells the model an ask nobody answered, or answered with no offered option, was unanswered (#1128)", async () => {
+    const decisions: string[] = [];
+    for (const reply of [undefined, "allow-everything"]) {
+      const people = answerer(() => reply);
+      const session = await open({
+        askPermission: people.askPermission,
+        onPermission: (i) => decisions.push(i.decision),
+      });
+      const r = await call(session, fetchCall);
+      expect(r.answer).toMatchObject({ hook: "ask", behavior: "deny", message: CLAUDE_SDK_DENIALS.unanswered });
+      expect(people.asked).toHaveLength(1);
+    }
+    expect(decisions).toEqual(["ask:cancelled", "ask:cancelled"]);
+  });
+
   it("offers the decline first when Claude says the ask must default to no", async () => {
     const people = answerer(() => "reject");
     const session = await open({ askPermission: people.askPermission });
