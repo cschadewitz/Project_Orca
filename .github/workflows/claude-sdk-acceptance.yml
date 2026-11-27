@@ -4,7 +4,8 @@
 # tests cannot: Claude Code's own model list and its answers to model and effort changes, the
 # deny-only tool gate and Claude Code's own permission ask meeting a real tool call, cancel,
 # and that close leaves no Claude Code behind. It then runs the #706 enforcement cases through
-# the same Claude Code on this route (#1128) and keeps the connected receipt.
+# the same Claude Code on this route (#1128) and keeps the connected receipt, and writes the
+# route's installed receipt through the bundled session factory (#1128), kept unsigned.
 #
 # The Claude Code installed here is the person's own install in shape: Claude Code's native
 # binary package, outside the workspace, never the CLI the Agent SDK bundles (which the
@@ -30,6 +31,7 @@ on:
       - packages/cli/test/claude-sdk-acceptance-1120.test.ts
       - tools/guard-qualification/**
       - tools/test/enforcement-connected-sdk-1128.test.js
+      - tools/test/enforcement-installed-claude-sdk-1128.test.js
       - pnpm-lock.yaml
       - .github/workflows/claude-sdk-acceptance.yml
   schedule:
@@ -52,7 +54,7 @@ jobs:
   linux:
     name: claude agent sdk acceptance (linux)
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -107,11 +109,28 @@ jobs:
               throw new Error(`expected every connected case to run and pass: ${JSON.stringify({total: r.numTotalTests, passed: r.numPassedTests, skipped: r.numPendingTests})}`);
           ' "$RUNNER_TEMP/connected.json"
 
-      - name: Keep the connected receipt
+      - name: Write the installed receipt for the SDK route (#1128)
+        shell: bash
+        env:
+          ORCA_ENFORCEMENT_RECEIPT_DIR: ${{ runner.temp }}/enforcement-receipts
+        run: |
+          set -euo pipefail
+          pnpm exec vitest run tools/test/enforcement-installed-claude-sdk-1128.test.js \
+            --reporter=default --reporter=json --outputFile="$RUNNER_TEMP/installed.json"
+          node -e '
+            const r = require(process.argv[1]);
+            if (r.numTotalTests === 0 || r.numPendingTests > 0 || r.numPassedTests !== r.numTotalTests)
+              throw new Error(`expected every installed test to run and pass: ${JSON.stringify({total: r.numTotalTests, passed: r.numPassedTests, skipped: r.numPendingTests})}`);
+          ' "$RUNNER_TEMP/installed.json"
+          test -f "$RUNNER_TEMP/enforcement-receipts/claude-sdk-claude-sdk-hook.json"
+
+      # Unsigned: guard-receipts.yml is the one signer the checker accepts, and signing this
+      # route's receipt there is the next part of #1128.
+      - name: Keep the connected and installed receipts
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: enforcement-claude-sdk-connected-receipt
+          name: enforcement-claude-sdk-receipts
           path: ${{ runner.temp }}/enforcement-receipts/
           if-no-files-found: warn
           retention-days: 30

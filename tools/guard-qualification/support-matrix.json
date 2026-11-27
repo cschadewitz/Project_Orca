@@ -118,6 +118,9 @@
         "F04": "ORCA builds the ask itself in canUseTool; there are no agent-offered options for it to pick from.",
         "P02": "No raw input or context file on this route (see F01 and F02)."
       },
+      "installed": {
+        "live": "claude-sdk-connected"
+      },
       "verifies": "ORCA's answers on the route: the hook never allows, denies before the call runs, and sends every call the policy asks about (or that runs outside the workspace) to Claude's ask; canUseTool decides that ask again from the policy as it is now, by a rule only for a call the hook saw inside the workspace, otherwise by the run's answerer, for this call only; every allowed MCP call, a person's one-time allow included, is checked again by the relay and at its handoff. A refusal is observed in the answer ORCA hands Claude",
       "unverified": [
         "That Claude runs the hook on every call, and calls canUseTool for every call the hook asked about",
@@ -292,13 +295,13 @@
       "routes": ["claude-sdk-hook"],
       "receipts": [],
       "unverified": [
-        "No installed receipt yet: the route's cases run synthetically (claude-sdk-hook) and through the pinned Claude Code (claude-sdk-connected, claude-sdk-acceptance.yml), unsigned",
-        "bridgeSha256 binds nothing yet: no claim may rest on it until it names the daemon artifact a run actually exercised",
+        "No signed installed receipt yet: enforcement-installed-claude-sdk-1128.test.js writes one in claude-sdk-acceptance.yml, unsigned, and its cases are only those the live runner observes (A02, A04, B01, F05 and P03 run on claude-sdk-hook in the #706 suite)",
+        "bridgeSha256 names the bundle of the daemon's session factory that the run imported and drove (installed/claude-sdk-factory.js), built from the receipt's commit; it is not the digest of a release's orca-daemon.mjs",
         "That events and logs about its calls are redacted"
       ],
-      "unsupportedRoutes": [],
+      "unsupportedRoutes": ["Remote sessions over SSH", "A Claude Code other than the pinned one"],
       "residualRisks": [],
-      "next": "#1128: installed receipt for claude-sdk-hook through guard-receipts.yml, then a scoped A claim; #1129 tier B. Held on feature/claude-agent-sdk until #1132"
+      "next": "#1128: sign and record the installed receipt (guard-receipts.yml), then a scoped A claim; #1129 tier B (lifecycle checks and the route's installed diagnostics). Held on feature/claude-agent-sdk until #1132"
     },
     {
       "id": "codex",

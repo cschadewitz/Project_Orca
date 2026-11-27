@@ -23,6 +23,14 @@ import { CLAUDE_SDK_DENIALS, LocalHost } from "@orca/agents";
 import { makeSessionFactory } from "../../../packages/cli/src/bootstrap.ts";
 import { MCP_SERVERS, claudeConnected } from "./claude.js";
 
+/** The daemon's session factory from source, and the types a session is opened with. */
+const FROM_SOURCE = {
+  makeSessionFactory,
+  LocalHost,
+  AgentSpecSchema,
+  silentLogger,
+};
+
 const RECORDER = fileURLToPath(new URL("./mcp-recorder.js", import.meta.url));
 const SHELL_RECORDER = fileURLToPath(new URL("./shell-recorder.sh", import.meta.url));
 
@@ -39,17 +47,20 @@ export const SDK_MARKERS = {
 };
 
 /**
- * @param {{ claude: string, model: { url: string, log: any } }} env `claude`: the Claude Code
- *   executable, installed the way a person installs it.
+ * @param {{ claude: string, model: { url: string, log: any }, factory?: typeof FROM_SOURCE }} env
+ *   `claude`: the Claude Code executable, installed the way a person installs it. `factory`:
+ *   where the session factory comes from, by default the sources; the installed receipt passes
+ *   the bundle it runs (`installed/claude-sdk-factory.js`).
  */
 export function claudeSdkConnected(env) {
+  const factory = env.factory ?? FROM_SOURCE;
   const path = claudeConnected({ adapter: "", hookScript: "", model: env.model, markers: SDK_MARKERS });
   path.id = "claude-sdk-connected";
   path.capabilities = ["answerer", "agent-turn", "mcp-grant-allows"];
 
   /** The agent as ORCA's config would declare it: the SDK driver, the hook opted in. */
   path.agent = (world, extraEnv = {}, command = env.claude) =>
-    AgentSpecSchema.parse({
+    factory.AgentSpecSchema.parse({
       id: world.agentId,
       driver: "claude-agent-sdk",
       command,
@@ -83,17 +94,17 @@ export function claudeSdkConnected(env) {
     await mkdir(join(world.root, "claude-config"), { recursive: true });
     world.orcaRecords ??= new Map();
     const answerer = world.withoutAnswerer ? undefined : askPermission;
-    return makeSessionFactory({ configDir: world.configDir, storeDir: ".orca" }, () =>
+    return factory.makeSessionFactory({ configDir: world.configDir, storeDir: ".orca" }, () =>
       Promise.reject(new Error("a driver: claude-agent-sdk agent was opened over ACP")),
     )({
-      host: host ?? new LocalHost({ id: "local", type: "local" }),
+      host: host ?? new factory.LocalHost({ id: "local", type: "local" }),
       agent: path.agent(world, extraEnv, command),
       cwd: world.workspace,
       ...(answerer ? { askPermission: answerer } : {}),
       onPermission: ({ toolCallId, decision }) => {
         if (toolCallId) world.orcaRecords.set(toolCallId, decision);
       },
-      logger: silentLogger,
+      logger: factory.silentLogger,
     });
   };
 

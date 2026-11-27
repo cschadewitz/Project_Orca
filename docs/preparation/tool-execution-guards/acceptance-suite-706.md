@@ -84,6 +84,21 @@ receipts share one driver (`PIN_SHAPES` in `check-support-matrix.js`), so a rece
 Claude route never backs the other's row, and an SDK receipt must also show that the session
 loaded no Claude settings and ran Claude's own check in its default mode.
 
+Its installed receipt (`tools/test/enforcement-installed-claude-sdk-1128.test.js`, run by
+`claude-sdk-acceptance.yml`, kept unsigned) binds what ran, each from the run itself. The
+daemon's session factory, the bridge it opens and the Agent SDK it drives are bundled into one
+file (`installed/claude-sdk-factory.js`, built by `childBundle`); the run imports that file and
+opens every session through it, and `bridgeSha256` is its digest. It is the code the run
+exercised, built from the receipt's commit, not the bytes of a release's `orca-daemon.mjs`. The
+Claude Code image is hashed from the running process (`/proc/<pid>/exe`), and the setting
+sources and permission mode are read from that process's command line, where the SDK passed
+them. The receipt shows the row's unsupported routes refused (an SSH host, a Claude Code other
+than the pinned image) and runs live, through `claude-sdk-connected` (the route's
+`installed.live`), every case that runner makes and observes. The others (A02, A04, B01, F05,
+P03) are listed under `notRun` and run on `claude-sdk-hook` in the suite; the route has no
+installed diagnostics yet, so a tier B claim waits on them and on the lifecycle checks
+(#1129). Signing the receipt in `guard-receipts.yml` and recording it come next (#1128).
+
 ## The connected proof
 
 `claude-connected` runs a real Claude Code (the pinned pair in `CLAUDE_HOOK_VERIFIED_PAIRS`)
