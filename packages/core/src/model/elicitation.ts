@@ -96,6 +96,9 @@ export const ElicitationFormSchema = z
   })
   .refine((form) => new Set(form.fields.map((f) => f.key)).size === form.fields.length, {
     message: "field keys must be unique",
+  })
+  .refine((form) => !form.fields.some((f) => f.key in Object.prototype), {
+    message: "a field key is a name ORCA reserves",
   });
 export type ElicitationForm = z.infer<typeof ElicitationFormSchema>;
 
@@ -138,7 +141,8 @@ export function elicitationForm(
   if (!isRecord(properties) || Object.keys(properties).length === 0)
     return { refused: "the form has no fields: a confirmation is not a question ORCA answers" };
   // `required` is validated, not filtered: a name ORCA dropped would be a field it let go empty.
-  const listed = requestedSchema.required ?? [];
+  // Absent is "none required"; anything else, null included, must be the list itself.
+  const listed = requestedSchema.required === undefined ? [] : requestedSchema.required;
   if (
     !Array.isArray(listed) ||
     !listed.every((k) => typeof k === "string" && Object.hasOwn(properties, k)) ||
@@ -163,6 +167,9 @@ function elicitationField(
   required: boolean,
 ): { field: ElicitationField } | { refused: string } {
   if (!isRecord(raw)) return { refused: `field '${key}' has no schema` };
+  // A field name is data, never object bookkeeping: a name an object already answers to
+  // (`__proto__`, `constructor`, `toString`, ...) could not round-trip through a plain map.
+  if (key in Object.prototype) return { refused: `field '${key}' has a name ORCA reserves` };
   // A secret is never collected through a question: the answer is recorded in the run's log.
   const meta = isRecord(raw._meta) ? raw._meta : {};
   const codex = isRecord(meta.codex) ? meta.codex : {};
@@ -316,14 +323,19 @@ function choices(raw: Json): ElicitationOption[] | null | undefined {
         ...(text(o.description) !== undefined ? { description: text(o.description)! } : {}),
       });
     }
-    return out;
+    return distinct(out);
   }
   if (Array.isArray(raw.enum)) {
     if (!raw.enum.every((v) => typeof v === "string")) return null;
     const names = Array.isArray(raw.enumNames) ? raw.enumNames : [];
-    return raw.enum.map((value, i) => ({ value, label: text(names[i]) ?? value }));
+    return distinct(raw.enum.map((value, i) => ({ value, label: text(names[i]) ?? value })));
   }
   return undefined;
+}
+
+/** A value offered twice matches two branches of a `oneOf`, which no answer then satisfies. */
+function distinct(options: ElicitationOption[]): ElicitationOption[] | null {
+  return new Set(options.map((o) => o.value)).size === options.length ? options : null;
 }
 
 function refuse(reason: string): never {
@@ -354,9 +366,10 @@ export function parseElicitationAnswer(form: ElicitationForm, answer: string): E
   if (!isRecord(content)) refuse("its content is not a set of fields");
   const byKey = new Map(form.fields.map((f) => [f.key, f]));
   for (const key of Object.keys(content)) if (!byKey.has(key)) refuse(`the form has no field '${key}'`);
-  const out: Record<string, ElicitationValue> = {};
+  // Own properties only, into a map with no prototype: a field name is never inherited bookkeeping.
+  const out: Record<string, ElicitationValue> = Object.create(null) as Record<string, ElicitationValue>;
   for (const field of form.fields) {
-    const value = content[field.key];
+    const value = Object.hasOwn(content, field.key) ? content[field.key] : undefined;
     if (value === undefined || (field.kind === "text" && value === "")) {
       if (field.required) refuse(`'${field.key}' is required`);
       continue;

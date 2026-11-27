@@ -82,7 +82,8 @@ async function askForm(
     "[orca] Your answers go to the agent and are recorded in the run's log. Do not type a password, key or other secret, whatever the question says.\n" +
       `[orca] Answer each field. Leave one empty to skip it if it is optional, or type ${DECLINE_WORD} to decline.\n`,
   );
-  const content: Record<string, ElicitationValue> = {};
+  // No prototype: a field name is data (the form already refuses reserved names).
+  const content = Object.create(null) as Record<string, ElicitationValue>;
   for (const field of form.fields) {
     output.write(`\n${quoted(field.title ?? field.key)}${field.required ? " (required)" : ""}\n`);
     if (field.description) output.write(`${quoted(field.description)}\n`);

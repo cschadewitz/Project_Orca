@@ -95,6 +95,36 @@ describe("elicitationForm", () => {
   });
 
   it.each([
+    ["a repeated oneOf value", { type: "string", oneOf: [{ const: "a" }, { const: "a", title: "A again" }] }],
+    ["a repeated enum value", { type: "string", enum: ["a", "a"] }],
+    ["a repeated list item", { type: "array", items: { anyOf: [{ const: "a" }, { const: "a" }] } }],
+  ])("declines %s: no answer satisfies exactly one branch", (_, field) => {
+    expect(elicitationForm("Q", { properties: { k: field } })).toHaveProperty("refused");
+  });
+
+  it.each(["__proto__", "constructor", "toString", "hasOwnProperty"])(
+    "declines a field named %s: field names are data, not object bookkeeping",
+    (key) => {
+      // JSON.parse makes `__proto__` an own key, as it arrives from an agent.
+      const schema = JSON.parse(`{"properties":{"${key}":{"type":"string"}}}`) as unknown;
+      const out = elicitationForm("Q", schema);
+      expect("refused" in out && out.refused).toContain("reserves");
+      expect(
+        elicitationOf({ elicitation: { message: "Q", fields: [{ key, kind: "text", required: false }] } }),
+      ).toBeUndefined();
+    },
+  );
+
+  it("reads only an answer's own fields, into a map without a prototype", () => {
+    const f = form({ properties: { k: { type: "string" } }, required: ["k"] });
+    // An inherited value is not an answer.
+    expect(() => parseElicitationAnswer(f, JSON.stringify({ action: "accept", content: {} }))).toThrow(/required/);
+    const parsed = parseElicitationAnswer(f, JSON.stringify({ action: "accept", content: { k: "v" } }));
+    expect(parsed.action === "accept" && Object.getPrototypeOf(parsed.content)).toBeNull();
+  });
+
+  it.each([
+    ["an explicit null", null],
     ["a name the form lacks", ["k", "missing"]],
     ["a name that is not text", ["k", 1]],
     ["a repeated name", ["k", "k"]],

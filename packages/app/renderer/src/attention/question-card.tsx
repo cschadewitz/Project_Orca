@@ -93,8 +93,13 @@ export function QuestionCard({ input, form, ...rest }: QuestionCardProps): JSX.E
 
 type Values = Record<string, ElicitationValue | undefined>;
 
+/** Field maps hold field names as data: no prototype, and only their own entries are read. */
+const emptyValues = (): Values => Object.create(null) as Values;
+const own = (values: Values, key: string): ElicitationValue | undefined =>
+  Object.hasOwn(values, key) ? values[key] : undefined;
+
 function initialValues(form: ElicitationForm): Values {
-  const values: Values = {};
+  const values = emptyValues();
   for (const field of form.fields)
     if (field.default !== undefined) values[field.key] = field.kind === "multi" ? [...field.default] : field.default;
   return values;
@@ -103,7 +108,7 @@ function initialValues(form: ElicitationForm): Values {
 /** Why the form cannot be sent yet, for the person: a required field left empty. */
 function missing(form: ElicitationForm, values: Values): string | undefined {
   for (const field of form.fields) {
-    const value = values[field.key];
+    const value = own(values, field.key);
     const empty =
       value === undefined || value === "" || (Array.isArray(value) && value.length === 0) || Number.isNaN(value);
     if (field.required && empty) return `answer "${field.title ?? field.key}" first`;
@@ -125,13 +130,14 @@ function QuestionForm({
   onAnswer: (request: AnswerRequest) => void;
 }): JSX.Element {
   const [values, setValues] = useState<Values>(() => initialValues(form));
-  const set = (key: string, value: ElicitationValue | undefined) => setValues((v) => ({ ...v, [key]: value }));
+  const set = (key: string, value: ElicitationValue | undefined) =>
+    setValues((v) => Object.assign(emptyValues(), v, { [key]: value }));
   const answerBlocked = blocked ?? missing(form, values);
   const send = () => {
     if (answerBlocked !== undefined) return;
-    const content: Record<string, ElicitationValue> = {};
+    const content = emptyValues() as Record<string, ElicitationValue>;
     for (const field of form.fields) {
-      const value = values[field.key];
+      const value = own(values, field.key);
       if (value === undefined || value === "" || (typeof value === "number" && Number.isNaN(value))) continue;
       content[field.key] = value;
     }
@@ -149,7 +155,7 @@ function QuestionForm({
         <Field
           key={field.key}
           field={field}
-          value={values[field.key]}
+          value={own(values, field.key)}
           disabled={blocked !== undefined}
           onChange={(value) => set(field.key, value)}
         />
