@@ -9,6 +9,7 @@ import io
 import json
 import os
 from pathlib import Path
+import shutil
 import sys
 import tempfile
 import unittest
@@ -352,6 +353,19 @@ class ServerSetupTests(unittest.TestCase):
         self.assertIn("process 778", lines[-1]["detail"])
         self.assertNotIn("s3cret", lines[-1]["detail"])
         self.assertNotIn("--token", lines[-1]["detail"])
+
+    def test_inventory_recognises_either_side_of_the_rename(self):
+        # The v0.8.1 bridge: a process of a release after the Orrery rename is still one it did
+        # not make. rename-keep-start: both names on purpose
+        for pid, cmdline in (("781", b"node\0/opt/orrery-daemon.mjs\0serve\0"), ("782", b"orrery\0serve\0")):
+            with self.subTest(cmdline=cmdline):
+                shutil.rmtree(self.proc, ignore_errors=True)
+                (self.proc / pid).mkdir(parents=True)
+                (self.proc / pid / "cmdline").write_bytes(cmdline)
+                code, lines = self.run_setup()
+                self.assertEqual(code, 2)
+                self.assertIn("process " + pid, lines[-1]["detail"])
+        # rename-keep-end
 
     def test_a_rerun_keeps_the_operators_deployment_settings(self):
         self.assertEqual(self.run_setup()[0], 0)

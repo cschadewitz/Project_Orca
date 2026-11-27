@@ -46,13 +46,23 @@ import uuid
 # signature from anything else, or a manifest or archive that does not match, is refused
 # before a single byte of the archive is read. Changing the signer is a reviewed change here.
 BUNDLE_REPOSITORY = "cschadewitz/Project_Orca"
+BUNDLE_PRODUCT = "orca"
+# The Orrery rename bridge (v0.8.1): the repository is renamed, and the releases after it are
+# signed there and named after the new product. For one release either repository and either
+# name is accepted, each exactly as before; v0.10.0 drops the old ones.
+# rename-keep-start: both names, so a server on either side of the rename can update across it
+BUNDLE_REPOSITORIES = tuple(dict.fromkeys((BUNDLE_REPOSITORY, "cschadewitz/Project_Orca", "cschadewitz/Orrery")))
+BUNDLE_PRODUCTS = tuple(dict.fromkeys((BUNDLE_PRODUCT, "orca", "orrery")))
+ENV_PREFIXES = ("ORCA_", "ORRERY_")
+VERSION_FIELDS = ("orcaVersion", "orreryVersion")
+# rename-keep-end
 BUNDLE_SIGNER = f"https://github.com/{BUNDLE_REPOSITORY}/.github/workflows/release-server-bundle.yml@refs/heads/main"
 BUNDLE_ISSUER = "https://token.actions.githubusercontent.com"
 BUNDLE_TRIGGER = "workflow_dispatch"
-BUNDLE_SCHEMA = "orca-server-bundle/1"
+BUNDLE_SCHEMA = f"{BUNDLE_PRODUCT}-server-bundle/1"
 BUNDLE_PLATFORM = "linux-x64"
-BUNDLE_RECORD_RE = (r"<!-- orca-server-run: [0-9]+ sha256:([0-9a-f]{64}) sha256:([0-9a-f]{64})"
-                    r" sha256:([0-9a-f]{64}) -->")
+BUNDLE_RECORD_RE = (r"<!-- (?:" + "|".join(BUNDLE_PRODUCTS) + r")-server-run: [0-9]+ sha256:([0-9a-f]{64})"
+                    r" sha256:([0-9a-f]{64}) sha256:([0-9a-f]{64}) -->")
 # What the managed daemon is told about its own installation, and nothing else is (#879).
 DEPLOYMENT_ENV = ("ORCA_DEPLOYMENT_ADAPTER", "ORCA_DEPLOYMENT_MANIFEST", "ORCA_DEPLOYMENT_RING")
 DEPLOYMENT_RINGS = ("internal", "preview", "stable")
@@ -86,7 +96,8 @@ SOURCE_ENTRY = "packages/cli/dist/main.js"
 # A bundle's runtime and entry are fixed, inside the release; nothing from a manifest or a
 # record can point them anywhere else.
 BUNDLE_NODE = "runtime/bin/node"
-BUNDLE_ENTRY = "orca-daemon.mjs"
+BUNDLE_ENTRY = f"{BUNDLE_PRODUCT}-daemon.mjs"
+BUNDLE_ENTRIES = tuple(f"{product}-daemon.mjs" for product in BUNDLE_PRODUCTS)
 # The update feed's server channel (#877): tools/deploy/feed-server.js writes it; the format is
 # flat `key: value` lines in exactly this order, so it is read here with the standard library.
 SERVER_CHANNEL_FILE = "latest-linux-x64.yml"
@@ -100,6 +111,7 @@ AUTO_UPDATE_KEYS = {"feed", "tokenFile", "interval", "maxDeferralHours", "quietH
 AUTO_UPDATE_STATUS = "auto-update.json"
 AUTO_UPDATE_STOP = "auto-update.stop"     # a local stop: while it exists, nothing is activated
 FEED_STOP_HEADER = "x-orca-feed-stop"     # the feed's servers' stop switch (#878)
+FEED_STOP_HEADERS = tuple(dict.fromkeys((FEED_STOP_HEADER, "x-orca-feed-stop", "x-orrery-feed-stop")))  # rename-keep: either
 AUTO_UPDATE_UNIT = "orca-auto-update"
 
 def run(args, **kwargs):
@@ -265,14 +277,15 @@ def rpc(url, method, params, token_file=None, use_environment=True):
 def metadata(release):
     """The staged release's record. A source stage records an absolute Node outside the
     release and runs the source layout's entry. A bundle stage runs exactly BUNDLE_NODE and
-    BUNDLE_ENTRY inside the release (relative, so the record stays true after the staging
-    directory is renamed into place); any other value is refused, never resolved."""
+    its entry (one of BUNDLE_ENTRIES) inside the release (relative, so the record stays true
+    after the staging directory is renamed into place); any other value is refused, never
+    resolved."""
     result = json.loads((release / ".orca-release.json").read_text())
     if result.get("source") == "bundle":
-        if result.get("node") != BUNDLE_NODE or result.get("entry") != BUNDLE_ENTRY:
+        if result.get("node") != BUNDLE_NODE or result.get("entry") not in BUNDLE_ENTRIES:
             raise RuntimeError("Bundle release record names an unexpected runtime or entry; restage the release")
         result["node"] = str(Path(release) / BUNDLE_NODE)
-        result["entry"] = str(Path(release) / BUNDLE_ENTRY)
+        result["entry"] = str(Path(release) / result["entry"])
         for key in ("node", "entry"):
             if Path(result[key]).is_symlink():
                 raise RuntimeError(f"Bundle {key} is a link; restage the release")
@@ -295,7 +308,8 @@ def verify_hello(hello, meta, pid=None):
     if pid is not None and hello.get("processId") != pid:
         raise RuntimeError("Daemon hello does not belong to the managed process")
     contract = meta["compatibility"]
-    if hello.get("orcaVersion") != meta["version"] or hello.get("protocol") != contract["protocol"]:
+    version = next((hello[field] for field in VERSION_FIELDS if field in hello), None)
+    if version != meta["version"] or hello.get("protocol") != contract["protocol"]:
         raise RuntimeError("Unexpected daemon version or protocol")
     if not set(contract["capabilities"]).issubset(hello.get("capabilities", [])):
         raise RuntimeError("Daemon is missing required capabilities")
@@ -333,9 +347,76 @@ def file_sha256(path):
     return digest.hexdigest()
 
 
-def bundle_names(version):
-    stem = f"orca-server-{version}-{BUNDLE_PLATFORM}"
+def bundle_names(version, product=BUNDLE_PRODUCT):
+    stem = f"{product}-server-{version}-{BUNDLE_PLATFORM}"
     return stem, stem + ".tar.xz", stem + ".manifest.json", stem + ".manifest.json.sigstore.json"
+
+
+def bundle_product(version, present):
+    """The one product (BUNDLE_PRODUCTS) whose three bundle files for VERSION are all present."""
+    found = [product for product in BUNDLE_PRODUCTS if all(present(name) for name in bundle_names(version, product)[1:])]
+    if len(found) != 1:
+        raise RuntimeError(f"Expected exactly one server bundle for v{version}, found {len(found)}")
+    return found[0]
+
+
+def signer(repository):
+    return f"https://github.com/{repository}/.github/workflows/release-server-bundle.yml@refs/heads/main"
+
+
+# rename-keep-start: the admission variable of either product
+def admission_keys(record):
+    """Which admission variables fence the daemon a release RECORD (metadata()) runs, and how.
+
+    - An `orca-daemon.mjs` bundle reads only ORCA_ADMISSION_FILE: ("any", (ORCA,)).
+    - An `orrery-daemon.mjs` bundle reads ORRERY_ADMISSION_FILE, adopting ORCA_ADMISSION_FILE
+      only when the new name is unset (core's adoptLegacyEnv): ("first", (ORRERY, ORCA)).
+    - A source stage runs packages/cli/dist/main.js on both sides of the rename, so its entry
+      proves nothing. One whose recorded version is below 0.9.0 is positively the old
+      generation and reads only ORCA_ADMISSION_FILE. Any other (0.9.0 on, or no readable
+      version) is unidentified, and BOTH variables must be present and agree: ("all", ...).
+    Launchers write the same value under both names, so a correct launch passes every case."""
+    if record.get("source") == "bundle":
+        if Path(record["entry"]).name == "orrery-daemon.mjs":
+            return "first", ("ORRERY_ADMISSION_FILE", "ORCA_ADMISSION_FILE")
+        return "any", ("ORCA_ADMISSION_FILE",)
+    match = re.fullmatch(r"(\d+)\.(\d+)\.\d+(?:-[0-9A-Za-z.-]+)?", str(record.get("version") or ""))
+    if match and (int(match[1]), int(match[2])) < (0, 9):
+        return "any", ("ORCA_ADMISSION_FILE",)
+    return "all", ("ORRERY_ADMISSION_FILE", "ORCA_ADMISSION_FILE")
+
+
+def admission_guarded(record, environment, pending):
+    """True only when the admission variable(s) that fence the daemon RECORD runs (see
+    admission_keys) name exactly PENDING, each exactly once. A variable the daemon ignores never
+    counts as proof, and a disagreeing honored one refuses even when another is right.
+    ENVIRONMENT is /proc/<pid>/environ split on NUL."""
+    mode, keys = admission_keys(record)
+    expected = [str(pending).encode()]
+
+    def values(key):
+        prefix = key.encode() + b"="
+        return [item[len(prefix):] for item in environment if item.startswith(prefix)]
+
+    if mode == "all":
+        return all(values(key) == expected for key in keys)
+    for key in keys:
+        found = values(key)
+        if found:
+            return found == expected
+    return False
+# rename-keep-end
+
+
+def both_env_names(env, names):
+    """The daemon environment this adapter sets, under the old and the new prefix (the rename
+    bridge): either release reads its own, whichever adapter launched it."""
+    for name in names:
+        for prefix in ENV_PREFIXES:
+            if name in env and name.startswith(prefix):
+                for other in ENV_PREFIXES:
+                    env.setdefault(other + name[len(prefix):], env[name])
+    return env
 
 
 def download(url, target, limit, accept=None):
@@ -432,7 +513,9 @@ def parse_server_channel(text):
         raise RuntimeError(f"Server channel is for {value['platform']}, not {BUNDLE_PLATFORM}")
     if not re.fullmatch(r"[0-9a-f]{40}", value["sourceSha"]):
         raise RuntimeError("Server channel names no source commit")
-    names = dict(zip(("archive", "manifest", "signature"), bundle_names(value["version"])[1:]))
+    product = next((p for p in BUNDLE_PRODUCTS if value["archive"] == bundle_names(value["version"], p)[1]),
+                   BUNDLE_PRODUCT)
+    names = dict(zip(("archive", "manifest", "signature"), bundle_names(value["version"], product)[1:]))
     for kind, name in names.items():
         if value[kind] != name:
             raise RuntimeError(f"Server channel {kind} is not {name}")
@@ -517,7 +600,7 @@ def feed_get(url, token, limit, target=None):
     except urllib.error.HTTPError as error:
         if error.code == 404:
             return None
-        if error.code == 503 and (error.headers.get(FEED_STOP_HEADER) or "").strip() == "servers":
+        if error.code == 503 and any((error.headers.get(h) or "").strip() == "servers" for h in FEED_STOP_HEADERS):
             raise FeedStopped("the feed's servers' stop switch is set") from None
         if error.code == 401:
             raise RuntimeError("The feed refused this server's token (401); check autoUpdate.tokenFile") from None
@@ -604,13 +687,22 @@ class BundleSource:
         return path
 
     def fetch_bundle(self, version, directory):
-        """The three published assets of release vVERSION, by its API record."""
-        _, *files = bundle_names(version)
-        url = f"https://api.github.com/repos/{BUNDLE_REPOSITORY}/releases/tags/v{version}"
+        """The three published assets of release vVERSION, by its API record: from the first of
+        BUNDLE_REPOSITORIES that has it (the rename bridge; a renamed repository also redirects)."""
         record_file = directory / "release.json"
-        self.typed_dispatch(download, url, record_file, 4 << 20, accept="application/vnd.github+json")
+        for index, repository in enumerate(BUNDLE_REPOSITORIES):
+            url = f"https://api.github.com/repos/{repository}/releases/tags/v{version}"
+            try:
+                self.typed_dispatch(download, url, record_file, 4 << 20, accept="application/vnd.github+json")
+                break
+            except urllib.error.HTTPError as error:
+                record_file.unlink(missing_ok=True)
+                if error.code != 404 or index == len(BUNDLE_REPOSITORIES) - 1:
+                    raise
         published = json.loads(record_file.read_text())
         record_file.unlink()
+        assets = {asset.get("name"): asset for asset in published.get("assets", [])}
+        _, *files = bundle_names(version, bundle_product(version, assets.__contains__))
         if (published.get("draft") or published.get("prerelease") is not ("-" in version)
                 or published.get("tag_name") != f"v{version}"):
             raise RuntimeError("Target is not a published release of that version")
@@ -618,10 +710,9 @@ class BundleSource:
         # records the three digests in the notes last. That record is the "ready" signal: until
         # it is there (exactly once), the bundle is not complete and is not fetched.
         records = re.findall(BUNDLE_RECORD_RE, published.get("body") or "")
-        if len(records) != 1 or (published.get("body") or "").count("orca-server-run") != 1:
+        if len(records) != 1 or sum((published.get("body") or "").count(p + "-server-run") for p in BUNDLE_PRODUCTS) != 1:
             raise RuntimeError(f"Release v{version} has no complete server bundle yet (no single orca-server-run record); retry later")
         recorded = dict(zip(files, records[0]))
-        assets = {asset.get("name"): asset for asset in published.get("assets", [])}
         for name in files:
             asset = assets.get(name) or {}
             if not asset.get("browser_download_url") or asset.get("digest") != "sha256:" + recorded[name]:
@@ -633,7 +724,8 @@ class BundleSource:
 
     def verify_bundle(self, directory, version):
         """Signature first (pinned signer), then the manifest, then the archive's digest."""
-        _, archive, manifest_name, signature = bundle_names(version)
+        product = bundle_product(version, lambda name: (directory / name).exists())
+        stem, archive, manifest_name, signature = bundle_names(version, product)
         manifest_path, archive_path = directory / manifest_name, directory / archive
         for path in (manifest_path, archive_path, directory / signature):
             if path.is_symlink() or not path.is_file():
@@ -645,28 +737,31 @@ class BundleSource:
         tuf.mkdir(mode=0o700, parents=True, exist_ok=True)
         # Only an offline stage carries a root, and it was checked against the pin when copied.
         trust = pushed_trusted_root(directory) if getattr(self, "pushed", None) is not None else None
-        result = self.typed_process(subprocess.run, [
-            str(cosign), "verify-blob", str(manifest_path),
-            "--bundle", str(directory / signature),
-            "--certificate-identity", BUNDLE_SIGNER,
-            "--certificate-oidc-issuer", BUNDLE_ISSUER,
-            "--certificate-github-workflow-repository", BUNDLE_REPOSITORY,
-            "--certificate-github-workflow-ref", "refs/heads/main",
-            "--certificate-github-workflow-trigger", BUNDLE_TRIGGER,
-            *(["--trusted-root", str(trust)] if trust else []),
-        ], env={**os.environ, "TUF_ROOT": str(tuf), "HOME": str(tuf)}, text=True,
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-        if result.returncode != 0:
+        # Each accepted repository is tried with its own exact identity; none is a pattern.
+        for repository in BUNDLE_REPOSITORIES:
+            result = self.typed_process(subprocess.run, [
+                str(cosign), "verify-blob", str(manifest_path),
+                "--bundle", str(directory / signature),
+                "--certificate-identity", signer(repository),
+                "--certificate-oidc-issuer", BUNDLE_ISSUER,
+                "--certificate-github-workflow-repository", repository,
+                "--certificate-github-workflow-ref", "refs/heads/main",
+                "--certificate-github-workflow-trigger", BUNDLE_TRIGGER,
+                *(["--trusted-root", str(trust)] if trust else []),
+            ], env={**os.environ, "TUF_ROOT": str(tuf), "HOME": str(tuf)}, text=True,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+            if result.returncode == 0:
+                break
+        else:
             detail = result.stdout.strip().splitlines()[-1:] or ["no output"]
             raise RuntimeError(f"Bundle signature refused: {detail[0]}")
         manifest = json.loads(manifest_path.read_text())
-        stem = bundle_names(version)[0]
-        expected = {"schema": BUNDLE_SCHEMA, "name": "orca-server", "version": version,
+        expected = {"schema": f"{product}-server-bundle/1", "name": f"{product}-server", "version": version,
                     "platform": BUNDLE_PLATFORM, "root": stem}
         for key, value in expected.items():
             if manifest.get(key) != value:
                 raise RuntimeError(f"Bundle manifest {key} is {manifest.get(key)!r}, expected {value!r}")
-        if manifest.get("entry") != BUNDLE_ENTRY or (manifest.get("node") or {}).get("path") != BUNDLE_NODE:
+        if manifest.get("entry") != f"{product}-daemon.mjs" or (manifest.get("node") or {}).get("path") != BUNDLE_NODE:
             raise RuntimeError("Bundle manifest names an unexpected runtime or entry")
         if not re.fullmatch(r"[0-9a-f]{40}", str(manifest.get("sourceSha"))):
             raise RuntimeError("Bundle manifest has no source commit")
@@ -831,7 +926,7 @@ class Deployment(BundleSource):
             self.typed_process(run, [node, str(cli), "demo", "--dir", scratch], cwd=stage, env=demo_env)
         for config_key in ("cliConfig", "acpConfig", "daemonConfig"):
             self.typed_process(run, [node, str(cli), "--config", self.config[config_key], "validate"],
-                cwd=self.config["cwd"], env={**env, "ORCA_RELEASE": str(stage)})
+                cwd=self.config["cwd"], env=both_env_names({**env, "ORCA_RELEASE": str(stage)}, ["ORCA_RELEASE"]))
         with tempfile.TemporaryDirectory(prefix="orca-health-") as scratch:
             with socket.socket() as sock:
                 sock.bind(("127.0.0.1", 0))
@@ -874,8 +969,8 @@ class Deployment(BundleSource):
         if local is not None:
             if local.is_file():
                 local = local.parent
-            found = [re.fullmatch(r"orca-server-(" + VERSION_RE + r")-linux-x64\.manifest\.json", p.name)
-                     for p in local.iterdir()]
+            found = [re.fullmatch(r"(?:" + "|".join(BUNDLE_PRODUCTS) + r")-server-(" + VERSION_RE
+                                  + r")-linux-x64\.manifest\.json", p.name) for p in local.iterdir()]
             versions = {match.group(1) for match in found if match}
             if len(versions) != 1:
                 raise RuntimeError(f"Expected one server bundle in {local}")
@@ -893,7 +988,8 @@ class Deployment(BundleSource):
             if local is None:
                 self.fetch_bundle(version, downloads)
             else:
-                for name in bundle_names(version)[1:]:
+                product = bundle_product(version, lambda name: (local / name).is_file() or (local / name).is_symlink())
+                for name in bundle_names(version, product)[1:]:
                     if (local / name).is_symlink() or not (local / name).is_file():
                         raise RuntimeError(f"Bundle file missing: {name}")
                     shutil.copyfile(local / name, downloads / name)
@@ -906,10 +1002,11 @@ class Deployment(BundleSource):
                 manifest = self.verify_bundle(downloads, version)
             finally:
                 self.pushed = None
+            product = manifest["name"][:-len("-server")]
             # The exact signed bytes this release was verified from, kept as its durable receipt:
             # a later reuse (auto-update) must match all three digests, not just the commit.
             receipt = {}
-            for kind, name in zip(("archive", "manifest", "signature"), bundle_names(version)[1:]):
+            for kind, name in zip(("archive", "manifest", "signature"), bundle_names(version, product)[1:]):
                 receipt[kind + "Sha256"] = file_sha256(downloads / name)
                 receipt[kind + "Size"] = (downloads / name).stat().st_size
             if receipt["archiveSha256"] != manifest["archive"]["sha256"]:
@@ -917,22 +1014,23 @@ class Deployment(BundleSource):
             self.typed_dispatch(unpack_bundle, downloads / manifest["archive"]["name"], manifest["root"], stage)
         finally:
             shutil.rmtree(downloads, ignore_errors=True)
-        for relative in (BUNDLE_NODE, BUNDLE_ENTRY):
+        for relative in (BUNDLE_NODE, manifest["entry"]):
             path = stage / relative
             if path.is_symlink() or not path.is_file():
                 raise RuntimeError(f"Bundle has no regular {relative}")
-        inside = json.loads((stage / "orca-server.json").read_text())
+        inside = json.loads((stage / f"{product}-server.json").read_text())
         contract = json.loads((stage / "release-compatibility.json").read_text())
         if (inside.get("version") != version or inside.get("sourceSha") != manifest["sourceSha"]
                 or inside.get("entry") != manifest["entry"] or inside.get("node") != manifest["node"]["path"]
                 or contract != manifest["compatibility"]):
             raise RuntimeError("Unpacked bundle disagrees with its signed manifest")
         record = {"version": version, "sha": manifest["sourceSha"], "node": BUNDLE_NODE,
-                  "entry": BUNDLE_ENTRY, "source": "bundle", "compatibility": contract,
+                  "entry": manifest["entry"], "source": "bundle", "compatibility": contract,
                   "bundle": receipt}
         # The release's own shipped workflows and templates, also for the demo.
-        env = {key: value for key, value in os.environ.items() if key != "ORCA_RELEASE"}
-        return self.validate_stage(stage, release, record, env, demo_env={**env, "ORCA_RELEASE": str(stage)})
+        env = {key: value for key, value in os.environ.items() if key not in (p + "RELEASE" for p in ENV_PREFIXES)}
+        demo_env = both_env_names({**env, "ORCA_RELEASE": str(stage)}, ["ORCA_RELEASE"])
+        return self.validate_stage(stage, release, record, env, demo_env=demo_env)
 
     def inspect_processes(self):
         """Reject unregistered old launchers too; permission failures are never idle."""
@@ -950,16 +1048,16 @@ class Deployment(BundleSource):
                 continue
             except PermissionError:
                 raise RuntimeError("Cannot inspect process activity reliably") from None
-            if re.search(r"(?:orca-daemon|packages/cli/(?:dist|src)/main\.|orca\s+(?:acp|run|program|serve))", args):
+            if re.search(r"(?:(?:orca|orrery)-daemon|packages/cli/(?:dist|src)/main\.|(?:orca|orrery)\s+(?:acp|run|program|serve))", args):  # rename-keep: both
                 raise RuntimeError(f"Unmanaged ORCA process blocks activation: pid {directory.name}")
         process_dir = Path("/proc") / str(service_pid)
         args = (process_dir / "cmdline").read_bytes().split(b"\0")
-        expected = metadata((self.root / "current").resolve())["entry"].encode()
+        record = metadata((self.root / "current").resolve())
+        expected = record["entry"].encode()
         if process_dir.stat().st_uid != os.getuid() or expected not in args or b"serve" not in args:
             raise RuntimeError("Service PID is not the expected managed daemon; inspect the actual launch method")
         environment = (process_dir / "environ").read_bytes().split(b"\0")
-        expected_gate = ("ORCA_ADMISSION_FILE=" + str(self.pending)).encode()
-        if expected_gate not in environment:
+        if not admission_guarded(record, environment, self.pending):
             raise RuntimeError("Managed daemon lacks the persistent admission guard; migrate its launcher first")
         return service_pid
 
@@ -1129,16 +1227,17 @@ class Deployment(BundleSource):
         assertion = self.typed_guard("launch")
         release = (self.root / "current").resolve(strict=True)
         meta = metadata(release)
-        env = {**os.environ, "ORCA_RELEASE": str(release)}
-        env.pop("ORCA_MAINTENANCE_TOKEN", None)
-        env.pop("ORCA_ADMISSION_FILE", None)
-        for name in DEPLOYMENT_ENV:
-            env.pop(name, None)
+        env = dict(os.environ)
+        for prefix in ENV_PREFIXES:
+            for name in ("RELEASE", "MAINTENANCE_TOKEN", "ADMISSION_FILE", *(n[len("ORCA_"):] for n in DEPLOYMENT_ENV)):
+                env.pop(prefix + name, None)
+        env["ORCA_RELEASE"] = str(release)
         if kind == "daemon":
             env["ORCA_ADMISSION_FILE"] = str(self.pending)
             # Reported in the daemon's hello (#879): the app runs this adapter over SSH to update
             # the server. Paths only; nothing installs through the daemon.
             env.update(self.deployment_env())
+        both_env_names(env, ["ORCA_RELEASE", "ORCA_ADMISSION_FILE", *DEPLOYMENT_ENV])
         config = self.config[{"cli": "cliConfig", "acp": "acpConfig", "daemon": "daemonConfig"}[kind]]
         command = [meta["node"], meta["entry"], "--config", config]
         if kind == "daemon":
