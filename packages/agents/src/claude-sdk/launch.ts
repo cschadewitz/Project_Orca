@@ -71,8 +71,8 @@ export interface ClaudeSdkDeliveredSecrets {
 /**
  * The environment the SDK's `claude` runs with: `base` (the daemon's) without any Claude or
  * Anthropic variable and without what `delivered` withholds, then `orcaEnv` (what ORCA itself
- * adds to a session, filtered the same way, so ORCA never sets a variable the agent's config did
- * not), the agent's literal `env`, and last the variables its secret references fill. A secret
+ * adds to a session, filtered the same way and withheld the same way, so ORCA never sets a
+ * variable the agent's config did not), the agent's literal `env`, and last the variables its secret references fill. A secret
  * reference that was not delivered is refused: it never falls back to anything inherited.
  */
 export function claudeSdkEnvironment(
@@ -94,7 +94,8 @@ export function claudeSdkEnvironment(
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(base))
     if (v !== undefined && !isClaudeCredentialVariable(k) && !withheld.has(k.toUpperCase())) env[k] = v;
-  for (const [k, v] of Object.entries(orcaEnv)) if (!isClaudeCredentialVariable(k)) env[k] = v;
+  for (const [k, v] of Object.entries(orcaEnv))
+    if (!isClaudeCredentialVariable(k) && !withheld.has(k.toUpperCase())) env[k] = v;
   const filled: Record<string, string> = {};
   for (const [k, v] of Object.entries(agent.env)) if (isSecretRef(v)) filled[k] = delivered.env[k]!;
   return { ...env, ...literalEnv(agent.env), ...filled };

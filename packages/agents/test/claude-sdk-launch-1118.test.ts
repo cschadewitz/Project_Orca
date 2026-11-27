@@ -147,6 +147,16 @@ describe("environment (#1118)", () => {
     );
     expect(env).toEqual({ PATH: "/usr/bin", FOO: "bar", ANTHROPIC_API_KEY: "the-value" });
   });
+
+  it("withholds a secret's source from what ORCA adds as well, and keeps what the agent sets (#1308 review)", () => {
+    const env = claudeSdkEnvironment(
+      agent({ env: { TOKEN: { secret: "t" }, EXPLICIT_SOURCE: "agent-set" } }),
+      { PATH: "/usr/bin" },
+      { ORCA_SOURCE: "orca-added", orca_source_lower: "orca-added", EXPLICIT_SOURCE: "orca-added", ORCA_OK: "1" },
+      { env: { TOKEN: "delivered" }, withheld: ["ORCA_SOURCE", "ORCA_SOURCE_LOWER", "EXPLICIT_SOURCE"] },
+    );
+    expect(env).toEqual({ PATH: "/usr/bin", ORCA_OK: "1", EXPLICIT_SOURCE: "agent-set", TOKEN: "delivered" });
+  });
 });
 
 describe.runIf(posix)("executable (#1118)", () => {

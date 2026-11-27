@@ -99,6 +99,38 @@ describe.runIf(process.platform !== "win32")("Claude Agent SDK isolation (#1126)
     }
   });
 
+  it("neither checks nor reads a reference only an MCP server uses: this route starts none (#1308 review)", async () => {
+    const asked: unknown[] = [];
+    const reported: unknown[] = [];
+    const session = await factory()({
+      host: new LocalHost({ id: "local", type: "local" }),
+      agent: AgentSpecSchema.parse({
+        id: "claude",
+        driver: "claude-agent-sdk",
+        command: claude,
+        mcpServers: [{ name: "tool", command: "/bin/true", env: { TOOL_KEY: { secret: "claude-key" } } }],
+      }),
+      cwd: dir,
+      // The source is gone: a read would fail the open.
+      secrets: { ...secrets(), "claude-key": { host: "local", provider: "file", path: join(dir, "missing") } },
+      authorizeSecretUse: (u) => {
+        asked.push(...u);
+        return Promise.resolve();
+      },
+      onSecretValues: (v) => reported.push(...v),
+    });
+    try {
+      const env = await childEnv(session);
+      expect(asked).toEqual([]);
+      expect(reported).toEqual([]);
+      expect(env["TOOL_KEY"]).toBeUndefined();
+      // The catalog's withholding still holds.
+      expect(env[SOURCE]).toBeUndefined();
+    } finally {
+      await session.close();
+    }
+  });
+
   it("refuses a secret reference without a server-verified use check, before Claude starts", async () => {
     const marker = join(dir, "started");
     await writeFile(claude, `#!/bin/sh\ntouch "${marker}"\nexit 1\n`);
