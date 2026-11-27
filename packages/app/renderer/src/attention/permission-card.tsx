@@ -50,6 +50,13 @@ export interface PermissionCardProps {
   cardRef?: Ref<HTMLElement> | undefined;
 }
 
+/**
+ * Said beside a permission ask's note (#1122): on a Claude Agent SDK session a decline also
+ * tells Claude the note. Over ACP it only goes to the log, which the first line already says.
+ */
+export const PERMISSION_NOTE_REACH =
+  "If this agent runs through the Claude Agent SDK, declining also sends this note to Claude. Do not put a password, key or other secret in it.";
+
 export function PermissionCard({ input, scopedRuleReview, ...rest }: PermissionCardProps): JSX.Element {
   scopedRuleReview ??=
     input.live && typeof window !== "undefined" && window.orca?.connection
@@ -96,6 +103,8 @@ export function PermissionCard({ input, scopedRuleReview, ...rest }: PermissionC
       }
       command={scopedRuleReview ? undefined : subject}
       judgeNote={!scopedRuleReview && judge ? <JudgeNote note={judge} /> : undefined}
+      // The card cannot tell which way the agent is driven, so it says when the note goes further.
+      noteReach={PERMISSION_NOTE_REACH}
       options={input.options}
       offerAlways
       standing={input.standing}

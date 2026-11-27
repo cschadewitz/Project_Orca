@@ -68,6 +68,11 @@ export interface AnswerCardProps {
   command?: string | undefined;
   /** A note under the command: what a plain-language rule's judge said (#701). Permission asks only. */
   judgeNote?: ReactNode;
+  /**
+   * Where else the note may go, said beside the field before it is sent. A permission ask's
+   * note can reach the agent with a decline (#1122); a workflow gate's never leaves the log.
+   */
+  noteReach?: string | undefined;
   options: readonly GateOption[];
   /** A separate revision form owns this option; it is never an ordinary answer. */
   excludedOptionId?: string | undefined;
@@ -112,6 +117,7 @@ export function AnswerCard({
   subtitle,
   command,
   judgeNote,
+  noteReach,
   options: offeredOptions,
   excludedOptionId,
   refs,
@@ -397,6 +403,7 @@ export function AnswerCard({
                 <Text style="caption">
                   Note — recorded with the answer in the run&rsquo;s log. The run branches on the answer alone.
                 </Text>
+                {noteReach ? <Text style="caption">{noteReach}</Text> : null}
                 <input
                   ref={noteField}
                   className={`orca-input ${textClass("body")}`}

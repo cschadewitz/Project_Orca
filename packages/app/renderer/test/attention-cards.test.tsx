@@ -15,6 +15,7 @@ import type { NotificationMessage, OpenInputView } from "@orca/protocol";
 import type { ConnectionState } from "@orca/design";
 import { type JSX } from "react";
 import { cardName } from "../src/attention/answer-card.js";
+import { PERMISSION_NOTE_REACH } from "../src/attention/permission-card.js";
 import { AttentionSurface } from "../src/attention/attention-surface.js";
 import { useAttention } from "../src/attention/use-attention.js";
 import { harness, installBridge, stubMatchMedia, type Harness } from "./harness.js";
@@ -90,6 +91,8 @@ describe("answering with a note", () => {
     // #238: `human.answered` has no field for it, so the card must not let a person think
     // the workflow will see it.
     expect(within(gate).getByText(/recorded with the answer in the run/)).toBeTruthy();
+    // A gate's note never leaves the log, so the card says nothing about an agent.
+    expect(within(gate).queryByText(/sends this note to Claude/)).toBeNull();
     expect(document.activeElement).toBe(note);
 
     fireEvent.change(note, { target: { value: "checked with the release manager" } });
@@ -113,6 +116,18 @@ describe("answering with a note", () => {
     fireEvent.keyDown(gate, { key: "Enter", code: "Enter", shiftKey: true });
     await waitFor(() => expect(fake.calls.some((c) => c.method === "inputs.answer")).toBe(true));
     expect(fake.calls.find((c) => c.method === "inputs.answer")?.params).toMatchObject({ note: "on the record" });
+  });
+});
+
+describe("a permission ask's note (#1122)", () => {
+  it("says, before it is sent, that a decline can send the note to Claude, and not to put a secret in it", async () => {
+    mount([PERMISSION_ASK]);
+    const card = await screen.findByRole("region", { name: cardName("permission", "Run a shell command?") });
+    card.focus();
+    fireEvent.keyDown(card, { key: "Enter", code: "Enter", shiftKey: true });
+    expect(within(card).getByLabelText("Note")).toBeTruthy();
+    expect(within(card).getByText(PERMISSION_NOTE_REACH)).toBeTruthy();
+    expect(PERMISSION_NOTE_REACH).toMatch(/Claude Agent SDK.*declining also sends this note to Claude.*secret/);
   });
 });
 

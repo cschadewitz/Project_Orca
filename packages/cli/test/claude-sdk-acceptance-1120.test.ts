@@ -17,7 +17,8 @@
  *   Read outside the workspace is asked by Claude Code and answered no; ORCA's in-process hook
  *   (#1123) records one telemetry line for each of those calls;
  * - with a person answering: a Bash they allow runs, once, and the next identical one is asked
- *   again; one they decline does not run and the model is told why; a rule's ask reaches them
+ *   again; one they decline does not run and the model is told why, and a note they write with
+ *   the decline through ORCA's live answer path (#1122) reaches the model with it; a rule's ask reaches them
  *   for a read Claude would have run by itself;
  * - a closed session resumed by its id (#1121) continues its transcript: the model sees the
  *   earlier turn; a required resume of an unknown id is refused as a failed load;
@@ -54,8 +55,19 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { AgentSpecSchema, configOptionValues, type HookTelemetryLine } from "@orca/core";
 import {
+  AgentSpecSchema,
+  configOptionValues,
+  parseWorkflow,
+  TemplateRegistry,
+  WorkflowRegistry,
+  type HookTelemetryLine,
+} from "@orca/core";
+import { ControlModel, ReadModel } from "@orca/daemon";
+import { LiveHumanInput, LocalWorkspaceProvider, Orchestrator } from "@orca/engine";
+import { memoryStores } from "@orca/store";
+import {
+  AgentRegistry,
   CLAUDE_SDK_VERIFIED_PAIRS,
   LocalHost,
   claudeSdkImageDir,
@@ -368,6 +380,72 @@ describe.runIf(CLAUDE !== undefined && process.platform !== "win32")(
         await session.close();
       }
     });
+
+    it("tells the model a person's decline note given through ORCA's live answer path (#1122)", async () => {
+      const marker = join(root, "declined-1122.txt");
+      const note = "orca-1122-note: use make clean instead";
+      const agent = AgentSpecSchema.parse({
+        id: "claude",
+        driver: "claude-agent-sdk",
+        command: CLAUDE,
+        env: {
+          ANTHROPIC_BASE_URL: model.url,
+          ANTHROPIC_API_KEY: "sk-orca-1120-test",
+          CLAUDE_CONFIG_DIR: join(root, "claude-config"),
+          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+        },
+      });
+      const bash = `CALL:${JSON.stringify({ name: "Bash", input: { command: `echo x > ${marker}`, description: "m" } })}`;
+      await mkdir(join(root, "runs-1122"), { recursive: true });
+      const port = new LiveHumanInput("boot");
+      const orc = new Orchestrator({
+        stores: memoryStores(),
+        agents: new AgentRegistry().addHost(new LocalHost({ id: "local", type: "local" })).addAgent(agent),
+        workflows: new WorkflowRegistry().register(
+          parseWorkflow(`
+id: note
+name: note
+start: s
+nodes:
+  s: {type: start}
+  work: {type: agent, agent: claude, prompt: ${JSON.stringify(bash)}}
+  end: {type: end}
+edges: [{from: s, to: work}, {from: work, to: end}]
+`),
+        ),
+        templates: new TemplateRegistry(),
+        sessionFactory: makeSessionFactory({ configDir: join(root, "orca"), storeDir: ".orca" }, () =>
+          Promise.reject(new Error("ACP opened")),
+        ),
+        workspaceProvider: new LocalWorkspaceProvider(join(root, "runs-1122")),
+        liveInput: { port, executionSignal: () => new AbortController().signal },
+      });
+      const reads = new ReadModel({ orchestrator: orc });
+      const control = new ControlModel({ orchestrator: orc, reads });
+      const runId = await orc.startRun({ workflowId: "note" });
+      const done = orc.run(runId);
+      void done.catch(() => undefined);
+      try {
+        await expect.poll(async () => (await reads.inputsList({ runId })).inputs.length, { timeout: 60_000 }).toBe(1);
+        const input = (await reads.inputsList({ runId })).inputs[0]!;
+        const decline = input.options.find((o) => o.destructive)!;
+        const before = model.requests.length;
+        const actor = { principalId: "alice" };
+        await control.answerInput(
+          { runId, requestId: input.id, optionId: decline.id, live: input.live!.target, resume: true, note },
+          actor,
+          { actor, authorize: async () => {} },
+        );
+        expect((await done).run.status).toBe("completed");
+        // The declined command did not run, and the model was told the person's note with the decline.
+        await expect(readFile(marker, "utf8")).rejects.toThrow(/ENOENT/);
+        const told = JSON.stringify(model.requests.slice(before).map((r) => r.messages.at(-1)));
+        expect(told).toContain(`The person declined this tool call. Their note: ${note}`);
+      } finally {
+        port.close();
+        await done.catch(() => undefined);
+      }
+    }, 180_000);
 
     it("resumes a closed session's transcript, and refuses a required resume of an unknown one (#1121)", async () => {
       const first = await open();
