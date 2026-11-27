@@ -114,15 +114,21 @@
   min-height: 0;
 }
 /* The request and claim columns hold id tokens (`ObjectId`), so they are `col-id` wide: a raw
-   id needed 128px and still truncated to the timestamp every id of a session shares. */
+   id needed 128px and still truncated to the timestamp every id of a session shares.
+
+   The title keeps a floor (#1112). At `minmax(0, 1fr)` the fixed columns took the whole width
+   of a 1280px window, the title track came to nothing and its heading was drawn on top of
+   "Request". The slug, status and risk columns give way first, down to what their longest
+   chip or a short slug needs, so the whole table fits a 1280px window beside the rail; below
+   that the table is wider than its pane and scrolls sideways, heading and rows together. */
 .orca-plan__row,
 .orca-plan__head {
   display: grid;
   grid-template-columns:
-    var(--col-classification) var(--col-slug) minmax(0, 1fr)
-    var(--col-id) var(--col-status) var(--col-score) var(--col-risk) var(--col-id);
+    var(--col-classification) minmax(14ch, var(--col-slug)) minmax(14ch, 1fr)
+    var(--col-id) minmax(14ch, var(--col-status)) var(--col-score) minmax(13ch, var(--col-risk)) var(--col-id);
   align-items: center;
-  gap: var(--space-3);
+  gap: var(--space-2);
   padding: 0 var(--space-3);
 }
 .orca-plan__row {
@@ -134,6 +140,13 @@
   width: 100%;
   color: var(--ink-secondary);
   border-bottom: var(--stroke-hairline) solid var(--border-control);
+}
+/* A heading is cut at its end inside its own column, never drawn over the next one. */
+.orca-plan__head > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .orca-plan__row:hover {
   background: var(--surface-hover);
@@ -245,14 +258,32 @@
   min-height: 0;
   overflow: auto;
 }
-.orca-plan__decision-row {
+/* The question is the widest column and the outcome next (#1112): with the due date and the
+   supersedes link at fixed token widths the question came to two characters ("Ho…") while
+   the outcome column beside it stood mostly empty. Every row is a grid of its own, so no track
+   is sized by content: that would line up nothing from one row to the next. */
+.orca-plan__decision-row,
+.orca-plan__decision-head {
   display: grid;
   grid-template-columns:
-    var(--col-status) var(--col-slug) minmax(0, 1fr)
-    var(--col-request) var(--col-classification) var(--col-claim);
+    15ch minmax(14ch, var(--col-slug)) minmax(24ch, 3fr)
+    16ch minmax(16ch, 2fr) minmax(0, 1fr);
   align-items: center;
   gap: var(--space-3);
   padding: 0 var(--space-3);
+}
+.orca-plan__decision-head {
+  width: 100%;
+  color: var(--ink-secondary);
+  border-bottom: var(--stroke-hairline) solid var(--border-control);
+}
+.orca-plan__decision-head > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.orca-plan__decision-row {
   height: var(--row-h);
   border-bottom: var(--stroke-hairline) solid var(--border-hairline);
   border-left: var(--stroke-rail) solid transparent;

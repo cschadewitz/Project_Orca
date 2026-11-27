@@ -34,6 +34,7 @@ import { useAnnounce } from "../a11y/announce-context.js";
 import { useAppearance } from "../appearance-context.js";
 import { PANE_BOUNDARIES, PANE_IDS } from "../panes.js";
 import { Button, ConfigField, Menu, Text } from "../ui/index.js";
+import { shortcutLabel } from "../keyboard-map.js";
 
 /** The surfaces a density is remembered for — `data-surface`'s ids, in sidebar order. */
 export interface PreferencesSectionProps {
@@ -66,7 +67,11 @@ export function PreferencesSection({ surfaces }: PreferencesSectionProps): JSX.E
 
       {/* No `onShowRaw`: a preference has a key and no document on this screen to show it
           in, and a **raw** button that did nothing would be worse than none. */}
-      <ConfigField label="Theme" path="theme" help="System follows the operating system. ⌘⇧L cycles the three.">
+      <ConfigField
+        label="Theme"
+        path="theme"
+        help={`System follows the operating system. ${shortcutLabel("Mod+Shift+L", window.orca.platform)} cycles the three.`}
+      >
         {(control) => (
           <Menu
             label="Theme"
@@ -87,7 +92,7 @@ export function PreferencesSection({ surfaces }: PreferencesSectionProps): JSX.E
           key={surface.id}
           label={`${surface.label} density`}
           path={`density.${surface.id}`}
-          help="Compact fits more rows on the screen; nothing else changes. ⌘⇧D toggles the focused surface."
+          help={`Compact fits more rows on the screen; nothing else changes. ${shortcutLabel("Mod+Shift+D", window.orca.platform)} toggles the focused surface.`}
         >
           {(control) => (
             <Menu

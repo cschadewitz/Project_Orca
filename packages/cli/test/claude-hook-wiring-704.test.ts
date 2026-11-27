@@ -120,6 +120,16 @@ async function setup(
       }
       return {
         closed,
+        // In Manual mode already, as ORCA runs Claude (claude-mode.ts).
+        configOptions: [
+          {
+            id: "mode",
+            name: "Mode",
+            type: "select",
+            currentValue: "default",
+            options: [{ value: "default", name: "Manual" }],
+          },
+        ],
         close: async () => {
           closedByFactory++;
         },
@@ -363,11 +373,12 @@ describe("installing the hook", () => {
       for (const info of [CLAUDE, { name: "orca-scripted-agent", version: "1.0.0" }, undefined]) {
         const off = await setup(info, choice);
         await off.open();
-        expect(off.seen.options?.sessionMeta).toBeUndefined();
+        // Only the mode pin's note of which agent it is: no metadata reaches the agent.
+        expect(off.seen.meta).toBeUndefined();
       }
       const remote = await setup(CLAUDE, choice);
       await remote.open(new SshHost(SshHostSchema.parse({ id: "box", type: "ssh", host: "box.example" })));
-      expect(remote.seen.options?.sessionMeta).toBeUndefined();
+      expect(remote.seen.meta).toBeUndefined();
     }
   });
 });

@@ -6,7 +6,8 @@
 # interrupted run recovers by itself. Nothing here needs a person or a stored key.
 #
 #   resolve  the release vVERSION exists, targets SOURCE_SHA (a final still a draft, an rc
-#            already published), and SOURCE_SHA is on main. Main's tooling only.
+#            already published), and SOURCE_SHA is on its protected line release/X.Y. Main's
+#            tooling only.
 #   build    builds SOURCE_SHA (its own lockfile and toolchain) and assembles
 #            orca-server-VERSION-linux-x64.tar.xz with tools/deploy/server-bundle.py, plus the
 #            SHA-256 manifest. Read-only token, no OIDC.
@@ -151,9 +152,22 @@ jobs:
              and .archive.name == $a and .archive.sha256 == $d' "$manifest" > /dev/null ||
             { echo "::error::the manifest does not describe $stem.tar.xz at $SHA"; exit 1; }
 
-      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
-        with:
-          cosign-release: v3.1.4
+      # The cosign orca-release.py verifies with (its COSIGN_VERSION and COSIGN_SHA256), fetched
+      # from the cosign release and checked against that digest. No third-party action runs in
+      # the job that holds the OIDC token, and the repository's allowed-actions list needs no entry.
+      - name: Install the pinned cosign
+        env:
+          COSIGN_VERSION: v3.1.4
+          COSIGN_SHA256: 424e2c97d0b45fd7a6b608a87f090f35633f4c23ece5f092d48bba11aaf4bbfa
+        run: |
+          set -euo pipefail
+          bin="$RUNNER_TEMP/cosign-bin"
+          mkdir -p "$bin"
+          curl -fsSL --retry 3 -o "$bin/cosign" \
+            "https://github.com/sigstore/cosign/releases/download/$COSIGN_VERSION/cosign-linux-amd64"
+          echo "$COSIGN_SHA256  $bin/cosign" | sha256sum -c -
+          chmod +x "$bin/cosign"
+          echo "$bin" >> "$GITHUB_PATH"
 
       - name: Sign
         env:
@@ -216,9 +230,34 @@ jobs:
             cliConfig: ($root + "/orca.config.yaml"), daemonConfig: ($root + "/orca.config.yaml"),
             acpConfig: ($root + "/orca.config.yaml"), url: "http://127.0.0.1:6722", service: "orca.service",
             launchAudit: "all-cli-acp-and-daemon-launches-migrated"}' > "$srv/deployment.json"
+          # ORCA's local authority identifies the OS user by uid and name, and a server's service
+          # account always has a name. The staging user is a synthetic, non-root `orca-stage`
+          # with this job's uid and gid, added to copies of the image's own account files and
+          # mounted read-only; nothing comes from the runner's account database.
+          image=python:3.12-slim-bookworm
+          uid=$(id -u)
+          gid=$(id -g)
+          [ "$uid" != 0 ] || { echo "::error::the staging user must not be root"; exit 1; }
+          accounts="$RUNNER_TEMP/accounts"
+          mkdir -p "$accounts"
+          docker run --rm "$image" cat /etc/passwd > "$accounts/passwd"
+          docker run --rm "$image" cat /etc/group > "$accounts/group"
+          if awk -F: -v id="$uid" '$3 == id { found = 1 } END { exit !found }' "$accounts/passwd"; then
+            echo "::error::uid $uid already has an account in $image"
+            exit 1
+          fi
+          echo "orca-stage:x:$uid:$gid:ORCA staging:$srv:/usr/sbin/nologin" >> "$accounts/passwd"
+          awk -F: -v id="$gid" '$3 == id { found = 1 } END { exit !found }' "$accounts/group" ||
+            echo "orca-stage:x:$gid:" >> "$accounts/group"
           # The image has Python 3 and util-linux; it has no gh, git, mise, pnpm or Node.
-          docker run --rm --user "$(id -u):$(id -g)" -e HOME="$srv" -v "$clean:$clean" -w "$srv" \
-            python:3.12-slim-bookworm sh -c '
+          docker run --rm --user "$uid:$gid" -e HOME="$srv" -v "$clean:$clean" -w "$srv" \
+            -v "$accounts/passwd:/etc/passwd:ro" -v "$accounts/group:/etc/group:ro" \
+            "$image" sh -c '
+              name=$(python3 -I -c "import os, pwd; print(pwd.getpwuid(os.getuid()).pw_name)")
+              if [ "$name" != orca-stage ] || [ "$(id -u)" = 0 ]; then
+                echo "staging runs as uid $(id -u) ($name), not the non-root orca-stage" >&2
+                exit 1
+              fi
               for tool in gh git mise pnpm node; do
                 if command -v "$tool" >/dev/null; then echo "clean host has $tool" >&2; exit 1; fi
               done

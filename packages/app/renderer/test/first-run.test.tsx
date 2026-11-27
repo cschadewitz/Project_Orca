@@ -72,7 +72,9 @@ it("requires explicit directory review, create and connect actions, and labels t
   expect(f.firstRun.connect).not.toHaveBeenCalled();
   await act(async () => fireEvent.click(screen.getByRole("button", { name: "Connect selected local workspace" })));
   expect(f.firstRun.connect).toHaveBeenCalledTimes(1);
-  expect(screen.getByText(/The #420 coding task and a real local-agent run require separate/)).toBeTruthy();
+  expect(
+    screen.getByText(/The beta-first-job-v1 coding task and a real local-agent run require separate/),
+  ).toBeTruthy();
 });
 it("keeps the selected review after a refused write and shows the reason main gave", async () => {
   const f = setup();

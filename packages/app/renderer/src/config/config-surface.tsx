@@ -52,6 +52,7 @@ import { DraftBar } from "./draft-bar.js";
 import { PermissionsView } from "./permissions-view.js";
 import { JudgeSetup } from "./judge-setup.js";
 import { PreferencesSection } from "./preferences-section.js";
+import { RemotesSection } from "./remotes-section.js";
 import { StorageSection } from "./storage-section.js";
 import { RawView } from "./raw-view.js";
 import { agentPolicies, buildSections, fieldPaths, patchFrom, placeErrors } from "./config-model.js";
@@ -59,6 +60,7 @@ import { useConfig } from "./config-context.js";
 import { DiagnosticsSection } from "../diagnostics/diagnostics-section.js";
 import "./config.css";
 import { ConfigurationStudioSurface } from "./configuration-studio-surface.js";
+import { NoDaemonView } from "../first-run/no-daemon-view.js";
 
 export interface ConfigSurfaceProps {
   /** Whether the daemon is answering. A screen nobody is updating says so rather than lying. */
@@ -72,11 +74,12 @@ export interface ConfigSurfaceProps {
   open?: ConfigDocument;
   launch?: ReactNode;
   onLaunch?: () => void;
+  onCloseLaunch?: () => void;
 }
 
 type View = "form" | "raw";
 
-export function ConfigSurface({ connection, open, launch, onLaunch }: ConfigSurfaceProps): JSX.Element {
+export function ConfigSurface({ connection, open, launch, onLaunch, onCloseLaunch }: ConfigSurfaceProps): JSX.Element {
   const feed = useConfig();
   if (window.orca.daemonConnection || (feed.state.phase === "ready" && feed.state.data.formSchema !== undefined))
     return (
@@ -84,6 +87,7 @@ export function ConfigSurface({ connection, open, launch, onLaunch }: ConfigSurf
         connection={connection}
         {...(launch ? { launch } : {})}
         {...(onLaunch ? { onLaunch } : {})}
+        {...(onCloseLaunch ? { onCloseLaunch } : {})}
         {...(open ? { open } : {})}
       />
     );
@@ -169,12 +173,7 @@ function LegacyConfigSurface({ connection, open }: ConfigSurfaceProps): JSX.Elem
               action={{ label: "Try again", onClick: feed.reload }}
             />
           ) : (
-            <StateView
-              kind="disconnected"
-              title="No daemon to read the configuration from"
-              body="Start one with orca serve, then try again."
-              action={{ label: "Try again", onClick: feed.reload }}
-            />
+            <NoDaemonView title="No daemon to read the configuration from" onRetry={feed.reload} />
           )}
           <DiagnosticsSection key="diagnostics" />
         </div>
@@ -273,6 +272,7 @@ function LegacyConfigSurface({ connection, open }: ConfigSurfaceProps): JSX.Elem
             autoFocus={open === "permissions"}
           />
 
+          <RemotesSection />
           <StorageSection />
           <PreferencesSection surfaces={SURFACES.map((surface) => ({ id: surface.id, label: surface.label }))} />
 

@@ -6,6 +6,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import re
 import os
 from pathlib import Path
 import platform
@@ -15,6 +16,7 @@ import tarfile
 import tempfile
 import types
 import unittest
+import zipfile
 from unittest.mock import patch
 
 
@@ -103,6 +105,95 @@ class ServerBundleTests(unittest.TestCase):
         self.assertTrue(any(name.startswith(stem + "templates/") for name in members))
         self.assertEqual(self.manifest["compatibility"],
                          json.loads((Path(__file__).parents[2] / "release-compatibility.json").read_text()))
+
+    def test_the_windows_bundle_is_a_deterministic_zip_with_node_exe(self):
+        runtime = self.tmp / "node-win"
+        runtime.mkdir()
+        (runtime / "node.exe").write_bytes(b"MZ")
+        (runtime / "LICENSE").write_text("node licence\n")
+        manifest = bundle.assemble("0.9.0", SHA, runtime / "node.exe", self.tmp / "daemon", self.tmp / "win",
+                                   1700000000, "v24.1.0", "win-x64")
+        again = bundle.assemble("0.9.0", SHA, runtime / "node.exe", self.tmp / "daemon", self.tmp / "win-again",
+                                1700000000, "v24.1.0", "win-x64")
+        self.assertEqual(again["archive"]["sha256"], manifest["archive"]["sha256"])
+        self.assertEqual(manifest["platform"], "win-x64")
+        self.assertEqual(manifest["archive"]["name"], "orca-server-0.9.0-win-x64.zip")
+        self.assertEqual(manifest["node"], {"path": "runtime/node.exe", "version": "v24.1.0"})
+        self.assertEqual(manifest["root"], "orca-server-0.9.0-win-x64")
+        self.assertTrue((self.tmp / "win" / "orca-server-0.9.0-win-x64.manifest.json").is_file())
+        stem = "orca-server-0.9.0-win-x64/"
+        with zipfile.ZipFile(self.tmp / "win" / "orca-server-0.9.0-win-x64.zip") as archive:
+            members = {member.filename: member for member in archive.infolist()}
+            inside = json.loads(archive.read(stem + "orca-server.json"))
+            self.assertEqual(archive.read(stem + "runtime/node.exe"), b"MZ")
+            self.assertEqual(archive.read(stem + "runtime/LICENSE"), b"node licence\n")
+        self.assertEqual(inside["node"], "runtime/node.exe")
+        self.assertEqual(inside["platform"], "win-x64")
+        names = list(members)
+        self.assertEqual(names[0], stem)
+        self.assertIn(stem + "runtime/", names)
+        self.assertNotIn(stem + "runtime/bin/node", names)
+        for name in ("orca-daemon.mjs", "native-io-worker.js", "claude-pre-tool-hook.mjs", "scripted-agent/main.js",
+                     "workflows/ai-sdlc.yaml", "release-compatibility.json", "package.json", "LICENSE"):
+            self.assertIn(stem + name, members)
+        self.assertEqual(members[stem + "runtime/node.exe"].external_attr >> 16, 0o100755)
+        self.assertEqual(members[stem + "orca-daemon.mjs"].external_attr >> 16, 0o100644)
+        self.assertTrue(all(m.date_time == (2023, 11, 14, 22, 13, 20) for m in members.values()))
+
+    def test_an_unknown_platform_is_refused(self):
+        with self.assertRaisesRegex(RuntimeError, "platform must be one of"):
+            bundle.assemble("0.9.0", SHA, self.tmp / "node-runtime" / "bin" / "node", self.tmp / "daemon",
+                            self.tmp / "mac", 1700000000, "v24.1.0", "darwin-arm64")
+
+    def pin_root(self, data):
+        """Pin `data` as the one trusted root this release accepts, for the test's length."""
+        (self.files / release.PUSHED_TRUSTED_ROOT).write_bytes(data)
+        patcher = patch.object(release, "TRUSTED_ROOT_SHA256", (hashlib.sha256(data).hexdigest(),))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_an_offline_stage_uses_a_carried_root_this_release_pins(self):
+        # #1234: asked for explicitly, the carried root is checked against the pin and cosign is
+        # told to use it instead of fetching one; the signature is still checked here.
+        self.pin_root(b'{"mediaType": "application/vnd.dev.sigstore.trustedroot+json;version=0.1"}')
+        self.deployment.stage_bundle(str(self.files), offline=True)
+        args = self.cosign_log.read_text().splitlines()
+        self.assertIn("--trusted-root", args)
+        self.assertTrue(args[args.index("--trusted-root") + 1].endswith(release.PUSHED_TRUSTED_ROOT))
+        self.assertIsNone(self.deployment.pushed)
+
+    def test_an_offline_stage_refuses_a_root_this_release_does_not_pin_before_cosign(self):
+        # The right shape is not enough: only the pinned digest is trusted.
+        self.pin_root(b'{"mediaType": "application/vnd.dev.sigstore.trustedroot+json;version=0.1"}')
+        (self.files / release.PUSHED_TRUSTED_ROOT).write_text(
+            json.dumps({"mediaType": "application/vnd.dev.sigstore.trustedroot+json;version=0.1", "tlogs": []}))
+        with self.assertRaisesRegex(RuntimeError, "not one this release trusts"):
+            self.deployment.stage_bundle(str(self.files), offline=True)
+        self.assertFalse(self.cosign_log.exists())
+
+    def test_an_offline_stage_refuses_a_missing_oversized_or_linked_root_before_reading_it(self):
+        with self.assertRaisesRegex(RuntimeError, "Pushed trusted root is missing"):
+            self.deployment.stage_bundle(str(self.files), offline=True)
+        (self.files / release.PUSHED_TRUSTED_ROOT).symlink_to(self.archive())
+        with self.assertRaisesRegex(RuntimeError, "Pushed trusted root is missing"):
+            self.deployment.stage_bundle(str(self.files), offline=True)
+        (self.files / release.PUSHED_TRUSTED_ROOT).unlink()
+        (self.files / release.PUSHED_TRUSTED_ROOT).write_bytes(b" " * (release.TRUSTED_ROOT_MAX + 1))
+        with patch.object(release, "file_sha256", side_effect=AssertionError("read")):
+            with self.assertRaisesRegex(RuntimeError, "Pushed trusted root is missing"):
+                release.pushed_trusted_root(self.files)
+        self.assertFalse(self.cosign_log.exists())
+
+    def test_an_ordinary_local_stage_ignores_a_carried_root_and_cosign(self):
+        # Without the explicit offline opt-in, files beside the bundle change nothing.
+        self.pin_root(b'{"mediaType": "application/vnd.dev.sigstore.trustedroot+json;version=0.1"}')
+        (self.files / "cosign-linux-amd64").write_bytes(b"not the pinned cosign")
+        self.deployment.stage_bundle(str(self.files))
+        self.assertNotIn("--trusted-root", self.cosign_log.read_text().splitlines())
+        self.assertIsNone(self.deployment.pushed)
+
+    def test_the_pinned_root_is_the_one_sigstore_lists_today(self):
+        self.assertTrue(all(re.fullmatch(r"[0-9a-f]{64}", pin) for pin in release.TRUSTED_ROOT_SHA256))
 
     def test_stages_a_verified_bundle_with_relative_runtime(self):
         staged = self.deployment.stage_bundle(str(self.files))
@@ -434,6 +525,56 @@ class CosignPinTests(unittest.TestCase):
             (root / "tools" / f"cosign-{release.COSIGN_VERSION}-{machine}").write_text("not cosign")
             with self.assertRaisesRegex(RuntimeError, "does not match the pinned cosign digest"):
                 deployment.cosign()
+
+
+class PushedCosignTests(unittest.TestCase):
+    """#1234: a host with no internet access takes the pinned cosign the client pushed, by digest."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.source = release.BundleSource(self.tmp / "root")
+        (self.tmp / "root").mkdir()
+        self.pushed = self.tmp / "pushed"
+        self.pushed.mkdir()
+        self.binary = b"#!/bin/sh\necho cosign\n"
+        digest = hashlib.sha256(self.binary).hexdigest()
+        for target, value in ((release.platform, ("machine", lambda: "x86_64")),
+                              (release, ("COSIGN_SHA256", {"x86_64": ("cosign-linux-amd64", digest)}))):
+            patcher = patch.object(target, *value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+        def no_download(*_args, **_kwargs):
+            raise AssertionError("downloaded although cosign was pushed")
+        patcher = patch.object(release, "download", no_download)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_installs_a_pushed_cosign_that_matches_the_pin(self):
+        (self.pushed / "cosign-linux-amd64").write_bytes(self.binary)
+        self.source.pushed = self.pushed
+        path = self.source.cosign()
+        self.assertEqual(path.read_bytes(), self.binary)
+        self.assertEqual(path.stat().st_mode & 0o777, 0o700)
+
+    def test_refuses_a_pushed_cosign_that_does_not_match(self):
+        (self.pushed / "cosign-linux-amd64").write_bytes(b"something else")
+        self.source.pushed = self.pushed
+        with self.assertRaisesRegex(RuntimeError, "Pushed cosign does not match its pinned digest"):
+            self.source.cosign()
+        self.assertEqual(list((self.tmp / "root" / "tools").glob("cosign-*")), [])
+
+    def test_refuses_a_missing_or_symlinked_pushed_cosign_without_trying_the_network(self):
+        # Offline means offline: no download is attempted (`download` here would fail the test).
+        self.source.pushed = self.pushed
+        with self.assertRaisesRegex(RuntimeError, "Pushed cosign is missing"):
+            self.source.cosign()
+        (self.tmp / "elsewhere").write_bytes(self.binary)
+        (self.pushed / "cosign-linux-amd64").symlink_to(self.tmp / "elsewhere")
+        with self.assertRaisesRegex(RuntimeError, "Pushed cosign is missing"):
+            self.source.cosign()
+        self.assertEqual(list((self.tmp / "root" / "tools").glob("cosign-*")), [])
 
 
 if __name__ == "__main__":

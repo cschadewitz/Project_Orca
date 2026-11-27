@@ -1,0 +1,376 @@
+# Build, sign and attach the Windows x64 headless server bundle for a release (#1238, incubating).
+#
+# The Windows counterpart of Release (server bundle), release-server-bundle.yml, from the 0.9
+# release line on. Release (publish) dispatches it for every real release, final or rc, beside
+# the Linux bundle; a reconcile every 6 hours dispatches it again for any release on a version
+# line newer than Latest that has no Windows record, so an interrupted run recovers by itself.
+# It is optional on a release while Windows hosts are incubating: release-attach.sh publishes a
+# final without it, or with all of it and its receipt; an attach interrupted before its record
+# leaves files nothing vouched for, which publishing removes (and only those) before it goes on
+# without the Windows bundle. Nothing here needs
+# a person or a stored key.
+#
+#   resolve  the release vVERSION exists, targets SOURCE_SHA, and SOURCE_SHA is on its protected
+#            line release/X.Y (release-attach.sh server-target with SERVER_PLATFORM=win-x64).
+#   build    builds SOURCE_SHA on Linux exactly as the Linux bundle does, takes Node's own
+#            Windows x64 build of the same Node version (checked against nodejs.org's
+#            SHASUMS256.txt for that version) and assembles orca-server-VERSION-win-x64.zip with
+#            tools/deploy/server-bundle.py --platform win-x64, plus the SHA-256 manifest.
+#   sign     signs the manifest keylessly: cosign with this job's GitHub OIDC identity. Runs
+#            nothing from SOURCE_SHA. The certificate's identity is this file on refs/heads/main,
+#            triggered by workflow_dispatch; a pull request cannot produce it.
+#   verify   on a fresh GitHub-hosted Windows machine, with main's tooling only: the pinned
+#            cosign for Windows (checked against its digest) verifies the signature against this
+#            workflow's identity, the archive must match the signed manifest, Windows' own
+#            Expand-Archive unpacks it, the unpacked bundle must agree with the manifest, and
+#            tools/deploy/server-bundle-smoke.mjs runs it with its own node.exe: version, demo,
+#            validate and a temporary daemon's hello.
+#   attach   uploads the three files to the release by id and then records their digests in its
+#            notes (release-attach.sh server-attach, SERVER_PLATFORM=win-x64), re-reading the
+#            release before every write.
+name: Release (Windows server bundle)
+# Binds the run to one version and commit: release-attach.sh reads it back as part of the
+# bundle's receipt.
+run-name: Release (Windows server bundle) v${{ inputs.version }} at ${{ inputs.source_sha }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version (X.Y.Z or X.Y.Z-rc.N)
+        required: true
+      source_sha:
+        description: The release's commit (40 hex)
+        required: true
+  schedule:
+    - cron: "53 */6 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-server-bundle-windows-${{ inputs.version || 'reconcile' }}
+  cancel-in-progress: false
+
+env:
+  SERVER_PLATFORM: win-x64
+
+jobs:
+  resolve:
+    name: the release this bundle belongs to
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    # Draft releases are only visible to a token that can write them. Nothing is written here.
+    permissions:
+      contents: write
+    outputs:
+      id: ${{ steps.target.outputs.id }}
+      kind: ${{ steps.target.outputs.kind }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Find the release at that commit
+        id: target
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          VERSION: ${{ inputs.version }}
+          SHA: ${{ inputs.source_sha }}
+        run: bash tools/deploy/release-attach.sh server-target "$VERSION" "$SHA" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: build the Windows bundle from the release commit
+    needs: resolve
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+
+      # No dependency cache: this job runs the release commit's code in the default branch's
+      # context, so it must neither read nor write a cache another run could share.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - run: pnpm install --frozen-lockfile
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: 1
+
+      - name: Build
+        run: pnpm exec tsc -b tsconfig.build.json
+
+      - name: Node's Windows x64 build of this Node version
+        id: node
+        run: |
+          set -euo pipefail
+          version=$(node --version)
+          [[ "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::unexpected Node version $version"; exit 1; }
+          dir="$RUNNER_TEMP/node-win"
+          mkdir -p "$dir"
+          name="node-$version-win-x64.zip"
+          curl -fsSL --retry 3 -o "$dir/SHASUMS256.txt" "https://nodejs.org/dist/$version/SHASUMS256.txt"
+          curl -fsSL --retry 3 -o "$dir/$name" "https://nodejs.org/dist/$version/$name"
+          want=$(awk -v n="$name" '$2 == n { print $1 }' "$dir/SHASUMS256.txt")
+          [[ "$want" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::$name is not in SHASUMS256.txt"; exit 1; }
+          echo "$want  $dir/$name" | sha256sum -c -
+          python3 -I -c 'import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])' "$dir/$name" "$dir/unpacked"
+          root="$dir/unpacked/node-$version-win-x64"
+          [[ -f "$root/node.exe" && -f "$root/LICENSE" ]] || { echo "::error::$name has no node.exe and LICENSE"; exit 1; }
+          echo "exe=$root/node.exe" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Assemble the bundle and its manifest
+        env:
+          VERSION: ${{ inputs.version }}
+          SHA: ${{ inputs.source_sha }}
+          NODE_EXE: ${{ steps.node.outputs.exe }}
+          NODE_VERSION: ${{ steps.node.outputs.version }}
+        run: |
+          set -euo pipefail
+          [ "$(git rev-parse HEAD)" = "$SHA" ] || { echo "::error::checked out $(git rev-parse HEAD), not $SHA"; exit 1; }
+          [ "$(node -p 'require("./package.json").version')" = "$VERSION" ] ||
+            { echo "::error::package.json at $SHA is not version $VERSION"; exit 1; }
+          node packages/app/scripts/build-daemon.js --outfile "$RUNNER_TEMP/daemon/orca-daemon.mjs" --server
+          SOURCE_DATE_EPOCH=$(git log -1 --format=%ct HEAD) python3 tools/deploy/server-bundle.py assemble \
+            --platform win-x64 --version "$VERSION" --sha "$SHA" --node "$NODE_EXE" --node-version "$NODE_VERSION" \
+            --daemon-dir "$RUNNER_TEMP/daemon" --out "$RUNNER_TEMP/bundle"
+          ls -l "$RUNNER_TEMP/bundle"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-server-bundle-unsigned
+          path: ${{ runner.temp }}/bundle/
+          if-no-files-found: error
+          retention-days: 7
+
+  sign:
+    name: sign the manifest (keyless, GitHub OIDC)
+    needs: [resolve, build]
+    runs-on: ubuntu-24.04
+    # id-token is job-wide: this job runs nothing from the release commit.
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: windows-server-bundle-unsigned
+          path: bundle
+
+      - name: The manifest describes exactly this archive, version and commit
+        env:
+          VERSION: ${{ inputs.version }}
+          SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          stem="orca-server-$VERSION-win-x64"
+          manifest="bundle/$stem.manifest.json"
+          [ "$(ls bundle | sort | tr '\n' ' ')" = "$stem.manifest.json $stem.zip " ] ||
+            { echo "::error::unexpected files: $(ls bundle)"; exit 1; }
+          jq -e --arg v "$VERSION" --arg s "$SHA" --arg a "$stem.zip" \
+            --arg d "$(sha256sum "bundle/$stem.zip" | cut -d' ' -f1)" \
+            '.schema == "orca-server-bundle/1" and .platform == "win-x64" and .version == $v and .sourceSha == $s
+             and .archive.name == $a and .archive.sha256 == $d' "$manifest" > /dev/null ||
+            { echo "::error::the manifest does not describe $stem.zip at $SHA"; exit 1; }
+
+      # The same pinned cosign the Linux bundle is signed with, fetched from the cosign release
+      # and checked against its digest. No third-party action runs in the job that holds the
+      # OIDC token.
+      - name: Install the pinned cosign
+        env:
+          COSIGN_VERSION: v3.1.4
+          COSIGN_SHA256: 424e2c97d0b45fd7a6b608a87f090f35633f4c23ece5f092d48bba11aaf4bbfa
+        run: |
+          set -euo pipefail
+          bin="$RUNNER_TEMP/cosign-bin"
+          mkdir -p "$bin"
+          curl -fsSL --retry 3 -o "$bin/cosign" \
+            "https://github.com/sigstore/cosign/releases/download/$COSIGN_VERSION/cosign-linux-amd64"
+          echo "$COSIGN_SHA256  $bin/cosign" | sha256sum -c -
+          chmod +x "$bin/cosign"
+          echo "$bin" >> "$GITHUB_PATH"
+
+      - name: Sign
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          manifest="bundle/orca-server-$VERSION-win-x64.manifest.json"
+          cosign sign-blob --yes --bundle "$manifest.sigstore.json" "$manifest"
+          cosign verify-blob "$manifest" --bundle "$manifest.sigstore.json" \
+            --certificate-identity "https://github.com/$GITHUB_REPOSITORY/.github/workflows/release-server-bundle-windows.yml@refs/heads/main" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-server-bundle
+          path: bundle/
+          if-no-files-found: error
+
+  verify:
+    name: verify on a clean Windows host
+    needs: [resolve, sign]
+    runs-on: windows-2025
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    outputs:
+      digests: ${{ steps.receipt.outputs.digests }}
+      receipt: ${{ steps.receipt.outputs.receipt }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: windows-server-bundle
+          path: ${{ runner.temp }}/clean/bundle
+
+      - name: Verify the signature with the pinned cosign for Windows
+        shell: pwsh
+        env:
+          VERSION: ${{ inputs.version }}
+          SHA: ${{ inputs.source_sha }}
+          COSIGN_VERSION: v3.1.4
+          COSIGN_SHA256: cbe953787074611f1334cbf37dc1cf953995bb8c45398eb4fc7bb781d29c1f2a
+        run: |
+          $ErrorActionPreference = "Stop"
+          $bundle = Join-Path $env:RUNNER_TEMP "clean\bundle"
+          $stem = "orca-server-$env:VERSION-win-x64"
+          $names = (Get-ChildItem -LiteralPath $bundle -File | Sort-Object Name | ForEach-Object Name) -join " "
+          if ($names -ne "$stem.manifest.json $stem.manifest.json.sigstore.json $stem.zip") { throw "unexpected files: $names" }
+          $cosign = Join-Path $env:RUNNER_TEMP "cosign.exe"
+          Invoke-WebRequest -UseBasicParsing -OutFile $cosign `
+            "https://github.com/sigstore/cosign/releases/download/$env:COSIGN_VERSION/cosign-windows-amd64.exe"
+          if ((Get-FileHash -Algorithm SHA256 -LiteralPath $cosign).Hash.ToLowerInvariant() -ne $env:COSIGN_SHA256) {
+            throw "cosign-windows-amd64.exe does not match its pinned digest"
+          }
+          $manifest = Join-Path $bundle "$stem.manifest.json"
+          & $cosign verify-blob $manifest --bundle "$manifest.sigstore.json" `
+            --certificate-identity "https://github.com/$env:GITHUB_REPOSITORY/.github/workflows/release-server-bundle-windows.yml@refs/heads/main" `
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com
+          if ($LASTEXITCODE -ne 0) { throw "the manifest's signature is not this workflow's" }
+          # Only the signed manifest is believed from here on.
+          $signed = Get-Content -LiteralPath $manifest -Raw | ConvertFrom-Json
+          if ($signed.schema -ne "orca-server-bundle/1" -or $signed.platform -ne "win-x64" -or $signed.version -ne $env:VERSION -or
+              $signed.sourceSha -ne $env:SHA -or $signed.archive.name -ne "$stem.zip" -or $signed.root -ne $stem -or
+              $signed.entry -ne "orca-daemon.mjs" -or $signed.node.path -ne "runtime/node.exe") {
+            throw "the signed manifest is not for $stem at $env:SHA"
+          }
+          $zip = Join-Path $bundle "$stem.zip"
+          if ((Get-FileHash -Algorithm SHA256 -LiteralPath $zip).Hash.ToLowerInvariant() -ne $signed.archive.sha256) {
+            throw "the archive does not match its signed manifest"
+          }
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: Unpack it with Windows' own tools and run it with its node.exe
+        shell: pwsh
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $bundle = Join-Path $env:RUNNER_TEMP "clean\bundle"
+          $stem = "orca-server-$env:VERSION-win-x64"
+          $signed = Get-Content -LiteralPath (Join-Path $bundle "$stem.manifest.json") -Raw | ConvertFrom-Json
+          $unpacked = Join-Path $env:RUNNER_TEMP "clean\unpacked"
+          Expand-Archive -LiteralPath (Join-Path $bundle "$stem.zip") -DestinationPath $unpacked
+          $top = (Get-ChildItem -LiteralPath $unpacked | ForEach-Object Name) -join " "
+          if ($top -ne $stem) { throw "the archive's top level is '$top', not $stem" }
+          $root = Join-Path $unpacked $stem
+          $inside = Get-Content -LiteralPath (Join-Path $root "orca-server.json") -Raw | ConvertFrom-Json
+          if ($inside.version -ne $env:VERSION -or $inside.sourceSha -ne $signed.sourceSha -or $inside.platform -ne "win-x64" -or
+              $inside.entry -ne $signed.entry -or $inside.node -ne $signed.node.path) {
+            throw "the unpacked bundle disagrees with its signed manifest"
+          }
+          $contract = Get-Content -LiteralPath (Join-Path $root "release-compatibility.json") -Raw | ConvertFrom-Json | ConvertTo-Json -Depth 10 -Compress
+          if ($contract -ne ($signed.compatibility | ConvertTo-Json -Depth 10 -Compress)) {
+            throw "the unpacked compatibility contract is not the signed one"
+          }
+          node tools/deploy/server-bundle-smoke.mjs $root
+          if ($LASTEXITCODE -ne 0) { throw "the bundle does not run" }
+          "Verified and ran $stem on a clean Windows host with its own node.exe." >> $env:GITHUB_STEP_SUMMARY
+
+      # Only after the clean-host check passed: the receipt commits to the release id, version,
+      # commit and the exact digests of the three files this job verified.
+      - name: The receipt for exactly these bytes
+        id: receipt
+        shell: bash
+        env:
+          ID: ${{ needs.resolve.outputs.id }}
+          SHA: ${{ inputs.source_sha }}
+          VERSION: ${{ inputs.version }}
+        run: bash tools/deploy/release-attach.sh server-receipt "$ID" "$SHA" "$VERSION" "$RUNNER_TEMP/clean/bundle" >> "$GITHUB_OUTPUT"
+
+  attach:
+    # The receipt: release-attach.sh publish requires a successful job of exactly this name
+    # whenever the release carries the Windows server bundle.
+    name: "windows server bundle receipt: release ${{ needs.resolve.outputs.id }} v${{ inputs.version }} ${{ inputs.source_sha }} ${{ needs.verify.outputs.receipt }}"
+    needs: [resolve, verify]
+    runs-on: ubuntu-24.04
+    # In the shared draft-writes queue with every other job that rewrites a release's notes, so
+    # this attach and publishing a final never interleave.
+    concurrency:
+      group: release-draft-writes
+      cancel-in-progress: false
+      queue: max
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: windows-server-bundle
+          path: bundle
+
+      - name: Upload and record
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          ID: ${{ needs.resolve.outputs.id }}
+          SHA: ${{ inputs.source_sha }}
+          VERSION: ${{ inputs.version }}
+          VERIFIED: ${{ needs.verify.outputs.digests }}
+        run: |
+          set -euo pipefail
+          # The bytes the clean-host job verified, and nothing else.
+          [ "$(bash tools/deploy/release-attach.sh server-receipt "$ID" "$SHA" "$VERSION" bundle | sed -n 's/^digests=//p')" = "$VERIFIED" ] ||
+            { echo "::error::the files to attach are not the ones the clean-host job verified"; exit 1; }
+          bash tools/deploy/release-attach.sh server-attach "$ID" "$SHA" "$VERSION" "$GITHUB_RUN_ID" bundle
+
+  reconcile:
+    name: dispatch Windows bundles still missing
+    if: github.event_name == 'schedule' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Dispatch the Windows bundle for releases without one
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: bash tools/deploy/release-attach.sh server-reconcile

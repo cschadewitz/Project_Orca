@@ -16,7 +16,8 @@
 import type { JSX, ReactNode } from "react";
 import { ArtifactPanel } from "../artifacts/artifact-panel.js";
 import { useArtifactPanel } from "../artifacts/panel-context.js";
-import { scopeProps } from "../keyboard-map.js";
+import { scopeProps, shortcutLabel } from "../keyboard-map.js";
+import { TOGGLE_PANEL_KEY } from "./use-chrome-shortcuts.js";
 import { Button, StateView, Text, textClass } from "../ui/index.js";
 
 export interface DockedPanelProps {
@@ -37,6 +38,7 @@ export interface DockedPanelProps {
 export function DockedPanel({ onClose, content }: DockedPanelProps): JSX.Element {
   const { target } = useArtifactPanel();
 
+  const closeKey = shortcutLabel(TOGGLE_PANEL_KEY, window.orca.platform);
   return (
     <div className="orca-panel" {...scopeProps("panel")}>
       <div className={`orca-pane__head ${textClass("label-strong")}`}>
@@ -47,9 +49,10 @@ export function DockedPanel({ onClose, content }: DockedPanelProps): JSX.Element
           </Text>
         )}
         <span className="orca-spacer" />
-        <Button tone="ghost" size="sm" onClick={onClose} aria-label="Close panel (⌘\)">
+        {/* The platform's own key names: ⌘\ on macOS, Ctrl+\ elsewhere (#1109). */}
+        <Button tone="ghost" size="sm" onClick={onClose} aria-label={`Close panel (${closeKey})`}>
           <span className={`orca-kbd ${textClass("mono-id")}`} aria-hidden="true">
-            ⌘\
+            {closeKey}
           </span>
         </Button>
       </div>

@@ -14,7 +14,7 @@
  * Tunnels are shared per profile and reference counted, so a reconnect to the profile that
  * is already on screen reuses the open tunnel instead of starting a second ssh.
  */
-import { mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import type { Duplex } from "node:stream";
 import { hostname as osHostname } from "node:os";
 import { join } from "node:path";
@@ -23,6 +23,7 @@ import { ServerPathSchema } from "@orca/protocol";
 import {
   ConnectionProfileSchema,
   CredentialSlots,
+  DEFAULT_SERVER_COMMAND,
   forgetPin,
   tunnelKeyIdentity,
   pinState,
@@ -40,7 +41,28 @@ import { OperatorDiscoverySchema } from "@orca/protocol";
 import { CredentialTransportUnavailable, type DaemonTokenSource } from "../client/auth.js";
 import { DaemonClient, DaemonClientError } from "../client/daemon-client.js";
 import { streamTransport, type StreamTransport } from "../client/stream-transport.js";
-import type { RemoteProfileView } from "../daemon-connection.js";
+import type { HostAgentView, RemoteProfileView } from "../daemon-connection.js";
+import {
+  HOST_AGENTS,
+  hostAgent,
+  hostAgentSettings,
+  hostAgentsProgram,
+  hostAgentStatus,
+  HostAgentRefused,
+  installHostAgent,
+  prepareHostAgent,
+  signInHostAgent,
+  type HostAgentLoginPrompt,
+  type HostAgentPackage,
+} from "@orca/protocol/server-agents";
+import { hostRepositories, RepositoryRefused, type HostRepository } from "@orca/protocol/server-repository";
+
+/** What agent work was checked against when it began (#1236). */
+interface AgentTarget {
+  profile: ConnectionProfile;
+  revision: number;
+  keys: string;
+}
 import { ConnectionRefusal } from "./connection-target.js";
 import {
   confirmationCode,
@@ -49,15 +71,32 @@ import {
   dropDiscovery,
   enrollDiscovered,
   keyFingerprints,
-  managedLauncher,
+  launcherCommand,
   readSetup,
-  setupCommand,
-  setupProgram,
-  SETUP_TIMEOUT_MS,
+  setupInvocation,
   type Discovery,
   type InspectOutcome,
   type SetupOutcome,
 } from "@orca/protocol/server-setup";
+import {
+  AdvertisedPinRefused,
+  readTailnet,
+  resolveTailnetBinding,
+  tailnetEnabled,
+  tailnetHostResolver,
+  tailnetLoginOrigins,
+  writeAdvertisedPin,
+  type ReadTailnetOptions,
+  type TailnetRead,
+} from "@orca/protocol/tailnet";
+import {
+  dropCourier,
+  httpsFetch,
+  prepareCourier,
+  pushCourier,
+  type CourierFetch,
+  type CourierPackage,
+} from "@orca/protocol/server-courier";
 import {
   CredentialRecords,
   CredentialSetupRefusal,
@@ -192,6 +231,8 @@ export interface ServerInspection {
   fingerprints: { server: string[]; jump?: string[] };
   /** The keys are not pinned for this profile yet: confirming enrolls them. */
   firstUse: boolean;
+  /** The keys are the ones the machine's tailnet advertises (#1227): ssh refused any other. */
+  advertised?: true;
   version: string;
   root: string;
   /** The version already set up there, if any (then this verifies and repairs it). */
@@ -222,6 +263,8 @@ export interface RemoteProfilesDeps {
   sshBinary?: string;
   /** Test seam over `new SshTunnel`. */
   tunnel?: (options: SshTunnelOptions) => SshTunnel;
+  /** Test seam (#1236): agent packages instead of the pinned ones. */
+  hostAgentPackages?: Readonly<Record<string, readonly HostAgentPackage[]>>;
   /** Tunnel state changes, for the console. Never carries ssh output. */
   onTunnelState?: (profileId: string, state: TunnelState) => void;
   /** Names this computer in the principal of issued credentials. Default: the OS host name. */
@@ -232,6 +275,15 @@ export interface RemoteProfilesDeps {
   installationId?: string;
   credentialPolicy?: CredentialPolicy;
   now?: () => number;
+  /**
+   * A login is waiting for the person to approve it in a browser (Tailscale SSH check mode,
+   * #1228): show them `url`. The login waits for the approval, up to the tunnel's limit.
+   */
+  onLoginApproval?: (profileId: string, url: string) => void;
+  /** Test seam: how the courier downloads (#1234). Default: HTTPS from this computer. */
+  courierFetch?: CourierFetch;
+  /** Test seam over how the local tailnet is read (`@orca/protocol/tailnet`, #1226). */
+  tailnet?: ReadTailnetOptions;
   /** Test seam: ask the daemon, over the tunnel's streams, whether it accepts `token`. */
   verify?: (connect: () => Duplex, url: string, token: string, principal?: string) => Promise<HelloAnswer>;
 }
@@ -290,6 +342,8 @@ export class RemoteProfiles {
   private readonly removing = new Set<string>();
   /** Profiles whose server is being set up (#881): nothing may connect, edit or remove them meanwhile. */
   private readonly serverSetups = new Set<string>();
+  /** Agent work running on a profile's server (#1236), with the tunnels it has open. */
+  private readonly agentLeases = new Map<string, Set<SshTunnel>>();
   /** The inspection each profile's confirmation was given for (#881): one at a time, used once. */
   private readonly inspections = new Map<
     string,
@@ -417,6 +471,16 @@ export class RemoteProfiles {
       ...(expectKeys !== undefined ? { expectKeys } : {}),
       ...(this.deps.sshBinary ? { sshBinary: this.deps.sshBinary } : {}),
       onState: (state) => this.deps.onTunnelState?.(profile.id, state),
+      // A tailnet profile dials its node's current address, read on every connect (#1226).
+      ...(profile.tailnet ? { resolveHost: tailnetHostResolver(profile.tailnet, this.deps.tailnet) } : {}),
+      // Only a connection to a machine on the tailnet passes an approval page on, and only
+      // from the tailnet's control plane (#1228): any other banner stays the server's text.
+      ...(profile.tailnet && this.deps.onLoginApproval
+        ? {
+            onLoginApproval: (url: string) => this.deps.onLoginApproval?.(profile.id, url),
+            approvalOrigins: tailnetLoginOrigins(),
+          }
+        : {}),
     };
   }
   /**
@@ -541,6 +605,7 @@ export class RemoteProfiles {
       ...(profile.serverCommand ? { serverCommand: profile.serverCommand } : {}),
       ...(profile.serverConfig ? { serverConfig: profile.serverConfig } : {}),
       ...(profile.readOnly ? { readOnly: true as const } : {}),
+      ...(profile.tailnet ? { tailnet: { node: profile.tailnet.node, name: profile.tailnet.name } } : {}),
       hasCredential: this.activeSlot(this.record(profile.id)) !== undefined,
       ...this.credentialView(profile.id),
       ...this.pinView(profile),
@@ -596,11 +661,31 @@ export class RemoteProfiles {
     if (!parsed.success) throw new ConnectionRefusal(parsed.error.issues[0]?.message ?? "Invalid profile");
     const profiles = this.read();
     const { id: requested, ...fields } = parsed.data;
+    if (fields.tailnet) {
+      if (!tailnetEnabled(this.deps.tailnet?.features))
+        throw new ConnectionRefusal("Machines from your tailnet are not available in this build.");
+      if (fields.jump)
+        throw new ConnectionRefusal("A machine on your tailnet is reached directly, without a jump host.");
+    }
     const id = requested ?? profileIdFor(fields.name, new Set(profiles.map((p) => p.id)));
     const existing = profiles.find((p) => p.id === id);
     if (requested && !existing) throw new ConnectionRefusal("That profile no longer exists.");
     if (existing) this.assertIdle(id, "editing");
-    const profile = ConnectionProfileSchema.parse({ ...fields, id });
+    // A server command left empty is the default, saved as such (#1207), except on a profile
+    // that already omits it: one saved before 0.8.1, whose server answers to `orca` and keeps
+    // doing so until someone enters another command.
+    const keepsLegacy = existing !== undefined && existing.serverCommand === undefined;
+    // An edit from a form that does not show the binding keeps it: a tailnet profile never
+    // turns into a typed one by accident (#1226).
+    const tailnet = fields.tailnet ?? existing?.tailnet;
+    if (tailnet && fields.jump)
+      throw new ConnectionRefusal("A machine on your tailnet is reached directly, without a jump host.");
+    const profile = ConnectionProfileSchema.parse({
+      ...fields,
+      ...(tailnet ? { tailnet } : {}),
+      ...(fields.serverCommand === undefined && !keepsLegacy ? { serverCommand: DEFAULT_SERVER_COMMAND } : {}),
+      id,
+    });
     if (existing) {
       const otherServer = serverKey(existing) !== serverKey(profile) || existing.remotePort !== profile.remotePort;
       const otherIssue =
@@ -627,6 +712,7 @@ export class RemoteProfiles {
   private assertIdle(id: string, what: "editing" | "removing" | "importing" | "resetting"): void {
     if (this.removing.has(id)) throw new ConnectionRefusal("That profile is being removed.");
     if (this.serverSetups.has(id)) throw new ConnectionRefusal("That profile's server is being set up.");
+    if (this.agentLeases.has(id)) throw new ConnectionRefusal("An agent action is running on that machine.");
     if (this.tunnels.has(id) || this.setups.has(id)) {
       const verb = {
         editing: "editing",
@@ -718,11 +804,13 @@ export class RemoteProfiles {
     this.serverSetups.add(id);
     let discovery: Discovery;
     try {
+      const advertised = await this.advertisedKeys(profile);
       discovery = await discoverServer({
         base: this.tunnelOptions(profile),
         tunnel: (tunnelOptions) => (this.deps.tunnel ?? ((o) => new SshTunnel(o)))(tunnelOptions),
         version: options.version,
-        program: setupProgram(options.scripts),
+        scripts: options.scripts,
+        ...(advertised ? { advertised: { alias: `orca-${profile.id}`, keys: advertised } } : {}),
       });
     } finally {
       this.serverSetups.delete(id);
@@ -744,6 +832,7 @@ export class RemoteProfiles {
       current,
       version: options.version,
       scope: "install-and-sign-in",
+      ...(discovery.os === "windows" ? { os: discovery.os } : {}),
     });
     this.inspections.set(id, {
       code,
@@ -763,10 +852,12 @@ export class RemoteProfiles {
         account,
         fingerprints: keyFingerprints(discovery.keys),
         firstUse: discovery.firstUse,
+        ...(discovery.advertised ? { advertised: true as const } : {}),
         version: options.version,
         root,
         current,
         scope: "install-and-sign-in",
+        ...(discovery.os === "windows" ? { os: "windows" as const } : {}),
       },
     };
   }
@@ -790,9 +881,21 @@ export class RemoteProfiles {
    */
   async setUpServer(
     id: string,
-    options: { version: string; scripts: string; confirmation: string },
+    options: {
+      version: string;
+      scripts: string;
+      confirmation: string;
+      /**
+       * Carry the signed bundle, cosign and Sigstore's trusted root from this computer instead of
+       * having the server download them (#1234): for a host with no internet access. The server
+       * still verifies the signature. Only with the `tailnet-hosts` flag on.
+       */
+      pushBundle?: boolean;
+    },
   ): Promise<ServerSetupResult> {
     if (this.closed) throw new ConnectionRefusal("The app is closing.");
+    if (options.pushBundle && !tailnetEnabled(this.deps.tailnet?.features))
+      throw new ConnectionRefusal("Setting up a server from this computer's copy is not available in this build.");
     this.assertIdle(id, "editing");
     const profile = this.get(id);
     if (!profile) throw new ConnectionRefusal("That profile no longer exists.");
@@ -810,29 +913,50 @@ export class RemoteProfiles {
       if (pending) dropDiscovery(pending.discovery);
       throw new ConnectionRefusal("That confirmation is not current. Check the server again, then confirm.");
     }
-    let command: string[];
-    let program: string;
+    // Held from here, before anything is awaited, so no agent action (or anything else
+    // `assertIdle` guards) starts while the bundle is fetched; released on every way out.
+    this.serverSetups.add(id);
+    const { os } = pending.discovery;
+    let courier: CourierPackage | undefined;
     try {
-      command = setupCommand(options.version, profile.remotePort, pending);
-      program = setupProgram(options.scripts);
+      // Checked before anything is gathered: the command is built again with the scratch directory.
+      setupInvocation(os, options.scripts, options.version, profile.remotePort, pending);
+      if (options.pushBundle && os === "windows")
+        throw new ConnectionRefusal("Carrying the server bundle to a Windows server is not available yet.");
+      // Everything the server would download, fetched and checked here before it is enrolled.
+      if (options.pushBundle)
+        courier = await prepareCourier({
+          version: options.version,
+          cacheDir: join(this.deps.dir, "courier"),
+          ...(this.deps.courierFetch ? { fetch: this.deps.courierFetch } : {}),
+        });
     } catch (error) {
+      this.serverSetups.delete(id);
       dropDiscovery(pending.discovery);
       throw error;
     }
-    enrollDiscovered(pending.discovery, this.pins(id), profile.jump !== undefined);
-    this.serverSetups.add(id);
     let setup: SetupOutcome;
     try {
+      if (this.revision(id) !== revision || this.closed) {
+        dropDiscovery(pending.discovery);
+        throw new ConnectionRefusal("The profile changed while the server bundle was fetched. Check it again.");
+      }
+      enrollDiscovered(pending.discovery, this.pins(id), profile.jump !== undefined);
       const tunnel = this.newTunnel(profile, true, pending.discovery.keys);
       try {
         await tunnel.open();
-        // Only the setup that was confirmed counts: what the server reports must match it.
-        setup = confirmedResult(readSetup(await tunnel.exec(command, SETUP_TIMEOUT_MS, program)), {
-          version: options.version,
-          port: profile.remotePort,
-          account: pending.account,
-          root: pending.root,
-        });
+        const scratch = courier ? await pushCourier(tunnel, courier) : undefined;
+        try {
+          const run = setupInvocation(os, options.scripts, options.version, profile.remotePort, pending, scratch?.path);
+          // Only the setup that was confirmed counts: what the server reports must match it.
+          setup = confirmedResult(
+            readSetup(await tunnel.exec(run.command, run.timeoutMs, run.input)),
+            { version: options.version, port: profile.remotePort, account: pending.account, root: pending.root },
+            os,
+          );
+        } finally {
+          if (scratch) await dropCourier(tunnel, scratch);
+        }
       } finally {
         await tunnel.close();
       }
@@ -851,7 +975,9 @@ export class RemoteProfiles {
     // server and port (so the verified pins stay). The managed launcher passes the server's
     // config itself, so the profile names none.
     const latest = this.get(id)!;
-    const launcher = managedLauncher(pending.root);
+    const launcher = launcherCommand(pending.root, os);
+    // Inspection refuses a directory no server command can name, so this is never reached.
+    if (launcher === undefined) throw new ConnectionRefusal(`ORCA cannot run a server from ${pending.root} yet.`);
     if (latest.serverCommand !== launcher || latest.serverConfig !== undefined) {
       const { serverConfig: _config, ...rest } = latest;
       this.save({ ...rest, serverCommand: launcher });
@@ -863,6 +989,169 @@ export class RemoteProfiles {
       return { setup, signIn: { ok: true } };
     } catch (error) {
       return { setup, signIn: { ok: false, message: error instanceof Error ? error.message : String(error) } };
+    }
+  }
+
+  /**
+   * The agents on the profile's managed server (#1236): each one this ORCA pins, whether that
+   * exact install is there and whether it is signed in. Over a pinned-only connection; only with
+   * the `tailnet-hosts` flag on.
+   */
+  async hostAgents(id: string, scripts: string): Promise<HostAgentView[]> {
+    return this.agentWork(id, async (target) => {
+      const found = await this.withAgentTunnel(target, (tunnel) => hostAgentStatus(tunnel, hostAgentsProgram(scripts)));
+      return Object.values(HOST_AGENTS).map((agent): HostAgentView => {
+        const status = found.find((item) => item.agent === agent.id);
+        return {
+          agent: agent.id,
+          name: agent.name,
+          version: agent.version,
+          installed: status?.versions.includes(agent.version) ?? false,
+          signedIn: status?.signedIn ?? "unknown",
+          ...(status?.problem ? { problem: status.problem } : {}),
+          signIn: agent.signIn,
+          ...(status?.signInCommand ? { signInCommand: status.signInCommand } : {}),
+          ...(status?.entry ? { entry: status.entry } : {}),
+        };
+      });
+    });
+  }
+
+  /**
+   * The repositories pushes put on the profile's managed server (#1235), each with a checkout a
+   * daemon there can work in. Read over a pinned-only connection, changing nothing; only with
+   * the `tailnet-hosts` flag on.
+   */
+  async hostRepositories(id: string): Promise<HostRepository[]> {
+    return this.agentWork(id, (target) =>
+      this.withAgentTunnel(target, (tunnel) =>
+        hostRepositories(tunnel).catch((error: unknown) => {
+          throw error instanceof RepositoryRefused ? new ConnectionRefusal(error.message) : error;
+        }),
+      ),
+    );
+  }
+
+  /**
+   * Install the agent's pinned packages on the profile's managed server from this computer
+   * (#1236), and return the server config that runs it. Nothing is fetched or cached unless the
+   * profile may take it, and the install goes only to the machine the profile named, with the
+   * host keys it had, when the fetch began.
+   */
+  async installHostAgent(id: string, agentId: string, scripts: string): Promise<{ settings: string }> {
+    const agent = this.knownAgent(agentId);
+    return this.agentWork(id, async (target) => {
+      const program = hostAgentsProgram(scripts);
+      const prepared = await prepareHostAgent(agent.id, {
+        cacheDir: join(this.deps.dir, "courier", "agents"),
+        fetch: this.deps.courierFetch ?? httpsFetch,
+        ...(this.deps.hostAgentPackages?.[agent.id] ? { packages: this.deps.hostAgentPackages[agent.id] } : {}),
+      }).catch((error: unknown) => {
+        throw error instanceof HostAgentRefused ? new ConnectionRefusal(error.message) : error;
+      });
+      try {
+        return await this.withAgentTunnel(target, async (tunnel) => ({
+          settings: hostAgentSettings(await installHostAgent(tunnel, prepared, program)),
+        }));
+      } finally {
+        rmSync(prepared.dir, { recursive: true, force: true });
+      }
+    });
+  }
+
+  /**
+   * Sign the agent in on the profile's managed server with its own device code (#1236).
+   * `onPrompt` gets the sign-in page and code to show; the credential stays on the server.
+   * `signal` ends the sign-in there.
+   */
+  async signInHostAgent(
+    id: string,
+    agentId: string,
+    scripts: string,
+    onPrompt: (prompt: HostAgentLoginPrompt) => void,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const agent = this.signInOffered(agentId);
+    await this.agentWork(id, (target) =>
+      this.withAgentTunnel(target, (tunnel) =>
+        signInHostAgent(
+          (command, onLine, input) => tunnel.execStreaming(command, onLine, input),
+          agent.id,
+          hostAgentsProgram(scripts),
+          onPrompt,
+          undefined,
+          signal,
+        ),
+      ),
+    );
+  }
+
+  /**
+   * The agent, if ORCA offers its sign-in: refused before any connection or prompt for one the
+   * person signs in themselves (Claude Code).
+   */
+  signInOffered(agentId: string) {
+    const agent = this.knownAgent(agentId);
+    if (agent.signIn === "yourself")
+      throw new ConnectionRefusal(`ORCA does not sign ${agent.name} in. Sign it in on that machine yourself.`);
+    return agent;
+  }
+
+  private knownAgent(agentId: string) {
+    try {
+      return hostAgent(agentId);
+    } catch (error) {
+      throw new ConnectionRefusal(error instanceof Error ? error.message : "Unknown agent.");
+    }
+  }
+
+  /**
+   * Agent work on one profile's server, as a lease the profile's lifecycle sees: while it runs,
+   * the profile cannot be edited, removed, reset or set up (`assertIdle`), and a second agent
+   * action on it is refused. Everything is checked before any work: the flag, the profile, a
+   * pinned host key. `work` gets the target as it was then: the profile, its revision and keys.
+   */
+  private async agentWork<T>(id: string, work: (target: AgentTarget) => Promise<T>): Promise<T> {
+    if (this.closed) throw new ConnectionRefusal("The app is closing.");
+    if (!tailnetEnabled(this.deps.tailnet?.features))
+      throw new ConnectionRefusal("Agents on a server are not available in this build.");
+    if (this.removing.has(id)) throw new ConnectionRefusal("That profile is being removed.");
+    if (this.serverSetups.has(id)) throw new ConnectionRefusal("That profile's server is being set up.");
+    if (this.agentLeases.has(id)) throw new ConnectionRefusal("Another agent action is running on that machine.");
+    const profile = this.get(id);
+    if (!profile) throw new ConnectionRefusal("That profile no longer exists.");
+    if (pinState(this.pins(id)) !== "pinned")
+      throw new ConnectionRefusal("Set up the ORCA server on this machine first.");
+    const target: AgentTarget = { profile, revision: this.revision(id), keys: this.hostKeys(profile) };
+    this.agentLeases.set(id, new Set());
+    try {
+      return await work(target);
+    } finally {
+      this.agentLeases.delete(id);
+    }
+  }
+
+  /**
+   * One pinned-only connection for agent work, only to the target as it was when the work began:
+   * the same profile revision, carrying nothing unless its pins vouch for the same host keys.
+   * Closed with the work, or when the app closes.
+   */
+  private async withAgentTunnel<T>(target: AgentTarget, work: (tunnel: SshTunnel) => Promise<T>): Promise<T> {
+    const id = target.profile.id;
+    const lease = this.agentLeases.get(id);
+    if (this.closed || !lease || this.revision(id) !== target.revision || this.hostKeys(target.profile) !== target.keys)
+      throw new ConnectionRefusal("The profile changed while the agent was being prepared. Nothing was installed.");
+    const tunnel = this.newTunnel(target.profile, true, target.keys);
+    lease.add(tunnel);
+    try {
+      await tunnel.open();
+      return await work(tunnel);
+    } catch (error) {
+      if (error instanceof HostAgentRefused) throw new ConnectionRefusal(error.message);
+      throw error;
+    } finally {
+      lease.delete(tunnel);
+      await tunnel.close();
     }
   }
 
@@ -929,6 +1218,7 @@ export class RemoteProfiles {
   forgetHostKey(id: string): void {
     if (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(id)) throw new ConnectionRefusal("Invalid profile");
     if (this.removing.has(id)) throw new ConnectionRefusal("That profile is being removed.");
+    if (this.agentLeases.has(id)) throw new ConnectionRefusal("An agent action is running on that machine.");
     const shared = this.tunnels.get(id);
     if (
       this.setups.has(id) ||
@@ -944,6 +1234,59 @@ export class RemoteProfiles {
     this.forgetPins(id);
     // Another key may be another server: what was approved on the old one is not carried over.
     this.forgetServerUpdater(id);
+  }
+
+  /**
+   * The machines on this computer's tailnet (#1226), for Add a machine and Add profile. Hidden
+   * (`off`, `absent`, …) unless the `tailnet-hosts` flag is on and Tailscale is running here.
+   */
+  tailnetMachines(): Promise<TailnetRead> {
+    return readTailnet(this.deps.tailnet);
+  }
+
+  /**
+   * Pin a tailnet profile's host keys from what its node advertises (#1227), instead of a
+   * fingerprint the person checks by hand. Only into a profile with no pin yet; a node that
+   * advertises none (no Tailscale SSH, a Windows machine) keeps the ordinary confirm flow.
+   * Returns whether it pinned.
+   */
+  async pinFromTailnet(id: string): Promise<boolean> {
+    const profile = this.get(id);
+    if (!profile?.tailnet) throw new ConnectionRefusal("That profile is not a machine on your tailnet.");
+    this.assertIdle(id, "resetting");
+    const read = await this.tailnetMachines();
+    if (read.state !== "running") throw new ConnectionRefusal("Tailscale is not running on this computer.");
+    const resolved = resolveTailnetBinding(read.snapshot, profile.tailnet);
+    if (!resolved.ok) throw new ConnectionRefusal(resolved.message);
+    if (!resolved.peer.sshHostKeys.length) return false;
+    // The profile may have changed or connected while the tailnet was read.
+    this.assertIdle(id, "resetting");
+    if (JSON.stringify(this.get(id)?.tailnet) !== JSON.stringify(profile.tailnet))
+      throw new ConnectionRefusal("That profile changed; try again.");
+    try {
+      // The person asked for this profile to be pinned from the tailnet (Add a machine, #1227).
+      writeAdvertisedPin(this.pins(id), `orca-${id}`, resolved.peer, { source: "tailnet-advertised" });
+    } catch (error) {
+      if (error instanceof AdvertisedPinRefused) throw new ConnectionRefusal(error.message);
+      throw error;
+    }
+    this.bump(id);
+    return true;
+  }
+
+  /**
+   * The host keys a tailnet profile's node advertises (#1227), for an inspection to check the
+   * server against strictly. None for any other profile, or a node that advertises none.
+   */
+  private async advertisedKeys(profile: ConnectionProfile): Promise<string[] | undefined> {
+    if (!profile.tailnet) return undefined;
+    const read = await this.tailnetMachines();
+    if (read.state !== "running") return undefined;
+    const resolved = resolveTailnetBinding(read.snapshot, profile.tailnet);
+    // A machine shared in from another tailnet is vouched for by that tailnet, not yours.
+    return resolved.ok && resolved.peer.sshHostKeys.length && !resolved.peer.sharedIn
+      ? resolved.peer.sshHostKeys
+      : undefined;
   }
 
   /** The host keys the profile's pins vouch for now (server, and jump host). */
@@ -1092,7 +1435,8 @@ export class RemoteProfiles {
     const all = [...this.tunnels.values()];
     this.tunnels.clear();
     for (const shared of all) if (shared.renewal) clearInterval(shared.renewal);
-    await Promise.all(all.map((shared) => shared.tunnel.close()));
+    const agentTunnels = [...this.agentLeases.values()].flatMap((lease) => [...lease]);
+    await Promise.all([...all.map((shared) => shared.tunnel.close()), ...agentTunnels.map((tunnel) => tunnel.close())]);
   }
 
   /** While the tunnel is open, renew its credential when it comes due. */

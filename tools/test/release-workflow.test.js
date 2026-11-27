@@ -407,6 +407,13 @@ it("signs the server bundle only from main, in a job that runs none of the relea
   expect(staging).toContain("python:3.12-slim-bookworm");
   expect(staging).toContain("stage --bundle");
   expect(staging).toContain("for tool in gh git mise pnpm node; do");
+  // The staging user is a synthetic, named, non-root account added to the image's own account
+  // files, never the runner's, and the container checks that its uid resolves to it.
+  expect(staging).toContain('docker run --rm "$image" cat /etc/passwd > "$accounts/passwd"');
+  expect(staging).toContain('echo "orca-stage:x:$uid:$gid:ORCA staging:$srv:/usr/sbin/nologin" >> "$accounts/passwd"');
+  expect(staging).toContain('-v "$accounts/passwd:/etc/passwd:ro" -v "$accounts/group:/etc/group:ro"');
+  expect(staging).not.toContain("-v /etc/passwd");
+  expect(staging).toContain('if [ "$name" != orca-stage ] || [ "$(id -u)" = 0 ]; then');
 });
 
 it("pins the same signer identity in the workflow and the adapter (#876)", () => {
@@ -416,11 +423,15 @@ it("pins the same signer identity in the workflow and the adapter (#876)", () =>
     'BUNDLE_SIGNER = f"https://github.com/{BUNDLE_REPOSITORY}/.github/workflows/release-server-bundle.yml@refs/heads/main"',
   );
   expect(adapter).toContain('BUNDLE_TRIGGER = "workflow_dispatch"');
+  // The signer installs the cosign the adapter verifies with, checked against the same digest.
   const sign = workflow("release-server-bundle.yml").jobs.sign.steps;
-  expect(sign.find((step) => step.uses?.startsWith("sigstore/cosign-installer@")).with).toEqual({
-    "cosign-release": "v3.1.4",
-  });
-  expect(adapter).toContain('COSIGN_VERSION = "v3.1.4"');
+  const install = sign.find((step) => step.name === "Install the pinned cosign");
+  expect(adapter).toContain(`COSIGN_VERSION = "${install.env.COSIGN_VERSION}"`);
+  expect(adapter).toContain(`"x86_64": ("cosign-linux-amd64", "${install.env.COSIGN_SHA256}")`);
+  expect(install.run).toContain("sha256sum -c -");
+  expect(install.run).toContain("/cosign-linux-amd64");
+  // Only GitHub's own actions run while the job holds its OIDC token.
+  for (const step of sign) if (step.uses) expect(step.uses).toMatch(/^actions\//);
 });
 
 it("accepts the signed arm64 installer on a GitHub-hosted arm64 machine, unattended (#889)", () => {
@@ -484,13 +495,14 @@ it("binds each server bundle run to its version and commit (#876)", () => {
   const file = workflow("release-server-bundle.yml");
   expect(file["run-name"]).toBe("Release (server bundle) v${{ inputs.version }} at ${{ inputs.source_sha }}");
   const script = readFileSync("tools/deploy/release-attach.sh", "utf8");
-  expect(script).toContain("|Release (server bundle) v$version at $sha");
+  expect(script).toContain("|$(server_title) v$version at $sha");
+  expect(script).toContain('echo "Release (server bundle)"');
   // The receipt names the jobs exactly as the workflow does.
   for (const job of ["sign", "verify"]) expect(script).toContain(`"${file.jobs[job].name}"`);
   expect(file.jobs.attach.name).toBe(
     "server bundle receipt: release ${{ needs.resolve.outputs.id }} v${{ inputs.version }} ${{ inputs.source_sha }} ${{ needs.verify.outputs.receipt }}",
   );
-  expect(script).toContain('receipt="server bundle receipt: release $id v$version $sha $(receipt_hash');
+  expect(script).toContain('local prefix="server bundle receipt"');
   // The receipt is computed only after the clean-host stage, and the attach uploads only those bytes.
   const steps = file.jobs.verify.steps.map((step) => step.name ?? step.uses);
   expect(steps.indexOf("The receipt for exactly these bytes")).toBeGreaterThan(
@@ -498,6 +510,53 @@ it("binds each server bundle run to its version and commit (#876)", () => {
   );
   expect(file.jobs.attach.needs).toEqual(["resolve", "verify"]);
   expect(file.jobs.attach.steps.at(-1).env.VERIFIED).toBe("${{ needs.verify.outputs.digests }}");
+});
+
+it("binds each Windows server bundle run to its version and commit, separately from Linux (#1238)", () => {
+  const file = workflow("release-server-bundle-windows.yml");
+  expect(file["run-name"]).toBe("Release (Windows server bundle) v${{ inputs.version }} at ${{ inputs.source_sha }}");
+  expect(file.env.SERVER_PLATFORM).toBe("win-x64");
+  const script = readFileSync("tools/deploy/release-attach.sh", "utf8");
+  expect(script).toContain('echo "Release (Windows server bundle)"');
+  expect(script).toContain("echo release-server-bundle-windows.yml");
+  for (const job of ["sign", "verify"]) expect(script).toContain(`"${file.jobs[job].name}"`);
+  expect(file.jobs.verify["runs-on"]).toMatch(/^windows-/);
+  // The build runs the release commit's code in the default branch's context: no shared cache.
+  const node = file.jobs.build.steps.find((step) => step.uses?.startsWith("actions/setup-node@"));
+  expect(node.with["package-manager-cache"]).toBe(false);
+  expect(node.with.cache).toBeUndefined();
+  expect(file.jobs.attach.name).toBe(
+    "windows server bundle receipt: release ${{ needs.resolve.outputs.id }} v${{ inputs.version }} ${{ inputs.source_sha }} ${{ needs.verify.outputs.receipt }}",
+  );
+  expect(script).toContain('prefix="windows server bundle receipt"');
+  // Signed by this workflow's own identity, and verified on Windows against exactly it.
+  const identity = ".github/workflows/release-server-bundle-windows.yml@refs/heads/main";
+  expect(file.jobs.sign.steps.find((step) => step.name === "Sign").run).toContain(identity);
+  const check = file.jobs.verify.steps.find(
+    (step) => step.name === "Verify the signature with the pinned cosign for Windows",
+  );
+  expect(check.run).toContain(identity);
+  expect(check.env.COSIGN_VERSION).toBe(
+    file.jobs.sign.steps.find((step) => step.name === "Install the pinned cosign").env.COSIGN_VERSION,
+  );
+  // The receipt is computed only after the clean-host run, and the attach uploads only those bytes.
+  const steps = file.jobs.verify.steps.map((step) => step.name ?? step.uses);
+  expect(steps.indexOf("The receipt for exactly these bytes")).toBeGreaterThan(
+    steps.indexOf("Unpack it with Windows' own tools and run it with its node.exe"),
+  );
+  expect(file.jobs.attach.needs).toEqual(["resolve", "verify"]);
+  expect(file.jobs.attach.concurrency.group).toBe("release-draft-writes");
+  expect(file.jobs.attach.steps.at(-1).env.VERIFIED).toBe("${{ needs.verify.outputs.digests }}");
+});
+
+it("starts the Windows server bundle with the 0.9 line in the dispatch and in release-attach.sh alike (#1238)", () => {
+  const dispatch = workflow("release-publish.yml").jobs["server-bundle"].steps[1].run;
+  const script = readFileSync("tools/deploy/release-attach.sh", "utf8");
+  const from = script.match(/^WIN_SERVER_FROM=(\S+)$/m)[1];
+  expect(from).toBe("0.9.0");
+  expect(dispatch).toContain(`WIN_SERVER_FROM=${from}`);
+  expect(dispatch.indexOf("WIN_SERVER_FROM=")).toBeLessThan(dispatch.indexOf("gh workflow run"));
+  expect(dispatch).toContain("gh workflow run release-server-bundle-windows.yml");
 });
 
 it("starts the server bundle with the 0.8 line in the dispatch and in release-attach.sh alike (#876)", () => {

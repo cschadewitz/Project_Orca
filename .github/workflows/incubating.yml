@@ -1,0 +1,77 @@
+# Dark code stays tested (#1239, docs/WORKSTREAMS.md). Unfinished work lands on main behind an
+# `incubating` flag (packages/core/src/features.ts) that is off by default, so the ordinary
+# CI run never exercises it. This runs the test suite again with every incubating flag on
+# (`ORCA_INCUBATING=all`), after a typecheck and build (which the flag does not change), so a dark
+# feature cannot rot until its promotion.
+#
+# Nightly, after each push to main or a feature branch, and on dispatch; GitHub-hosted, so it
+# never takes Tyler's runners from the required `check`. With no incubating flag listed it stops
+# after one cheap step. It is not a required check: a failure shows on the run and on main's
+# commit, for the workstream's owner.
+name: Incubating features
+
+on:
+  schedule:
+    - cron: "43 5 * * *"
+  push:
+    branches: [main, "feature/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: incubating-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  incubating:
+    name: tests with every incubating flag on
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+
+      # Node 24 reads the dependency-free registry directly (type stripping).
+      - name: Incubating flags
+        id: flags
+        run: |
+          set -euo pipefail
+          names=$(node --input-type=module -e '
+            const { FEATURES } = await import(process.cwd() + "/packages/core/src/features.ts");
+            console.log(FEATURES.filter((f) => f.stage === "incubating").map((f) => f.name).join(","));
+          ')
+          echo "names=$names" >> "$GITHUB_OUTPUT"
+          if [ -z "$names" ]; then
+            echo "No incubating flags; nothing to run." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Incubating flags on: \`$names\`" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - if: steps.flags.outputs.names != ''
+        run: pnpm install --frozen-lockfile
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: 1
+
+      - name: Typecheck
+        if: steps.flags.outputs.names != ''
+        run: pnpm run typecheck
+
+      - name: Build
+        if: steps.flags.outputs.names != ''
+        run: pnpm run build
+
+      - name: Test with every incubating flag on
+        if: steps.flags.outputs.names != ''
+        env:
+          ORCA_INCUBATING: all
+        run: pnpm exec vitest run --maxWorkers=2

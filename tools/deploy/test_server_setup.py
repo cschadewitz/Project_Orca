@@ -790,12 +790,43 @@ class ServerSetupTests(unittest.TestCase):
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         self.assertEqual(result.returncode, 2)
         self.assertIn("--version takes", result.stderr)
-        # A real run, refused on this test host's platform or systemd, still reads the adapter.
-        result = subprocess.run([sys.executable, "-", "--version", "0.8.0", "--root", str(self.tmp / "srv")],
+        # A real run, refused on this test host's platform or systemd, still reads the adapter. It
+        # stages from an empty local bundle directory: without --bundle it would download the
+        # published release of that version, which made this test slow and network-bound once
+        # v0.8.0 existed.
+        empty = self.tmp / "no-bundle"
+        empty.mkdir()
+        result = subprocess.run([sys.executable, "-", "--version", "0.8.0", "--root", str(self.tmp / "srv"),
+                                 "--bundle", str(empty)],
                                 input=program, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                 env={**os.environ, "HOME": str(self.home)})
         line = json.loads(result.stdout.splitlines()[-1][len("orca-setup: "):])
         self.assertIn(line["result"], ("ok", "refused", "failed"))
+
+
+
+class OfflineBundleTests(unittest.TestCase):
+    """#1234: only an explicit --offline-bundle asks the adapter to use what was carried."""
+
+    def stage_args(self, **options):
+        root = tempfile.TemporaryDirectory()
+        self.addCleanup(root.cleanup)
+        setup = setup_module.Setup(root.name, "0.8.0", 6722, "", **options)
+        setup.manifest.write_text("{}")
+        seen = []
+        with patch.object(setup_module.subprocess, "run", lambda args, **_: seen.append(args)):
+            setup.run_stage(str(options.get("bundle", "0.8.0")), Path(root.name))
+        return seen[0][seen[0].index("stage"):]
+
+    def test_an_ordinary_bundle_directory_is_staged_as_before(self):
+        self.assertEqual(self.stage_args(bundle="/tmp/b"), ["stage", "--bundle", "/tmp/b"])
+
+    def test_an_offline_bundle_says_so(self):
+        self.assertEqual(self.stage_args(bundle="/tmp/b", offline=True), ["stage", "--bundle", "--offline", "/tmp/b"])
+
+    def test_offline_needs_a_bundle(self):
+        with self.assertRaises(SystemExit), redirect_stdout(io.StringIO()), patch("sys.stderr", io.StringIO()):
+            setup_module.main(["--version", "0.8.0", "--offline-bundle", "--adapter", __file__])
 
 
 if __name__ == "__main__":

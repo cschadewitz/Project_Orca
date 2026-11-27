@@ -118,6 +118,7 @@ export function RiskMatrix({ scale, thresholds, appetite, risks, selected, onSel
                       type="button"
                       className={`orca-risk__pin ${textClass("caption")}`}
                       aria-pressed={risk.id === selected}
+                      title={`${risk.key} ${risk.title}`}
                       aria-label={`${risk.key}, ${risk.title}, ${level}, likelihood ${likelihood}, impact ${impact}`}
                       onClick={() => onSelect(risk.id)}
                     >

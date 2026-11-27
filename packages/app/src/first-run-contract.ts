@@ -47,7 +47,12 @@ export type FirstRunStatus =
         checks: FirstRunAgentCheck[];
       };
     }
-  | { state: "selection-required"; reason: string }
+  | {
+      state: "selection-required";
+      reason: string;
+      /** The saved setup still verifies except for a Config save that was never bound for reopening (#1192). */
+      changedConfiguration?: { workspace: string };
+    }
   | { state: "review"; review: FirstRunReview }
   | { state: "prepared"; project: string; workspace: string; sample: FirstRunReview["sample"] };
 export interface FirstRunBridge {
