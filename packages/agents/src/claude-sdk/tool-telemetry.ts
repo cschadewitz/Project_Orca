@@ -8,6 +8,11 @@
  * is kept in memory until the next drain. As with a spool, lines drained before a consumer is
  * attached are dropped, a consumer's failure drops that drain's lines, and `record` never throws,
  * so recording can never change an answer.
+ *
+ * Telemetry is optional, so it never holds a session open: `finish` settles within
+ * `finishTimeoutMs` even while a consumer has not answered. Once it has settled, nothing more
+ * is handed to the consumer, so no later write reaches a closed scope; what was still waiting
+ * is counted as dropped. A consumer call already under way when it settles is its own.
  */
 import { HookTelemetryLineSchema, type HookTelemetryLine } from "@orca/core";
 import {
@@ -23,8 +28,15 @@ export interface InProcessHookTelemetry extends HookTelemetrySource {
   record(line: HookTelemetryLine): void;
 }
 
-export function inProcessHookTelemetry(): InProcessHookTelemetry {
+/** How long `finish` waits for the last lines to be kept before it gives up on them. */
+export const IN_PROCESS_TELEMETRY_FINISH_MS = 2_000;
+
+export function inProcessHookTelemetry(options: { finishTimeoutMs?: number | undefined } = {}): InProcessHookTelemetry {
   let consumer: HookTelemetryConsumer | undefined;
+  /** Set once `finish` has settled: no consumer is called after it. */
+  let closed = false;
+  /** Lines handed to a consumer call that has not answered yet. */
+  let inFlight = 0;
   let pending: HookTelemetryLine[] = [];
   let rejected = 0;
   let dropped = 0;
@@ -39,12 +51,15 @@ export function inProcessHookTelemetry(): InProcessHookTelemetry {
     const lines = pending;
     pending = [];
     if (!lines.length) return out;
-    if (!consumer) return { ...out, dropped: out.dropped + lines.length };
+    if (!consumer || closed) return { ...out, dropped: out.dropped + lines.length };
+    inFlight = lines.length;
     try {
       await consumer(lines);
       return { ...out, accepted: lines.length };
     } catch {
       return { ...out, dropped: out.dropped + lines.length };
+    } finally {
+      inFlight = 0;
     }
   };
   const serialized = () => {
@@ -77,7 +92,25 @@ export function inProcessHookTelemetry(): InProcessHookTelemetry {
     },
     finish() {
       ended = true;
-      return (finished ??= serialized());
+      return (finished ??= (async () => {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const last = serialized();
+        const gaveUp = new Promise<"timeout">((resolve) => {
+          timer = setTimeout(() => resolve("timeout"), options.finishTimeoutMs ?? IN_PROCESS_TELEMETRY_FINISH_MS);
+        });
+        try {
+          const report = await Promise.race([last, gaveUp]);
+          if (report !== "timeout") return report;
+          // Still waiting on the consumer: what was not handed over yet is given up.
+          const left = pending.length + inFlight;
+          pending = [];
+          return { accepted: 0, rejected: 0, dropped: left, refused: "the consumer did not answer in time" };
+        } finally {
+          closed = true;
+          consumer = undefined;
+          if (timer) clearTimeout(timer);
+        }
+      })());
     },
   };
 }

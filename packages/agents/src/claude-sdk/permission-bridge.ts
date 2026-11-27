@@ -54,6 +54,9 @@ import {
 import type { PolicyCall } from "../policy-call.js";
 import { claudeLabel } from "./config-options.js";
 
+/** How many tool uses' workspace records a session keeps; past it the oldest is forgotten. */
+const WORKSPACE_SCOPE_LIMIT = 1024;
+
 /** Searches that stay denied: what they visit is not what their path names. */
 export const CLAUDE_SDK_SEARCH_TOOLS: ReadonlySet<string> = new Set(["Glob", "Grep"]);
 /** Tools that touch nothing outside Claude's own session state. */
@@ -146,8 +149,13 @@ export function claudeSdkPermissionBridge(o: ClaudeSdkPermissionBridgeOptions): 
 } {
   /** Claude's tool uses of ORCA-run MCP tools that ORCA allowed, by tool use id; each is used once. */
   const mcpGrants = new Map<string, McpGrant>();
-  /** Tool uses the hook found running outside the workspace: only a person may allow them. */
-  const outsideWorkspace = new Set<string>();
+  /**
+   * Where the hook found each tool use running, for `canUseTool`: by tool use id, bound to the
+   * turn and the exact input. Only a use the hook saw inside the workspace, in this turn, with
+   * this input, may be allowed by a rule; any other (outside, unknown, forgotten, from another
+   * turn or with other input) is decided by a person only.
+   */
+  const workspaceScope = new Map<string, { turnId: string; input: string; inside: boolean }>();
   const scope: PermissionEvalContext = {
     workspaceCwd: o.cwd,
     ...(o.protectedPaths ? { protectedPaths: o.protectedPaths } : {}),
@@ -237,6 +245,18 @@ export function claudeSdkPermissionBridge(o: ClaudeSdkPermissionBridgeOptions): 
       record(call, toolUseId, "gate:no-turn");
       return gated(deny(CLAUDE_SDK_DENIALS.noTurn), "deny", "no-turn");
     }
+    // Where the call runs is settled before the policy is read, for every call, so whatever the
+    // policy says now or when Claude asks, a call outside the workspace is a person's to allow.
+    // A rule is relative to the workspace: a call running somewhere else is not the call it granted.
+    const roots = [o.cwd, ...(o.additionalDirectories ?? [])];
+    const where = typeof hookInput.cwd === "string" && hookInput.cwd !== "" ? hookInput.cwd : o.cwd;
+    const inside = roots.some((root) => existingDirectoryWithin(where, root));
+    if (toolUseId) {
+      for (const [id, entry] of workspaceScope) if (entry.turnId !== turn.id) workspaceScope.delete(id);
+      // Forgetting the oldest only makes its call a person's to decide.
+      while (workspaceScope.size >= WORKSPACE_SCOPE_LIMIT) workspaceScope.delete(workspaceScope.keys().next().value!);
+      workspaceScope.set(toolUseId, { turnId: turn.id, input: JSON.stringify(hookInput.tool_input ?? null), inside });
+    }
     const seen = { unreadable: false };
     const explained = explainPermission(await policy(seen), call, scope);
     if (o.liveTurn()?.id !== turn.id) {
@@ -260,15 +280,8 @@ export function claudeSdkPermissionBridge(o: ClaudeSdkPermissionBridgeOptions): 
         "ask",
         seen.unreadable ? "sidecar-unreadable" : "policy",
       );
-    // A rule is relative to the workspace: a call running somewhere else is not the call it
-    // granted, so it is asked about, as by the ACP route's hook.
-    const roots = [o.cwd, ...(o.additionalDirectories ?? [])];
-    const where = typeof hookInput.cwd === "string" && hookInput.cwd !== "" ? hookInput.cwd : o.cwd;
-    if (!roots.some((root) => existingDirectoryWithin(where, root))) {
-      if (toolUseId) {
-        if (outsideWorkspace.size >= 1024) outsideWorkspace.clear();
-        outsideWorkspace.add(toolUseId);
-      }
+    // Allowed, but running outside the workspace: asked about, as by the ACP route's hook.
+    if (!inside) {
       record(call, toolUseId, "gate:ask:cwd-outside-workspace");
       return gated(
         askClaude("This tool call runs outside the run's workspace, so no workspace grant covers it."),
@@ -286,6 +299,9 @@ export function claudeSdkPermissionBridge(o: ClaudeSdkPermissionBridgeOptions): 
     } catch (error) {
       o.logger.warn("ORCA could not answer a Claude permission ask; denying it", { error: errorName(error) });
       return { behavior: "deny", message: CLAUDE_SDK_DENIALS.failed, toolUseID: ctx.toolUseID };
+    } finally {
+      // Settled: the hook's record for this use is spent, and a later ask for it is a person's.
+      workspaceScope.delete(ctx.toolUseID);
     }
   };
 
@@ -311,8 +327,14 @@ export function claudeSdkPermissionBridge(o: ClaudeSdkPermissionBridgeOptions): 
       signal: AbortSignal.any([turn.signal, ctx.signal]),
     };
     const live = () => o.liveTurn()?.id === turn.id && !invocation.signal.aborted;
-    // A call the hook found outside the workspace: no rule's allow covers it, a person decides.
-    const personOnly = outsideWorkspace.delete(toolUseId);
+    // Unless the hook saw this very call inside the workspace in this turn, no rule's allow
+    // covers it: a person decides. The record stays until the answer is settled.
+    const where = workspaceScope.get(toolUseId);
+    const personOnly = !(
+      where?.inside &&
+      where.turnId === turn.id &&
+      where.input === JSON.stringify(toolInput ?? null)
+    );
     let resolved: Awaited<ReturnType<typeof resolvePermission>>;
     try {
       const loaded = await policy();

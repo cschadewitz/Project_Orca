@@ -189,6 +189,72 @@ describe("ORCA's native tool hook, in process (#1123)", () => {
     expect(asked).toHaveLength(1);
   });
 
+  describe("a call outside the workspace stays a person's to allow, through Claude's ask (#1316 review)", () => {
+    /** A bridge whose answerer declines and counts, with the policy as `current` says now. */
+    const counted = (current: { policy: ConfiguredPermissionPolicy }, turn = { id: "turn-1" }) => {
+      const asked: string[] = [];
+      const b = bridge({
+        loadPolicy: () =>
+          Promise.resolve({ default: current.policy.default ?? "ask", rules: [...current.policy.rules] } as never),
+        liveTurn: () => ({ id: turn.id, signal: new AbortController().signal }),
+        askPermission: (request) => {
+          asked.push(request.toolCall.title ?? "");
+          return Promise.resolve(request.options.find((o) => o.kind === "reject_once")!.optionId);
+        },
+      });
+      const ask = (id: string, input: Record<string, unknown> = { file_path: "a.ts" }) =>
+        b.canUseTool("Read", input, { signal: new AbortController().signal, toolUseID: id } as never);
+      return { b, asked, ask };
+    };
+    const allowAll: ConfiguredPermissionPolicy = { default: "allow", rules: [] };
+    const askAll: ConfiguredPermissionPolicy = { default: "ask", rules: [] };
+    const read = (id: string, cwd: string, input: Record<string, unknown> = { file_path: "a.ts" }) => ({
+      toolName: "Read",
+      toolInput: input,
+      cwd,
+      toolUseId: id,
+    });
+
+    it("when the policy asked at the hook and allows by the time Claude asks", async () => {
+      const current = { policy: askAll };
+      const { b, asked, ask } = counted(current);
+      expect(await b.hook(read("t1", dir))).toMatchObject({ hookSpecificOutput: { permissionDecision: "ask" } });
+      current.policy = allowAll;
+      expect(await ask("t1")).toMatchObject({ behavior: "deny", message: CLAUDE_SDK_DENIALS.declined });
+      expect(asked).toHaveLength(1);
+    });
+
+    it("when the hook never saw the call, saw other input, or saw it in another turn", async () => {
+      const turn = { id: "turn-1" };
+      const { b, asked, ask } = counted({ policy: allowAll }, turn);
+      expect(await ask("unseen")).toMatchObject({ behavior: "deny" });
+      await b.hook(read("t2", ws, { file_path: "a.ts" }));
+      expect(await ask("t2", { file_path: "b.ts" })).toMatchObject({ behavior: "deny" });
+      await b.hook(read("t3", ws));
+      turn.id = "turn-2";
+      expect(await ask("t3")).toMatchObject({ behavior: "deny" });
+      expect(asked).toHaveLength(3);
+      // The control: seen inside, in this turn, with this input, the rule allows it.
+      await b.hook(read("t4", ws));
+      expect(await ask("t4")).toMatchObject({ behavior: "allow" });
+      expect(asked).toHaveLength(3);
+    });
+
+    it("once its answer is settled, and once the session has forgotten it", async () => {
+      const { b, asked, ask } = counted({ policy: allowAll });
+      await b.hook(read("t1", ws));
+      expect(await ask("t1")).toMatchObject({ behavior: "allow" });
+      // The same use asked again is not covered by the hook's earlier look.
+      expect(await ask("t1")).toMatchObject({ behavior: "deny" });
+      expect(asked).toHaveLength(1);
+      await b.hook(read("old", ws));
+      for (let i = 0; i < 1024; i++) await b.hook(read(`n${i}`, ws));
+      expect(await ask("old")).toMatchObject({ behavior: "deny" });
+      expect(await ask("n1023")).toMatchObject({ behavior: "allow" });
+      expect(asked).toHaveLength(2);
+    });
+  });
+
   it("takes the session's additional directories as the workspace too", async () => {
     const extra = join(dir, "extra");
     await mkdir(extra);
@@ -232,6 +298,30 @@ describe("in-process telemetry, as the engine reads a spool (#1123)", () => {
     t.record({ ...line("A"), latencyMs: -1 });
     t.record(line("B"));
     expect(await t.drain()).toEqual({ accepted: 0, rejected: 1, dropped: 1 });
+  });
+
+  it("settles finish in time with a consumer that never answers, and hands it nothing after", async () => {
+    const t = inProcessHookTelemetry({ finishTimeoutMs: 100 });
+    let calls = 0;
+    t.attach(() => {
+      calls++;
+      return new Promise<void>(() => undefined);
+    });
+    t.record(line("A"));
+    void t.drain(); // the consumer takes A and never answers
+    await new Promise((r) => setTimeout(r, 10));
+    t.record(line("B"));
+    const started = Date.now();
+    expect(await t.finish()).toEqual({
+      accepted: 0,
+      rejected: 0,
+      dropped: 2,
+      refused: "the consumer did not answer in time",
+    });
+    expect(Date.now() - started).toBeLessThan(1_000);
+    t.record(line("C"));
+    await t.drain();
+    expect(calls).toBe(1);
   });
 
   it("cuts a long input to the line limit as the hook program does", async () => {
@@ -281,6 +371,17 @@ describe.runIf(process.platform !== "win32")("telemetry on a session (#1123)", (
       ["Read", "allow", "policy"],
       ["Bash", "ask", "policy"],
     ]);
+  });
+
+  it("closes though the engine's consumer never answers", async () => {
+    const session = await open("keep");
+    session.hookTelemetry!.attach(() => new Promise<void>(() => undefined));
+    await session.prompt(`call ${JSON.stringify({ name: "Read", input: { file_path: join(ws, "src", "a.ts") } })}`);
+    void session.hookTelemetry!.drain();
+    const started = Date.now();
+    await session.close();
+    await session.closed;
+    expect(Date.now() - started).toBeLessThan(8_000);
   });
 
   it("offers none by default", async () => {

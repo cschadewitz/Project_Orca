@@ -176,14 +176,17 @@ hook does:
 
 - a call touching ORCA's own files is denied; then the permission rules decide;
 - a call the rules allow but that runs outside the workspace (and outside
-  `additionalDirectories`) is asked about, and only a person can allow it;
+  `additionalDirectories`) is asked about, and only a person can allow it, whatever the rules
+  say by the time Claude asks. So is any ask ORCA cannot tie to a call the hook saw inside the
+  workspace in the same turn with the same input;
 - the hook never answers `allow`, so Claude's own check still runs;
 - every failure while deciding is an explicit deny, and the hook is installed with
   `onFailure: "block"`, which Claude Code versions without it refuse before the session opens.
 
 With `diagnostics.toolCalls: keep`, the hook records one line per decided call in the ACP
 route's hook format (#1000), which ORCA stores as it does a hook program's lines. Recording
-can never change an answer.
+can never change an answer, and never holds a session open: lines not stored within two
+seconds of the session closing are dropped.
 
 ### MCP servers
 

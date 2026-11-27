@@ -358,6 +358,11 @@ describe("ORCA answers Claude's permission asks (#1122)", () => {
       );
     const ask = (b: ReturnType<typeof claudeSdkPermissionBridge>) =>
       b.canUseTool("WebFetch", fetchCall.input, { signal: new AbortController().signal, toolUseID: "t1" } as never);
+    /** What Claude does: the hook (one policy read, and where the call runs), then its ask. */
+    const hookThenAsk = async (b: ReturnType<typeof claudeSdkPermissionBridge>) => {
+      await hook(b);
+      return ask(b);
+    };
     const failedHook = {
       hookSpecificOutput: { permissionDecision: "deny", permissionDecisionReason: CLAUDE_SDK_DENIALS.failed },
     };
@@ -380,9 +385,9 @@ describe("ORCA answers Claude's permission asks (#1122)", () => {
     it("the read again after an allow, before Claude is told yes", async () => {
       let reads = 0;
       const allowFetch: PermissionPolicy = { default: "ask", rules: [{ match: { kind: "fetch" }, decision: "allow" }] };
-      const b = bridgeWith(() => (++reads === 1 ? Promise.resolve(allowFetch) : Promise.reject(new Error("gone"))));
-      expect(await ask(b)).toMatchObject(failedAsk);
-      expect(reads).toBe(2);
+      const b = bridgeWith(() => (++reads <= 2 ? Promise.resolve(allowFetch) : Promise.reject(new Error("gone"))));
+      expect(await hookThenAsk(b)).toMatchObject(failedAsk);
+      expect(reads).toBe(3);
     });
 
     describe("the policy changing between the verdict and the answer to Claude", () => {
@@ -397,30 +402,30 @@ describe("ORCA answers Claude's permission asks (#1122)", () => {
 
       it("an automatic allow is refused when the policy now asks: nobody answered", async () => {
         const decisions: string[] = [];
-        const b = bridgeWith(sequence(allowFetch, askFetch), {
+        const b = bridgeWith(sequence(allowFetch, allowFetch, askFetch), {
           ...yes,
           onPermission: (i: { decision: string }) => decisions.push(i.decision),
         });
-        expect(await ask(b)).toMatchObject({ behavior: "deny", message: CLAUDE_SDK_DENIALS.askedSince });
+        expect(await hookThenAsk(b)).toMatchObject({ behavior: "deny", message: CLAUDE_SDK_DENIALS.askedSince });
         expect(decisions).toEqual(["allow:ask-since"]);
       });
 
       it("an automatic allow stands when the policy still allows", async () => {
-        const b = bridgeWith(sequence(allowFetch, allowFetch));
-        expect(await ask(b)).toMatchObject({ behavior: "allow" });
+        const b = bridgeWith(sequence(allowFetch, allowFetch, allowFetch));
+        expect(await hookThenAsk(b)).toMatchObject({ behavior: "allow" });
       });
 
       it("a person's allow-once stands while the policy still asks", async () => {
-        const b = bridgeWith(sequence(askFetch, askFetch), yes);
-        expect(await ask(b)).toMatchObject({ behavior: "allow" });
+        const b = bridgeWith(sequence(askFetch, askFetch, askFetch), yes);
+        expect(await hookThenAsk(b)).toMatchObject({ behavior: "allow" });
       });
 
       it("a deny that appears meanwhile wins over an automatic allow and over a person's allow", async () => {
-        expect(await ask(bridgeWith(sequence(allowFetch, denyFetch)))).toMatchObject({
+        expect(await hookThenAsk(bridgeWith(sequence(allowFetch, allowFetch, denyFetch)))).toMatchObject({
           behavior: "deny",
           message: CLAUDE_SDK_DENIALS.changed,
         });
-        expect(await ask(bridgeWith(sequence(askFetch, denyFetch), yes))).toMatchObject({
+        expect(await hookThenAsk(bridgeWith(sequence(askFetch, askFetch, denyFetch), yes))).toMatchObject({
           behavior: "deny",
           message: CLAUDE_SDK_DENIALS.changed,
         });
