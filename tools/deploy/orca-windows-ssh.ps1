@@ -31,7 +31,9 @@ alone: a Windows Firewall profile that is off or does not block inbound connecti
 default, any other enabled rule that allows SSH on another network (it changes no rule it did
 not make, and none a policy manages), a rule by its own name with another scope, or a firewall
 it cannot read in full. It reads the effective policy (ActiveStore: local rules and every
-policy's) and changes local rules only (PersistentStore). A step that fails stops the run
+policy's) and changes local rules only (PersistentStore). It also refuses an sshd_config that
+listens anywhere but port 22, or that it cannot read in full (an Include, say): the firewall it
+sets up is for port 22 alone. A step that fails stops the run
 before sshd is started; run it again to finish.
 
 It needs Tailscale installed and signed in (its "Tailscale" network adapter).
@@ -74,8 +76,7 @@ function ConvertTo-OrcaRule($rule, $ports, $interfaces, $programs, $services) {
     LocalPort = @($ports[$id].LocalPort | ForEach-Object { [string]$_ })
     Interfaces = @($interfaces[$id].InterfaceAlias | ForEach-Object { [string]$_ })
     Program = [string]$programs[$id].Program
-    # An app package's own rule (a Store app's network isolation rule, made for the account that
-    # installed it): only that app's container is let in, never sshd.
+    # An app package's own rule: only that package's app container is let in, never sshd.
     Package = [string]$programs[$id].Package
     Owner = [string]$rule.Owner
     Service = [string]$services[$id].Service
@@ -138,8 +139,9 @@ function Test-OrcaRuleAllowsSsh($rule) {
   if (-not (Test-OrcaPortCovers22 $rule.LocalPort)) { return $false }
   if ($rule.Program -and $rule.Program -ne "Any" -and -not $rule.Program.EndsWith("\sshd.exe", [StringComparison]::OrdinalIgnoreCase)) { return $false }
   if ($rule.Service -and $rule.Service -ne "Any" -and $rule.Service -ne $Service) { return $false }
-  if ($rule.PSObject.Properties["Package"] -and $rule.Package) { return $false }
-  if ($rule.PSObject.Properties["Owner"] -and $rule.Owner) { return $false }
+  # Only a rule constrained to an app package (an app container's SID) is known not to match
+  # sshd, which runs in none. An owner alone proves nothing, and anything else counts.
+  if ($rule.PSObject.Properties["Package"] -and $rule.Package -match '^S-1-15-2-[0-9-]+$') { return $false }
   return -not ($rule.Interfaces.Count -eq 1 -and $rule.Interfaces[0] -eq $Adapter)
 }
 
@@ -175,6 +177,47 @@ function Get-OrcaFirewallState {
   }
 }
 
+function Read-OrcaSshConfig {
+  # The OpenSSH Server's own configuration, as the service reads it; none yet before its first start.
+  $path = Join-Path $env:ProgramData "ssh\sshd_config"
+  if (-not (Test-Path -LiteralPath $path)) { return $null }
+  return [IO.File]::ReadAllText($path)
+}
+
+function Measure-OrcaSshListen($text) {
+  # The ports sshd would listen on, or why that cannot be told here. Only port 22 is set up.
+  $ports = New-Object Collections.ArrayList
+  if ($null -ne $text) {
+    foreach ($raw in ($text -split "`r?`n")) {
+      $line = $raw.Trim()
+      if (-not $line -or $line.StartsWith("#")) { continue }
+      $words = @($line -split '[\s=]+', 2)
+      $key = $words[0].ToLowerInvariant()
+      $value = if ($words.Count -gt 1) { $words[1].Trim() } else { "" }
+      if ($key -eq "include") { return [pscustomobject]@{ Ports = @(); Problem = "sshd_config includes other files ($value)" } }
+      if ($key -eq "port") {
+        if ($value -notmatch '^\d{1,5}$') { return [pscustomobject]@{ Ports = @(); Problem = "sshd_config has a port this cannot read ($value)" } }
+        $null = $ports.Add([int]$value)
+      }
+      if ($key -eq "listenaddress") {
+        $address = @($value -split '\s+')[0]
+        if ($address -match '^\[.*\]:(\d{1,5})$' -or $address -match '^[^:\[\]]+:(\d{1,5})$') { $null = $ports.Add([int]$Matches[1]) }
+        elseif ($address -match '^\[' -or ($address -match ':' -and $address -notmatch '^[0-9A-Fa-f:]+$')) {
+          return [pscustomobject]@{ Ports = @(); Problem = "sshd_config has a listen address this cannot read ($value)" }
+        }
+      }
+    }
+  }
+  if (-not $ports.Count) { $null = $ports.Add(22) }
+  $other = @($ports | Where-Object { $_ -ne 22 } | Sort-Object -Unique)
+  if ($other.Count) { return [pscustomobject]@{ Ports = @($ports); Problem = "sshd is set to listen on port $($other -join ', ')" } }
+  return [pscustomobject]@{ Ports = @(22); Problem = "" }
+}
+
+function Get-OrcaSshListen {
+  try { return Measure-OrcaSshListen (Read-OrcaSshConfig) } catch { return [pscustomobject]@{ Ports = @(); Problem = "could not read sshd_config ($($_.Exception.Message))" } }
+}
+
 function Get-OrcaSshState {
   $service = Get-Service -Name $Service -ErrorAction SilentlyContinue
   # Windows answers for its features only in an elevated session; the service answers in any.
@@ -187,6 +230,7 @@ function Get-OrcaSshState {
     Running = $null -ne $service -and [string]$service.Status -eq "Running"
     Tailscale = $null -ne (Get-NetAdapter -Name $Adapter -ErrorAction SilentlyContinue)
     Firewall = Get-OrcaFirewallState
+    Listen = Get-OrcaSshListen
   }
 }
 
@@ -227,7 +271,9 @@ function Set-OrcaSshFirewall {
 }
 
 function Assert-OrcaSshTailnetOnly {
-  $firewall = (Get-OrcaSshState).Firewall
+  $state = Get-OrcaSshState
+  if ($state.Listen.Problem) { throw $state.Listen.Problem }
+  $firewall = $state.Firewall
   $refusal = Get-OrcaFirewallRefusal $firewall
   if ($refusal) { throw $refusal }
   if ($firewall.Ours -ne "ok") { throw "the firewall rule `"$RuleDisplay`" is not in place" }
@@ -262,6 +308,11 @@ function Invoke-OrcaWindowsSsh {
   }
   if (-not $state.Tailscale) {
     Write-Host "No Tailscale network adapter: install Tailscale and sign in to your tailnet first. Nothing was changed."
+    return 2
+  }
+  if ($state.Listen.Problem) {
+    $problem = $state.Listen.Problem
+    Write-Host "$($problem.Substring(0, 1).ToUpper() + $problem.Substring(1)). This sets up the OpenSSH Server only as Windows installs it, listening on port 22 alone: set it back, or set up its firewall yourself. Nothing was changed."
     return 2
   }
   $refusal = Get-OrcaFirewallRefusal $state.Firewall

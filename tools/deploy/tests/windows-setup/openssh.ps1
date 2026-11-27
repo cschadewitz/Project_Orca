@@ -46,7 +46,7 @@ try {
   Microsoft.PowerShell.Utility\Write-Host "      $([string]($probe | Select-Object -Last 1))"
   # What each rule it reads as letting SSH in looks like there, for the record.
   $detail = powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command `
-    ". '$shipped'; (Read-OrcaFirewall).Allowing | Where-Object { Test-OrcaRuleAllowsSsh `$_ } | Select-Object -First 3 | ConvertTo-Json -Compress"
+    ". '$shipped'; (Read-OrcaFirewall).Allowing | Where-Object { Test-OrcaRuleAllowsSsh `$_ } | Select-Object -First 3 | ConvertTo-Json -Compress; Get-NetFirewallRule -PolicyStore ActiveStore -Direction Inbound -Action Allow -Enabled True | Where-Object { `$_.Owner } | Select-Object -First 2 | ForEach-Object { `$_ | Select-Object Name, Owner, Platform, PolicyStoreSourceType, PolicyStoreSource | ConvertTo-Json -Compress; `$_ | Get-NetFirewallApplicationFilter | Select-Object * -ExcludeProperty Cim* | ConvertTo-Json -Compress }"
   Microsoft.PowerShell.Utility\Write-Host "      $([string]($detail -join ' '))"
 
   Check "the firewall reading: its own rule only when exactly TCP 22 over Tailscale"
@@ -67,7 +67,10 @@ try {
       (New-Rule "any-port" -ports @("Any")), (New-Rule "range" -ports @("20-30")), (New-Rule "any-protocol" -protocol "Any"),
       (New-Rule "by-number" -protocol "6"), (New-Rule "sshd-any-port" -ports @("Any") -program "%SystemRoot%\System32\OpenSSH\SSHD.EXE"),
       (New-Rule "lan-and-tailnet" -interfaces @("Tailscale", "Ethernet")), (New-Rule "sshd-service" -service "sshd"),
-      (New-Rule $BroadRule -store "GroupPolicy"))) {
+      (New-Rule $BroadRule -store "GroupPolicy"),
+      # An owner alone does not keep sshd out, nor a package that is not an app container's.
+      ((New-Rule "owner-only" -protocol "Any" -ports @("Any")) | Add-Member -PassThru NoteProperty Owner "S-1-5-21-1-2-3-1001"),
+      (New-Rule "package-any" -ports @("Any") -package "*"), (New-Rule "package-odd" -package "S-1-5-21-1-2-3"))) {
     $measured = Get-Measured @($open)
     Assert ($measured.Others.Count -eq 1 -and -not $measured.Broad) "$($open.Name) is not found: $(ConvertTo-Json -Compress $measured)"
   }
@@ -77,7 +80,7 @@ try {
       (New-Rule "range-above" -ports @("23-80")), (New-Rule "other-program" -ports @("Any") -program "C:\app\app.exe"),
       (New-Rule "other-service" -service "W32Time"), (New-Rule "tailnet-only" -interfaces @("Tailscale")),
       (New-Rule "store-app" -protocol "Any" -ports @("Any") -package "S-1-15-2-1910091885-1573563583-1104941280-2418270861-3411158377-2822700936-2990310272"),
-      ((New-Rule "isolation" -protocol "Any" -ports @("Any")) | Add-Member -PassThru NoteProperty Owner "S-1-5-21-1-2-3-1001"))) {
+      (New-Rule "app-only" -ports @("Any") -package "S-1-15-2-1"))) {
     $measured = Get-Measured @($closed)
     Assert (-not $measured.Others.Count -and -not $measured.Broad) "$($closed.Name) is taken to allow SSH: $(ConvertTo-Json -Compress $measured)"
   }
@@ -85,6 +88,19 @@ try {
   Assert (($measured.Open -join ",") -eq "Private,Public") "open profiles: $($measured.Open -join ',')"
   $measured = Get-Measured @() -profiles @([pscustomobject]@{ Name = "Domain"; Enabled = $true; DefaultInbound = "NotConfigured" })
   Assert (($measured.Open -join ",") -eq "Domain") "a profile that does not say it blocks is taken as closed"
+
+  Check "the listener: only an sshd_config that listens on port 22 alone, read in full, is set up"
+  foreach ($fine in @($null, "", "#Port 2222`nPort 22", "Port=22", "  port 22  ", "ListenAddress 0.0.0.0`nListenAddress ::", "ListenAddress 100.64.0.1:22", "Match Group administrators`n  AuthorizedKeysFile x")) {
+    $listen = Measure-OrcaSshListen $fine
+    Assert (-not $listen.Problem -and ($listen.Ports -join ",") -eq "22") "'$fine' is read as: $(ConvertTo-Json -Compress $listen)"
+  }
+  foreach ($case in @(
+      @("Port 2222", "port 2222"), @("Port 22`nPort 2200", "port 2200"), @("ListenAddress 0.0.0.0:2222", "port 2222"),
+      @("ListenAddress [::]:2022", "port 2022"), @("Include C:/ProgramData/ssh/more.conf", "includes other files"),
+      @("Port twenty-two", "a port this cannot read"), @("ListenAddress [fe80::1", "a listen address this cannot read"))) {
+    $listen = Measure-OrcaSshListen $case[0]
+    Assert ($listen.Problem -like "*$($case[1])*") "'$($case[0])' is read as: $(ConvertTo-Json -Compress $listen)"
+  }
 
   Check "the firewall is read from the effective policy: a policy's rule seen only there stops sshd from starting"
   # Windows' firewall cmdlets stand in for by functions: the local store holds only this machine's
@@ -138,6 +154,7 @@ try {
   function Get-NetAdapter { [CmdletBinding()] param([string]$Name) [pscustomobject]@{ Name = "Tailscale" } }
   function Test-OrcaElevated { return $true }
   function Read-OrcaConsent([string]$question) { return "y" }
+  function Read-OrcaSshConfig { return $null }
   function Set-OrcaSshFirewall { $script:mine = $true; $script:policy = $true }
   function Start-OrcaSshService { $script:started = $true }
   $script:reads.Clear()
@@ -149,7 +166,7 @@ try {
   Assert (@($script:reads | Where-Object { $_ -notlike "*:ActiveStore" }).Count -eq 0) "read from another store: $($script:reads -join ', ')"
   foreach ($name in @("Get-NetFirewallRule", "Get-NetFirewallProfile", "Get-NetFirewallPortFilter", "Get-NetFirewallInterfaceFilter",
       "Get-NetFirewallApplicationFilter", "Get-NetFirewallServiceFilter", "Get-Service", "Get-WindowsCapability", "Get-NetAdapter",
-      "Test-OrcaElevated", "Read-OrcaConsent", "Set-OrcaSshFirewall", "Start-OrcaSshService")) {
+      "Test-OrcaElevated", "Read-OrcaConsent", "Read-OrcaSshConfig", "Set-OrcaSshFirewall", "Start-OrcaSshService")) {
     Remove-Item -LiteralPath "function:$name"
   }
   # The shipped ones back, for the run below to replace again.
@@ -173,14 +190,16 @@ try {
     if ($script:fail -eq "firewall") { throw "the firewall refused the rule" }
     $script:state.Firewall.Ours = "ok"; $script:state.Firewall.Broad = $false
     if ($script:fail -eq "appeared") { $script:state.Firewall.Others = @("rule lan (lan)") }
+    if ($script:fail -eq "port") { $script:state.Listen.Problem = "sshd is set to listen on port 2222" }
   }
   function Start-OrcaSshService { $null = $script:changed.Add("service"); if ($script:fail -eq "service") { throw "the service did not start" } }
 
   function New-State([bool]$installed, [bool]$automatic, [bool]$running, [string]$ours = "missing", [bool]$broad = $false,
-    [string[]]$others = @(), [string[]]$open = @(), [bool]$tailscale = $true, [bool]$available = $true) {
+    [string[]]$others = @(), [string[]]$open = @(), [bool]$tailscale = $true, [bool]$available = $true, [string]$listen = "") {
     return [pscustomobject]@{
       Available = $available; Installed = $installed; Automatic = $automatic; Running = $running; Tailscale = $tailscale
       Firewall = [pscustomobject]@{ Ours = $ours; Open = $open; Broad = $broad; Others = $others }
+      Listen = [pscustomobject]@{ Ports = $(if ($listen) { @() } else { @(22) }); Problem = $listen }
     }
   }
   function Invoke-Case($state, [string]$answer = "", [bool]$elevated = $true, [string]$fail = "") {
@@ -212,6 +231,8 @@ try {
   & $nothing (Invoke-Case (New-State $true $false $false -ours "wrong") "y") "not exactly inbound TCP 22 over the Tailscale adapter"
   & $nothing (Invoke-Case (New-State $false $false $false -open @("Public")) "y") "for the Public profile"
   & $nothing (Invoke-Case (New-State $true $false $false -others @("rule lan (lan)", "rule gpo (gpo, set by GroupPolicy)")) "y") "rule lan (lan); rule gpo (gpo, set by GroupPolicy). This changes no rule it did not make"
+  & $nothing (Invoke-Case (New-State $true $false $false -ours "ok" -listen "sshd is set to listen on port 2222") "y") "Sshd is set to listen on port 2222. This sets up the OpenSSH Server only as Windows installs it, listening on port 22 alone"
+  & $nothing (Invoke-Case (New-State $true $false $false -listen "sshd_config includes other files (more.conf)") "y") "includes other files"
   $state = New-State $true $false $false
   $state.Firewall | Add-Member NoteProperty Error "Access is denied."
   & $nothing (Invoke-Case $state "y") "Could not read the Windows Firewall rules (Access is denied.)"
@@ -258,6 +279,12 @@ try {
   Assert ($code -eq 1) "exit $code"
   Assert (($script:changed -join ",") -eq "firewall") "changed $($script:changed -join ',')"
   Assert ((& $all) -like "*Could not check that SSH is allowed only over Tailscale*rule lan (lan)*sshd was not started by this run*") "it said: $(& $all)"
+
+  Check "a listener changed to another port before the start is caught by the check, and sshd is not started"
+  $code = Invoke-Case (New-State $true $false $false) "y" -fail "port"
+  Assert ($code -eq 1) "exit $code"
+  Assert (($script:changed -join ",") -eq "firewall") "changed $($script:changed -join ',')"
+  Assert ((& $all) -like "*Could not check that SSH is allowed only over Tailscale*port 2222*sshd was not started by this run*") "it said: $(& $all)"
 
   Check "a rerun after a partial failure picks up where it stopped, and checks again before starting sshd"
   $state = New-State $false $false $false
