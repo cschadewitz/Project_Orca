@@ -22,7 +22,14 @@
  * - a closed session resumed by its id (#1121) continues its transcript: the model sees the
  *   earlier turn; a required resume of an unknown id is refused as a failed load;
  * - a checkout's `.claude/settings.json` and `settings.local.json` do not load (#1126): its
- *   hooks do not run and its permission rules do not apply;
+ *   hooks do not run and its permission rules do not apply; listed in `claudeCode.settingSources`
+ *   they load, and their hook, allow rule and bypass mode still do not run a call ORCA asks
+ *   about, while their deny rule refuses one ORCA allows; the loaded hook's own program does
+ *   run, for a call ORCA then denies too: ORCA governs the call, not a hook's side effects;
+ * - with `claudeCode.sandbox: on` (#1134) Bash runs in Claude Code's sandbox: an allowed write
+ *   outside the workspace is stopped, a command without a rule is still asked and refused, and
+ *   ORCA's protected paths inside the workspace hold: its credentials and private execution
+ *   cannot be read, its store and config cannot be written;
  * - an ORCA-run MCP server is served to Claude in process (#1125): the person is asked about the
  *   tool call once, ORCA's relay runs the real server, and a checkout's `.mcp.json` does not load;
  * - with `nativeToolHook: experimental` the pinned Claude Code is attested and opens (#1124), and
@@ -221,8 +228,9 @@ describe.runIf(CLAUDE !== undefined && process.platform !== "win32")(
       extra: Partial<Parameters<ReturnType<typeof makeSessionFactory>>[0]> = {},
       permissions?: unknown,
       agentExtra: Record<string, unknown> = {},
+      configDir = join(root, "orca"),
     ): Promise<AgentSession> => {
-      const factory = makeSessionFactory({ configDir: join(root, "orca"), storeDir: ".orca" }, () =>
+      const factory = makeSessionFactory({ configDir, storeDir: ".orca" }, () =>
         Promise.reject(new Error("ACP opened")),
       );
       const agent = AgentSpecSchema.parse({
@@ -420,6 +428,128 @@ describe.runIf(CLAUDE !== undefined && process.platform !== "win32")(
         // A loaded `deny: Read` would have refused this; a loaded hook would have left its marker.
         expect(texts(events).join("")).toContain("orca-1126-checkout");
         await expect(readFile(hookMarker, "utf8")).rejects.toThrow(/ENOENT/);
+      } finally {
+        await session.close();
+      }
+    });
+
+    it("loads a checkout's settings when claudeCode lists them, and they still decide nothing ORCA asks about (#1126)", async () => {
+      const checkout = join(root, "checkout-loaded");
+      const hookMarker = join(root, "loaded-hook-ran");
+      const bashMarker = join(checkout, "bash-ran.txt");
+      await mkdir(join(checkout, ".claude"), { recursive: true });
+      await writeFile(join(checkout, "notes.txt"), "orca-1126-loaded\n");
+      await writeFile(join(checkout, "denied.txt"), "orca-1126-denied\n");
+      // Everything a checkout could try: its own hook answering allow, an allow rule, bypass mode.
+      // (`Read(//abs/path)`: a rule's absolute path takes two slashes.)
+      const allow = JSON.stringify({
+        hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow" },
+      });
+      const settings = {
+        hooks: {
+          PreToolUse: [
+            {
+              matcher: "*",
+              hooks: [{ type: "command", command: `cat >> ${hookMarker}; echo >> ${hookMarker}; echo '${allow}'` }],
+            },
+          ],
+        },
+        permissions: {
+          allow: ["Bash"],
+          deny: [`Read(/${join(checkout, "denied.txt")})`],
+          defaultMode: "bypassPermissions",
+        },
+      };
+      await writeFile(join(checkout, ".claude", "settings.json"), JSON.stringify(settings));
+      const session = await open({ cwd: checkout }, undefined, {
+        claudeCode: { settingSources: ["project", "local"] },
+      });
+      try {
+        const events: SessionUpdateEvent[] = [];
+        session.onUpdate((e) => events.push(e));
+        const call = (name: string, input: unknown) => `CALL:${JSON.stringify({ name, input })}`;
+        // Loaded: its hook runs (its own program, which ORCA does not govern), and its deny rule
+        // refuses a read ORCA would allow.
+        await session.prompt(call("Read", { file_path: join(checkout, "notes.txt") }));
+        expect(texts(events).join("")).toContain("orca-1126-loaded");
+        expect(await readFile(hookMarker, "utf8")).toContain('"tool_name":"Read"');
+        await session.prompt(call("Read", { file_path: join(checkout, "denied.txt") }));
+        expect(texts(events).join("")).not.toContain("orca-1126-denied");
+        // ORCA's policy asks about Bash and nobody can answer: the checkout's allow, hook and
+        // bypass mode do not let it run.
+        await session.prompt(call("Bash", { command: `echo x > ${bashMarker}`, description: "m" }));
+        await expect(readFile(bashMarker, "utf8")).rejects.toThrow(/ENOENT/);
+        // The loaded hook's own program still ran for that call: ORCA governs the call, not the
+        // side effects of a hook the person chose to load.
+        expect(await readFile(hookMarker, "utf8")).toContain('"tool_name":"Bash"');
+      } finally {
+        await session.close();
+      }
+    });
+
+    it("runs Bash in Claude Code's sandbox with sandbox: on, still decided by ORCA (#1134)", async () => {
+      const escaped = join(outside, "escaped.txt");
+      const inside = join(workspace, "sandboxed.txt");
+      const call = (command: string) =>
+        `CALL:${JSON.stringify({ name: "Bash", input: { command, description: "m" } })}`;
+      const permissions = {
+        rules: [{ match: { kind: "execute", titlePattern: "^echo orca-1134" }, decision: "allow" }],
+      };
+      // The control: without the sandbox the allowed command writes outside the workspace.
+      let session = await open({}, permissions);
+      try {
+        await session.prompt(call(`echo orca-1134 >> ${escaped}`));
+        expect(await readFile(escaped, "utf8")).toContain("orca-1134");
+      } finally {
+        await session.close();
+      }
+      await rm(escaped, { force: true });
+
+      session = await open({}, permissions, { claudeCode: { settingSources: [], sandbox: "on" } });
+      try {
+        await session.prompt(call(`echo orca-1134 >> ${inside}`));
+        expect(await readFile(inside, "utf8")).toContain("orca-1134");
+        // Outside the workspace the sandbox stops a write ORCA's policy allowed.
+        await session.prompt(call(`echo orca-1134 >> ${escaped}`));
+        await expect(readFile(escaped, "utf8")).rejects.toThrow(/ENOENT/);
+        // Sandboxed is not allowed: a command with no rule is still asked about, and refused.
+        await session.prompt(call(`echo other >> ${inside}`));
+        expect(await readFile(inside, "utf8")).not.toContain("other");
+      } finally {
+        await session.close();
+      }
+    });
+
+    it("keeps sandboxed commands off ORCA's protected paths inside the workspace (#1134)", async () => {
+      // ORCA's config and store inside the workspace, which is otherwise writable to the sandbox.
+      const ws = join(root, "sandbox-protected");
+      const store = join(ws, ".orca");
+      await mkdir(join(ws, "auth"), { recursive: true });
+      await mkdir(join(store, "private-execution"), { recursive: true });
+      await writeFile(join(ws, "auth", "token.txt"), "orca-1134-auth\n");
+      await writeFile(join(store, "private-execution", "plan.txt"), "orca-1134-private\n");
+      await writeFile(join(store, "state.txt"), "orig\n");
+      await writeFile(join(ws, "orca.config.yaml"), "orig\n");
+      const permissions = { rules: [{ match: { kind: "execute", titlePattern: "orca-1134" }, decision: "allow" }] };
+      const session = await open({ cwd: ws }, permissions, { claudeCode: { settingSources: [], sandbox: "on" } }, ws);
+      // Each command first leaves a mark, so a missing effect is the sandbox's, not a refusal.
+      const ran = join(ws, "ran.txt");
+      const leak = join(ws, "leak.txt");
+      const bash = (rest: string) =>
+        session.prompt(
+          `CALL:${JSON.stringify({ name: "Bash", input: { command: `echo orca-1134 >> ${ran}; ${rest}`, description: "m" } })}`,
+        );
+      try {
+        // No access: neither ORCA's credentials nor its private execution can be read.
+        await bash(`cat ${join(ws, "auth", "token.txt")} >> ${leak}`);
+        await bash(`cat ${join(store, "private-execution", "plan.txt")} >> ${leak}`);
+        // Read only: the store and ORCA's config cannot be written.
+        await bash(`echo changed >> ${join(store, "state.txt")}`);
+        await bash(`echo changed >> ${join(ws, "orca.config.yaml")}`);
+        expect((await readFile(ran, "utf8")).split("\n").filter(Boolean)).toHaveLength(4);
+        expect(await readFile(leak, "utf8").catch(() => "")).toBe("");
+        expect(await readFile(join(store, "state.txt"), "utf8")).toBe("orig\n");
+        expect(await readFile(join(ws, "orca.config.yaml"), "utf8")).toBe("orig\n");
       } finally {
         await session.close();
       }

@@ -266,10 +266,42 @@ ORCA does not yet own the whole process tree there. Leave `driver` out to run Cl
 
 ORCA starts Claude with a fixed setup:
 
-- **No settings files** (`settingSources: []`): your user settings and a checkout's
+- **No settings files** unless you list some: your user settings and a checkout's
   `.claude/settings.json` and `settings.local.json` are not loaded, so their hooks do not run and
-  their permission rules and `env` do not apply. Your login is still used. Loading them by choice
-  is not offered yet.
+  their permission rules and `env` do not apply. Your login is still used. To load some, list
+  them in the agent's `claudeCode.settingSources` (`user`, `project`, `local`; `project` also
+  brings CLAUDE.md), as on the ACP route. Unlike the ACP route, leaving it out loads none.
+
+  **Opt in only to settings you trust, above all ones with hooks.** ORCA's decision governs the
+  tool call Claude asks for, not what a loaded file runs by itself:
+
+  - What ORCA still decides: ORCA's hook sees every tool call first. A call its policy denies
+    does not run, and a call its policy asks about does not run without an answer, whatever the
+    file's allow rules, hooks or `defaultMode` say. The file's MCP servers stay out, and the
+    permission mode stays `default`.
+  - What ORCA does not decide: a loaded file's hooks are programs Claude Code runs on its own,
+    with your account, for every call, even one ORCA then denies. ORCA does not see, ask about
+    or sandbox them. A loaded file's `env`, deny rules and hooks also apply, so they can refuse
+    a call ORCA would allow.
+  - Managed (administrator) settings are not one of the three sources. They always load and
+    take precedence over everything else, ORCA's settings included, on this route as on the ACP
+    route.
+- **Claude Code's command sandbox** with `claudeCode.sandbox: on` (#1134): Bash runs in Claude
+  Code's OS sandbox (bubblewrap and socat on Linux, Seatbelt on macOS) with the same settings as
+  on the ACP route, and the session fails to start without it. Sandboxed commands cannot read
+  ORCA's credentials or private paths, and cannot write its store or config, even inside the
+  workspace. Every command is still decided by ORCA. It needs `settingSources: []`, written
+  out. **On an SSH host this is unverified:** the sandbox runs on that machine's Claude Code,
+  and ORCA's protected paths are paths on ORCA's own machine, so nothing there is checked beyond
+  Claude Code starting its sandbox.
+
+```yaml
+  - id: claude
+    driver: claude-agent-sdk
+    claudeCode:
+      settingSources: []
+      sandbox: on
+```
 - **Only ORCA's MCP servers** (`--strict-mcp-config`): the agent's own `mcpServers`, run by ORCA
   (see below). A checkout's `.mcp.json` and your own Claude MCP config are not loaded.
 - Claude Code's own system prompt, and permission mode `default`.

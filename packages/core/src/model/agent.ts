@@ -1236,6 +1236,8 @@ export const AgentSpecSchema = z
      * Claude Code through `session/new`'s `_meta.claudeCode.options`. Left out, Claude Code
      * loads every settings source and runs commands unsandboxed, as before. ORCA refuses the
      * session when the agent turns out not to be the Claude adapter, rather than drop them.
+     * With `driver: claude-agent-sdk` ORCA passes them to Claude Code itself, and a
+     * `settingSources` left out loads none (#1126).
      *
      * - `settingSources`: which of Claude Code's own settings files it loads: `user`
      *   (`~/.claude/settings.json`), `project` (the checkout's `.claude/settings.json`) and

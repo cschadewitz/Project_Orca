@@ -158,3 +158,35 @@ export function claudeCodeSessionMeta(
     return withClaudeCodeOptions(meta, options);
   };
 }
+
+/**
+ * The Agent SDK options for an agent's `claudeCode` config on the Claude Agent SDK route
+ * (#1126, #1134). That route starts Claude Code itself, so the options go straight to `query()`
+ * rather than through an adapter's `_meta`.
+ *
+ * - `settingSources` left out is `[]` there, not all three as on the ACP route: the SDK route
+ *   has never loaded a settings file (#1120), and a config that says nothing does not widen it.
+ *   Listing sources loads them. ORCA's decision still governs each tool call Claude asks for:
+ *   ORCA's in-process hook sees every call first, denies what its policy denies and sends what
+ *   its policy asks about to ORCA's ask, whatever a loaded allow rule, hook or `defaultMode`
+ *   says; MCP servers they name stay out (`strictMcpConfig`); and the permission mode stays
+ *   `default`, with bypass mode off. It does not govern what a loaded file runs itself: its
+ *   hooks are programs Claude Code runs for every call, one ORCA then denies included, unseen
+ *   and unsandboxed by ORCA, so a file is to be listed only when it is trusted. A loaded deny
+ *   rule or hook can also refuse a call ORCA would allow, and managed (administrator) settings,
+ *   never one of the three, load regardless and take precedence over everything else.
+ * - `sandbox: on` is Claude Code's `sandbox` option, the same settings as on the ACP route. On an
+ *   SSH host (#1130) it runs on that machine's Claude Code while ORCA's protected paths name
+ *   paths on ORCA's machine, so there it is unverified beyond the sandbox starting.
+ */
+export function claudeSdkSettingOptions(
+  config: ClaudeCodeConfig | undefined,
+  protectedPaths: ProtectedPaths | undefined,
+): { settingSources: ClaudeSettingSource[]; sandbox?: Record<string, unknown> } {
+  const problem = claudeCodeConfigProblem(config);
+  if (problem) throw new OrcaError("CONFIG_INVALID", `claudeCode: ${problem}`);
+  return {
+    settingSources: [...(config?.settingSources ?? [])],
+    ...(config?.sandbox === "on" ? { sandbox: claudeSandboxSettings(protectedPaths) } : {}),
+  };
+}

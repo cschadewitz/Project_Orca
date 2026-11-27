@@ -14,8 +14,10 @@
  * - **Model and effort.** The models Claude Code lists at `initialize` become a `model` option
  *   (`setModel`), and a model's effort levels an `effort` option (`applyFlagSettings`), so a
  *   run's model selection (#187) reaches Claude.
- * - **Fixed setup.** No settings files (`settingSources: []`), no MCP servers, Claude Code's own
- *   system prompt, permission mode `default`.
+ * - **Fixed setup.** No settings files unless the agent's `claudeCode.settingSources` lists
+ *   some (`claudeSdkSettingOptions`, #1126), with Claude Code's sandbox when it says
+ *   `sandbox: on` (#1134); no MCP servers but ORCA's relayed ones, Claude Code's own system
+ *   prompt, permission mode `default`.
  * - **Resume (#1121).** Claude Code keeps each session's transcript where it always does (its
  *   own config directory), under the id ORCA chose for it, which is the session's
  *   `acpSessionId`. `resumeSessionId` opens that transcript again (`resume`), with the same
@@ -56,6 +58,7 @@ import {
   type Logger,
   type SessionConfigOption,
 } from "@orca/core";
+import { claudeSdkSettingOptions } from "../claude-code-options.js";
 import { contextRecoveryFailure, type PermissionInvocation, type SessionContinuity } from "../acp-session.js";
 import { redactError, redactingLogger } from "../secrets.js";
 import { redactSecretValues } from "@orca/core";
@@ -90,7 +93,7 @@ import { claudeSdkRemoteCleanupUnconfirmed, type ClaudeSdkRemoteLaunch } from ".
 import { attestClaudeSdkRuntime, type ClaudeSdkRuntimeAttestation, type ClaudeSdkVerifiedPair } from "./attestation.js";
 
 export interface ClaudeSdkSessionOptions {
-  agent: Pick<AgentSpec, "id" | "cancelGraceMs"> & Partial<Pick<AgentSpec, "permissions">>;
+  agent: Pick<AgentSpec, "id" | "cancelGraceMs"> & Partial<Pick<AgentSpec, "permissions" | "claudeCode">>;
   hostId: string;
   cwd: string;
   /** What `claudeSdkPreflight` found: the executable to run and the environment to run it with. */
@@ -238,6 +241,8 @@ export async function openClaudeSdkSession(options: ClaudeSdkSessionOptions): Pr
 }
 
 async function openClaudeSdkContinuing(options: ClaudeSdkSessionOptions): Promise<AgentSession> {
+  // Checked before anything starts: a config ORCA cannot enforce as written is refused.
+  claudeSdkSettingOptions(options.agent.claudeCode, options.protectedPaths);
   const resume = options.resumeSessionId?.trim() ? options.resumeSessionId : undefined;
   const required = options.requireContextRecovery === true;
   if (required && !resume) throw contextRecoveryFailure("missing-session-id");
@@ -471,7 +476,7 @@ async function openClaudeSdkProcess(
       ...(options.additionalDirectories?.length ? { additionalDirectories: [...options.additionalDirectories] } : {}),
       abortController: abort,
       permissionMode: "default",
-      settingSources: [],
+      ...claudeSdkSettingOptions(options.agent.claudeCode, options.protectedPaths),
       // Kept, so that a later session can continue it (#1121), as Claude Code does over ACP.
       persistSession: true,
       ...(resume ? { resume } : { sessionId: acpSessionId }),

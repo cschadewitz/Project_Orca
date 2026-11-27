@@ -9,6 +9,7 @@ import {
   claudeCodeOptions,
   claudeCodeSessionMeta,
   claudeSandboxSettings,
+  claudeSdkSettingOptions,
   withClaudeCodeOptions,
 } from "../src/index.js";
 
@@ -138,5 +139,25 @@ describe("the agent config", () => {
     expect(parse({ settingSources: ["managed"] }).success).toBe(false);
     expect(parse({ sandbox: true }).success).toBe(false);
     expect(parse({ other: 1 }).success).toBe(false);
+  });
+});
+
+describe("claudeSdkSettingOptions (the Claude Agent SDK route, #1126)", () => {
+  it("loads no settings file unless the config lists some", () => {
+    expect(claudeSdkSettingOptions(undefined, protectedPaths)).toEqual({ settingSources: [] });
+    expect(claudeSdkSettingOptions({}, protectedPaths)).toEqual({ settingSources: [] });
+    expect(claudeSdkSettingOptions({ settingSources: ["user", "project"] }, protectedPaths)).toEqual({
+      settingSources: ["user", "project"],
+    });
+  });
+
+  it("runs Bash in Claude Code's sandbox for sandbox: on, with the same settings as over ACP", () => {
+    expect(claudeSdkSettingOptions({ settingSources: [], sandbox: "on" }, protectedPaths)).toEqual({
+      settingSources: [],
+      sandbox: claudeSandboxSettings(protectedPaths),
+    });
+    expect(() => claudeSdkSettingOptions({ settingSources: ["user"], sandbox: "on" }, protectedPaths)).toThrow(
+      /needs settingSources: \[\]/,
+    );
   });
 });
