@@ -291,6 +291,123 @@ async function turn(text) {
       });
     case "fail":
       return result({ is_error: true, result: `API Error: ${text}` });
+    case "usage": {
+      // `usage [utilization]`: a turn's usage, and the subscription limit close when given.
+      const utilization = text.split(/\s+/)[1];
+      if (utilization)
+        out({
+          type: "rate_limit_event",
+          session_id: SESSION,
+          uuid: `rl${nextRequest++}`,
+          rate_limit_info: {
+            status: "allowed_warning",
+            rateLimitType: "five_hour",
+            utilization: Number(utilization),
+            resetsAt: 1795000000,
+          },
+        });
+      out({
+        type: "assistant",
+        session_id: SESSION,
+        uuid: `a${nextRequest++}`,
+        parent_tool_use_id: null,
+        message: {
+          id: "msg",
+          type: "message",
+          role: "assistant",
+          model: "claude-stand-in",
+          content: [{ type: "text", text: "counted" }],
+          stop_reason: null,
+          usage: {
+            input_tokens: 1200,
+            cache_read_input_tokens: 30000,
+            cache_creation_input_tokens: 500,
+            output_tokens: 300,
+          },
+        },
+      });
+      return result({
+        total_cost_usd: 0.4249,
+        modelUsage: {
+          "claude-stand-in": {
+            inputTokens: 1200,
+            outputTokens: 300,
+            cacheReadInputTokens: 30000,
+            cacheCreationInputTokens: 500,
+            webSearchRequests: 0,
+            costUSD: 0.4249,
+            contextWindow: 200000,
+            maxOutputTokens: 32000,
+          },
+        },
+      });
+    }
+    case "usagejson": {
+      // `usagejson {"model":…|null,"modelUsage":{…}}`: a call by that model (none for null), then
+      // a result with those per-model totals.
+      const u = JSON.parse(text.slice("usagejson ".length));
+      if (u.model)
+        out({
+          type: "assistant",
+          session_id: SESSION,
+          uuid: `a${nextRequest++}`,
+          parent_tool_use_id: null,
+          message: {
+            id: "msg",
+            type: "message",
+            role: "assistant",
+            model: u.model,
+            content: [{ type: "text", text: "counted" }],
+            stop_reason: null,
+            usage: { input_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 5 },
+          },
+        });
+      return result({ total_cost_usd: 0.01, modelUsage: u.modelUsage });
+    }
+    case "flip": {
+      // `flip allowed|<resetsAt>`: the subscription limit reached during the turn, then lifted
+      // (`allowed`) or already past its reset; the turn then fails for another reason.
+      const how = text.split(/\s+/)[1];
+      const event = (info) =>
+        out({ type: "rate_limit_event", session_id: SESSION, uuid: `rl${nextRequest++}`, rate_limit_info: info });
+      event({ status: "rejected", rateLimitType: "five_hour", resetsAt: how === "allowed" ? 1795000000 : Number(how) });
+      if (how === "allowed") event({ status: "allowed", rateLimitType: "five_hour" });
+      return result({ is_error: true, result: "API Error: SENTINEL-1127-cli-text overloaded" });
+    }
+    case "limit":
+    case "throttle": {
+      // `limit [resetsAt]`: the subscription limit is reached; `throttle`: an API key's HTTP 429.
+      if (word === "limit") {
+        const at = text.split(/\s+/)[1];
+        out({
+          type: "rate_limit_event",
+          session_id: SESSION,
+          uuid: `rl${nextRequest++}`,
+          rate_limit_info: {
+            status: "rejected",
+            rateLimitType: text.split(/\s+/)[2] ?? "seven_day",
+            ...(at === "none" ? {} : { resetsAt: Number(at ?? 1795000000) }),
+          },
+        });
+      }
+      out({
+        type: "assistant",
+        session_id: SESSION,
+        uuid: `a${nextRequest++}`,
+        parent_tool_use_id: null,
+        error: "rate_limit",
+        message: {
+          id: "msg",
+          type: "message",
+          role: "assistant",
+          model: "<synthetic>",
+          content: [{ type: "text", text: "SENTINEL-1127-cli-text limit reached" }],
+          stop_reason: "stop_sequence",
+          usage: {},
+        },
+      });
+      return result({ is_error: true, api_error_status: 429, result: "SENTINEL-1127-cli-text limit reached" });
+    }
     case "maxturns":
       return result({ subtype: "error_max_turns", is_error: true, errors: [] });
     case "die":

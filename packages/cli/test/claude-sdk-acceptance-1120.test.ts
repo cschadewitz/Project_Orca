@@ -255,6 +255,11 @@ describe.runIf(CLAUDE !== undefined && process.platform !== "win32")(
 
         expect((await session.prompt("hello")).stopReason).toBe("end_turn");
         expect(texts(events).join("")).toContain("done");
+        // The turn's usage, as the real Claude Code reports it, reaches the run (#1127).
+        const usage = events.find((e) => e.raw.sessionUpdate === "usage_update");
+        expect(usage?.raw).toMatchObject({ sessionUpdate: "usage_update", used: expect.any(Number) });
+        expect((usage?.raw as { size: number }).size).toBeGreaterThan(0);
+        expect(usage?.summary.text).toMatch(/ context tokens used/);
 
         const before = model.requests.length;
         await session.setConfigOption(modelOption.id, "sonnet");
