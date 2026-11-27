@@ -83,7 +83,7 @@ const texts = (events: SessionUpdateEvent[]) =>
   events.filter((e) => e.summary.kind === "agent_message_chunk").map((e) => e.summary.text);
 
 describe.runIf(process.platform !== "win32")("Claude Agent SDK session (#1120)", () => {
-  it("runs turns over one claude, with the fixed launch flags and no settings, MCP or session files", async () => {
+  it("runs turns over one claude, with the fixed launch flags and no settings or MCP", async () => {
     const logFile = join(dir, "log.jsonl");
     const session = await open({ STAND_IN_LOG: logFile });
     const events = collect(session);
@@ -109,10 +109,12 @@ describe.runIf(process.platform !== "win32")("Claude Agent SDK session (#1120)",
         "stream-json",
         "--setting-sources=",
         "--permission-mode=default",
-        "--no-session-persistence",
         "--strict-mcp-config",
+        `--session-id=${session.acpSessionId}`,
       ]),
     );
+    // Claude Code keeps the transcript, so the session can be resumed (#1121).
+    expect(argv).not.toContain("--no-session-persistence");
     expect(starts[0]!.cwd).toBe(dir);
     const init = lines.find((l) => (l.in as { request?: { subtype?: string } })?.request?.subtype === "initialize");
     expect((init!.in as { request: Record<string, unknown> }).request).toMatchObject({

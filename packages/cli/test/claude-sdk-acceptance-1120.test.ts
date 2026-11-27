@@ -18,6 +18,8 @@
  * - with a person answering: a Bash they allow runs, once, and the next identical one is asked
  *   again; one they decline does not run and the model is told why; a rule's ask reaches them
  *   for a read Claude would have run by itself;
+ * - a closed session resumed by its id (#1121) continues its transcript: the model sees the
+ *   earlier turn; a required resume of an unknown id is refused as a failed load;
  * - cancel ends a turn as `cancelled`, and close leaves no Claude Code process behind.
  */
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -313,6 +315,44 @@ describe.runIf(CLAUDE !== undefined && process.platform !== "win32")(
       } finally {
         await session.close();
       }
+    });
+
+    it("resumes a closed session's transcript, and refuses a required resume of an unknown one (#1121)", async () => {
+      const first = await open();
+      let id: string;
+      try {
+        expect((await first.prompt("remember orca-1121-alpha")).stopReason).toBe("end_turn");
+        id = first.acpSessionId;
+      } finally {
+        await first.close();
+      }
+      await first.terminated;
+
+      const continuity: unknown[] = [];
+      const resumed = await open({
+        resumeSessionId: id,
+        requireContextRecovery: true,
+        onSessionContinuity: (c) => continuity.push(c),
+      });
+      try {
+        expect(continuity).toEqual([{ mode: "loaded", reason: "load-supported" }]);
+        expect(resumed.acpSessionId).toBe(id);
+        const before = model.requests.length;
+        expect((await resumed.prompt("and now orca-1121-beta")).stopReason).toBe("end_turn");
+        const sent = JSON.stringify(model.requests.slice(before).map((r) => r.messages));
+        // The model sees the earlier turn before the new one.
+        expect(sent).toContain("orca-1121-alpha");
+        expect(sent.indexOf("orca-1121-alpha")).toBeLessThan(sent.indexOf("orca-1121-beta"));
+      } finally {
+        await resumed.close();
+      }
+
+      const refused = await open({ resumeSessionId: crypto.randomUUID(), requireContextRecovery: true }).then(
+        () => undefined,
+        (e: unknown) => e as { code?: string; details?: unknown },
+      );
+      expect(refused?.code).toBe("AGENT_PROTOCOL");
+      expect(refused?.details).toEqual({ contextRecoveryReason: "load-failed" });
     });
 
     it("cancels a turn, and close leaves no Claude Code behind", async () => {

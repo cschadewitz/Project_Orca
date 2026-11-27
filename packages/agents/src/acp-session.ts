@@ -276,7 +276,9 @@ function mcpMessageParams(params: unknown): acpUnstable.McpMessageParams {
 export const ORCA_CLIENT_INFO = { name: "orca", version: "0.1.0" } as const;
 
 /** Provider errors can contain private context; report only the failed recovery boundary. */
-function contextRecoveryFailure(reason: "missing-session-id" | "load-unsupported" | "load-failed" | "load-timeout") {
+export function contextRecoveryFailure(
+  reason: "missing-session-id" | "load-unsupported" | "load-failed" | "load-timeout",
+) {
   const failures = {
     "missing-session-id": ["CONFIG_INVALID", "Required agent context recovery needs a nonempty resumeSessionId."],
     "load-unsupported": [

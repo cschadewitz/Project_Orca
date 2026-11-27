@@ -14,8 +14,15 @@
  * - **Model and effort.** The models Claude Code lists at `initialize` become a `model` option
  *   (`setModel`), and a model's effort levels an `effort` option (`applyFlagSettings`), so a
  *   run's model selection (#187) reaches Claude.
- * - **Fixed setup.** No settings files (`settingSources: []`), no MCP servers, no session
- *   files, Claude Code's own system prompt, permission mode `default`.
+ * - **Fixed setup.** No settings files (`settingSources: []`), no MCP servers, Claude Code's own
+ *   system prompt, permission mode `default`.
+ * - **Resume (#1121).** Claude Code keeps each session's transcript where it always does (its
+ *   own config directory), under the id ORCA chose for it, which is the session's
+ *   `acpSessionId`. `resumeSessionId` opens that transcript again (`resume`), with the same
+ *   guarantees as the ACP route's `session/load`: when recovery is required a failed or timed-out
+ *   resume is refused and no fresh session is opened; otherwise it falls back to a fresh session
+ *   and `onSessionContinuity` says so. Only a UUID is passed on: Claude Code would also resume
+ *   a session by its title, which ORCA never asks for.
  * - **Tools (#1122).** Every tool call is decided by ORCA's permission policy, its people and
  *   the run's answerer, in a `PreToolUse` hook and in `canUseTool` (`permission-bridge.ts`).
  *   An allow is for one call only: Claude is never told to remember it.
@@ -47,9 +54,10 @@ import {
   type Logger,
   type SessionConfigOption,
 } from "@orca/core";
-import type { PermissionInvocation } from "../acp-session.js";
+import { contextRecoveryFailure, type PermissionInvocation, type SessionContinuity } from "../acp-session.js";
 import type { PermissionRuleRecord, ProtectedPaths } from "../permissions.js";
 import {
+  startupTermination,
   summarizeUpdate,
   withStartupTermination,
   type AgentSession,
@@ -90,6 +98,12 @@ export interface ClaudeSdkSessionOptions {
   /** Each permission decision, for the run log. */
   onPermission?:
     ((info: { toolCallId?: string; title: string; decision: string; rule?: PermissionRuleRecord }) => void) | undefined;
+  /** The `acpSessionId` of an earlier session to continue (#1121). Explicit opt-in only. */
+  resumeSessionId?: string | undefined;
+  /** Refuse to open at all unless `resumeSessionId` is resumed; never fall back to a fresh session. */
+  requireContextRecovery?: boolean | undefined;
+  /** Whether the session continued an earlier one, told once it is open. */
+  onSessionContinuity?: ((state: SessionContinuity) => void) | undefined;
   /** Aborts the open while it is starting. */
   signal?: AbortSignal | undefined;
   logger?: Logger | undefined;
@@ -132,8 +146,56 @@ export function claudeSdkPlatformUnsupported(agentId: string): OrcaError {
   );
 }
 
-/** Open a session that runs Claude through the Claude Agent SDK. */
+/** A Claude Code session id: what ORCA gives Claude Code and the only thing it resumes. */
+const CLAUDE_SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Open a session that runs Claude through the Claude Agent SDK, continuing one when asked (#1121). */
 export async function openClaudeSdkSession(options: ClaudeSdkSessionOptions): Promise<AgentSession> {
+  const resume = options.resumeSessionId?.trim() ? options.resumeSessionId : undefined;
+  const required = options.requireContextRecovery === true;
+  if (required && !resume) throw contextRecoveryFailure("missing-session-id");
+  // The open decides the session and its continuity; only then is the observer told, outside the
+  // load and its fallback. An observer that throws fails the open: the session it was told about
+  // is closed and its process awaited, and the error is the caller's, never a load failure.
+  const opened = async (session: AgentSession, continuity: SessionContinuity): Promise<AgentSession> => {
+    try {
+      options.onSessionContinuity?.(continuity);
+    } catch (error) {
+      await session.close().catch(() => undefined);
+      throw withStartupTermination(
+        error instanceof Error ? error : new OrcaError("INTERNAL", "the session continuity observer failed"),
+        session.terminated ?? Promise.resolve(),
+      );
+    }
+    return session;
+  };
+  if (!resume) return opened(await openClaudeSdkProcess(options, undefined), { mode: "fresh", reason: "new" });
+  if (CLAUDE_SESSION_ID.test(resume)) {
+    let resumed: AgentSession | undefined;
+    try {
+      resumed = await openClaudeSdkProcess(options, resume);
+    } catch (error) {
+      // A cancelled open, or one refused before Claude Code started, is the open's own failure.
+      if (error instanceof OrcaError && error.code === "CANCELLED") throw error;
+      if (error instanceof OrcaError && error.code === "NOT_SUPPORTED") throw error;
+      const exit = startupTermination(error) ?? Promise.resolve();
+      if (required) {
+        const timedOut = error instanceof OrcaError && error.details?.["startup"] === "timeout";
+        throw withStartupTermination(contextRecoveryFailure(timedOut ? "load-timeout" : "load-failed"), exit);
+      }
+      // One Claude Code at a time: the fresh one starts once the refused one is gone.
+      await exit.catch(() => undefined);
+    }
+    if (resumed) return opened(resumed, { mode: "loaded", reason: "load-supported" });
+  } else if (required) throw contextRecoveryFailure("load-failed");
+  return opened(await openClaudeSdkProcess(options, undefined), { mode: "fresh", reason: "load-failed" });
+}
+
+/** One Claude Code process and its `query()`: a new session, or `resume`'s transcript continued. */
+async function openClaudeSdkProcess(
+  options: ClaudeSdkSessionOptions,
+  resume: string | undefined,
+): Promise<AgentSession> {
   const clock = options.clock ?? systemClock;
   const logger = options.logger ?? silentLogger;
   const { executable, env } = options.preflight;
@@ -201,6 +263,8 @@ export async function openClaudeSdkSession(options: ClaudeSdkSessionOptions): Pr
 
   // ---- input, permissions, the query --------------------------------------------------------
   const id = newId("sess", clock.now());
+  /** Claude Code's own session id: the transcript it keeps, and what a later session resumes. */
+  const acpSessionId = resume ?? randomUUID();
   const input = new InputQueue();
   const abort = new AbortController();
   let activeTurn: ActiveTurn | undefined;
@@ -233,7 +297,9 @@ export async function openClaudeSdkSession(options: ClaudeSdkSessionOptions): Pr
       abortController: abort,
       permissionMode: "default",
       settingSources: [],
-      persistSession: false,
+      // Kept, so that a later session can continue it (#1121), as Claude Code does over ACP.
+      persistSession: true,
+      ...(resume ? { resume } : { sessionId: acpSessionId }),
       mcpServers: {},
       strictMcpConfig: true,
       systemPrompt: { type: "preset", preset: "claude_code" },
@@ -279,7 +345,10 @@ export async function openClaudeSdkSession(options: ClaudeSdkSessionOptions): Pr
     initResult = await Promise.race([
       initialized,
       new Promise<never>((_, reject) => {
-        startupTimer = setTimeout(() => reject(startupFailure("did not answer in time")), startupTimeoutMs);
+        startupTimer = setTimeout(
+          () => reject(startupFailure("did not answer in time", { startup: "timeout" })),
+          startupTimeoutMs,
+        );
         onOpenAbort = () => reject(new OrcaError("CANCELLED", `opening agent ${options.agent.id} was cancelled`));
         options.signal?.addEventListener("abort", onOpenAbort, { once: true });
       }),
@@ -376,7 +445,6 @@ export async function openClaudeSdkSession(options: ClaudeSdkSessionOptions): Pr
       return configOptions;
     }
   };
-  const acpSessionId = randomUUID();
   const listeners = new Set<(e: SessionUpdateEvent) => void>();
   const tools = new Map<string, string>();
   let ended: Error | undefined;
