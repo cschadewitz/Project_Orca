@@ -71,12 +71,27 @@ export interface McpRelayOptions {
    * the check to run in the same step the request is written to the server, plus the signal
    * that ends the request with the turn or session it belongs to.
    */
-  authorize: (call: McpRelayCall, request: AbortSignal) => Promise<McpRelayDispatch>;
+  authorize: (call: McpRelayCall, request: AbortSignal, context?: McpRelayContext) => Promise<McpRelayDispatch>;
   /** How long a server has to answer `initialize` before it is stopped. */
   startTimeoutMs?: number | undefined;
   /** How long one relayed request may take. */
   requestTimeoutMs?: number | undefined;
   exitGraceMs?: number | undefined;
+}
+
+/**
+ * What a transport other than ACP knows about a request and passes on to `authorize` (`serve`):
+ * on the Claude Agent SDK route (#1125), the tool use Claude says the call belongs to.
+ */
+export interface McpRelayContext {
+  toolUseId?: string | undefined;
+}
+
+/** One relayed request as a transport hands it over: the method, its params, and its cancellation. */
+export interface McpRelayOperation {
+  method: string;
+  params: Record<string, unknown> | undefined;
+  signal: AbortSignal;
 }
 
 /** One request the agent sent a relayed server, as `authorize` sees it. */
@@ -182,6 +197,12 @@ export interface McpRelay {
   readonly handleRequest: acpUnstable.McpOverAcpProvider["handleRequest"];
   /** Registers every server on the connection; pass the declarations in `session/new`. */
   declare(connection: acpUnstable.HasConnectionContext): acp.McpServer[];
+  /**
+   * The same handling for a transport that is not ACP (#1125): one request to the server named
+   * `server`, with every check a request over ACP gets. Resolves to `{ result }`; refuses or fails
+   * with an `McpProtocolError` whose code and message are what the agent may be told.
+   */
+  serve(server: string, op: McpRelayOperation, context?: McpRelayContext): Promise<{ result: Record<string, unknown> }>;
   /** Stops every server ORCA started. */
   close(): Promise<void>;
 }
@@ -213,8 +234,8 @@ export function createMcpRelay(opts: McpRelayOptions): McpRelay {
   };
 
   const handlerFor =
-    (server: RelayedMcpServer): acpUnstable.McpRequestHandler =>
-    async (op) => {
+    (server: RelayedMcpServer, context?: McpRelayContext) =>
+    async (op: McpRelayOperation): Promise<{ result: Record<string, unknown> }> => {
       // The request's deadline runs from its arrival, and with cancellation it bounds every wait
       // the request makes: admission, deciding it (and retiring any ask), starting its server
       // and the server's answer.
@@ -246,7 +267,7 @@ export function createMcpRelay(opts: McpRelayOptions): McpRelay {
       if (early.aborted) throw failure(new RelayFailure(abortFailure(early)));
       let gate: McpRelayDispatch;
       try {
-        gate = await untilAborted(opts.authorize(call, early), early);
+        gate = await untilAborted(opts.authorize(call, early, context), early);
       } catch (error) {
         if (error instanceof RelayFailure && early.aborted) throw failure(error);
         opts.logger.warn("MCP request refused", {
@@ -318,10 +339,19 @@ export function createMcpRelay(opts: McpRelayOptions): McpRelay {
     handleRequest: provider.handleRequest,
     declare(connection) {
       return opts.servers.map((server) => {
-        const reg = provider.registerServer(connection, { name: server.name, handler: handlerFor(server) });
+        const handler: acpUnstable.McpRequestHandler = (op) => handlerFor(server)(op);
+        const reg = provider.registerServer(connection, { name: server.name, handler });
         registrations.push(reg);
         return reg.declaration as unknown as acp.McpServer;
       });
+    },
+    serve(name, op, context) {
+      const server = opts.servers.find((s) => s.name === name);
+      if (!server)
+        return Promise.reject(
+          new acpUnstable.McpProtocolError(METHOD_NOT_FOUND, `no MCP server "${name}" in this session`),
+        );
+      return handlerFor(server, context)(op);
     },
     async close() {
       closing = true;

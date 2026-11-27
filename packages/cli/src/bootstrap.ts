@@ -385,6 +385,9 @@ export function makeSessionFactory(
         delivery: options.secretDelivery,
       });
       if (secrets.values.length) options.onSecretValues?.([...secrets.values]);
+      // Skills reach a session as embedded prompt context, which this route does not take yet:
+      // a step that delivers skills is refused rather than run without them.
+      if (options.requireEmbeddedContext) throw options.requireEmbeddedContext();
       const preflight = await claudeSdkPreflight({
         agent: options.agent,
         cwd: options.cwd,
@@ -394,6 +397,8 @@ export function makeSessionFactory(
       }).catch((error: unknown) => {
         throw redactError(error, secrets.values);
       });
+      // Asked last, immediately before Claude starts and is handed its servers (#337, #1125).
+      await options.authorizeCapabilityDelivery?.();
       return openClaudeSdkSession({
         agent: options.agent,
         hostId: options.host.id,
@@ -412,6 +417,10 @@ export function makeSessionFactory(
         cancelGraceMs: options.cancelGraceMs,
         additionalDirectories: options.additionalDirectories,
         secretValues: secrets.values,
+        // ORCA runs the agent's MCP servers itself and serves them to Claude in process (#1125).
+        host: options.host,
+        mcpServers: secrets.mcpServers,
+        withheldEnv: secrets.withheld,
       });
     }
     // ORCA's gate in Codex's executor path (#1026): its own route, which refuses every session

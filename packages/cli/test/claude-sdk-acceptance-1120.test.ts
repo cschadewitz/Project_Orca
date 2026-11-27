@@ -22,6 +22,8 @@
  *   earlier turn; a required resume of an unknown id is refused as a failed load;
  * - a checkout's `.claude/settings.json` and `settings.local.json` do not load (#1126): its
  *   hooks do not run and its permission rules do not apply;
+ * - an ORCA-run MCP server is served to Claude in process (#1125): the person is asked about the
+ *   tool call once, ORCA's relay runs the real server, and a checkout's `.mcp.json` does not load;
  * - cancel ends a turn as `cancelled`, and close leaves no Claude Code process behind.
  */
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -198,6 +200,7 @@ describe.runIf(CLAUDE !== undefined && process.platform !== "win32")(
     const open = (
       extra: Partial<Parameters<ReturnType<typeof makeSessionFactory>>[0]> = {},
       permissions?: unknown,
+      agentExtra: Record<string, unknown> = {},
     ): Promise<AgentSession> => {
       const factory = makeSessionFactory({ configDir: join(root, "orca"), storeDir: ".orca" }, () =>
         Promise.reject(new Error("ACP opened")),
@@ -213,6 +216,7 @@ describe.runIf(CLAUDE !== undefined && process.platform !== "win32")(
           CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
         },
         ...(permissions ? { permissions } : {}),
+        ...agentExtra,
       });
       return factory({ host: new LocalHost({ id: "local", type: "local" }), agent, cwd: workspace, ...extra });
     };
@@ -383,6 +387,82 @@ describe.runIf(CLAUDE !== undefined && process.platform !== "win32")(
       }
     });
 
+    it("serves ORCA's MCP server to Claude in process, and no other MCP config loads (#1125)", async () => {
+      const serverLog = join(root, "mcp-server.log");
+      const script = join(root, "mcp-server.cjs");
+      await writeFile(
+        script,
+        `const rl = require("node:readline").createInterface({ input: process.stdin });
+const fs = require("node:fs");
+const send = (o) => process.stdout.write(JSON.stringify(o) + "\\n");
+rl.on("line", (line) => {
+  const m = JSON.parse(line);
+  fs.appendFileSync(process.env.SERVER_LOG, (m.method || "response") + "\\n");
+  if (m.method === "initialize")
+    send({ jsonrpc: "2.0", id: m.id, result: { protocolVersion: "2025-06-18", capabilities: { tools: {} }, serverInfo: { name: "real", version: "1" } } });
+  else if (m.method === "tools/list")
+    send({ jsonrpc: "2.0", id: m.id, result: { tools: [{ name: "touch", description: "t", inputSchema: { type: "object", properties: {} } }] } });
+  else if (m.method === "tools/call")
+    send({ jsonrpc: "2.0", id: m.id, result: { content: [{ type: "text", text: "orca-1125-served token=" + process.env.MCP_TOKEN }] } });
+  else if (m.id !== undefined) send({ jsonrpc: "2.0", id: m.id, error: { code: -32601, message: "no" } });
+});
+`,
+      );
+      // A checkout's own MCP config, which must not load.
+      const checkout = join(root, "mcp-checkout");
+      await mkdir(checkout, { recursive: true });
+      await writeFile(
+        join(checkout, ".mcp.json"),
+        JSON.stringify({ mcpServers: { "orca-1125-project": { command: "/bin/true" } } }),
+      );
+      // A credential only the server is given, which it echoes back: it must not reach Claude.
+      const token = "orca-1125-synthetic-mcp-credential";
+      const tokenFile = join(root, "mcp-token");
+      await writeFile(tokenFile, `${token}\n`);
+      const asked: string[] = [];
+      const session = await open(
+        {
+          cwd: checkout,
+          secrets: { "mcp-token": { host: "local", provider: "file", path: tokenFile } },
+          authorizeSecretUse: () => Promise.resolve(),
+          askPermission: (request) => {
+            asked.push(request.toolCall.title ?? "");
+            return Promise.resolve(request.options.find((o) => o.kind === "allow_once")!.optionId);
+          },
+        },
+        undefined,
+        {
+          mcpServers: [
+            {
+              name: "orca-tools",
+              command: process.execPath,
+              args: [script],
+              env: { SERVER_LOG: serverLog, MCP_TOKEN: { secret: "mcp-token" } },
+            },
+          ],
+        },
+      );
+      try {
+        const events: SessionUpdateEvent[] = [];
+        session.onUpdate((e) => events.push(e));
+        const before = model.requests.length;
+        await session.prompt(`CALL:${JSON.stringify({ name: "mcp__orca-tools__touch", input: {} })}`);
+        expect(texts(events).join("")).toContain("orca-1125-served");
+        expect(asked).toEqual(["orca-tools: touch"]);
+        expect(await readFile(serverLog, "utf8")).toContain("tools/call");
+        const sent = JSON.stringify(model.requests.slice(before));
+        expect(sent).not.toContain("orca-1125-project");
+        // The server had its credential, and the answer Claude saw had it taken out.
+        expect(sent).toContain("orca-1125-served token=[REDACTED]");
+        expect(sent).not.toContain(token);
+        expect(JSON.stringify(events)).not.toContain(token);
+      } finally {
+        await session.close();
+      }
+      // Nor did it reach Claude's saved transcript.
+      expect(await filesContaining(join(root, "claude-config"), token)).toEqual([]);
+    });
+
     it("cancels a turn, and close leaves no Claude Code behind", async () => {
       const session = await open();
       const before = new Set(model.requests);
@@ -400,6 +480,19 @@ describe.runIf(CLAUDE !== undefined && process.platform !== "win32")(
     });
   },
 );
+
+/** Files under `dir` whose text holds `needle`. */
+async function filesContaining(dir: string, needle: string): Promise<string[]> {
+  const { readdir } = await import("node:fs/promises");
+  const entries = await readdir(dir, { recursive: true, withFileTypes: true }).catch(() => []);
+  const hits: string[] = [];
+  for (const e of entries) {
+    if (!e.isFile()) continue;
+    const path = join(e.parentPath, e.name);
+    if ((await readFile(path, "utf8").catch(() => "")).includes(needle)) hits.push(path);
+  }
+  return hits;
+}
 
 /** Processes whose command line names this test's config directory: the session's Claude Code. */
 async function claudePids(root: string): Promise<number[]> {

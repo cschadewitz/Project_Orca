@@ -99,7 +99,7 @@ describe.runIf(process.platform !== "win32")("Claude Agent SDK isolation (#1126)
     }
   });
 
-  it("neither checks nor reads a reference only an MCP server uses: this route starts none (#1308 review)", async () => {
+  it("checks and reads a reference an MCP server uses for that server, and keeps it from Claude (#1125)", async () => {
     const asked: unknown[] = [];
     const reported: unknown[] = [];
     const session = await factory()({
@@ -111,8 +111,7 @@ describe.runIf(process.platform !== "win32")("Claude Agent SDK isolation (#1126)
         mcpServers: [{ name: "tool", command: "/bin/true", env: { TOOL_KEY: { secret: "claude-key" } } }],
       }),
       cwd: dir,
-      // The source is gone: a read would fail the open.
-      secrets: { ...secrets(), "claude-key": { host: "local", provider: "file", path: join(dir, "missing") } },
+      secrets: secrets(),
       authorizeSecretUse: (u) => {
         asked.push(...u);
         return Promise.resolve();
@@ -121,14 +120,36 @@ describe.runIf(process.platform !== "win32")("Claude Agent SDK isolation (#1126)
     });
     try {
       const env = await childEnv(session);
-      expect(asked).toEqual([]);
-      expect(reported).toEqual([]);
+      // ORCA runs the server, so the reference has a consumer: checked, read and redacted.
+      expect(asked).toEqual([expect.objectContaining({ secret: "claude-key", agentId: "claude" })]);
+      expect(reported).toEqual([VALUE]);
+      // It reaches the server only: Claude is given neither the variable nor the value.
       expect(env["TOOL_KEY"]).toBeUndefined();
-      // The catalog's withholding still holds.
+      expect(JSON.stringify(env)).not.toContain(VALUE);
       expect(env[SOURCE]).toBeUndefined();
     } finally {
       await session.close();
     }
+  });
+
+  it("refuses a missing source an MCP server's reference names, before Claude starts", async () => {
+    const error = await factory()({
+      host: new LocalHost({ id: "local", type: "local" }),
+      agent: AgentSpecSchema.parse({
+        id: "claude",
+        driver: "claude-agent-sdk",
+        command: claude,
+        mcpServers: [{ name: "tool", command: "/bin/true", env: { TOOL_KEY: { secret: "claude-key" } } }],
+      }),
+      cwd: dir,
+      secrets: { ...secrets(), "claude-key": { host: "local", provider: "file", path: join(dir, "missing") } },
+      authorizeSecretUse: () => Promise.resolve(),
+    }).then(
+      () => undefined,
+      (e: unknown) => e as OrcaError,
+    );
+    expect(error).toBeInstanceOf(OrcaError);
+    expect(error!.message).toMatch(/unavailable/);
   });
 
   it("refuses a secret reference without a server-verified use check, before Claude starts", async () => {

@@ -5,18 +5,21 @@
  *
  * The SDK route spawns `claude` itself rather than through `AgentHost.spawnAgent`, so the
  * reading the host would do at spawn happens here, immediately before ORCA starts the person's
- * `claude` for this session, and only on ORCA's own machine. Only the agent's own `env` is
- * planned: the route starts no MCP server yet (#1125), so a reference in one has no consumer. A value reaches Claude only in a
+ * `claude` for this session, and only on ORCA's own machine. The agent's MCP servers are
+ * planned with it: ORCA runs them itself (#1125), and a value reaches a server only in the
+ * variable its own `env` names. A value reaches Claude only in a
  * variable the agent's own `env` names, every variable a secret on this host is read from is
  * withheld from what Claude inherits, and the values are returned so the caller redacts them
  * from logs, errors and the run's events.
  */
-import { OrcaError, type AgentSpec, type SecretsConfig } from "@orca/core";
+import { OrcaError, literalEnv, type AgentSpec, type SecretsConfig } from "@orca/core";
+import type { RelayedMcpServer } from "../mcp-relay.js";
 import type { AgentHost } from "../host.js";
 import { readLocalSecret } from "../hosts/local-host.js";
 import {
   ENV_SECRET_DELIVERY,
   checkSecretUse,
+  fillMcpSecrets,
   planSessionSecrets,
   type AgentSecretDelivery,
   type AuthorizeSecretUse,
@@ -30,6 +33,8 @@ export interface ClaudeSdkSecrets {
   withheld: readonly string[];
   /** Every value read, for redaction. Never logged or shown. */
   values: readonly string[];
+  /** The agent's MCP servers with their secret-backed variables filled, for ORCA to run. */
+  mcpServers: RelayedMcpServer[];
 }
 
 export interface ClaudeSdkSecretOptions {
@@ -43,10 +48,9 @@ export interface ClaudeSdkSecretOptions {
 /** Plan, check and read the secrets the agent's `env` refers to. Reads nothing it may not use. */
 export async function claudeSdkSecrets(options: ClaudeSdkSecretOptions): Promise<ClaudeSdkSecrets> {
   const { host, agent } = options;
-  // Only the agent's own env is planned: this route starts no MCP server (#1125), so a reference
-  // in an MCP server's env has no consumer and is neither checked nor read. What the catalog
-  // withholds from Claude does not depend on the agent and is kept whole.
-  const plan = planSessionSecrets(host, { ...agent, mcpServers: [] }, options.secrets);
+  // The agent's env and its MCP servers' env: ORCA runs the servers itself (#1125), so each
+  // reference there has a consumer and is checked and read like the agent's own.
+  const plan = planSessionSecrets(host, agent, options.secrets);
   await checkSecretUse(plan, host, agent.id, options.authorizeSecretUse);
   const delivery = options.delivery ?? ENV_SECRET_DELIVERY;
   const { secrets = [], withheldEnv = [] } = delivery.spawnOptions(plan);
@@ -66,10 +70,18 @@ export async function claudeSdkSecrets(options: ClaudeSdkSecretOptions): Promise
     );
   const env: Record<string, string> = {};
   const values: string[] = [];
+  const byId = new Map<string, string>();
   for (const d of secrets) {
     const value = await readLocalSecret(d.id, d.source, host.id);
     values.push(value);
+    byId.set(d.id, value);
     for (const name of d.env) env[name] = value;
   }
-  return { env, withheld: withheldEnv, values };
+  const mcpServers = fillMcpSecrets(plan, byId).map((m) => ({
+    name: m.name,
+    command: m.command,
+    args: [...m.args],
+    env: literalEnv(m.env),
+  }));
+  return { env, withheld: withheldEnv, values, mcpServers };
 }
