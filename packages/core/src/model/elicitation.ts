@@ -246,7 +246,7 @@ function choices(raw: Json): ElicitationOption[] | null | undefined {
   if (Array.isArray(raw.enum)) {
     if (!raw.enum.every((v) => typeof v === "string")) return null;
     const names = Array.isArray(raw.enumNames) ? raw.enumNames : [];
-    return (raw.enum).map((value, i) => ({ value, label: text(names[i]) ?? value }));
+    return raw.enum.map((value, i) => ({ value, label: text(names[i]) ?? value }));
   }
   return undefined;
 }
