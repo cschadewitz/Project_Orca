@@ -311,6 +311,9 @@ export function claudeConnected(env) {
             answer: a.answer,
             ...(a.judged ? { judged: a.judged } : {}),
           })),
+          // What ORCA itself recorded for the call, where the route reports it (the SDK route's
+          // bridge decision): kept beside the evidence, never used to derive the outcome.
+          ...(path.orcaRecordFor ? { orcaRecord: path.orcaRecordFor(world, c.toolUseId) ?? null } : {}),
           effect,
           effectRef,
           ...(p.primed ? { primingRead: p.primed } : {}),

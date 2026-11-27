@@ -73,18 +73,31 @@ export function claudeSdkConnected(env) {
       nativeToolHook: "experimental",
     });
 
-  /** Open a session the daemon's way. The world's `configured` is read now, as at session open. */
+  /**
+   * Open a session the daemon's way. The world's `configured` is read now, as at session open.
+   * A world with `withoutAnswerer` set opens its session with no answerer at all, as a run that
+   * has nobody to ask: the answerer `claude.js` passes is dropped, not replaced. ORCA's own
+   * decision for each tool use is kept (`orcaRecordFor`).
+   */
   path.openSession = async (world, { askPermission, extraEnv, host, command } = {}) => {
     await mkdir(join(world.root, "claude-config"), { recursive: true });
+    world.orcaRecords ??= new Map();
+    const answerer = world.withoutAnswerer ? undefined : askPermission;
     return makeSessionFactory({ configDir: world.configDir, storeDir: ".orca" }, () =>
       Promise.reject(new Error("a driver: claude-agent-sdk agent was opened over ACP")),
     )({
       host: host ?? new LocalHost({ id: "local", type: "local" }),
       agent: path.agent(world, extraEnv, command),
       cwd: world.workspace,
-      askPermission: askPermission ?? (async () => undefined),
+      ...(answerer ? { askPermission: answerer } : {}),
+      onPermission: ({ toolCallId, decision }) => {
+        if (toolCallId) world.orcaRecords.set(toolCallId, decision);
+      },
       logger: silentLogger,
     });
   };
+
+  /** The bridge's last decision for a tool use, as ORCA recorded it. */
+  path.orcaRecordFor = (world, toolUseId) => (toolUseId ? world.orcaRecords?.get(toolUseId) : undefined);
   return path;
 }

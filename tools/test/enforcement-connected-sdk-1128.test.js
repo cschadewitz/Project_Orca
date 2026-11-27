@@ -14,7 +14,7 @@ import { once } from "node:events";
 import { appendFile, chmod, copyFile, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { CLAUDE_SDK_VERIFIED_PAIRS } from "@orca/agents";
+import { CLAUDE_SDK_DENIALS, CLAUDE_SDK_VERIFIED_PAIRS } from "@orca/agents";
 import {
   REPO_ROOT,
   casesFor,
@@ -60,7 +60,7 @@ describe("the SDK connected path and the matrix agree", () => {
 describe.skipIf(CLAUDE === undefined || process.platform === "win32")("connected: claude sdk (#1128)", () => {
   let model;
   let path;
-  const receipt = { route: "claude-sdk-connected", cases: [], unobservedCalls: [], checks: {} };
+  const receipt = { route: "claude-sdk-connected", cases: [], unobservedCalls: [], checks: {}, noAnswerer: undefined };
 
   beforeAll(async () => {
     model = await modelStandIn();
@@ -100,6 +100,41 @@ describe.skipIf(CLAUDE === undefined || process.platform === "win32")("connected
     }
   }, 120_000);
 
+  // L08's no-answerer call runs in a session that has an answerer which returns nothing: an
+  // unanswered ask (ask:cancelled). A run with nobody to ask is shown here, in its own session
+  // opened with no answerer at all, and kept apart in the receipt.
+  it("no answerer: a session opened without one denies a call its policy asks about, and nothing runs", async () => {
+    const world = await realWorld();
+    world.withoutAnswerer = true;
+    try {
+      const got = await path.decide(
+        world,
+        { tool: "mcp", server: "github", name: "create_issue" },
+        { expect: ["ask"] },
+      );
+      const call = got.detail;
+      expect(call.approvals).toEqual([]);
+      expect(call.orcaRecord).toBe("ask:no-answerer");
+      expect(call.result).toBe(CLAUDE_SDK_DENIALS.noAnswerer);
+      expect(call.effect).toBe("none");
+      expect(call.effectRef).toMatchObject({ kind: "mcp", loggedFor: [], answeredWith: null, unaccountedLines: 0 });
+      receipt.checks.noAnswerer = "pass";
+      // Only what the check shows: the call, ORCA's decision, what Claude was told, no approval
+      // and the independently observed absence of an effect. Its outcome is not a case outcome.
+      receipt.noAnswerer = {
+        toolUseId: call.toolUseId,
+        tool: call.tool,
+        orcaRecord: call.orcaRecord,
+        refusalText: "CLAUDE_SDK_DENIALS.noAnswerer",
+        approvals: call.approvals,
+        effect: call.effect,
+        effectRef: call.effectRef,
+      };
+    } finally {
+      await world.dispose();
+    }
+  }, 120_000);
+
   const runs = new Set(casesFor(listed, catalogue));
   for (const c of catalogue.cases.filter((x) => runs.has(x.id)))
     it(
@@ -131,6 +166,16 @@ describe.skipIf(CLAUDE === undefined || process.platform === "win32")("connected
       for (const p of problems)
         expect(p, id).toMatch(new RegExp(`^case ${id}: .*ORCA's decision was not observed \\(`));
     }
+    // L08's in-case calls are an unanswered ask, an ask whose turn was cancelled while it waited
+    // and an answer that was not offered, each with its own approval; none of them is the
+    // no-answerer check's decision.
+    const l08 = receipt.cases.find((c) => c.id === "L08")?.calls ?? [];
+    expect(l08.map((c) => c.approvals.map((a) => a.answer))).toEqual([
+      ["no-answer"],
+      ["pending"],
+      ["not-offered:allow-everything"],
+    ]);
+    expect(l08.map((c) => c.orcaRecord)).toEqual(["ask:cancelled", "ask:expired", "ask:cancelled"]);
     expect(model.log.errors, "the model stand-in answered every request").toEqual([]);
   });
 });
@@ -158,6 +203,8 @@ async function writeReceipt(receipt) {
         build,
         node: process.version,
         checks: receipt.checks,
+        // The no-answerer check's call, apart from the cases (see the check above).
+        noAnswerer: receipt.noAnswerer ?? null,
         cases: receipt.cases,
         excluded: listed.excluded ?? {},
         unobserved: listed.unobserved ?? {},

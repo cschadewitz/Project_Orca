@@ -167,7 +167,7 @@
         "A04": "One session has one working directory, fixed when it opens; a live agent cannot make a call from another one.",
         "P02": "No raw input or context file on this route (see F01 and F02)."
       },
-      "verifies": "End to end on the SDK route: whether each case's call took effect, was asked about through ORCA's human channel, or came back to the model as ORCA's denial or block, judged from the files, the MCP recorder, the shell recorder and the tool results",
+      "verifies": "End to end on the SDK route: whether each case's call took effect, was asked about through ORCA's human channel, or came back to the model as ORCA's denial or block, judged from the files, the MCP recorder, the shell recorder and the tool results. L08's in-case calls run in a session that has an answerer: an unanswered ask (ask:cancelled), an ask whose turn was cancelled while it waited (ask:expired) and an answer that was not offered, each with its own approval. A run with nobody to ask is shown apart, by the receipt's noAnswerer check: a session opened with no answerer at all, ORCA's ask:no-answerer decision, the fixed text Claude was told, no approval and no MCP effect",
       "unverified": [
         "Behaviour of a real model, which may make calls in shapes the stand-in does not",
         "Claude Code and SDK versions other than the pinned pair; hosts other than linux-x64",
