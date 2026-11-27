@@ -8,7 +8,10 @@ set -euo pipefail
 git config user.name "github-actions[bot]"
 git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 summary() { echo "$*" | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"; }
-gh label create sync-conflict --repo "$REPO" --force --color d93f0b \
+# Issues and labels go through ISSUES_TOKEN (the workflow's own GITHUB_TOKEN, which has
+# `issues: write`): the release App that pushes and merges is not granted Issues.
+gh_issues() { GH_TOKEN="${ISSUES_TOKEN:-$GH_TOKEN}" gh "$@"; }
+gh_issues label create sync-conflict --repo "$REPO" --force --color d93f0b \
   --description "main does not merge cleanly into a feature branch" >/dev/null 2>&1 || true
 
 git fetch -q --prune origin '+refs/heads/*:refs/remotes/origin/*'
@@ -74,30 +77,43 @@ ACTIONS_APP_ID=15368
 # requires a pull request and `check (node 24)` from GitHub Actions under the strict (up to
 # date with the base) policy, with no bypass actors at all, so no credential, the merging one
 # included, can merge past it. A ruleset whose bypass list cannot be read counts as unverified.
+# The message names why each candidate ruleset did not qualify.
 ruleset_problem() {
   local rules id ruleset
   if ! rules=$(gh api "repos/$REPO/rules/branches/$1" 2>/dev/null); then
     echo "its rules could not be read"; return 1
   fi
+  local seen=() why
   for id in $(jq -r --arg c "$REQUIRED_CHECK" --argjson app "$ACTIONS_APP_ID" '
       .[] | select(.type == "required_status_checks"
         and .parameters.strict_required_status_checks_policy == true
         and any(.parameters.required_status_checks[]; .context == $c and .integration_id == $app))
       | .ruleset_id // empty' <<<"$rules" | sort -u); do
-    ruleset=$(gh api "repos/$REPO/rulesets/$id" 2>/dev/null) || continue
-    if jq -e '.enforcement == "active"
-        and (.bypass_actors | type == "array" and length == 0)
-        and any(.rules[]; .type == "pull_request")' <<<"$ruleset" >/dev/null; then
-      return 0
+    if ! ruleset=$(gh api "repos/$REPO/rulesets/$id" 2>/dev/null); then
+      seen+=("ruleset $id could not be read"); continue
     fi
+    # "qualifies", or why this candidate does not. Only a successful parse that prints exactly
+    # "qualifies" counts; a jq failure or any other output leaves the ruleset unverified.
+    if ! why=$(jq -r --arg id "$id" '
+      if .enforcement != "active" then "ruleset \($id) is not active"
+      elif (.bypass_actors | type) != "array" then "ruleset \($id) bypass list is not visible to this token"
+      elif (.bypass_actors | length) != 0 then "ruleset \($id) has bypass actors"
+      elif any(.rules[]; .type == "pull_request") | not then "ruleset \($id) does not require a pull request"
+      else "qualifies" end' <<<"$ruleset" 2>/dev/null); then
+      seen+=("ruleset $id could not be parsed"); continue
+    fi
+    [ "$why" != "qualifies" ] || return 0
+    seen+=("${why:-ruleset $id gave no verdict}")
   done
-  echo "no active ruleset with no bypass actors requires a pull request and an up-to-date \`$REQUIRED_CHECK\` from GitHub Actions (or its bypass list could not be read)"
+  local detail=""
+  [ "${#seen[@]}" -eq 0 ] || detail=" ($(IFS=';'; echo "${seen[*]}" | sed 's/;/; /g'))"
+  echo "no active ruleset with no bypass actors requires a pull request and an up-to-date \`$REQUIRED_CHECK\` from GitHub Actions$detail"
   return 1
 }
 
 # conflict_issue NAME: the open sync-conflict issue for feature/NAME, or empty.
 conflict_issue() {
-  gh issue list --repo "$REPO" --state open --label sync-conflict --search "\"feature/$1\" in:title" \
+  gh_issues issue list --repo "$REPO" --state open --label sync-conflict --search "\"feature/$1\" in:title" \
     --json number,title --jq ".[] | select(.title == \"Sync conflict: feature/$1\") | .number" | head -n 1
 }
 
@@ -106,10 +122,17 @@ for name in "${branches[@]}"; do
   feature="feature/$name"
   sync="feature-sync/$name"
   head=$(git rev-parse "refs/remotes/origin/$feature")
+  # A branch that shares no history with main cannot be synced by a merge; that is no file
+  # conflict for an issue, but a branch to archive or rebuild from main.
+  if ! git merge-base "$main" "$head" >/dev/null 2>&1; then
+    summary "$feature shares no history with main; skipped. Archive it, or rebuild it from main."
+    echo "::warning::$feature shares no history with main; skipped"
+    continue
+  fi
   if git merge-base --is-ancestor "$main" "$head"; then
     summary "$feature already contains main."
     issue=$(conflict_issue "$name")
-    [ -z "$issue" ] || gh issue close "$issue" --repo "$REPO" --comment "$feature now contains main." >/dev/null
+    [ -z "$issue" ] || gh_issues issue close "$issue" --repo "$REPO" --comment "$feature now contains main." >/dev/null
     continue
   fi
 
@@ -158,9 +181,9 @@ for name in "${branches[@]}"; do
       "$main" "$feature" "$head" "${files:-- (none listed)}" "$feature")
     issue=$(conflict_issue "$name")
     if [ -n "$issue" ]; then
-      gh issue comment "$issue" --repo "$REPO" --body "$body" >/dev/null
+      gh_issues issue comment "$issue" --repo "$REPO" --body "$body" >/dev/null
     else
-      gh issue create --repo "$REPO" --title "Sync conflict: $feature" --label sync-conflict --body "$body" >/dev/null
+      gh_issues issue create --repo "$REPO" --title "Sync conflict: $feature" --label sync-conflict --body "$body" >/dev/null
     fi
     summary "$feature: main conflicts; reported."
     continue
@@ -176,5 +199,5 @@ for name in "${branches[@]}"; do
     summary "$feature: refreshed sync #$pr."
   fi
   issue=$(conflict_issue "$name")
-  [ -z "$issue" ] || gh issue close "$issue" --repo "$REPO" --comment "main merges cleanly into $feature again." >/dev/null
+  [ -z "$issue" ] || gh_issues issue close "$issue" --repo "$REPO" --comment "main merges cleanly into $feature again." >/dev/null
 done

@@ -79,6 +79,9 @@ describe("authoritative rich configuration metadata", () => {
     expect(shape.visibility).toBe("withheld");
     expect(JSON.stringify(shape)).not.toContain("secret");
     expect(describeFormNode(z.string(), "agents[].command").visibility).toBe("non-secret");
+    // The hook and gate are policy enums, shown so Config can say what absence means (#1109).
+    expect(describeFormNode(z.string(), "agents[].nativeToolHook").visibility).toBe("non-secret");
+    expect(describeFormNode(z.string(), "agents[].codexExecGate").visibility).toBe("non-secret");
     expect(describeFormNode(z.string().describe("private"), "futureField")).toMatchObject({
       visibility: "metadata-unavailable",
       field: { type: "string" },

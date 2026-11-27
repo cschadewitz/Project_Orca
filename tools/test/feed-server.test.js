@@ -92,6 +92,15 @@ describe("serverChannel", () => {
 
 describe("parseServerChannel", () => {
   const good = () => serverChannel(bundle(), "0.8.0");
+  it("reads a channel naming a bundle from either side of the Orrery rename (the v0.8.1 bridge)", () => {
+    // rename-keep-start: both names on purpose
+    for (const product of ["orca", "orrery"]) {
+      const text = good().replace(/(orca|orrery)-server-/g, `${product}-server-`);
+      expect(parseServerChannel(text).archive).toBe(`${product}-server-0.8.0-linux-x64.tar.xz`);
+    }
+    expect(() => parseServerChannel(good().replace(/(orca|orrery)-server-/g, "kepler-server-"))).toThrow();
+    // rename-keep-end
+  });
   it.each([
     ["a missing final newline", (t) => t.slice(0, -1)],
     ["a reordered key", (t) => t.replace(/^version: (.*)\nplatform: (.*)\n/, "platform: $2\nversion: $1\n")],

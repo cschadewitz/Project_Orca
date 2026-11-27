@@ -515,6 +515,23 @@ const slugify = (text) =>
 
 const runIdOf = (result) => result?.runId ?? result?.run?.id;
 
+/**
+ * `STORE_LOCK_TIMEOUT` is the store saying another writer holds the admission catalog: nothing
+ * was admitted, and the same request with the same idempotency key is safe to send again. The
+ * daemon's own background writes can hold it past the short wait, above all on Windows, where a
+ * replace that meets another open handle retries (#1284). Bounded: about 3 s, then the error.
+ */
+async function retryContended(send, delays = [100, 200, 400, 800, 1600]) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await send();
+    } catch (error) {
+      if (error?.code !== "STORE_LOCK_TIMEOUT" || attempt >= delays.length) throw error;
+      await new Promise((resolve) => setTimeout(resolve, delays[attempt]));
+    }
+  }
+}
+
 async function populate(call, workspace) {
   const marker = join(workspace, DIR, "seeded.json");
   if (existsSync(marker) && !args.force) {
@@ -526,10 +543,8 @@ async function populate(call, workspace) {
   const stamp = `${Date.now().toString(36).slice(-5)}${randomBytes(2).toString("hex")}`;
   const submitted = [];
   const submit = async (label, params, extra = {}) => {
-    const result = await call("requests.submit", {
-      idempotencyKey: `demo-seed-${stamp}-${submitted.length}`,
-      ...params,
-    });
+    const request = { idempotencyKey: `demo-seed-${stamp}-${submitted.length}`, ...params };
+    const result = await retryContended(() => call("requests.submit", request));
     const runId = runIdOf(result);
     submitted.push({ label, runId, requestId: result.requestId, state: result.state, ...extra });
     if (result.state === "recoverable-failure") log(`  ${label}: ${result.failure.code} ${result.failure.message}`);

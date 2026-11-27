@@ -3,7 +3,7 @@
  * needs get/put/list/delete; swap in a database-backed implementation by
  * implementing DocumentStore<T>.
  */
-import { mkdir, open, readFile, stat, rename } from "node:fs/promises";
+import { mkdir, open, readFile, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { ZodType } from "zod";
 import type { Clock, Logger, Request, WorkItem } from "@orca/core";
@@ -25,6 +25,7 @@ import {
 } from "./tool-telemetry-store.js";
 import { refuseOtherBackend } from "./store-backend.js";
 import { filePlanStores, memoryPlanStores, type PlanStores } from "./plan-store.js";
+import { replaceFile } from "./durable-file.js";
 import {
   documentVersion,
   FILE_STORE_CAPABILITIES,
@@ -369,7 +370,7 @@ export class JsonFileDocumentStore<T extends { id: string }> implements Versione
         await handle.close();
       }
       reached("rename");
-      await rename(tmp, this.file);
+      await replaceFile(tmp, this.file);
       reached("committed");
       this.cache = map;
       this.fingerprint = await this.fingerprintOf();

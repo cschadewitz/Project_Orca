@@ -109,8 +109,25 @@ function Create({
   );
 }
 
+/**
+ * What leaving an agent's policy field out means, for the fields whose default the metadata
+ * cannot show: the native hook read as "Absent" and "Default withheld", and never said that
+ * absence is off or how to opt in (#1109). Keyed on the field under `agents[n]`.
+ */
+const AGENT_FIELD_NOTES: Record<string, string> = {
+  nativeToolHook:
+    "Off when absent: no native pre-tool hook. experimental opts this agent in (docs/agent-hook-coverage.md).",
+  codexExecGate: "Off when absent. experimental is refused for now.",
+  "diagnostics.toolCalls": "off when absent: nothing is recorded. keep needs nativeToolHook: experimental.",
+};
+
+function fieldNote(path: DocumentPath): string | undefined {
+  if (path[0] !== "agents" || typeof path[1] !== "number") return undefined;
+  return AGENT_FIELD_NOTES[path.slice(2).join(".")];
+}
+
 function defaultHelp(shape: FieldShape): string {
-  if (shape.default.state === "withheld") return "Default withheld.";
+  if (shape.default.state === "withheld") return "Default not shown.";
   if (shape.default.state === "metadata-unavailable") return "Default metadata unavailable.";
   if (shape.default.state === "available")
     return `Default when absent: ${JSON.stringify(shape.default.value)}. Explicit values are saved only when edited.`;
@@ -167,6 +184,7 @@ export function StructuredForm(form: StructuredFormProps): JSX.Element {
         {value === undefined ? "Absent. " : value === null ? "Explicit null. " : "Explicit value. "}
         {defaultHelp(shape)}
       </Text>
+      {fieldNote(path) !== undefined && <Text style="caption">{fieldNote(path)}</Text>}
       {error !== undefined && shape.kind !== "scalar" && <Text style="caption">{error}</Text>}
       {value !== undefined && shape.acceptsAbsent === true && (
         <Action edits={[{ kind: "remove", path }]} form={form} aria-label={`Remove ${displayPath}`}>
