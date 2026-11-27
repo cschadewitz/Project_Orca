@@ -95,8 +95,11 @@ sources and permission mode are read from that process's command line, where the
 them. The receipt shows the row's unsupported routes refused (an SSH host, a Claude Code other
 than the pinned image) and runs live, through `claude-sdk-connected` (the route's
 `installed.live`), every case that runner makes and observes. The others (A02, A04, B01, F05,
-P03) are listed under `notRun` and run on `claude-sdk-hook` in the suite; the route has no
-installed diagnostics yet, so a tier B claim waits on them (#1129). The receipt also carries
+P03) are the route's installed diagnostics (`installed.diagnostic`, the row's `notAsserted`):
+there is no hook program on this route, so (`installed.diagnosticsOn: "bridge"`) they run on
+the bridge from the same bundle, each call keeping ORCA's answers so that
+`bridgeDiagnosticProblems` re-derives its outcome. Like the ACP route's program diagnostics,
+they count toward no tier. The receipt also carries
 the tier B lifecycle evidence (#1129): a cancelled pending ask has no effect, a fresh session
 asks again and runs each call only on its own one-time answer (the MCP call included, since on
 this route it asks once), and a call whose policy cannot be read within ORCA's decision

@@ -787,5 +787,124 @@
         }
       ]
     }
+  },
+  "bridges": {
+    "claude-sdk-hook": {
+      "A02": [
+        {
+          "tool": "Write",
+          "expected": ["allow"]
+        },
+        {
+          "tool": "Write",
+          "expected": ["ask"],
+          "calls": 2
+        },
+        {
+          "tool": "Edit",
+          "expected": ["ask"]
+        },
+        {
+          "tool": "Read",
+          "expected": ["ask"]
+        }
+      ],
+      "A04": [
+        {
+          "tool": "mcp__github__create_issue",
+          "expected": ["allow"]
+        },
+        {
+          "tool": "mcp__github__create_issue",
+          "expected": ["ask"]
+        },
+        {
+          "tool": "Write",
+          "expected": ["ask"]
+        }
+      ],
+      "B01": [
+        {
+          "tool": "Write",
+          "expected": ["deny"]
+        },
+        {
+          "tool": "Edit",
+          "expected": ["deny"]
+        },
+        {
+          "tool": "Write",
+          "expected": ["deny"]
+        },
+        {
+          "tool": "Edit",
+          "expected": ["deny"]
+        },
+        {
+          "tool": "Write",
+          "expected": ["deny"]
+        },
+        {
+          "tool": "Edit",
+          "expected": ["deny"]
+        },
+        {
+          "tool": "Write",
+          "expected": ["deny"]
+        },
+        {
+          "tool": "Edit",
+          "expected": ["deny"]
+        },
+        {
+          "tool": "Write",
+          "expected": ["deny"]
+        },
+        {
+          "tool": "Edit",
+          "expected": ["deny"]
+        },
+        {
+          "tool": "Read",
+          "expected": ["allow"]
+        }
+      ],
+      "F05": [
+        {
+          "tool": "SomeToolFromTheFuture",
+          "expected": ["ask"]
+        },
+        {
+          "tool": "mcp__onlyserver",
+          "expected": ["ask"]
+        },
+        {
+          "tool": "mcp____x",
+          "expected": ["ask"]
+        },
+        {
+          "tool": "mcp__a__b__c",
+          "expected": ["ask"]
+        }
+      ],
+      "P03": [
+        {
+          "tool": "Bash",
+          "expected": ["ask"]
+        },
+        {
+          "tool": "Write",
+          "expected": ["deny"]
+        },
+        {
+          "tool": "mcp__s__t",
+          "expected": ["ask"]
+        },
+        {
+          "expected": ["ask"],
+          "toolPattern": "^Toolz{4096}$"
+        }
+      ]
+    }
   }
 }

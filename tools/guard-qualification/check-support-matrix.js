@@ -405,6 +405,85 @@ export function programEvidenceProblems(receipt, neededCases, assertions = loadA
   return problems;
 }
 
+/**
+ * The diagnostic evidence of an installed receipt on a route decided in process
+ * (`installed.diagnosticsOn: "bridge"`, #1129): each diagnostic case ran on the bridge from the
+ * bundle the receipt's sessions ran (`via: "bridge"`) and passed. Its calls must be exactly the
+ * committed bridge inventory's (`assertions.bridges`, for the receipt's route): the same count,
+ * in order, for the same tool, each with an outcome the inventory accepts. Each outcome is
+ * re-derived from what ORCA answered (the hook's output, `canUseTool`'s answer bound to that
+ * call, the relay), as `paths.js` does, never taken on its word, and an invalid one never
+ * passes. It counts toward no tier.
+ */
+export function bridgeDiagnosticProblems(receipt, neededCases, assertions = loadAssertions()) {
+  const inventory = assertions.bridges?.[receipt.route];
+  if (!inventory) return [`no committed bridge inventory for route ${receipt.route}`];
+  const problems = [];
+  const byId = new Map((receipt.cases ?? []).map((c) => [c.id, c]));
+  for (const id of neededCases) {
+    const c = byId.get(id);
+    const at = `case ${id} (bridge)`;
+    if (!c) {
+      problems.push(`${at}: not run`);
+      continue;
+    }
+    if (c.via !== "bridge") problems.push(`${at}: ran via ${c.via ?? "nothing"}, not the bridge`);
+    if (c.result !== "pass") problems.push(`${at}: did not pass`);
+    const required = inventoryCalls(inventory[id]);
+    if (!required) {
+      problems.push(`${at}: not in the bridge inventory`);
+      continue;
+    }
+    const calls = Array.isArray(c.calls) ? c.calls : [];
+    if (calls.length !== required.length) {
+      problems.push(`${at}: ${calls.length} calls, the inventory requires ${required.length}`);
+      continue;
+    }
+    calls.forEach((call, i) => {
+      const want = required[i];
+      const run = `${at}: call ${i + 1}`;
+      const tool = typeof call?.tool === "string" ? call.tool : "";
+      const sameTool = want.toolPattern !== undefined ? new RegExp(want.toolPattern).test(tool) : tool === want.tool;
+      if (!sameTool)
+        problems.push(`${run}: tool ${tool.slice(0, 80)}, the inventory's is ${want.tool ?? want.toolPattern}`);
+      const derived = bridgeOutcome(call);
+      if (derived.startsWith("invalid:")) problems.push(`${run}: ORCA's answers are invalid (${derived})`);
+      else if (derived !== call.outcome)
+        problems.push(`${run}: its answers show ${derived}, not ${String(call.outcome)}`);
+      else if (!want.expected.includes(derived))
+        problems.push(`${run}: outcome ${derived} is not one the inventory accepts (${want.expected.join("|")})`);
+    });
+  }
+  return problems;
+}
+
+/**
+ * The outcome of one bridge call from what ORCA answered: the hook's output, then (unless the
+ * hook denied) `canUseTool`'s, which must be bound to this call and remember nothing, then the
+ * relay for an allowed MCP call. As `claudeSdkHook.decide`.
+ */
+function bridgeOutcome(call) {
+  const said = call.hook?.hookSpecificOutput;
+  if (said?.permissionDecision === "deny") return said.permissionDecisionReason === call.failedText ? "block" : "deny";
+  if (said !== undefined && said.permissionDecision !== "ask") return `invalid:hook-${String(said.permissionDecision)}`;
+  const answer = call.answer;
+  if (!answer || typeof answer !== "object") return "invalid:no-answer";
+  if (typeof call.toolUseId !== "string" || answer.toolUseID !== call.toolUseId || "updatedPermissions" in answer)
+    return "invalid:answer-shape";
+  const decision = call.decision ?? "";
+  if (answer.behavior === "deny") {
+    if (decision === "ask:failed" || (decision === "" && answer.message === call.failedText)) return "block";
+    return decision.startsWith("ask:") ? "ask" : "deny";
+  }
+  if (answer.behavior !== "allow") return `invalid:answer-${String(answer.behavior)}`;
+  const answered = decision === "ask:allow_once";
+  if (said !== undefined && !answered) return `invalid:allowed-after-ask:${decision}`;
+  const outcome = answered ? "ask" : "allow";
+  if (call.relay === "refused-before-handoff") return "invalid:relay-refused";
+  if (call.relay === "refused") return call.beforeHandoff ? "deny" : "invalid:relay-refused";
+  return outcome;
+}
+
 /** The outcome Claude Code takes from one run of a command hook (as `paths.js` `hookOutcome`). */
 function programOutcome(call) {
   if (call.exitCode !== 0) return "block";
@@ -539,6 +618,8 @@ export function qualificationProfile(matrix, catalogue, assertions, agent, route
     inventories: {
       live: (live && assertions.paths?.[live]) ?? null,
       program: assertions.programs?.[routePath.id] ?? null,
+      // Only a route whose diagnostics run on the bridge has one; others' profiles are as they were.
+      ...(assertions.bridges?.[routePath.id] ? { bridge: assertions.bridges[routePath.id] } : {}),
     },
   };
   return createHash("sha256").update(canonical(profile)).digest("hex");
@@ -667,15 +748,41 @@ export function checkSupportMatrix(
     }
   }
 
-  // A route's installed diagnostics have their program runs and accepted outcomes committed.
+  // A route's installed diagnostics have their program runs and accepted outcomes committed. A
+  // route decided in the session's own process (`installed.diagnosticsOn: "bridge"`, #1129) has
+  // no program: its diagnostics are the route's own cases, run on the bridge the receipt's
+  // sessions ran (`bridgeDiagnosticProblems`), and there is no program inventory for it.
   for (const path of matrix.paths) {
     const program = path.installed?.diagnostic ?? {};
     const inventory = assertions.programs?.[path.id] ?? {};
     const runs = new Set(casesFor(path, catalogue));
+    const onBridge = path.installed?.diagnosticsOn === "bridge";
+    if (path.installed?.diagnosticsOn !== undefined && !onBridge)
+      problems.push(`path ${path.id}: installed.diagnosticsOn must be "bridge" when given`);
+    if (onBridge && Object.keys(inventory).length)
+      problems.push(`path ${path.id}: its diagnostics run on the bridge, so it has no program inventory`);
+    const bridges = assertions.bridges?.[path.id] ?? {};
+    if (!onBridge && Object.keys(bridges).length)
+      problems.push(`path ${path.id}: has a bridge inventory, but its diagnostics do not run on the bridge`);
     for (const id of Object.keys(program)) {
       if (!runs.has(id)) problems.push(`path ${path.id}: lists ${id} as an installed diagnostic, but does not run it`);
-      if (!Array.isArray(inventory[id]))
+      if (!onBridge && !Array.isArray(inventory[id]))
         problems.push(`path ${path.id}: diagnostic case ${id} has no committed program inventory`);
+      if (onBridge && !inventoryCalls(bridges[id]))
+        problems.push(`path ${path.id}: diagnostic case ${id} has no committed bridge inventory`);
+    }
+    for (const [id, entries] of Object.entries(bridges)) {
+      if (!(id in program))
+        problems.push(`path ${path.id}: the bridge inventory lists ${id}, not an installed diagnostic`);
+      for (const e of entries ?? [])
+        if (
+          (typeof e.tool === "string") === (typeof e.toolPattern === "string") ||
+          !Array.isArray(e.expected) ||
+          e.expected.length === 0
+        )
+          problems.push(
+            `path ${path.id}: bridge inventory for ${id} needs one tool or toolPattern and accepted outcomes per call`,
+          );
     }
     for (const [id, entries] of Object.entries(inventory)) {
       if (!(id in program))

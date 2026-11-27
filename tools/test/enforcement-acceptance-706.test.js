@@ -200,6 +200,12 @@ describe("the matrix checker refuses claims beyond the evidence", () => {
           ([id]) => paths.find((p) => p.id === id)?.installed?.diagnostic,
         ),
       ),
+      // And the committed bridge inventories, for a route whose diagnostics run on the bridge (#1129).
+      bridges: Object.fromEntries(
+        Object.entries(loadAssertions().bridges ?? {}).filter(
+          ([id]) => paths.find((p) => p.id === id)?.installed?.diagnosticsOn === "bridge",
+        ),
+      ),
     };
   };
   /**

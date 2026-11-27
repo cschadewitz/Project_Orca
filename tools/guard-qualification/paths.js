@@ -363,6 +363,8 @@ const quiet = { log() {}, debug() {}, info() {}, warn() {}, error() {}, child: (
  * world's sidecar and protected paths. A session either has the run's answerer or has none, so
  * a world keeps one bridge of each. All calls share one live turn, as calls in one agent
  * message do; a call's `signal` is ORCA cancelling that turn, and later calls get a new one.
+ * A world may name the bridge to make (`world.sdkBridge`): the installed receipt runs the route's
+ * diagnostics on the bridge from the bundle its sessions ran (#1129); by default, the sources'.
  */
 function sdkSession(world, answered) {
   world.sdk ??= { decisions: new Map(), answerers: new Map(), bridges: new Map(), turn: undefined, turns: 0 };
@@ -371,7 +373,7 @@ function sdkSession(world, answered) {
   if (!sdk.bridges.has(answered))
     sdk.bridges.set(
       answered,
-      claudeSdkPermissionBridge({
+      (world.sdkBridge ?? claudeSdkPermissionBridge)({
         agent: { id: world.agentId, permissions: world.configured },
         sessionId: "acceptance-session",
         cwd: world.workspace,
@@ -410,7 +412,8 @@ export const claudeSdkHook = {
     const { sdk, bridge } = sdkSession(world, !opts.noAnswerer);
     const turn = sdk.turn;
     const { toolName, toolInput } = claudeShape(action);
-    const toolUseId = `toolu_${++world.seq}`;
+    // A world may set a prefix, so its calls' ids are unique beside another run's in one receipt.
+    const toolUseId = `toolu_${world.sdkIdPrefix ?? ""}${++world.seq}`;
     const claudeSignal = new AbortController().signal;
     if (opts.signal)
       opts.signal.addEventListener(
@@ -427,9 +430,20 @@ export const claudeSdkHook = {
       return world.answers.shift();
     });
     const surfaces = [];
+    // What ORCA answered at each step, kept whole so an installed diagnostic can re-derive the
+    // outcome from it (`bridgeDiagnosticProblems`).
+    const answers = { hook: undefined, answer: undefined };
     const result = (outcome, response) => {
       sdk.answerers.delete(toolUseId);
-      return { outcome, detail: sdk.decisions.get(toolUseId) ?? outcome, response, surfaces };
+      return {
+        outcome,
+        detail: sdk.decisions.get(toolUseId) ?? outcome,
+        response,
+        surfaces,
+        toolUseId,
+        decision: sdk.decisions.get(toolUseId),
+        ...answers,
+      };
     };
 
     const hook = await bridge.preToolUse(
@@ -446,6 +460,7 @@ export const claudeSdkHook = {
       toolUseId,
       { signal: claudeSignal },
     );
+    answers.hook = hook;
     const said = hook?.hookSpecificOutput;
     if (said?.permissionDecisionReason !== undefined) surfaces.push(said.permissionDecisionReason);
     if (said?.permissionDecision === "deny")
@@ -460,6 +475,7 @@ export const claudeSdkHook = {
       toolUseID: toolUseId,
       suggestions: [],
     });
+    answers.answer = answer;
     if (answer.message !== undefined) surfaces.push(answer.message);
     // Claude is told which tool use the answer is for, and never told to remember it.
     if (answer.toolUseID !== toolUseId || "updatedPermissions" in answer) return result("invalid:answer-shape", answer);
@@ -486,7 +502,7 @@ export const claudeSdkHook = {
         { toolUseId },
       );
     } catch {
-      return { ...result("invalid:relay-refused", answer), relay: "refused" };
+      return { ...result("invalid:relay-refused", answer), relay: "refused-before-handoff" };
     }
     // A case may change the policy between the relay's first check and the handoff.
     await opts.beforeHandoff?.();
