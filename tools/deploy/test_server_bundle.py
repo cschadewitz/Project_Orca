@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import platform
 import sys
+import shutil
 import tarfile
 import tempfile
 import types
