@@ -173,5 +173,7 @@ jobs:
       # The sign-in test runs the CLI on the server side over ssh: it needs the built CLI.
       - name: Build the CLI
         run: pnpm exec tsc -b packages/cli
+      # One file at a time: the setup's inventory refuses a machine where an ORCA process runs,
+      # and the sign-in tests run the CLI on this same machine.
       - name: Tunnel and profile tests against the sshd
-        run: pnpm exec vitest run packages/protocol/test/remote-access.test.ts packages/protocol/test/server-setup-windows-live.test.ts packages/app/test/remote-profiles
+        run: pnpm exec vitest run --no-file-parallelism packages/protocol/test/remote-access.test.ts packages/protocol/test/server-setup-windows-live.test.ts packages/app/test/remote-profiles

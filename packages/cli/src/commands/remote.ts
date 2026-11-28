@@ -42,6 +42,7 @@ import {
   enrollDiscovered,
   keyFingerprints,
   launcherCommand,
+  windowsSshBootstrap,
   readSetup,
   setupInvocation,
   SETUP_SCRIPT,
@@ -137,10 +138,11 @@ export async function remoteCommand(
   const [sub, destination, ...extra] = ctx.positionals;
   if (sub === "push-repo" && destination && !extra.length) return pushRepoCommand(ctx, destination, deps);
   if (sub === "agent" && destination && extra.length === 1) return agentCommand(ctx, destination, extra[0]!, deps);
+  if (sub === "windows-ssh" && !destination) return windowsSshCommand(ctx, deps);
   if (sub !== "add" || !destination || extra.length)
     throw new OrcaError(
       "CONFIG_INVALID",
-      "usage: orca remote add [user@]host [--tailnet] [--ssh-port N] [--identity FILE] [--port N] [--push-bundle] [--confirm CODE], orca remote push-repo [user@]host [--tailnet] [--repo DIR] [--name NAME] [--ref REF]..., orca remote agent install|status|login [user@]host [--tailnet] [--agent ID], or orca remote enroll <id> [--host-key SHA256:... | --tailnet]",
+      "usage: orca remote add [user@]host [--tailnet] [--ssh-port N] [--identity FILE] [--port N] [--push-bundle] [--confirm CODE], orca remote push-repo [user@]host [--tailnet] [--repo DIR] [--name NAME] [--ref REF]..., orca remote agent install|status|login [user@]host [--tailnet] [--agent ID], orca remote windows-ssh, or orca remote enroll <id> [--host-key SHA256:... | --tailnet]",
     );
   const scripts = deps.scripts ?? setupScripts();
   if (!scripts)
@@ -530,9 +532,39 @@ async function tailnetPeer(
     ctx.err(`${peer.dnsName} is shared from another tailnet: check its host key by hand before you confirm.`);
   if (!peer.tailscaleSsh)
     ctx.err(
-      `${peer.dnsName} does not run Tailscale SSH, so its host key is not advertised and it needs its own sshd. To log in with Tailscale SSH instead, run this on it: sudo tailscale set --ssh`,
+      peer.os.toLowerCase() === "windows"
+        ? // Tailscale SSH has no Windows server: Windows' own OpenSSH Server it is (#1238).
+          `${peer.dnsName} is a Windows machine, so its host key is not advertised: check it by hand before you confirm. It needs the Windows OpenSSH Server; if that is not on yet, run the line orca remote windows-ssh prints on it, in an administrator PowerShell.`
+        : `${peer.dnsName} does not run Tailscale SSH, so its host key is not advertised and it needs its own sshd. To log in with Tailscale SSH instead, run this on it: sudo tailscale set --ssh`,
     );
   return peer;
+}
+
+/**
+ * `orca remote windows-ssh` (#1238): the line that turns a Windows machine's OpenSSH Server on,
+ * which runs the download only if it matches this checkout's own copy.
+ */
+function windowsSshCommand(ctx: CommandContext, deps: { scripts?: string; version?: string }): number {
+  const scripts = deps.scripts ?? setupScripts();
+  if (!scripts)
+    throw new OrcaError(
+      "CONFIG_INVALID",
+      "orca remote windows-ssh runs from a source checkout; in the desktop app, pick the Windows machine in Add a machine.",
+    );
+  const bootstrap = windowsSshBootstrap(scripts, deps.version ?? ORCA_VERSION);
+  if (ctx.flags.json) {
+    ctx.out(JSON.stringify(bootstrap));
+    return 0;
+  }
+  ctx.err(
+    "Run this once on the Windows machine, in an administrator PowerShell. It downloads orca-windows-ssh.ps1 for this version and runs it only if its SHA-256 is that of this ORCA's own copy:",
+  );
+  ctx.err(`  ${bootstrap.sha256}`);
+  ctx.err(
+    "If the OpenSSH Server is already on, it changes nothing. Otherwise it lists each change (install the Windows feature, allow SSH over the Tailscale adapter and block it on every other network adapter, start sshd automatically, with a scheduled task that keeps the block up to date as adapters come and go) and asks before making any. Windows Update keeps the OpenSSH Server updated; ORCA does not bundle it.",
+  );
+  ctx.out(bootstrap.command);
+  return 0;
 }
 
 function finish(

@@ -80,6 +80,10 @@ try {
   & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "download.ps1") | ForEach-Object { Write-Host "  $_" }
   Assert ($LASTEXITCODE -eq 0) "the download checks failed"
 
+  Case "the OpenSSH Server bootstrap: silent when it is on, otherwise every change listed and asked for first"
+  & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "openssh.ps1") | ForEach-Object { Write-Host "  $_" }
+  Assert ($LASTEXITCODE -eq 0) "the OpenSSH bootstrap checks failed"
+
   Case "an archive entry outside its root is refused before anything is unpacked, and the run is put back"
   $evil = Join-Path $base "evil"
   $null = New-Item -ItemType Directory -Force $evil

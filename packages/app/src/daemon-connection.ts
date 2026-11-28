@@ -143,6 +143,11 @@ export interface TailnetMachineView {
   sharedIn: boolean;
   /** ORCA can set up a server there: Linux or Windows (#1238). */
   hostSupported: boolean;
+  /**
+   * A Windows machine (#1238): the line that turns its OpenSSH Server on, which the person runs
+   * there first, and the SHA-256 it checks the download against (this app's own copy's).
+   */
+  windowsSsh?: { command: string; sha256: string };
 }
 /**
  * The tailnet as Add a machine sees it: `off` (the `tailnet-hosts` flag is off: nothing is

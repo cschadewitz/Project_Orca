@@ -4,12 +4,14 @@
  * standard input, and reads its lines, with the confirmed account and directory carried into the
  * script exactly. Runs when `ORCA_SSH_TUNNEL_TEST` names a Windows sshd (the SSH tunnel check's
  * Windows job; see remote-access.test.ts). The setup's own behaviour on Windows is the Windows
- * server bundle check's (tools/deploy/tests/windows-setup/run.ps1).
+ * server bundle check's (tools/deploy/tests/windows-setup/run.ps1). On any Windows, also the line
+ * that turns a Windows machine's OpenSSH Server on: it runs exactly the bytes it checked, or none.
  */
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
 import { ConnectionProfileSchema, SshTunnel } from "../src/remote-access.js";
 import {
@@ -20,6 +22,8 @@ import {
   serverOs,
   setupInvocation,
   type Inspected,
+  WINDOWS_SSH_SCRIPT,
+  windowsSshBootstrap,
 } from "../src/server-setup.js";
 
 const live = process.env.ORCA_SSH_TUNNEL_TEST
@@ -106,4 +110,40 @@ describe.skipIf(!live || process.platform !== "win32")("a Windows server's setup
     expect(outcome).toMatchObject({ kind: "failed", step: "stage" });
     expect(outcome.kind === "failed" && outcome.detail).toMatch(/0\.0\.1/);
   }, 600_000);
+});
+
+describe.skipIf(process.platform !== "win32")("the Windows OpenSSH bootstrap line, in Windows PowerShell", () => {
+  // In place of the tag's address, a local file: what the line fetches, checks and runs.
+  const dir = mkdtempSync(join(tmpdir(), "orca-windows-ssh-line-"));
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+  const shipped = join(dir, "shipped");
+  const served = join(dir, "served.ps1");
+  const run = (command: string) =>
+    execFileSync(
+      "powershell",
+      ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(command, "utf16le").toString("base64")],
+      { encoding: "utf8" },
+    );
+  const bootstrap = (from = pathToFileURL(served).href) => windowsSshBootstrap(shipped, "0.9.0", from).command;
+  const script = "Write-Host ('ran the bytes ' + 'it checked')\n";
+
+  it("runs exactly the fetched bytes when they are the shipped copy's, writing no file", () => {
+    mkdirSync(shipped);
+    writeFileSync(join(shipped, WINDOWS_SSH_SCRIPT), script);
+    writeFileSync(served, script);
+    const before = new Set(readdirSync(tmpdir()));
+    expect(run(bootstrap())).toContain("ran the bytes it checked");
+    const after = readdirSync(tmpdir());
+    expect(after.filter((name) => name.includes("orca-windows-ssh") && !before.has(name))).toEqual([]);
+  });
+
+  it("runs nothing when the fetched bytes differ, or the fetch fails", () => {
+    writeFileSync(served, "Write-Host 'ran other bytes'\n");
+    const other = run(bootstrap());
+    expect(other).toContain("Not the orca-windows-ssh.ps1 this ORCA ships, so nothing was run.");
+    expect(other).not.toContain("ran");
+    const missing = run(bootstrap(pathToFileURL(join(dir, "missing.ps1")).href));
+    expect(missing).toContain("Could not download orca-windows-ssh.ps1, so nothing was run:");
+    expect(missing).not.toContain("Not the orca-windows-ssh.ps1");
+  });
 });

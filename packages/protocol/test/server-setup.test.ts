@@ -2,6 +2,7 @@
  * The client side of one-step server setup (#881): what the person is shown and confirms is
  * exactly what ssh would print, and the confirmation is bound to all of it.
  */
+import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -27,6 +28,8 @@ import {
   WINDOWS_COMMAND,
   WINDOWS_SETUP_SCRIPT,
   WINDOWS_SETUP_TIMEOUT_MS,
+  WINDOWS_SSH_SCRIPT,
+  windowsSshBootstrap,
 } from "../src/server-setup.js";
 
 /** The shipped setup files. */
@@ -242,6 +245,43 @@ describe("a Windows server (#1238)", () => {
     expect(inspectInvocation("linux", DEPLOY, "0.9.0", 6722).timeoutMs).toBe(INSPECT_TIMEOUT_MS);
     expect(SETUP_TIMEOUT_MS).toBe(30 * 60_000);
     expect(WINDOWS_SETUP_TIMEOUT_MS).toBeGreaterThan(SETUP_TIMEOUT_MS);
+  });
+
+  it("gives a Windows OpenSSH bootstrap line that runs the download only if it is this ORCA's own copy", () => {
+    const { command, url, sha256 } = windowsSshBootstrap(DEPLOY, "0.9.0");
+    const own = createHash("sha256")
+      .update(readFileSync(join(DEPLOY, WINDOWS_SSH_SCRIPT)))
+      .digest("hex")
+      .toUpperCase();
+    expect(sha256).toBe(own);
+    expect(url).toBe(
+      "https://raw.githubusercontent.com/cschadewitz/Project_Orca/v0.9.0/tools/deploy/orca-windows-ssh.ps1",
+    );
+    // Fetched into memory, checked, and exactly those bytes run: no file to swap, never `iex`.
+    expect(command).not.toMatch(/\biex\b|Invoke-Expression|-OutFile|\$env:TEMP|-File /);
+    const fetch = command.indexOf(`$b = (New-Object Net.WebClient).DownloadData('${url}');`);
+    const check = command.indexOf(
+      `if ($null -ne $b -and $h -eq '${own}') { & ([scriptblock]::Create([Text.Encoding]::UTF8.GetString($b))) }`,
+    );
+    expect(fetch).toBeGreaterThan(0);
+    expect(check).toBeGreaterThan(fetch);
+    // A failed download runs nothing, and says so; so do other bytes.
+    expect(command).toContain(
+      "} catch { $b = $null; Write-Host ('Could not download orca-windows-ssh.ps1, so nothing was run: '",
+    );
+    expect(command).toContain(
+      "elseif ($null -ne $b) { Write-Host 'Not the orca-windows-ssh.ps1 this ORCA ships, so nothing was run.' }",
+    );
+    expect(() => windowsSshBootstrap(DEPLOY, "0.9.0", "https://x/'; calc; '")).toThrow(/Not an address/);
+    // Another copy, another digest: the line is bound to the bytes shipped beside it.
+    const other = mkdtempSync(join(tmpdir(), "orca-windows-ssh-"));
+    try {
+      writeFileSync(join(other, WINDOWS_SSH_SCRIPT), "Write-Host 'something else'\n");
+      expect(windowsSshBootstrap(other, "0.9.0").sha256).not.toBe(own);
+    } finally {
+      rmSync(other, { recursive: true, force: true });
+    }
+    expect(() => windowsSshBootstrap(DEPLOY, "0.9.0'; calc; '")).toThrow(/Not a release version/);
   });
 
   it("reports a Windows daemon started at its account's logon, not at boot", () => {

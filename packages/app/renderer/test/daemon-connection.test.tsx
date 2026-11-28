@@ -477,6 +477,10 @@ it("adds a machine picked from the tailnet, and passes Tailscale SSH approval on
           machine("nBuild1", "build-1.example-tailnet.ts.net"),
           machine("nMac", "desk.example-tailnet.ts.net", { os: "macOS", hostSupported: false }),
           machine("nOff", "old.example-tailnet.ts.net", { online: false }),
+          machine("nWin", "pc.example-tailnet.ts.net", {
+            os: "windows",
+            windowsSsh: { command: "Invoke-WebRequest the-bootstrap", sha256: "0123456789ABCDEF".repeat(4) },
+          }),
         ],
       },
     })),
@@ -502,7 +506,18 @@ it("adds a machine picked from the tailnet, and passes Tailscale SSH approval on
   expect(option("old.").disabled).toBe(true);
   const inputs = () => [...group.querySelectorAll("input")];
   fireEvent.change(inputs()[1]!, { target: { value: "casey@" } });
+  // A Windows machine: the step that turns its OpenSSH Server on, told before it is run (#1238).
+  fireEvent.change(select, { target: { value: "nWin" } });
+  const step = within(group).getByRole("group", { name: "Turn on OpenSSH on Windows" });
+  expect(step.textContent).toContain("First, on pc.example-tailnet.ts.net: turn on its OpenSSH Server");
+  expect(step.textContent).toContain("you maintain nothing for it beyond Windows Update");
+  expect(step.textContent).toContain("If the OpenSSH Server is already on, it changes nothing");
+  expect(step.textContent).toContain("asks before making any");
+  expect(step.textContent).toContain("only if it is exactly the file this app ships (SHA-256 0123456789AB");
+  expect(within(step).getByLabelText("PowerShell command").textContent).toBe("Invoke-WebRequest the-bootstrap");
+  fireEvent.change(inputs()[0]!, { target: { value: "" } });
   fireEvent.change(select, { target: { value: "nBuild1" } });
+  expect(within(group).queryByRole("group", { name: "Turn on OpenSSH on Windows" })).toBeNull();
   expect(inputs()[0]!.value).toBe("build-1");
   expect(inputs()[1]!.value).toBe("casey@build-1.example-tailnet.ts.net");
   // A machine on the tailnet is reached directly.

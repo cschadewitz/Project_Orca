@@ -212,6 +212,7 @@ never treats tailnet membership as permission: every connection is still ORCA's 
 tunnel, and every daemon call still needs an ORCA credential.
 
 **On the new host** (Linux x64): install Tailscale and join your tailnet with Tailscale SSH on.
+For a Windows x64 host, see [Windows hosts](#windows-hosts) below.
 
 ```sh
 sudo tailscale up --ssh
@@ -233,7 +234,7 @@ tailnet. Pick one, enter the account to log in as (`you@`), and save: the app ch
 shows the host keys your tailnet advertises for it, and sets it up once you confirm, carrying the
 signed bundle over the tunnel. When Tailscale asks you to approve the login, the dialog says so
 and **Open approval page** opens it in your browser. Offline machines, and machines that are not
-Linux, cannot be picked for setup. **Add profile…** offers the same list for a machine that
+Linux or Windows, cannot be picked for setup. **Add profile…** offers the same list for a machine that
 already runs a daemon.
 
 - `build-1` is the machine's name on your tailnet (its short or full MagicDNS name, or its node
@@ -342,8 +343,80 @@ apply it as with any other change (#1235).
 (for example `tag:orca-server`), it leaves `autogroup:self`, so add a narrow SSH rule for your
 own devices and the account ORCA logs in as. Avoid broad `autogroup:member` rules.
 
-Windows hosts cannot be set up this way yet: Tailscale SSH has no Windows server (#1238). Without
-Tailscale, typed SSH profiles keep working over any VPN or LAN.
+Without Tailscale, typed SSH profiles keep working over any VPN or LAN.
+
+### Windows hosts
+
+Tailscale SSH has no Windows server, so a Windows x64 host uses the OpenSSH Server that Windows
+itself ships (#1238). ORCA does not bundle, update or reconfigure it: Windows Update installs and
+updates it, and you maintain nothing for it beyond Windows Update.
+
+**On the Windows host**, install Tailscale and sign in to your tailnet. Then turn its OpenSSH
+Server on with the line your own ORCA gives you, run once in an administrator PowerShell there:
+
+- In the desktop app, **Add a machine…** shows it when you pick a Windows machine, with what it
+  does, and copies it for you.
+- From a source checkout, `orca-cli remote windows-ssh` prints it (`--json` for the command and
+  digest alone).
+
+The line fetches `tools/deploy/orca-windows-ssh.ps1` from your ORCA version's tag into memory,
+checks its SHA-256 against the copy your ORCA install ships, and runs exactly those bytes only if
+they match. Nothing is written to disk on the way, so nothing can replace the file between the
+check and the run. A failed download, or bytes that differ, run nothing, and the line says
+which. To read the script first, it is in your ORCA install's `resources/server-setup/` folder, and it runs the same
+way with `powershell -NoProfile -ExecutionPolicy Bypass -File orca-windows-ssh.ps1`.
+
+- If the OpenSSH Server is already installed, starts automatically and is running, it changes
+  nothing, its firewall rules included, and says so. It does not then claim SSH is limited to
+  Tailscale: that policy is yours. The one exception is a machine it set up itself whose
+  adapter rule or guard task is out of date; then it offers to put them back, as below.
+- Otherwise it lists exactly what it would change and asks first. Anything but `y` changes
+  nothing ("Nothing was changed"). The changes, only those still needed, in this order:
+  1. Install the OpenSSH Server Windows feature from Windows Update. Its `sshd` service stays
+     stopped.
+  2. Allow inbound SSH (TCP 22) over the Tailscale adapter, with the firewall rule
+     "ORCA: OpenSSH Server over Tailscale". Block inbound SSH on every other network adapter the
+     machine has, named one by one, with the rule "ORCA: Block OpenSSH Server on other network
+     adapters". Block it from every address outside Tailscale's (`100.64.0.0/10` and
+     `fd7a:115c:a1e0::/48`) on any adapter, with the rule "ORCA: Block OpenSSH Server outside
+     Tailscale". Disable the rule the feature adds for every network (`OpenSSH-Server-In-TCP`).
+  3. Check that SSH is then blocked on every other adapter, and only then set `sshd` to start
+     automatically and start it.
+- A Windows Firewall block rule wins over every allow rule, so other rules that allow inbound
+  connections, such as the ones Windows adds for its own apps, cannot open SSH on another
+  adapter. It lists them and leaves them as they are.
+- Adapters come and go (a new VPN, say), so it also adds the scheduled task `\ORCA\orca-ssh-guard`,
+  which runs as SYSTEM at startup, whenever a network connects and every minute. It brings the
+  adapter rule up to the adapters there are, and stops `sshd` when it cannot. The task carries its
+  script itself, so there is no file anyone else could change. Nothing in it needs maintaining.
+- It refuses, changing nothing, outside an administrator session, without the Tailscale
+  adapter, on a Windows too old to have the feature (before Windows 10 1809 or Windows Server
+  2019), or when the block would not hold: a firewall profile that is off or does not block
+  inbound connections by default, a policy that turns local firewall rules off (the ORCA rules
+  would not apply), an enabled rule that allows SSH and lets connections past block rules
+  (`OverrideBlockRules`; it changes no rule it did not make), a rule by one of its own names
+  with another scope, or a firewall it cannot read. It also refuses an `sshd_config` that
+  listens on any port but 22, or that it cannot read in full (an `Include`, say). It reads the
+  effective policy (Windows' `ActiveStore`), Group Policy and other managed rules included, and
+  changes only local rules.
+- A step that fails stops the run before `sshd` is started; run it again to finish.
+
+**From your own machine**, add it as above (`orca-cli remote add you@desk-1 --tailnet`, or **Add
+a machine…**). Its host key is not advertised by your tailnet, so you compare the fingerprint by
+hand before you confirm, as for any first-seen key. Signing in uses the key or password your
+Windows account accepts over SSH. For an administrator account, Windows reads its keys from
+`C:\ProgramData\ssh\administrators_authorized_keys`, not from the account's own
+`.ssh\authorized_keys`.
+
+The setup then runs as that account and needs no administrator rights of its own: it installs
+under `%LOCALAPPDATA%\orca-server`, downloads and verifies the signed Windows server bundle on
+the host (`--push-bundle` is Linux only for now), and registers the scheduled task
+`\ORCA\orca-server`.
+- **At boot, or at logon.** Where the account may register a task that starts at boot, the
+  daemon runs whether or not anyone is logged on. Otherwise the task starts when the account
+  logs on, and the setup says so; setting it up again while the account is an administrator
+  moves it to boot.
+- A setup directory whose path has a space is refused for now.
 
 ## How this is tested
 

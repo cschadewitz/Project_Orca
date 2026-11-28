@@ -54,7 +54,11 @@ it("accepts a carried Sigstore root only by the pins orca-release.py has", () =>
 
 it("is run end to end on Windows by the Windows server bundle check, in Windows PowerShell", () => {
   const check = parse(read(".github/workflows/windows-server-bundle.yml"));
-  for (const path of ["tools/deploy/orca-server-setup.ps1", "tools/deploy/tests/windows-setup/**"])
+  for (const path of [
+    "tools/deploy/orca-server-setup.ps1",
+    "tools/deploy/orca-windows-ssh.ps1",
+    "tools/deploy/tests/windows-setup/**",
+  ])
     expect(check.on.pull_request.paths).toContain(path);
   const step = check.jobs.bundle.steps.find((candidate) => candidate.run?.includes("tests/windows-setup/run.ps1"));
   // Windows PowerShell 5.1, the one every Windows host has, not PowerShell 7.
@@ -74,4 +78,18 @@ it("gives the client's Windows setup session longer than every download deadline
   expect(downloads).toBeGreaterThan(0);
   // With room left for unpacking, verifying, the task and the daemon's health check.
   expect(minutes * 60).toBeGreaterThanOrEqual(downloads + 15 * 60);
+});
+
+it("documents the OpenSSH Server bootstrap as a checked download, ships it, and tests it on Windows", () => {
+  const docs = read("docs/MULTI-MACHINE.md");
+  expect(docs).toContain("orca-cli remote windows-ssh");
+  // Never a download piped into an elevated session.
+  expect(docs).not.toMatch(/\|\s*iex\b|Invoke-Expression/);
+  const builder = parse(read("packages/app/electron-builder.yml"));
+  const setup = builder.extraResources.find((entry) => entry.to === "server-setup");
+  expect(setup.filter).toContain("orca-windows-ssh.ps1");
+  // Its digest is the shipped copy's: the same bytes on every checkout.
+  expect(read(".gitattributes")).toMatch(/^tools\/deploy\/orca-windows-ssh\.ps1 text eol=lf$/m);
+  expect(read("tools/deploy/orca-windows-ssh.ps1")).toContain("Windows Update");
+  expect(read("tools/deploy/tests/windows-setup/run.ps1")).toContain('"openssh.ps1"');
 });

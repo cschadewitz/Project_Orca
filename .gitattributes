@@ -39,3 +39,7 @@ packages/app/build/cli/orca-cli text eol=lf
 packages/app/build/linux/orca-cli text eol=lf
 packages/app/build/win/*.ps1 text eol=crlf
 packages/app/test/windows/*.ps1 text eol=crlf
+
+# The Windows OpenSSH bootstrap (#1238) runs only when its download matches the SHA-256 of the
+# copy an ORCA install ships: the same bytes on every checkout.
+tools/deploy/orca-windows-ssh.ps1 text eol=lf

@@ -836,6 +836,58 @@ function ServerConfirmation({
   );
 }
 
+/**
+ * What a Windows machine needs before ORCA can reach it (#1238): its own OpenSSH Server, turned
+ * on by a line the person runs there, told in full before they run it.
+ */
+function WindowsSshStep({
+  machine,
+  bootstrap,
+}: {
+  machine: string;
+  bootstrap: NonNullable<TailnetMachineView["windowsSsh"]>;
+}): JSX.Element {
+  const [copied, setCopied] = useState(false);
+  return (
+    <div className="orca-connection-stack" role="group" aria-label="Turn on OpenSSH on Windows">
+      <Text style="label-strong" as="p">
+        First, on {machine}: turn on its OpenSSH Server
+      </Text>
+      <Text style="caption" as="p">
+        Tailscale SSH has no Windows server, so ORCA reaches a Windows machine through the OpenSSH Server that Windows
+        ships. Windows Update installs and updates it; ORCA does not bundle it, and you maintain nothing for it beyond
+        Windows Update. Run this once there, in an administrator PowerShell. It downloads ORCA&apos;s setup step for
+        this version and runs it only if it is exactly the file this app ships (SHA-256 {bootstrap.sha256.slice(0, 12)}
+        …).
+      </Text>
+      <Text style="caption" as="p">
+        If the OpenSSH Server is already on, it changes nothing. Otherwise it lists each change and asks before making
+        any: install the OpenSSH Server Windows feature, allow SSH over the Tailscale adapter and block it on every
+        other network adapter, then start sshd automatically. A scheduled task keeps that block up to date as adapters
+        come and go, and stops sshd when it cannot. It refuses, changing nothing, if that block would not hold, for
+        example when a policy turns local firewall rules off.
+      </Text>
+      <pre
+        className={`orca-input ${textClass("mono-id")}`}
+        aria-label="PowerShell command"
+        style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}
+      >
+        {bootstrap.command}
+      </pre>
+      <div className="orca-dialog__actions">
+        <Button
+          size="sm"
+          onClick={() => {
+            void navigator.clipboard?.writeText(bootstrap.command).then(() => setCopied(true));
+          }}
+        >
+          {copied ? "Copied" : "Copy command"}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 function ProfileEditor({
   draft: initial,
   disabled,
@@ -865,6 +917,8 @@ function ProfileEditor({
     };
   }, [picking, tailnetMachines]);
   const bound = draft.tailnet !== undefined || draft.bound === true;
+  const picked =
+    tailnet?.state === "running" ? tailnet.machines.find((m) => m.node === draft.tailnet?.node) : undefined;
   const pick = (node: string) => {
     const machine = tailnet?.state === "running" ? tailnet.machines.find((m) => m.node === node) : undefined;
     if (!machine) {
@@ -913,7 +967,7 @@ function ProfileEditor({
           path="profiles.tailnet"
           help={
             settingUp
-              ? "A Linux machine that runs Tailscale. With Tailscale SSH on, its host keys come from your tailnet; nothing else needs to be installed there."
+              ? "A Linux or Windows machine that runs Tailscale. On Linux with Tailscale SSH on, its host keys come from your tailnet and nothing else needs to be installed there; Windows needs its own OpenSSH Server turned on first."
               : "Optional. The profile follows the machine if it is renamed or its address changes."
           }
         >
@@ -939,6 +993,7 @@ function ProfileEditor({
           )}
         </ConfigField>
       )}
+      {settingUp && picked?.windowsSsh && <WindowsSshStep machine={picked.name} bootstrap={picked.windowsSsh} />}
       {field("name", "Name", "How this daemon is named in the app.", false)}
       {field(
         "destination",
